@@ -110,6 +110,8 @@ milestone is to confirm the public integration path and add support for the
 documents 16-bit-only service and characteristic discovery. The precise
 limitation and follow-up work are tracked in
 [docs/initial-investigation.md](docs/initial-investigation.md#ble-midi-gatt-limitation).
+An [AROS source patch](patches/README.md) for 128-bit GATT discovery and
+Write Without Response is available in this repository.
 
 ### MIDI 2.0 / UMP
 

@@ -200,14 +200,19 @@ UUID. Thus the current GATT client cannot identify a BLE MIDI endpoint through
 its normal discovery results. This is a known prerequisite for BLE MIDI, not
 an implemented MIDIHub transport.
 
-Follow-up: extend the AROS GATT discovery result types and parsers to retain
-128-bit service and characteristic UUIDs, add focused tests using BLE MIDI
-UUIDs, then define the public Bluetooth API that MIDIHub will use to subscribe
-to the MIDI characteristic and route its messages to CAMD. The upstream
+The AROS prerequisite is to retain 128-bit service and characteristic UUIDs
+in GATT discovery results. MIDIHub must then use the public Bluetooth API to
+subscribe to the MIDI characteristic and route its messages to CAMD. The upstream
 [GATT client header](https://github.com/aros-development-team/AROS/blob/13c7f81274825dd9bca047fc7caebfa21576a163/rom/bluetooth/stack/include/btcore/gatt_client.h)
 records the discovery restriction; Microsoft's
 [BLE MIDI transport documentation](https://microsoft.github.io/MIDI/kb/ble-midi-transport-architecture/)
 lists the MIDI service UUID.
+
+The [AROS source patch](../patches/README.md) now implements the discovery
+change and ATT Write Command support, including the existing public
+`BTPR_GATTWRITENORSP` route. It has passed the portable host tests and an
+apply check, but has not yet been built as `bluetooth.library` or exercised
+with a BLE MIDI device. The MIDIHub BLE transport remains to be implemented.
 
 ## Third-party code and licenses
 
