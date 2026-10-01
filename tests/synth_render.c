@@ -1,10 +1,8 @@
-/* Small, portable TinySoundFont smoke test. Output is always little-endian WAV. */
+/* Portable MIDIHub synthesizer smoke test. Output is little-endian WAV. */
+#include <midihub/synth.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-
-#define TSF_IMPLEMENTATION
-#include "tsf.h"
 
 enum { SAMPLE_RATE = 44100, SECONDS = 2, BLOCK_SAMPLES = 512 };
 
@@ -33,9 +31,12 @@ static int write_header(FILE *out)
 
 int main(int argc, char **argv)
 {
-    tsf *synth;
+    struct mh_synth *synth;
     FILE *out;
-    short samples[BLOCK_SAMPLES];
+    int16_t samples[BLOCK_SAMPLES];
+    const uint8_t program[] = {0xc0, 0};
+    const uint8_t note_on[] = {0x90, 60, 127};
+    const uint8_t note_off[] = {0x80, 60, 0};
     unsigned sample_index = 0;
     unsigned nonzero = 0;
     int result = 1;
@@ -44,32 +45,34 @@ int main(int argc, char **argv)
         fprintf(stderr, "Usage: %s BANK.sf2 OUTPUT.wav\n", argv[0]);
         return 2;
     }
-    synth = tsf_load_filename(argv[1]);
+    synth = mh_synth_open(argv[1], SAMPLE_RATE);
     if (!synth) {
         fprintf(stderr, "Could not load SoundFont: %s\n", argv[1]);
         return 1;
     }
-    tsf_set_output(synth, TSF_MONO, SAMPLE_RATE, 0);
-    if (!tsf_note_on(synth, 0, 60, 1.0f)) {
+    if (mh_synth_send(synth, program, sizeof(program)) != 0 ||
+        mh_synth_send(synth, note_on, sizeof(note_on)) != 0) {
         fprintf(stderr, "Could not start note\n");
-        tsf_close(synth);
+        mh_synth_close(synth);
         return 1;
     }
     out = fopen(argv[2], "wb");
     if (!out) {
         perror(argv[2]);
-        tsf_close(synth);
+        mh_synth_close(synth);
         return 1;
     }
     if (!write_header(out)) goto finish;
     while (sample_index < SAMPLE_RATE * SECONDS) {
         unsigned count = SAMPLE_RATE * SECONDS - sample_index;
         unsigned i;
-        if (sample_index == SAMPLE_RATE) tsf_note_off(synth, 0, 60);
+        if (sample_index == SAMPLE_RATE &&
+            mh_synth_send(synth, note_off, sizeof(note_off)) != 0)
+            goto finish;
         if (count > BLOCK_SAMPLES) count = BLOCK_SAMPLES;
         if (sample_index < SAMPLE_RATE && count > SAMPLE_RATE - sample_index)
             count = SAMPLE_RATE - sample_index;
-        tsf_render_short(synth, samples, (int)count, 0);
+        mh_synth_render(synth, samples, count);
         for (i = 0; i < count; ++i) {
             if (samples[i] != 0) ++nonzero;
             if (!put_u16(out, (uint16_t) samples[i])) goto finish;
@@ -84,6 +87,6 @@ int main(int argc, char **argv)
     printf("Rendered %u nonzero samples to %s\n", nonzero, argv[2]);
 finish:
     if (fclose(out) != 0) result = 1;
-    tsf_close(synth);
+    mh_synth_close(synth);
     return result;
 }

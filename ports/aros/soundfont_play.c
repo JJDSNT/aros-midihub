@@ -1,12 +1,10 @@
-/* Render one General MIDI note with TinySoundFont and play it via ahi.device. */
+/* Render one General MIDI note with MIDIHub and play it via ahi.device. */
+#include <midihub/synth.h>
 #include <devices/ahi.h>
 #include <exec/memory.h>
 #include <proto/exec.h>
 
 #include <stdio.h>
-
-#define TSF_IMPLEMENTATION
-#include "tsf.h"
 
 enum { SAMPLE_RATE = 44100, SECONDS = 2, NOTE = 60 };
 
@@ -15,8 +13,11 @@ int main(int argc, char **argv)
     const ULONG sample_count = SAMPLE_RATE * SECONDS;
     struct MsgPort *port = NULL;
     struct AHIRequest *request = NULL;
-    short *samples = NULL;
-    tsf *synth = NULL;
+    int16_t *samples = NULL;
+    struct mh_synth *synth = NULL;
+    const uint8_t program[] = {0xc0, 0};
+    const uint8_t note_on[] = {0x90, NOTE, 127};
+    const uint8_t note_off[] = {0x80, NOTE, 0};
     int device_open = 0;
     int result = 1;
 
@@ -24,7 +25,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "Usage: %s BANK.sf2\n", argv[0]);
         return 2;
     }
-    synth = tsf_load_filename(argv[1]);
+    synth = mh_synth_open(argv[1], SAMPLE_RATE);
     if (!synth) {
         fprintf(stderr, "Could not load SoundFont: %s\n", argv[1]);
         goto cleanup;
@@ -34,14 +35,14 @@ int main(int argc, char **argv)
         fputs("Could not allocate PCM buffer\n", stderr);
         goto cleanup;
     }
-    tsf_set_output(synth, TSF_MONO, SAMPLE_RATE, 0);
-    if (!tsf_note_on(synth, 0, NOTE, 1.0f)) {
+    if (mh_synth_send(synth, program, sizeof(program)) != 0 ||
+        mh_synth_send(synth, note_on, sizeof(note_on)) != 0) {
         fputs("Could not start note\n", stderr);
         goto cleanup;
     }
-    tsf_render_short(synth, samples, SAMPLE_RATE, 0);
-    tsf_note_off(synth, 0, NOTE);
-    tsf_render_short(synth, samples + SAMPLE_RATE, SAMPLE_RATE, 0);
+    mh_synth_render(synth, samples, SAMPLE_RATE);
+    mh_synth_send(synth, note_off, sizeof(note_off));
+    mh_synth_render(synth, samples + SAMPLE_RATE, SAMPLE_RATE);
 
     port = CreateMsgPort();
     if (!port) {
@@ -82,6 +83,6 @@ cleanup:
     if (request) DeleteIORequest((struct IORequest *)request);
     if (port) DeleteMsgPort(port);
     if (samples) FreeVec(samples);
-    if (synth) tsf_close(synth);
+    mh_synth_close(synth);
     return result;
 }

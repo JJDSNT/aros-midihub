@@ -62,12 +62,12 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
 
 %build_prog mmake=contrib-aros-midihub-soundfonttest-program \
     progname=SoundFontTest \
-    files="$(MIDIHUB_ROOT)/tests/synth_render" \
+    files="$(MIDIHUB_ROOT)/tests/synth_render $(MIDIHUB_ROOT)/src/synth" \
     targetdir=$(MIDIHUB_PACKAGE)/C
 
 %build_prog mmake=contrib-aros-midihub-soundfontplay-program \
     progname=SoundFontPlay \
-    files="$(MIDIHUB_ROOT)/ports/aros/soundfont_play" \
+    files="$(MIDIHUB_ROOT)/ports/aros/soundfont_play $(MIDIHUB_ROOT)/src/synth" \
     targetdir=$(MIDIHUB_PACKAGE)/C
 
 %copy_files_q mmake=contrib-aros-midihub-soundfonttest-bank \

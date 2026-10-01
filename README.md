@@ -127,6 +127,11 @@ for development. Clone with `git clone --recurse-submodules`, or run
 not establish correct GeneralUser GS playback. TinySoundFont currently ignores
 SoundFont modulators, which GeneralUser GS uses extensively.
 
+The `src/synth.c` wrapper accepts complete MIDI channel messages and renders
+mono PCM. It currently handles notes, Control Change, Program Change, and
+pitch bend. The WAV and AHI test programs use this same wrapper. Channel
+pressure, polyphonic pressure, and synthesizer SysEx are not yet implemented.
+
 For an AROS build, the optional MetaMake target
 `contrib-aros-midihub-soundfonttest` installs `SoundFontTest` and the test bank
 under `SYS:Extras/aros-midihub/`. Inside AROS, run

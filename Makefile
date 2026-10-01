@@ -27,13 +27,13 @@ test-synth: build/synth-render
 
 synth-m68k: build/synth-render-m68k
 
-build/synth-render: tests/synth_render.c third_party/TinySoundFont/tsf.h
+build/synth-render: tests/synth_render.c src/synth.c include/midihub/synth.h third_party/TinySoundFont/tsf.h
 	mkdir -p build
-	$(CC) -Ithird_party/TinySoundFont $(CFLAGS) -o $@ tests/synth_render.c -lm
+	$(CC) $(CPPFLAGS) -Ithird_party/TinySoundFont $(CFLAGS) -o $@ tests/synth_render.c src/synth.c -lm
 
-build/synth-render-m68k: tests/synth_render.c third_party/TinySoundFont/tsf.h
+build/synth-render-m68k: tests/synth_render.c src/synth.c include/midihub/synth.h third_party/TinySoundFont/tsf.h
 	mkdir -p build
-	$(M68K_CC) -Ithird_party/TinySoundFont $(M68K_CFLAGS) -o $@ tests/synth_render.c -lm
+	$(M68K_CC) $(CPPFLAGS) -Ithird_party/TinySoundFont $(M68K_CFLAGS) -o $@ tests/synth_render.c src/synth.c -lm
 
 build/MIDIHub: $(SOURCES) $(HEADERS) $(PROGRAM_SOURCES)
 	mkdir -p build

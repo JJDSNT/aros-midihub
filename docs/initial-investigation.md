@@ -28,7 +28,9 @@ AROS still requires a working Linux-hosted AROS environment. The Bellatrix
 m68k GCC and its AROS libraries also linked `MIDIHub-m68k` through `make
 m68k`; that binary has not yet been run inside m68k AROS. The separate
 TinySoundFont smoke test renders GeneralUser GS to a WAV on the host and
-compiles for m68k, but is not connected to CAMD or live AROS audio.
+compiles for m68k. A separate optional program sends the same rendered note
+to `ahi.device`; both use the MIDIHub synthesis wrapper. The wrapper is not
+yet connected to CAMD, and AROS playback has not been run.
 
 ## Existing facilities in the local AROS checkout
 
