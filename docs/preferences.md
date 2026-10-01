@@ -37,6 +37,17 @@ AROS audio path without assuming a particular target or device. The engine
 should validate a new SoundFont before replacing the one in use, so a failed
 load does not interrupt currently playing notes.
 
+AHI Preferences already has a **Music unit**. Its AHI documentation defines
+this as the default audio mode for applications using AHI's low-level API
+(`AHI_NO_UNIT`); it does not configure MIDI or CAMD ports, instruments, or
+SoundFonts. MIDIHub should use the existing AHI audio mode preferences for
+its synthesizer output and keep SoundFont selection and MIDI routing in its
+own configuration. The current `SoundFontPlay` diagnostic opens AHI unit 0,
+so switching live synthesis to the Music unit requires an explicit playback
+test. See the upstream AHI
+[user guide](https://github.com/aros-development-team/AROS/blob/13c7f81274825dd9bca047fc7caebfa21576a163/workbench/devs/AHI/Docs/ahiusr.texinfo)
+and [AHI Preferences implementation](https://github.com/aros-development-team/AROS/blob/13c7f81274825dd9bca047fc7caebfa21576a163/workbench/devs/AHI/AHI/support.c).
+
 Preview should send Note On/Off through the same synthesizer and audio path
 used by CAMD clients. A small virtual key or `Test` button, with selectable
 note and velocity, is enough initially. This exercises the SoundFont, routing,
