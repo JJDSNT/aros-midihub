@@ -257,6 +257,54 @@ int mh_journal_decode_notes(const struct mh_journal_channel *channel,
     return 1;
 }
 
+int mh_journal_decode_channel_state(
+    const struct mh_journal_channel *channel,
+    struct mh_journal_channel_state *state)
+{
+    const uint8_t *data;
+    size_t length;
+    size_t offset = 3;
+    size_t size;
+    if (!channel || !state || !channel->data || channel->length < 3)
+        return -1;
+    memset(state, 0, sizeof(*state));
+    if (!(channel->chapters & (0x80 | 0x10)))
+        return 0;
+    data = channel->data;
+    length = channel->length;
+    if (channel->chapters & 0x80) {
+        if (length - offset < 3) return -1;
+        state->has_program = 1;
+        state->program_single_packet_safe = !!(data[offset] & 0x80);
+        state->program = data[offset] & 0x7f;
+        state->has_bank = !!(data[offset + 1] & 0x80);
+        state->bank_msb = data[offset + 1] & 0x7f;
+        state->bank_lsb = data[offset + 2] & 0x7f;
+        offset += 3;
+    }
+    if (channel->chapters & 0x40) {
+        if (length - offset < 1 || (data[0] & 0x04))
+            return -1;
+        size = 1 + 2 * ((size_t)(data[offset] & 0x7f) + 1);
+        if (size > length - offset) return -1;
+        offset += size;
+    }
+    if (channel->chapters & 0x20) {
+        if (length - offset < 2) return -1;
+        size = ((size_t)(data[offset] & 3) << 8) | data[offset + 1];
+        if (size < 2 || size > length - offset) return -1;
+        offset += size;
+    }
+    if (channel->chapters & 0x10) {
+        if (length - offset < 2) return -1;
+        state->has_pitch = 1;
+        state->pitch_single_packet_safe = !!(data[offset] & 0x80);
+        state->pitch_lsb = data[offset] & 0x7f;
+        state->pitch_msb = data[offset + 1] & 0x7f;
+    }
+    return 1;
+}
+
 void mh_rtp_reader_init(struct mh_rtp_reader *reader,
                         const struct mh_rtp_packet *packet)
 {

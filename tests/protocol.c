@@ -234,6 +234,29 @@ static void journal_note_offs(void)
     assert(mh_journal_decode_notes(&journal.channels[0], &notes) == -1);
 }
 
+static void journal_channel_state(void)
+{
+    static const uint8_t state_bytes[] = {
+        0x20, 0, 4, 0x00, 0x08, 0x90,
+        0x05, 0x82, 0x03, 0x01, 0x20
+    };
+    struct mh_journal journal;
+    struct mh_journal_channel_state state;
+
+    assert(mh_journal_decode(state_bytes, sizeof(state_bytes),
+                             &journal) == 0);
+    assert(mh_journal_decode_channel_state(&journal.channels[0],
+                                            &state) == 1);
+    assert(state.has_program && state.program == 5 && state.has_bank &&
+           state.bank_msb == 2 && state.bank_lsb == 3 &&
+           !state.program_single_packet_safe);
+    assert(state.has_pitch && state.pitch_lsb == 1 &&
+           state.pitch_msb == 32 && !state.pitch_single_packet_safe);
+    journal.channels[0].length--;
+    assert(mh_journal_decode_channel_state(&journal.channels[0],
+                                            &state) == -1);
+}
+
 static void rtp_command_reader(void)
 {
     static const uint8_t midi[] = {
@@ -514,6 +537,7 @@ int main(void)
     rtp_journal_and_lengths();
     journal_framing();
     journal_note_offs();
+    journal_channel_state();
     rtp_command_reader();
     rtp_system_common();
     rtp_sysex();

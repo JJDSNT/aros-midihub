@@ -219,6 +219,25 @@ def run_feedback_case(binary):
             if time.monotonic() >= deadline:
                 raise AssertionError(output)
             time.sleep(0.01)
+        state_packet = struct.pack(">BBHII", 0x80, 0xe1, 13,
+                                   future & 0xffffffff, peer_ssrc)
+        state_journal = (
+            b"\x20\x00\x0c\x00\x08\x90\x05\x82\x03\x01\x20"
+        )
+        data.sendto(state_packet + b"\x40" + state_journal,
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x1000D
+        deadline = time.monotonic() + 1
+        while True:
+            log.seek(0)
+            output = log.read().decode(errors="replace")
+            if ("recovered Program Change channel=0 program=5" in output and
+                    "recovered Pitch Bend channel=0 value=4097" in output):
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(output)
+            time.sleep(0.01)
         assert "malformed recovery journal discarded" in output
         assert "1 RTP packet(s) lost; journal covers gap" in output
         assert "recovered Note Off channel=0 note=60" in output

@@ -292,10 +292,12 @@ recovers missed `Note Off` commands for notes the receiver still considers
 active and cancels matching `Note On` events still waiting in the timestamp
 queue. Ending a session also releases notes still active at the receiver.
 Chapter N also recovers timely lost `Note On` commands when the sender's `Y`
-hint requests playback and the clocks are synchronized. Recovery of other
-journal chapters, discovery, Preferences, and connecting the synthesizer to
-CAMD remain to be done. The CAMD bridge has compiled and linked for Linux
-hosted but has not yet been exercised inside AROS.
+hint requests playback and the clocks are synchronized. Chapters P and W
+restore Program Change, bank selection, and Pitch
+Bend state after packet loss. Recovery of the remaining journal chapters,
+discovery, Preferences, and connecting the synthesizer to CAMD remain to be
+done. The CAMD bridge has compiled and linked for Linux hosted but has not
+yet been exercised inside AROS.
 
 Run the portable codec tests with `make test`. For an AROS source checkout,
 place this repository at `contrib/extras/aros-midihub` and build the

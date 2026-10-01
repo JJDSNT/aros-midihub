@@ -61,6 +61,13 @@ struct runtime {
     struct mh_sysex_assembler sysex;
     struct mh_event_queue queue;
     uint8_t active_notes[16][128];
+    uint8_t program[16];
+    uint8_t program_known[16];
+    uint8_t bank_msb[16];
+    uint8_t bank_lsb[16];
+    uint8_t bank_msb_known[16];
+    uint8_t bank_lsb_known[16];
+    uint16_t pitch[16];
     struct mh_camd_bridge camd;
     int camd_opened;
 };
@@ -175,7 +182,33 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
         memset(rt->active_notes[channel], 0,
                sizeof(rt->active_notes[channel]));
     }
+    if (length == 2 && (status & 0xf0) == 0xc0) {
+        rt->program[channel] = bytes[1];
+        rt->program_known[channel] = 1;
+    } else if (length == 3 && (status & 0xf0) == 0xb0) {
+        if (bytes[1] == 0) {
+            rt->bank_msb[channel] = bytes[2];
+            rt->bank_msb_known[channel] = 1;
+        } else if (bytes[1] == 32) {
+            rt->bank_lsb[channel] = bytes[2];
+            rt->bank_lsb_known[channel] = 1;
+        } else if (bytes[1] == 121) {
+            rt->pitch[channel] = 0x2000;
+        }
+    } else if (length == 3 && (status & 0xf0) == 0xe0) {
+        rt->pitch[channel] = (uint16_t)(bytes[1] | (bytes[2] << 7));
+    }
     mh_camd_bridge_deliver(&rt->camd, bytes, length);
+}
+
+static void reset_channel_state(struct runtime *rt)
+{
+    unsigned int channel;
+    memset(rt->program_known, 0, sizeof(rt->program_known));
+    memset(rt->bank_msb_known, 0, sizeof(rt->bank_msb_known));
+    memset(rt->bank_lsb_known, 0, sizeof(rt->bank_lsb_known));
+    for (channel = 0; channel < 16; ++channel)
+        rt->pitch[channel] = 0x2000;
 }
 
 static void release_active_notes(struct runtime *rt)
@@ -191,6 +224,69 @@ static void release_active_notes(struct runtime *rt)
                 continue;
             message[1] = (uint8_t)note;
             deliver_short(rt, message, sizeof(message));
+        }
+    }
+}
+
+static void recover_channel_state(struct runtime *rt,
+                                   const struct mh_journal *journal,
+                                   int single_loss)
+{
+    struct mh_journal_channel_state state;
+    uint8_t message[3];
+    size_t i;
+    unsigned int channel;
+    int bank_changed;
+    uint16_t pitch;
+
+    if (single_loss && journal->single_packet_safe)
+        return;
+    for (i = 0; i < journal->channel_count; ++i) {
+        const struct mh_journal_channel *entry = &journal->channels[i];
+        if (single_loss && entry->single_packet_safe)
+            continue;
+        if (mh_journal_decode_channel_state(entry, &state) <= 0)
+            continue;
+        channel = entry->number;
+        bank_changed = 0;
+        if (state.has_program &&
+            (!single_loss || !state.program_single_packet_safe)) {
+            message[0] = (uint8_t)(0xb0 | channel);
+            if (state.has_bank) {
+                if (!rt->bank_msb_known[channel] ||
+                    rt->bank_msb[channel] != state.bank_msb) {
+                    message[1] = 0;
+                    message[2] = state.bank_msb;
+                    deliver_short(rt, message, 3);
+                    bank_changed = 1;
+                }
+                if (!rt->bank_lsb_known[channel] ||
+                    rt->bank_lsb[channel] != state.bank_lsb) {
+                    message[1] = 32;
+                    message[2] = state.bank_lsb;
+                    deliver_short(rt, message, 3);
+                    bank_changed = 1;
+                }
+            }
+            if (bank_changed || !rt->program_known[channel] ||
+                rt->program[channel] != state.program) {
+                message[0] = (uint8_t)(0xc0 | channel);
+                message[1] = state.program;
+                deliver_short(rt, message, 2);
+                printf("MIDIHub: recovered Program Change channel=%u program=%u\n",
+                       channel, (unsigned int)state.program);
+            }
+        }
+        pitch = (uint16_t)(state.pitch_lsb | (state.pitch_msb << 7));
+        if (state.has_pitch &&
+            (!single_loss || !state.pitch_single_packet_safe) &&
+            rt->pitch[channel] != pitch) {
+            message[0] = (uint8_t)(0xe0 | channel);
+            message[1] = state.pitch_lsb;
+            message[2] = state.pitch_msb;
+            deliver_short(rt, message, 3);
+            printf("MIDIHub: recovered Pitch Bend channel=%u value=%u\n",
+                   channel, (unsigned int)pitch);
         }
     }
 }
@@ -404,6 +500,7 @@ static void receive_packet(struct runtime *rt, int data_port)
             mh_sysex_reset(&rt->sysex);
             mh_queue_reset(&rt->queue);
             release_active_notes(rt);
+            reset_channel_state(rt);
         }
         return;
     }
@@ -441,9 +538,11 @@ static void receive_packet(struct runtime *rt, int data_port)
         return; /* A duplicate or older packet must not replay MIDI events. */
     if (sequence_advance > 1 && midi.journal &&
         mh_journal_covers_gap(previous_sequence, midi.sequence,
-                              journal.checkpoint))
+                              journal.checkpoint)) {
+        recover_channel_state(rt, &journal, sequence_advance == 2);
         recover_notes(rt, &journal, sequence_advance == 2,
                       midi.timestamp);
+    }
     if (!midi.midi_length)
         return; /* Guard packet: acknowledge its journal without MIDI output. */
     printf("MIDIHub: RTP-MIDI seq=%u timestamp=%lu length=%lu bytes=",
@@ -693,6 +792,7 @@ int main(int argc, char **argv)
     if (remaining >= 3)
         peer_ip = argv[argi + 1];
     memset(&rt, 0, sizeof(rt));
+    reset_channel_state(&rt);
     rt.control = rt.data = -1;
     rt.initiating = *peer_ip != 0;
     rt.probe_note = remaining == 4 &&

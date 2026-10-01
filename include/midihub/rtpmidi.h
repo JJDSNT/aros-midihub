@@ -59,6 +59,24 @@ struct mh_journal_notes {
 int mh_journal_decode_notes(const struct mh_journal_channel *channel,
                             struct mh_journal_notes *notes);
 
+struct mh_journal_channel_state {
+    int has_program;
+    int program_single_packet_safe;
+    uint8_t program;
+    int has_bank;
+    uint8_t bank_msb;
+    uint8_t bank_lsb;
+    int has_pitch;
+    int pitch_single_packet_safe;
+    uint8_t pitch_lsb;
+    uint8_t pitch_msb;
+};
+
+/* Decode Chapters P and W. 0: neither present, 1: decoded, -1: malformed. */
+int mh_journal_decode_channel_state(
+    const struct mh_journal_channel *channel,
+    struct mh_journal_channel_state *state);
+
 /* Iterates MIDI 1.0 short commands in a decoded RTP-MIDI command section.
  * SysEx and unsupported system commands return -2; malformed data returns
  * -1. A result of 1 contains a command, and 0 means end of list. */
