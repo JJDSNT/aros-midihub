@@ -115,6 +115,66 @@ int mh_rtp_decode(const uint8_t *data, size_t length,
     return 0;
 }
 
+int mh_journal_decode(const uint8_t *data, size_t length,
+                      struct mh_journal *journal)
+{
+    size_t offset = 3;
+    size_t section_length;
+    size_t count;
+    size_t i;
+    int previous_channel = -1;
+
+    if (!data || !journal || length < 3)
+        return -1;
+    memset(journal, 0, sizeof(*journal));
+    journal->checkpoint = read16(data + 1);
+    journal->single_packet_safe = !!(data[0] & 0x80);
+    journal->enhanced_controllers = !!(data[0] & 0x10);
+    if (data[0] & 0x40) {
+        if (length - offset < 2)
+            return -1;
+        section_length = ((size_t)(data[offset] & 3) << 8) |
+                         data[offset + 1];
+        if (section_length < 2 || section_length > length - offset)
+            return -1;
+        journal->system = data + offset;
+        journal->system_length = section_length;
+        offset += section_length;
+    }
+    count = (data[0] & 0x20) ? (size_t)(data[0] & 0x0f) + 1 : 0;
+    for (i = 0; i < count; ++i) {
+        struct mh_journal_channel *channel = &journal->channels[i];
+        if (length - offset < 3)
+            return -1;
+        section_length = ((size_t)(data[offset] & 3) << 8) |
+                         data[offset + 1];
+        if (section_length < 3 || section_length > length - offset)
+            return -1;
+        channel->number = (data[offset] >> 2) & 0x0f;
+        if (channel->number <= previous_channel)
+            return -1;
+        previous_channel = channel->number;
+        channel->single_packet_safe = !!(data[offset] & 0x80);
+        channel->chapters = data[offset + 2];
+        channel->data = data + offset;
+        channel->length = section_length;
+        offset += section_length;
+    }
+    if (offset != length)
+        return -1;
+    journal->channel_count = count;
+    return 0;
+}
+
+int mh_journal_covers_gap(uint16_t previous, uint16_t current,
+                          uint16_t checkpoint)
+{
+    uint16_t advance = (uint16_t)(current - previous);
+    uint16_t first_missing = (uint16_t)(previous + 1);
+    return advance > 1 && advance < 0x8000 &&
+           (uint16_t)(first_missing - checkpoint) < 0x8000;
+}
+
 void mh_rtp_reader_init(struct mh_rtp_reader *reader,
                         const struct mh_rtp_packet *packet)
 {

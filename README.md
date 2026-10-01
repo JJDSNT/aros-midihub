@@ -285,9 +285,11 @@ RTP packets, including journal-only guard packets, with AppleMIDI `RS`
 feedback. The CK exchange estimates the peer clock offset. Short MIDI
 messages with future RTP timestamps are queued for delivery to CAMD at the
 requested time, with a 10-second lookahead and 256-event limit. Events beyond
-those limits are discarded; SysEx is still delivered on receipt. Applying
-recovery journals, discovery, Preferences, and connecting the synthesizer to
-CAMD remain to be done. The CAMD bridge has compiled and
+those limits are discarded; SysEx is still delivered on receipt. Incoming
+recovery journal framing is checked before feedback is sent. Sequence gaps
+and whether a journal checkpoint covers them are reported. Interpreting the
+journal chapters to recover MIDI state, discovery, Preferences, and connecting
+the synthesizer to CAMD remain to be done. The CAMD bridge has compiled and
 linked for Linux hosted but has not yet been exercised inside AROS.
 
 Run the portable codec tests with `make test`. For an AROS source checkout,

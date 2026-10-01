@@ -89,9 +89,10 @@ yet connected to CAMD, and AROS playback has not been run.
   at least identify and bound a present journal before applying it. AppleMIDI
   receiver feedback (`RS`) reports the most recent accepted RTP sequence on
   the control port, including journal-only guard packets; MIDIHub now sends
-  this feedback. Packet loss and note recovery need explicit later work:
-  without interpreting incoming journals or sending outgoing journals, the
-  current version does not claim full RFC 6295 recovery.
+  this feedback. MIDIHub validates top-level journal framing and channel
+  lengths, detects RTP sequence gaps, and reports whether the journal
+  checkpoint covers a gap. It does not yet interpret journal chapters or
+  send outgoing journals, so note recovery remains future work.
 
 ## Recommended architecture
 

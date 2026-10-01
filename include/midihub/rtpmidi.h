@@ -18,6 +18,30 @@ struct mh_rtp_packet {
     uint8_t p;
 };
 
+struct mh_journal_channel {
+    const uint8_t *data;
+    size_t length;
+    uint8_t number;
+    uint8_t chapters;
+    uint8_t single_packet_safe;
+};
+
+struct mh_journal {
+    uint16_t checkpoint;
+    uint8_t single_packet_safe;
+    uint8_t enhanced_controllers;
+    const uint8_t *system;
+    size_t system_length;
+    struct mh_journal_channel channels[16];
+    size_t channel_count;
+};
+
+/* Decode journal framing. Chapter contents remain opaque. */
+int mh_journal_decode(const uint8_t *data, size_t length,
+                      struct mh_journal *journal);
+int mh_journal_covers_gap(uint16_t previous, uint16_t current,
+                          uint16_t checkpoint);
+
 /* Iterates MIDI 1.0 short commands in a decoded RTP-MIDI command section.
  * SysEx and unsupported system commands return -2; malformed data returns
  * -1. A result of 1 contains a command, and 0 means end of list. */

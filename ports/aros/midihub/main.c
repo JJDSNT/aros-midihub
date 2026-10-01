@@ -210,6 +210,7 @@ static void receive_packet(struct runtime *rt, int data_port)
     struct mh_apple_packet packet;
     struct mh_apple_packet response;
     struct mh_rtp_packet midi;
+    struct mh_journal journal;
     struct mh_rtp_reader reader;
     struct mh_midi_event event;
     const uint8_t *sysex_message;
@@ -217,6 +218,7 @@ static void receive_packet(struct runtime *rt, int data_port)
     int response_port;
     int action;
     int sysex_result;
+    int16_t sequence_advance;
     uint64_t now;
     size_t i;
 
@@ -283,11 +285,30 @@ static void receive_packet(struct runtime *rt, int data_port)
         mh_rtp_decode(bytes, (size_t)count, &midi) != 0 ||
         midi.ssrc != rt->session.peer_ssrc)
         return;
+    if (midi.journal &&
+        mh_journal_decode(midi.journal, midi.journal_length,
+                          &journal) != 0) {
+        puts("MIDIHub: malformed recovery journal discarded");
+        return;
+    }
     mh_rtp_reader_init(&reader, &midi);
     while ((action = mh_rtp_reader_next(&reader, &event)) == 1) {}
     if (action < 0) {
         puts("MIDIHub: unsupported or malformed MIDI command");
         return;
+    }
+    if (rt->have_received_sequence) {
+        sequence_advance = (int16_t)(midi.sequence -
+                                     (uint16_t)rt->received_sequence);
+        if (sequence_advance > 1) {
+            printf("MIDIHub: %u RTP packet(s) lost; journal %s\n",
+                   (unsigned int)(sequence_advance - 1),
+                   !midi.journal ? "unavailable" :
+                   mh_journal_covers_gap(
+                       (uint16_t)rt->received_sequence, midi.sequence,
+                       journal.checkpoint) ? "covers gap" :
+                                             "does not cover gap");
+        }
     }
     if (!send_feedback(rt, midi.sequence))
         return; /* A duplicate or older packet must not replay MIDI events. */

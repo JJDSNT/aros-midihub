@@ -113,9 +113,9 @@ def run_feedback_case(binary):
     data.bind(("127.0.0.1", port + 3))
     control.settimeout(0.2)
     data.settimeout(2)
+    log = tempfile.TemporaryFile(mode="w+b")
     process = subprocess.Popen(
-        [binary, str(port)], stdout=subprocess.DEVNULL,
-        stderr=subprocess.STDOUT
+        [binary, str(port)], stdout=log, stderr=subprocess.STDOUT
     )
     token = 0x12345678
     peer_ssrc = 0x89ABCDEF
@@ -150,6 +150,25 @@ def run_feedback_case(binary):
                 data.sendto(packet, ("127.0.0.1", port + 1))
                 repeated, _ = control.recvfrom(128)
                 assert repeated == feedback
+        invalid = struct.pack(">BBHII", 0x80, 0xe1, 1, 100, peer_ssrc)
+        data.sendto(invalid + b"\x40\x80\x00", ("127.0.0.1", port + 1))
+        control.settimeout(0.2)
+        try:
+            control.recvfrom(128)
+        except socket.timeout:
+            pass
+        else:
+            raise AssertionError("malformed journal was acknowledged")
+        gap = struct.pack(">BBHII", 0x80, 0xe1, 2, 100, peer_ssrc)
+        data.sendto(gap + b"\x40\x80\x00\x00",
+                    ("127.0.0.1", port + 1))
+        control.settimeout(2)
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x10002
+        log.seek(0)
+        output = log.read().decode(errors="replace")
+        assert "malformed recovery journal discarded" in output
+        assert "1 RTP packet(s) lost; journal covers gap" in output
     finally:
         process.send_signal(signal.SIGINT)
         try:
@@ -159,6 +178,7 @@ def run_feedback_case(binary):
             process.wait()
         control.close()
         data.close()
+        log.close()
 
 
 def main():

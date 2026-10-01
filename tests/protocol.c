@@ -145,6 +145,52 @@ static void rtp_journal_and_lengths(void)
     assert(mh_rtp_decode(broken, sizeof(broken), &packet) == -1);
 }
 
+static void journal_framing(void)
+{
+    static const uint8_t empty[] = {0x80, 0x12, 0x34};
+    static const uint8_t sections[] = {
+        0xe1, 0x12, 0x34,
+        0x00, 0x02,
+        0x80, 0x03, 0x10,
+        0x94, 0x03, 0x20
+    };
+    uint8_t broken[sizeof(sections)];
+    struct mh_journal journal;
+
+    assert(mh_journal_decode(empty, sizeof(empty), &journal) == 0);
+    assert(journal.checkpoint == 0x1234 &&
+           journal.single_packet_safe && !journal.channel_count &&
+           !journal.system);
+    assert(mh_journal_decode(sections, sizeof(sections), &journal) == 0);
+    assert(journal.system == sections + 3 && journal.system_length == 2);
+    assert(journal.channel_count == 2);
+    assert(journal.channels[0].number == 0 &&
+           journal.channels[0].chapters == 0x10 &&
+           journal.channels[0].length == 3);
+    assert(journal.channels[1].number == 5 &&
+           journal.channels[1].chapters == 0x20);
+    assert(mh_journal_decode(empty, 2, &journal) == -1);
+    assert(mh_journal_decode(sections, sizeof(sections) - 1,
+                             &journal) == -1);
+    memcpy(broken, sections, sizeof(broken));
+    broken[4] = 12;
+    assert(mh_journal_decode(broken, sizeof(broken), &journal) == -1);
+    memcpy(broken, sections, sizeof(broken));
+    broken[6] = 2;
+    assert(mh_journal_decode(broken, sizeof(broken), &journal) == -1);
+    memcpy(broken, sections, sizeof(broken));
+    broken[8] = 0x80; /* Duplicate channel number. */
+    assert(mh_journal_decode(broken, sizeof(broken), &journal) == -1);
+    assert(mh_journal_decode(empty, sizeof(empty) - 1, &journal) == -1);
+    assert(mh_journal_covers_gap(10, 13, 11));
+    assert(mh_journal_covers_gap(10, 13, 9));
+    assert(!mh_journal_covers_gap(10, 13, 12));
+    assert(!mh_journal_covers_gap(10, 13, 13));
+    assert(mh_journal_covers_gap(0xfffe, 1, 0xffff));
+    assert(!mh_journal_covers_gap(0xfffe, 1, 0));
+    assert(!mh_journal_covers_gap(10, 11, 10));
+}
+
 static void rtp_command_reader(void)
 {
     static const uint8_t midi[] = {
@@ -416,6 +462,7 @@ int main(void)
     apple_feedback();
     rtp_short();
     rtp_journal_and_lengths();
+    journal_framing();
     rtp_command_reader();
     rtp_system_common();
     rtp_sysex();
