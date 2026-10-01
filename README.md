@@ -103,8 +103,11 @@ For example:
 
 Bluetooth Low Energy MIDI is widely used by modern wireless MIDI controllers and instruments.
 
-BLE MIDI support can be explored as the Bluetooth capabilities available to AROS evolve.
-No Bluetooth transport is implemented yet.
+The current upstream AROS tree includes `bluetooth.library`, an LE stack, ATT,
+and a GATT client. MIDIHub does not yet implement BLE MIDI. Its first Bluetooth
+milestone is to confirm the public integration path and add support for the
+128-bit MIDI service and characteristic UUIDs; the current GATT client header
+documents 16-bit-only service and characteristic discovery.
 
 ### MIDI 2.0 / UMP
 

@@ -185,7 +185,8 @@ does not copy executables to `SYS:C` or modify `camd.library`.
 | Multiple peers and routing | CAMD port contract and loop prevention |
 | USB MIDI | CAMD class test on targets that provide it; optional transport |
 | TinySoundFont/SF2 | Chosen and tested AROS PCM output, bank distribution policy, modulator work |
-| Serial/DIN and BLE MIDI | Available target-specific transport and hardware |
+| Serial/DIN MIDI | Available target-specific transport and hardware |
+| BLE MIDI | Current AROS Bluetooth stack integration and 128-bit GATT UUID discovery |
 | MIDI 2.0/UMP | Event contract independent of three-byte `MidiMsg` |
 
 ## Third-party code and licenses
