@@ -16,6 +16,9 @@ typedef int (*mh_camd_output)(void *context, const uint8_t *message,
                               size_t length);
 
 int mh_camd_bridge_open(struct mh_camd_bridge *bridge);
+int mh_camd_bridge_open_named(struct mh_camd_bridge *bridge,
+                              char *node_name, char *incoming_name,
+                              char *outgoing_name);
 void mh_camd_bridge_close(struct mh_camd_bridge *bridge);
 void mh_camd_bridge_deliver(struct mh_camd_bridge *bridge,
                             const uint8_t *message, size_t length);

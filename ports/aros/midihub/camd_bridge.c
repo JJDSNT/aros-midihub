@@ -12,11 +12,10 @@
 
 struct Library *CamdBase;
 
-int mh_camd_bridge_open(struct mh_camd_bridge *bridge)
+int mh_camd_bridge_open_named(struct mh_camd_bridge *bridge,
+                              char *node_name, char *incoming_name,
+                              char *outgoing_name)
 {
-    static char node_name[] = "MIDIHub";
-    static char incoming_name[] = "MIDIHub In";
-    static char outgoing_name[] = "MIDIHub Out";
     struct TagItem node_tags[] = {
         {MIDI_Name, (IPTR)node_name},
         {MIDI_MsgQueue, 256},
@@ -63,6 +62,15 @@ int mh_camd_bridge_open(struct mh_camd_bridge *bridge)
 fail:
     mh_camd_bridge_close(bridge);
     return -1;
+}
+
+int mh_camd_bridge_open(struct mh_camd_bridge *bridge)
+{
+    static char node_name[] = "MIDIHub";
+    static char incoming_name[] = "MIDIHub In";
+    static char outgoing_name[] = "MIDIHub Out";
+    return mh_camd_bridge_open_named(bridge, node_name, incoming_name,
+                                     outgoing_name);
 }
 
 void mh_camd_bridge_close(struct mh_camd_bridge *bridge)
@@ -146,11 +154,21 @@ void mh_camd_bridge_poll(struct mh_camd_bridge *bridge,
 
 #else
 
-int mh_camd_bridge_open(struct mh_camd_bridge *bridge)
+int mh_camd_bridge_open_named(struct mh_camd_bridge *bridge,
+                              char *node_name, char *incoming_name,
+                              char *outgoing_name)
 {
+    (void)node_name;
+    (void)incoming_name;
+    (void)outgoing_name;
     memset(bridge, 0, sizeof(*bridge));
     bridge->signal_bit = -1;
     return 0;
+}
+
+int mh_camd_bridge_open(struct mh_camd_bridge *bridge)
+{
+    return mh_camd_bridge_open_named(bridge, NULL, NULL, NULL);
 }
 
 void mh_camd_bridge_close(struct mh_camd_bridge *bridge)

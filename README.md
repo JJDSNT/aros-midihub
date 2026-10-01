@@ -106,15 +106,13 @@ For example:
 
 Bluetooth Low Energy MIDI is widely used by modern wireless MIDI controllers and instruments.
 
-The current upstream AROS tree includes `bluetooth.library`, an LE stack, ATT,
-and a GATT client. MIDIHub does not yet implement BLE MIDI. Its first Bluetooth
-milestone is to confirm the public integration path and add support for the
-128-bit MIDI service and characteristic UUIDs; the current GATT client header
-documents 16-bit-only service and characteristic discovery. The precise
-limitation and follow-up work are tracked in
-[docs/initial-investigation.md](docs/initial-investigation.md#ble-midi-gatt-limitation).
-An [AROS source patch](patches/README.md) for 128-bit GATT discovery and
-Write Without Response is available in this repository.
+The optional [BLE MIDI central transport](docs/ble-midi.md) connects a
+registered BLE MIDI peripheral to CAMD through `bluetooth.library`. Its
+portable packet codec supports running status, timestamps and multi-packet
+SysEx. The [AROS GATT patch](patches/README.md) supplies 128-bit UUID
+discovery and Write Without Response. The runtime still needs a build and
+physical BLE test. AROS cannot advertise itself as a BLE MIDI peripheral
+until its Bluetooth stack has GATT server support.
 
 ### MIDI 2.0 / UMP
 

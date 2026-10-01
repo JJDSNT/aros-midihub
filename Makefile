@@ -13,8 +13,13 @@ HEADERS = include/midihub/applemidi.h include/midihub/rtpmidi.h \
 
 .PHONY: test test-network test-synth demo m68k synth-m68k clean
 
-test: build/protocol-test
+test: build/protocol-test build/ble-midi-test
 	./build/protocol-test
+	./build/ble-midi-test
+
+build/ble-midi-test: tests/ble_midi.c src/ble_midi.c include/midihub/ble_midi.h
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/ble_midi.c src/ble_midi.c
 
 demo: build/MIDIHub
 
