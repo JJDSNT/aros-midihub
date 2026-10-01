@@ -4,8 +4,8 @@ Status: October 1, 2026. This document records verified findings and the
 implementation sequence. The first increment includes AppleMIDI and RTP-MIDI
 packet codecs, invitation negotiation for one peer, host tests, a native
 self-test, and a UDP diagnostic program. The program opens both ports,
-exchanges invitations and CK messages, and can send a test note. It does not
-yet estimate clock offset or schedule future events. The CAMD bridge for
+exchanges invitations and CK messages, and can send a test note. It estimates
+clock offset and schedules future short MIDI events. The CAMD bridge for
 short messages and SysEx is implemented but has not been exercised inside a
 running AROS instance. Audio output is not yet integrated.
 

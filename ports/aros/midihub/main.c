@@ -55,6 +55,7 @@ struct runtime {
     uint32_t received_sequence;
     uint64_t last_invite;
     uint64_t last_sync;
+    uint64_t last_peer_sync;
     uint64_t last_rtp_send;
     unsigned int sync_exchanges;
     int sync_outstanding;
@@ -484,6 +485,7 @@ static void receive_sync(struct runtime *rt,
         incoming->ssrc != rt->session.peer_ssrc)
         return;
     if (incoming->sync_count == 0 && !rt->initiating) {
+        rt->last_peer_sync = now;
         response = *incoming;
         response.ssrc = rt->session.local_ssrc;
         response.sync_count = 1;
@@ -591,6 +593,7 @@ static void receive_packet(struct runtime *rt, int data_port)
         } else if (rt->session.phase == MH_SESSION_CONNECTED &&
                    packet.command == MH_APPLE_IN && data_port) {
             puts("MIDIHub: session connected");
+            rt->last_peer_sync = now;
         } else if (packet.command == MH_APPLE_BY &&
                    rt->session.phase == MH_SESSION_IDLE) {
             puts("MIDIHub: peer disconnected");
@@ -846,6 +849,24 @@ static void periodic(struct runtime *rt, uint64_t now)
             }
         }
     } else if (rt->session.phase == MH_SESSION_CONNECTED) {
+        if (!rt->initiating &&
+            elapsed_ticks(now, rt->last_peer_sync) >= 1200000) {
+            struct mh_apple_packet goodbye;
+            puts("MIDIHub: peer synchronization timed out");
+            if (mh_session_end(&rt->session, &goodbye) == 0)
+                send_apple(rt, 0, &goodbye);
+            rt->have_peer = 0;
+            rt->sync_ready = 0;
+            rt->peer_to_local = 0;
+            rt->sync_t1 = rt->sync_t2 = 0;
+            rt->have_received_sequence = 0;
+            mh_sysex_reset(&rt->sysex);
+            mh_queue_reset(&rt->queue);
+            release_active_notes(rt);
+            reset_channel_state(rt);
+            mh_sender_reset(&rt->sender);
+            return;
+        }
         if (rt->initiating &&
             elapsed_ticks(now, rt->last_sync) >=
                 (rt->sync_exchanges < 3 ? 10000u : 500000u))

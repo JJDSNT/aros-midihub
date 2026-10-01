@@ -308,7 +308,8 @@ and removes confirmed history when AppleMIDI `RS` feedback arrives. While
 unconfirmed history remains, it sends an empty MIDI guard packet once per
 second so the peer can recover a lost final event. The initiator exchanges
 clocks three times during startup, then every 50 seconds. System messages
-and SysEx are sent without recovery journals.
+and SysEx are sent without recovery journals. A responder closes a session
+after two minutes without peer clock synchronization and releases active notes.
 
 Run the portable codec tests with `make test`. For an AROS source checkout,
 place this repository at `contrib/extras/aros-midihub` and build the
