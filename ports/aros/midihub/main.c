@@ -169,7 +169,7 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
     unsigned int channel = status & 0x0f;
     if (length == 3 && status >= 0x80 && status <= 0x9f) {
         rt->active_notes[channel][bytes[1]] =
-            (status & 0xf0) == 0x90 && bytes[2] != 0;
+            (status & 0xf0) == 0x90 ? bytes[2] : 0;
     } else if (length == 3 && (status & 0xf0) == 0xb0 &&
                (bytes[1] == 120 || bytes[1] >= 123)) {
         memset(rt->active_notes[channel], 0,
@@ -195,19 +195,22 @@ static void release_active_notes(struct runtime *rt)
     }
 }
 
-static void recover_note_offs(struct runtime *rt,
-                              const struct mh_journal *journal,
-                              int single_loss)
+static void recover_notes(struct runtime *rt,
+                          const struct mh_journal *journal,
+                          int single_loss, uint32_t timestamp)
 {
-    uint8_t offbits[16];
+    struct mh_journal_notes notes;
     uint8_t message[3];
     size_t i;
+    size_t log_index;
     unsigned int octave;
     unsigned int bit;
     unsigned int note;
     size_t cancelled;
-    int safe;
     int decoded;
+    uint64_t due;
+    uint64_t now;
+    int timely;
 
     if (single_loss && journal->single_packet_safe)
         return;
@@ -215,15 +218,17 @@ static void recover_note_offs(struct runtime *rt,
         const struct mh_journal_channel *channel = &journal->channels[i];
         if (single_loss && channel->single_packet_safe)
             continue;
-        decoded = mh_journal_note_offs(channel, offbits, &safe);
-        if (decoded <= 0 || (single_loss && safe))
+        decoded = mh_journal_decode_notes(channel, &notes);
+        if (decoded <= 0)
             continue;
         message[0] = (uint8_t)(0x80 | channel->number);
         message[2] = 0;
-        for (octave = 0; octave < 16; ++octave) {
+        for (octave = 0; octave < 16 &&
+                         (!single_loss || !notes.offbits_single_packet_safe);
+             ++octave) {
             for (bit = 0; bit < 8; ++bit) {
                 note = octave * 8 + bit;
-                if (!(offbits[octave] & (0x80u >> bit)))
+                if (!(notes.offbits[octave] & (0x80u >> bit)))
                     continue;
                 cancelled = mh_queue_cancel_note_on(&rt->queue,
                                                     channel->number,
@@ -239,6 +244,43 @@ static void recover_note_offs(struct runtime *rt,
                 printf("MIDIHub: recovered Note Off channel=%u note=%u\n",
                        (unsigned int)channel->number, note);
             }
+        }
+        now = now_ticks();
+        timely = rt->sync_ready &&
+                 mh_clock_due(timestamp, now, rt->peer_to_local, &due) == 0 &&
+                 (due >= now || now - due <= 200);
+        for (log_index = 0; log_index < notes.log_count; ++log_index) {
+            const struct mh_journal_note_log *log = &notes.logs[log_index];
+            if (single_loss && log->single_packet_safe)
+                continue;
+            if (rt->active_notes[channel->number][log->number] ==
+                log->velocity ||
+                mh_queue_has_note_on(&rt->queue, channel->number,
+                                     log->number))
+                continue;
+            if (rt->active_notes[channel->number][log->number]) {
+                message[0] = (uint8_t)(0x80 | channel->number);
+                message[1] = log->number;
+                message[2] = 0;
+                deliver_short(rt, message, sizeof(message));
+            }
+            if (!log->simultaneous || !timely)
+                continue;
+            message[0] = (uint8_t)(0x90 | channel->number);
+            message[1] = log->number;
+            message[2] = log->velocity;
+            if (due > now) {
+                if (due - now > 100000 ||
+                    mh_queue_push(&rt->queue, due, message,
+                                  sizeof(message)) != 0)
+                    continue;
+            } else {
+                deliver_short(rt, message, sizeof(message));
+            }
+            printf("MIDIHub: recovered Note On channel=%u note=%u velocity=%u\n",
+                   (unsigned int)channel->number,
+                   (unsigned int)log->number,
+                   (unsigned int)log->velocity);
         }
     }
 }
@@ -400,7 +442,8 @@ static void receive_packet(struct runtime *rt, int data_port)
     if (sequence_advance > 1 && midi.journal &&
         mh_journal_covers_gap(previous_sequence, midi.sequence,
                               journal.checkpoint))
-        recover_note_offs(rt, &journal, sequence_advance == 2);
+        recover_notes(rt, &journal, sequence_advance == 2,
+                      midi.timestamp);
     if (!midi.midi_length)
         return; /* Guard packet: acknowledge its journal without MIDI output. */
     printf("MIDIHub: RTP-MIDI seq=%u timestamp=%lu length=%lu bytes=",

@@ -204,18 +204,34 @@ static void journal_note_offs(void)
         0x80, 0x00,
         0x80, 0x77, 0x08
     };
+    static const uint8_t note_on[] = {
+        0x20, 0, 4, 0x00, 0x07, 0x08, 0x01, 0xf1, 0x3c, 0xe4
+    };
+    static const uint8_t duplicate_notes[] = {
+        0x20, 0, 4, 0x00, 0x09, 0x08, 0x02, 0xf1,
+        0x3c, 0xe4, 0x3c, 0x64
+    };
     struct mh_journal journal;
-    uint8_t offbits[16];
-    int safe;
+    struct mh_journal_notes notes;
 
     assert(mh_journal_decode(note_only, sizeof(note_only), &journal) == 0);
-    assert(mh_journal_note_offs(&journal.channels[0], offbits, &safe) == 1);
-    assert(!safe && offbits[7] == 0x08 && offbits[6] == 0);
+    assert(mh_journal_decode_notes(&journal.channels[0], &notes) == 1);
+    assert(!notes.offbits_single_packet_safe &&
+           notes.offbits[7] == 0x08 && notes.offbits[6] == 0);
     assert(mh_journal_decode(preceded, sizeof(preceded), &journal) == 0);
-    assert(mh_journal_note_offs(&journal.channels[0], offbits, &safe) == 1);
-    assert(safe && offbits[7] == 0x08);
+    assert(mh_journal_decode_notes(&journal.channels[0], &notes) == 1);
+    assert(notes.offbits_single_packet_safe && notes.offbits[7] == 0x08);
     journal.channels[0].length--;
-    assert(mh_journal_note_offs(&journal.channels[0], offbits, &safe) == -1);
+    assert(mh_journal_decode_notes(&journal.channels[0], &notes) == -1);
+    assert(mh_journal_decode(note_on, sizeof(note_on), &journal) == 0);
+    assert(mh_journal_decode_notes(&journal.channels[0], &notes) == 1);
+    assert(notes.log_count == 1 && notes.logs[0].number == 60 &&
+           notes.logs[0].velocity == 100 && notes.logs[0].simultaneous &&
+           !notes.logs[0].single_packet_safe);
+    assert(notes.offbits[7] == 0);
+    assert(mh_journal_decode(duplicate_notes, sizeof(duplicate_notes),
+                             &journal) == 0);
+    assert(mh_journal_decode_notes(&journal.channels[0], &notes) == -1);
 }
 
 static void rtp_command_reader(void)
@@ -480,9 +496,11 @@ static void clock_and_queue(void)
     assert(mh_queue_push(&queue, 300, first, sizeof(first)) == 0);
     assert(mh_queue_push(&queue, 200, second, sizeof(second)) == 0);
     assert(mh_queue_cancel_note_on(&queue, 0, 60) == 1);
+    assert(!mh_queue_has_note_on(&queue, 0, 60));
     assert(mh_queue_next_due(&queue, &due) == 1 && due == 200);
     assert(mh_queue_cancel_note_on(&queue, 0, 60) == 0);
     assert(mh_queue_push(&queue, 400, first, sizeof(first)) == 0);
+    assert(mh_queue_has_note_on(&queue, 0, 60));
     mh_queue_reset(&queue);
     assert(mh_queue_pop_due(&queue, 400, &event) == 0);
 }

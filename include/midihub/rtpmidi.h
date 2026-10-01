@@ -41,9 +41,23 @@ int mh_journal_decode(const uint8_t *data, size_t length,
                       struct mh_journal *journal);
 int mh_journal_covers_gap(uint16_t previous, uint16_t current,
                           uint16_t checkpoint);
-/* Extract Chapter N NoteOff bits. 0: absent, 1: decoded, -1: malformed. */
-int mh_journal_note_offs(const struct mh_journal_channel *channel,
-                         uint8_t offbits[16], int *single_packet_safe);
+struct mh_journal_note_log {
+    uint8_t number;
+    uint8_t velocity;
+    uint8_t simultaneous;
+    uint8_t single_packet_safe;
+};
+
+struct mh_journal_notes {
+    uint8_t offbits[16];
+    int offbits_single_packet_safe;
+    struct mh_journal_note_log logs[128];
+    size_t log_count;
+};
+
+/* Decode Chapter N. 0: absent, 1: decoded, -1: malformed. */
+int mh_journal_decode_notes(const struct mh_journal_channel *channel,
+                            struct mh_journal_notes *notes);
 
 /* Iterates MIDI 1.0 short commands in a decoded RTP-MIDI command section.
  * SysEx and unsupported system commands return -2; malformed data returns

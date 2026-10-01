@@ -175,8 +175,8 @@ int mh_journal_covers_gap(uint16_t previous, uint16_t current,
            (uint16_t)(first_missing - checkpoint) < 0x8000;
 }
 
-int mh_journal_note_offs(const struct mh_journal_channel *channel,
-                         uint8_t offbits[16], int *single_packet_safe)
+int mh_journal_decode_notes(const struct mh_journal_channel *channel,
+                            struct mh_journal_notes *notes)
 {
     const uint8_t *data;
     size_t length;
@@ -186,12 +186,14 @@ int mh_journal_note_offs(const struct mh_journal_channel *channel,
     size_t off_count;
     unsigned int low;
     unsigned int high;
+    uint8_t seen[16] = {0};
+    size_t i;
+    uint8_t number;
 
-    if (!channel || !offbits || !single_packet_safe || !channel->data ||
+    if (!channel || !notes || !channel->data ||
         channel->length < 3)
         return -1;
-    memset(offbits, 0, 16);
-    *single_packet_safe = 0;
+    memset(notes, 0, sizeof(*notes));
     if (!(channel->chapters & 0x08))
         return 0;
     data = channel->data;
@@ -218,7 +220,7 @@ int mh_journal_note_offs(const struct mh_journal_channel *channel,
         offset += 2; /* Chapter W. */
     }
     if (length - offset < 2) return -1;
-    *single_packet_safe = !!(data[offset] & 0x80);
+    notes->offbits_single_packet_safe = !!(data[offset] & 0x80);
     logs = data[offset] & 0x7f;
     low = data[offset + 1] >> 4;
     high = data[offset + 1] & 0x0f;
@@ -232,8 +234,26 @@ int mh_journal_note_offs(const struct mh_journal_channel *channel,
         ++logs;
     size = 2 + logs * 2 + off_count;
     if (size > length - offset) return -1;
+    notes->log_count = logs;
+    for (i = 0; i < logs; ++i) {
+        const uint8_t *log = data + offset + 2 + i * 2;
+        struct mh_journal_note_log *entry = &notes->logs[i];
+        number = log[0] & 0x7f;
+        if (!((log[1] & 0x7f)) ||
+            (seen[number / 8] & (0x80u >> (number % 8))))
+            return -1;
+        seen[number / 8] |= (uint8_t)(0x80u >> (number % 8));
+        entry->number = number;
+        entry->velocity = log[1] & 0x7f;
+        entry->single_packet_safe = !!(log[0] & 0x80);
+        entry->simultaneous = !!(log[1] & 0x80);
+    }
     if (off_count)
-        memcpy(offbits + low, data + offset + 2 + logs * 2, off_count);
+        memcpy(notes->offbits + low,
+               data + offset + 2 + logs * 2, off_count);
+    for (i = 0; i < 16; ++i)
+        if (seen[i] & notes->offbits[i])
+            return -1;
     return 1;
 }
 

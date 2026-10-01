@@ -187,8 +187,38 @@ def run_feedback_case(binary):
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
         assert struct.unpack(">I", feedback[8:12])[0] == 0x10008
-        log.seek(0)
-        output = log.read().decode(errors="replace")
+        note_off = struct.pack(">BBHII", 0x80, 0xe1, 9, 100, peer_ssrc)
+        data.sendto(note_off + b"\x03\x80\x3c\x00",
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x10009
+        t1 = int(time.time() * 10000)
+        ck0 = struct.pack(">4sIB3xQQQ", b"\xff\xffCK", peer_ssrc,
+                          0, t1, 0, 0)
+        data.sendto(ck0, ("127.0.0.1", port + 1))
+        ck1, _ = data.recvfrom(128)
+        assert ck1[:4] == b"\xff\xffCK" and ck1[8] == 1
+        t2 = struct.unpack(">Q", ck1[20:28])[0]
+        ck2 = struct.pack(">4sIB3xQQQ", b"\xff\xffCK", peer_ssrc,
+                          2, t1, t2, int(time.time() * 10000))
+        data.sendto(ck2, ("127.0.0.1", port + 1))
+        future = int(time.time() * 10000) + 3000
+        missed_on = struct.pack(">BBHII", 0x80, 0xe1, 11,
+                                future & 0xffffffff, peer_ssrc)
+        on_journal = b"\x20\x00\x0a\x00\x07\x08\x01\xf1\x3c\xe4"
+        data.sendto(missed_on + b"\x40" + on_journal,
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x1000B
+        deadline = time.monotonic() + 1
+        while True:
+            log.seek(0)
+            output = log.read().decode(errors="replace")
+            if "recovered Note On channel=0 note=60 velocity=100" in output:
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(output)
+            time.sleep(0.01)
         assert "malformed recovery journal discarded" in output
         assert "1 RTP packet(s) lost; journal covers gap" in output
         assert "recovered Note Off channel=0 note=60" in output

@@ -93,8 +93,9 @@ yet connected to CAMD, and AROS playback has not been run.
   lengths, detects RTP sequence gaps, and reports whether the journal
   checkpoint covers a gap. It interprets Chapter N NoteOff bitfields to
   release notes that are still active after a covered gap and to cancel
-  matching future NoteOn events. It does not yet recover NoteOn commands or
-  other chapters, or send outgoing journals.
+  matching future NoteOn events. It also recovers timely lost NoteOn commands
+  when the journal's Y hint requests playback and clock sync is available.
+  Other chapters and outgoing journals remain to be implemented.
 
 ## Recommended architecture
 

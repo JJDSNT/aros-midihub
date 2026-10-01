@@ -33,5 +33,7 @@ int mh_queue_pop_due(struct mh_event_queue *queue, uint64_t now,
 int mh_queue_next_due(const struct mh_event_queue *queue, uint64_t *due);
 size_t mh_queue_cancel_note_on(struct mh_event_queue *queue,
                                 uint8_t channel, uint8_t note);
+int mh_queue_has_note_on(const struct mh_event_queue *queue,
+                          uint8_t channel, uint8_t note);
 
 #endif

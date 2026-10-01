@@ -121,3 +121,19 @@ size_t mh_queue_cancel_note_on(struct mh_event_queue *queue,
     queue->count = write_index;
     return read_index;
 }
+
+int mh_queue_has_note_on(const struct mh_event_queue *queue,
+                          uint8_t channel, uint8_t note)
+{
+    size_t i;
+    if (!queue || channel >= 16 || note >= 128)
+        return 0;
+    for (i = 0; i < queue->count; ++i) {
+        const struct mh_queued_event *event = &queue->events[i];
+        if (event->length == 3 &&
+            event->bytes[0] == (uint8_t)(0x90 | channel) &&
+            event->bytes[1] == note && event->bytes[2])
+            return 1;
+    }
+    return 0;
+}
