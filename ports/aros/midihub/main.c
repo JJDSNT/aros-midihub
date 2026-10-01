@@ -78,6 +78,10 @@ struct runtime {
     uint8_t controller_known[16][128];
     uint8_t sustain_toggles[16];
     uint8_t controller_count[16][128];
+    uint8_t channel_pressure[16];
+    uint8_t channel_pressure_known[16];
+    uint8_t poly_pressure[16][128];
+    uint8_t poly_pressure_known[16][128];
     struct mh_camd_bridge camd;
     int camd_opened;
 };
@@ -214,6 +218,12 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
             rt->bank_lsb_known[channel] = 1;
         } else if (bytes[1] == 121) {
             rt->pitch[channel] = 0x2000;
+            rt->channel_pressure[channel] = 0;
+            rt->channel_pressure_known[channel] = 1;
+            memset(rt->poly_pressure[channel], 0,
+                   sizeof(rt->poly_pressure[channel]));
+            memset(rt->poly_pressure_known[channel], 1,
+                   sizeof(rt->poly_pressure_known[channel]));
             if (rt->controllers[channel][64] >= 64) {
                 rt->sustain_toggles[channel] =
                     (uint8_t)((rt->sustain_toggles[channel] + 1) & 0x3f);
@@ -221,6 +231,12 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
                 rt->controller_known[channel][64] = 1;
             }
         }
+    } else if (length == 2 && (status & 0xf0) == 0xd0) {
+        rt->channel_pressure[channel] = bytes[1];
+        rt->channel_pressure_known[channel] = 1;
+    } else if (length == 3 && (status & 0xf0) == 0xa0) {
+        rt->poly_pressure[channel][bytes[1]] = bytes[2];
+        rt->poly_pressure_known[channel][bytes[1]] = 1;
     } else if (length == 3 && (status & 0xf0) == 0xe0) {
         rt->pitch[channel] = (uint16_t)(bytes[1] | (bytes[2] << 7));
     }
@@ -237,6 +253,9 @@ static void reset_channel_state(struct runtime *rt)
     memset(rt->controllers, 0, sizeof(rt->controllers));
     memset(rt->sustain_toggles, 0, sizeof(rt->sustain_toggles));
     memset(rt->controller_count, 0, sizeof(rt->controller_count));
+    memset(rt->channel_pressure_known, 0,
+           sizeof(rt->channel_pressure_known));
+    memset(rt->poly_pressure_known, 0, sizeof(rt->poly_pressure_known));
     for (channel = 0; channel < 16; ++channel)
         rt->pitch[channel] = 0x2000;
 }
@@ -476,6 +495,49 @@ static void recover_notes(struct runtime *rt,
     }
 }
 
+static void recover_aftertouch(struct runtime *rt,
+                               const struct mh_journal *journal,
+                               int single_loss)
+{
+    struct mh_journal_aftertouch aftertouch;
+    uint8_t message[3];
+    size_t i;
+    size_t j;
+    unsigned int channel;
+    if (single_loss && journal->single_packet_safe) return;
+    for (i = 0; i < journal->channel_count; ++i) {
+        const struct mh_journal_channel *entry = &journal->channels[i];
+        if (single_loss && entry->single_packet_safe) continue;
+        if (mh_journal_decode_aftertouch(entry, &aftertouch) <= 0) continue;
+        channel = entry->number;
+        if (aftertouch.has_channel_pressure &&
+            (!single_loss || !aftertouch.channel_single_packet_safe) &&
+            (!rt->channel_pressure_known[channel] ||
+             rt->channel_pressure[channel] != aftertouch.channel_pressure)) {
+            message[0] = (uint8_t)(0xd0 | channel);
+            message[1] = aftertouch.channel_pressure;
+            deliver_short(rt, message, 2);
+            printf("MIDIHub: recovered Channel Aftertouch channel=%u pressure=%u\n",
+                   channel, (unsigned int)message[1]);
+        }
+        for (j = 0; j < aftertouch.poly_count; ++j) {
+            const struct mh_journal_poly_pressure *log = &aftertouch.poly[j];
+            if ((single_loss && log->single_packet_safe) ||
+                log->reset_notes || !rt->active_notes[channel][log->number] ||
+                (rt->poly_pressure_known[channel][log->number] &&
+                 rt->poly_pressure[channel][log->number] == log->pressure))
+                continue;
+            message[0] = (uint8_t)(0xa0 | channel);
+            message[1] = log->number;
+            message[2] = log->pressure;
+            deliver_short(rt, message, 3);
+            printf("MIDIHub: recovered Poly Aftertouch channel=%u note=%u pressure=%u\n",
+                   channel, (unsigned int)log->number,
+                   (unsigned int)log->pressure);
+        }
+    }
+}
+
 static void receive_sync(struct runtime *rt,
                          const struct mh_apple_packet *incoming,
                          uint64_t now)
@@ -651,6 +713,7 @@ static void receive_packet(struct runtime *rt, int data_port)
         recover_notes(rt, &journal, sequence_advance == 2,
                       midi.timestamp);
         recover_controls(rt, &journal, sequence_advance == 2);
+        recover_aftertouch(rt, &journal, sequence_advance == 2);
     }
     if (!midi.midi_length)
         return; /* Guard packet: acknowledge its journal without MIDI output. */

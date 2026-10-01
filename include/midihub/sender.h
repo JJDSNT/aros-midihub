@@ -27,6 +27,7 @@ struct mh_sender {
     uint8_t sustain_on[16];
     uint8_t sustain_toggle[16];
     uint8_t reset_count[16][2];
+    uint8_t active_notes[16][128];
 };
 
 void mh_sender_reset(struct mh_sender *sender);

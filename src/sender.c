@@ -20,10 +20,11 @@ int mh_sender_supported(const uint8_t *message, size_t length)
     if (!message || !length || message[0] < 0x80 || message[0] > 0xef)
         return 0;
     type = message[0] & 0xf0;
-    if (type == 0xc0)
+    if (type == 0xc0 || type == 0xd0)
         return length == 2;
     return length == 3 &&
-           (type == 0x80 || type == 0x90 || type == 0xb0 || type == 0xe0);
+           (type == 0x80 || type == 0x90 || type == 0xa0 ||
+            type == 0xb0 || type == 0xe0);
 }
 
 void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
@@ -48,7 +49,10 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
     memcpy(event->bytes, message, length);
     type = message[0] & 0xf0;
     channel = message[0] & 0x0f;
-    if (type == 0xb0) {
+    if (type == 0x80 || type == 0x90) {
+        sender->active_notes[channel][message[1]] =
+            (uint8_t)(type == 0x90 && message[2] != 0);
+    } else if (type == 0xb0) {
         event->recovery_value = message[2];
         if (message[1] == 0) {
             sender->bank_msb[channel] = message[2];
@@ -75,6 +79,9 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
                 (uint8_t)((sender->sustain_toggle[channel] + 1) & 0x3f);
             sender->sustain_on[channel] = 0;
         }
+        if (message[1] == 120 || message[1] >= 123)
+            memset(sender->active_notes[channel], 0,
+                   sizeof(sender->active_notes[channel]));
     } else if (type == 0xc0) {
         event->bank_msb = sender->bank_msb[channel];
         event->bank_lsb = sender->bank_lsb[channel];
@@ -112,12 +119,16 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
 {
     int latest_control[128];
     int latest_note[128];
+    int latest_poly[128];
     int program = -1;
     int pitch = -1;
+    int aftertouch = -1;
+    int reset_controllers = -1;
     size_t i;
     size_t start = *length;
     size_t control_count = 0;
     size_t note_on_count = 0;
+    size_t poly_count = 0;
     uint8_t offbits[16] = {0};
     unsigned int low = 16;
     unsigned int high = 0;
@@ -127,7 +138,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
     uint8_t number;
 
     for (i = 0; i < 128; ++i)
-        latest_control[i] = latest_note[i] = -1;
+        latest_control[i] = latest_note[i] = latest_poly[i] = -1;
     for (i = 0; i < sender->count; ++i) {
         const struct mh_sent_event *event = &sender->events[i];
         if ((event->bytes[0] & 0x0f) != channel)
@@ -137,13 +148,26 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
             latest_note[event->bytes[1]] = (int)i;
         else if (type == 0xb0)
             latest_control[event->bytes[1]] = (int)i;
+        else if (type == 0xa0)
+            latest_poly[event->bytes[1]] = (int)i;
         else if (type == 0xc0)
             program = (int)i;
+        else if (type == 0xd0)
+            aftertouch = (int)i;
         else if (type == 0xe0)
             pitch = (int)i;
+        if (type == 0xb0 && event->bytes[1] == 121)
+            reset_controllers = (int)i;
+    }
+    if (aftertouch <= reset_controllers)
+        aftertouch = -1;
+    if (aftertouch >= 0) {
+        for (i = 0; i < 128 && !sender->active_notes[channel][i]; ++i) {}
+        if (i == 128) aftertouch = -1;
     }
     for (i = 0; i < 128; ++i) {
         if (latest_control[i] >= 0) ++control_count;
+        if (latest_poly[i] > reset_controllers) ++poly_count;
         if (latest_note[i] >= 0) {
             const struct mh_sent_event *event =
                 &sender->events[latest_note[i]];
@@ -159,7 +183,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
         }
     }
     if (program < 0 && pitch < 0 && !control_count &&
-        !note_on_count && low == 16)
+        !note_on_count && low == 16 && aftertouch < 0 && !poly_count)
         return 0;
     if (capacity - *length < 3) return -1;
     *length += 3;
@@ -247,6 +271,53 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
             for (i = low; i <= high; ++i)
                 if (put(data, capacity, length, offbits[i]) < 0)
                     return -1;
+    }
+    if (aftertouch >= 0) {
+        const struct mh_sent_event *event = &sender->events[aftertouch];
+        int is_recent = event->sequence == (uint16_t)(sequence - 1);
+        toc |= 0x02;
+        *recent |= is_recent;
+        if (put(data, capacity, length,
+                (uint8_t)((is_recent ? 0 : 0x80) | event->bytes[1])) < 0)
+            return -1;
+    }
+    if (poly_count) {
+        size_t header = *length;
+        int poly_recent = 0;
+        toc |= 0x01;
+        if (put(data, capacity, length, 0) < 0) return -1;
+        for (i = 0; i < sender->count; ++i) {
+            const struct mh_sent_event *event = &sender->events[i];
+            size_t later;
+            int reset_notes = 0;
+            if ((event->bytes[0] & 0xf0) != 0xa0 ||
+                (event->bytes[0] & 0x0f) != channel ||
+                latest_poly[event->bytes[1]] != (int)i ||
+                (int)i <= reset_controllers)
+                continue;
+            for (later = i + 1; later < sender->count; ++later) {
+                const struct mh_sent_event *next = &sender->events[later];
+                if ((next->bytes[0] & 0xf0) == 0xb0 &&
+                    (next->bytes[0] & 0x0f) == channel &&
+                    (next->bytes[1] == 120 || next->bytes[1] >= 123)) {
+                    reset_notes = 1;
+                    break;
+                }
+            }
+            if (event->sequence == (uint16_t)(sequence - 1))
+                poly_recent = 1;
+            if (put(data, capacity, length,
+                    (uint8_t)((event->sequence ==
+                               (uint16_t)(sequence - 1) ? 0 : 0x80) |
+                              event->bytes[1])) < 0 ||
+                put(data, capacity, length,
+                    (uint8_t)((reset_notes ? 0x80 : 0) |
+                              event->bytes[2])) < 0)
+                return -1;
+        }
+        data[header] = (uint8_t)((poly_recent ? 0 : 0x80) |
+                                 (poly_count - 1));
+        *recent |= poly_recent;
     }
     if (*length - start > 1023) return -1;
     data[start] = (uint8_t)((*recent ? 0 : 0x80) |

@@ -101,7 +101,8 @@ yet connected to CAMD, and AROS playback has not been run.
   All Sound Off (120) and All Notes Off (123). Other alternate logs, other
   chapters, and system journals remain to be implemented. Outgoing channel
   messages include journals from a bounded 32-packet history, trimmed by
-  AppleMIDI RS feedback. Guard packets repeat pending recovery data after
+  AppleMIDI RS feedback. Chapters T and A cover Channel and Poly Aftertouch.
+  Guard packets repeat pending recovery data after
   the last event. SysEx and system messages remain unprotected.
 
 ## Recommended architecture

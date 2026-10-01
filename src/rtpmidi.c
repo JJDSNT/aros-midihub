@@ -176,6 +176,97 @@ int mh_journal_covers_gap(uint16_t previous, uint16_t current,
            (uint16_t)(first_missing - checkpoint) < 0x8000;
 }
 
+int mh_journal_decode_aftertouch(const struct mh_journal_channel *channel,
+                                  struct mh_journal_aftertouch *aftertouch)
+{
+    const uint8_t *data;
+    size_t length;
+    size_t offset = 3;
+    size_t size;
+    size_t logs;
+    size_t off_count;
+    unsigned int low;
+    unsigned int high;
+    size_t i;
+    uint8_t seen[16] = {0};
+    uint8_t number;
+    if (!channel || !aftertouch || !channel->data || channel->length < 3)
+        return -1;
+    memset(aftertouch, 0, sizeof(*aftertouch));
+    if (!(channel->chapters & 0x03)) return 0;
+    data = channel->data;
+    length = channel->length;
+    if (channel->chapters & 0x80) {
+        if (length - offset < 3) return -1;
+        offset += 3;
+    }
+    if (channel->chapters & 0x40) {
+        if (length - offset < 1 || (data[0] & 0x04)) return -1;
+        size = 1 + 2 * ((size_t)(data[offset] & 0x7f) + 1);
+        if (size > length - offset) return -1;
+        offset += size;
+    }
+    if (channel->chapters & 0x20) {
+        if (length - offset < 2) return -1;
+        size = ((size_t)(data[offset] & 3) << 8) | data[offset + 1];
+        if (size < 2 || size > length - offset) return -1;
+        offset += size;
+    }
+    if (channel->chapters & 0x10) {
+        if (length - offset < 2) return -1;
+        offset += 2;
+    }
+    if (channel->chapters & 0x08) {
+        if (length - offset < 2) return -1;
+        logs = data[offset] & 0x7f;
+        low = data[offset + 1] >> 4;
+        high = data[offset + 1] & 0x0f;
+        if (low <= high)
+            off_count = high - low + 1;
+        else if (low == 15 && (high == 0 || high == 1))
+            off_count = 0;
+        else
+            return -1;
+        if (logs == 127 && low == 15 && high == 0) ++logs;
+        size = 2 + logs * 2 + off_count;
+        if (size > length - offset) return -1;
+        offset += size;
+    }
+    if (channel->chapters & 0x04) {
+        if (length - offset < 1) return -1;
+        size = 1 + 2 * ((size_t)(data[offset] & 0x7f) + 1);
+        if (size > length - offset) return -1;
+        offset += size;
+    }
+    if (channel->chapters & 0x02) {
+        if (length - offset < 1) return -1;
+        aftertouch->has_channel_pressure = 1;
+        aftertouch->channel_single_packet_safe = !!(data[offset] & 0x80);
+        aftertouch->channel_pressure = data[offset] & 0x7f;
+        ++offset;
+    }
+    if (channel->chapters & 0x01) {
+        if (length - offset < 1) return -1;
+        logs = (data[offset] & 0x7f) + 1;
+        size = 1 + 2 * logs;
+        if (size > length - offset) return -1;
+        ++offset;
+        aftertouch->poly_count = logs;
+        for (i = 0; i < logs; ++i) {
+            struct mh_journal_poly_pressure *log = &aftertouch->poly[i];
+            number = data[offset] & 0x7f;
+            if (seen[number / 8] & (0x80u >> (number % 8))) return -1;
+            seen[number / 8] |= (uint8_t)(0x80u >> (number % 8));
+            log->number = number;
+            log->single_packet_safe = !!(data[offset] & 0x80);
+            log->reset_notes = !!(data[offset + 1] & 0x80);
+            log->pressure = data[offset + 1] & 0x7f;
+            offset += 2;
+        }
+    }
+    return offset == length ? 1 : -1;
+}
+
 int mh_journal_decode_notes(const struct mh_journal_channel *channel,
                             struct mh_journal_notes *notes)
 {

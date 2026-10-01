@@ -303,8 +303,9 @@ linked for Linux hosted but has not
 yet been exercised inside AROS.
 
 Outgoing channel messages now include recovery journals for notes, Control
-Change, Program Change, and Pitch Bend. The sender retains up to 32 packets
-and removes confirmed history when AppleMIDI `RS` feedback arrives. While
+Change, Program Change, Pitch Bend, Channel Aftertouch, and Poly Aftertouch.
+The sender retains up to 32 packets and removes confirmed history when
+AppleMIDI `RS` feedback arrives. While
 unconfirmed history remains, it sends an empty MIDI guard packet once per
 second so the peer can recover a lost final event. The initiator exchanges
 clocks three times during startup, then every 50 seconds. System messages

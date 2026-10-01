@@ -94,6 +94,25 @@ struct mh_journal_controls {
 int mh_journal_decode_controls(const struct mh_journal_channel *channel,
                                 struct mh_journal_controls *controls);
 
+struct mh_journal_poly_pressure {
+    uint8_t number;
+    uint8_t pressure;
+    uint8_t reset_notes;
+    uint8_t single_packet_safe;
+};
+
+struct mh_journal_aftertouch {
+    int has_channel_pressure;
+    int channel_single_packet_safe;
+    uint8_t channel_pressure;
+    struct mh_journal_poly_pressure poly[128];
+    size_t poly_count;
+};
+
+/* Decode Chapters T and A. 0: absent, 1: decoded, -1: malformed. */
+int mh_journal_decode_aftertouch(const struct mh_journal_channel *channel,
+                                  struct mh_journal_aftertouch *aftertouch);
+
 /* Iterates MIDI 1.0 short commands in a decoded RTP-MIDI command section.
  * SysEx and unsupported system commands return -2; malformed data returns
  * -1. A result of 1 contains a command, and 0 means end of list. */

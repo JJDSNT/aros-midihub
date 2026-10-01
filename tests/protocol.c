@@ -307,11 +307,15 @@ static void outgoing_journal(void)
     const uint8_t program[] = {0xc0, 5};
     const uint8_t pitch[] = {0xe0, 1, 32};
     const uint8_t volume[] = {0xb0, 7, 90};
+    const uint8_t channel_pressure[] = {0xd0, 40};
+    const uint8_t poly_pressure[] = {0xa0, 60, 50};
+    const uint8_t reset_controllers[] = {0xb0, 121, 0};
     struct mh_sender sender;
     struct mh_journal journal;
     struct mh_journal_notes notes;
     struct mh_journal_channel_state channel_state;
     struct mh_journal_controls controls;
+    struct mh_journal_aftertouch aftertouch;
     uint8_t bytes[256];
     size_t length;
 
@@ -367,6 +371,30 @@ static void outgoing_journal(void)
     assert(sender.count == 1 && sender.events[0].sequence == 105);
     mh_sender_clear_history(&sender);
     assert(sender.count == 0);
+    mh_sender_reset(&sender);
+    mh_sender_record(&sender, 200, 2000, on, sizeof(on));
+    mh_sender_record(&sender, 201, 2010, channel_pressure,
+                      sizeof(channel_pressure));
+    mh_sender_record(&sender, 202, 2020, poly_pressure,
+                      sizeof(poly_pressure));
+    assert(mh_sender_journal(&sender, 203, 2030,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(journal.channels[0].chapters == 0x0b);
+    assert(mh_journal_decode_aftertouch(&journal.channels[0],
+                                        &aftertouch) == 1);
+    assert(aftertouch.has_channel_pressure &&
+           aftertouch.channel_pressure == 40 &&
+           aftertouch.poly_count == 1 &&
+           aftertouch.poly[0].number == 60 &&
+           aftertouch.poly[0].pressure == 50);
+    mh_sender_record(&sender, 203, 2030, reset_controllers,
+                      sizeof(reset_controllers));
+    assert(mh_sender_journal(&sender, 204, 2040,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_aftertouch(&journal.channels[0],
+                                        &aftertouch) == 0);
 }
 
 static void rtp_command_reader(void)
