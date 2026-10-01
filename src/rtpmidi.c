@@ -191,6 +191,12 @@ int mh_rtp_reader_next(struct mh_rtp_reader *reader,
     if (status >= 0x80 && status <= 0xef)
         needed = ((status & 0xf0) == 0xc0 ||
                   (status & 0xf0) == 0xd0) ? 1 : 2;
+    else if (status == 0xf1 || status == 0xf3)
+        needed = 1;
+    else if (status == 0xf2)
+        needed = 2;
+    else if (status == 0xf6)
+        needed = 0;
     else if (status >= 0xf8 && status != 0xf9 && status != 0xfd)
         needed = 0;
     else

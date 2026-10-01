@@ -11,7 +11,8 @@ enum mh_apple_command {
     MH_APPLE_OK = 0x4f4b,
     MH_APPLE_NO = 0x4e4f,
     MH_APPLE_BY = 0x4259,
-    MH_APPLE_CK = 0x434b
+    MH_APPLE_CK = 0x434b,
+    MH_APPLE_RS = 0x5253
 };
 
 struct mh_apple_packet {
@@ -22,6 +23,7 @@ struct mh_apple_packet {
     size_t name_length;
     uint8_t sync_count;
     uint64_t timestamps[3];
+    uint32_t feedback_sequence;
 };
 
 /* Returns 0 for success, -1 for invalid data or insufficient capacity. */

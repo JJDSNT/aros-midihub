@@ -4,6 +4,7 @@ import os
 import selectors
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -103,12 +104,70 @@ def run_case(binary, probe, expected, use_config=False):
             directory.cleanup()
 
 
+def run_feedback_case(binary):
+    """Use a raw AppleMIDI peer to inspect control-port receiver feedback."""
+    port = free_port_pair()
+    control = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    data = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    control.bind(("127.0.0.1", port + 2))
+    data.bind(("127.0.0.1", port + 3))
+    control.settimeout(0.2)
+    data.settimeout(2)
+    process = subprocess.Popen(
+        [binary, str(port)], stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT
+    )
+    token = 0x12345678
+    peer_ssrc = 0x89ABCDEF
+    invite = b"\xff\xffIN" + struct.pack(">III", 2, token, peer_ssrc) + b"Peer\0"
+    try:
+        deadline = time.monotonic() + 3
+        while True:
+            control.sendto(invite, ("127.0.0.1", port))
+            try:
+                reply, _ = control.recvfrom(128)
+                break
+            except socket.timeout:
+                if time.monotonic() >= deadline:
+                    raise AssertionError("control invitation was not accepted")
+        assert reply[:4] == b"\xff\xffOK" and reply[8:12] == invite[8:12]
+        data.sendto(invite, ("127.0.0.1", port + 1))
+        reply, _ = data.recvfrom(128)
+        assert reply[:4] == b"\xff\xffOK" and reply[8:12] == invite[8:12]
+        for sequence, payload, expected_ack in (
+            (0xffff, b"\x03\x90\x3c\x64", 0xffff),
+            (0, b"\x40\x00\x00\x00", 0x10000),
+        ):
+            packet = struct.pack(">BBHII", 0x80, 0xe1, sequence,
+                                 100, peer_ssrc) + payload
+            data.sendto(packet, ("127.0.0.1", port + 1))
+            control.settimeout(2)
+            feedback, source = control.recvfrom(128)
+            assert source[1] == port
+            assert feedback[:4] == b"\xff\xffRS" and len(feedback) == 12
+            assert struct.unpack(">I", feedback[8:12])[0] == expected_ack
+            if sequence == 0xffff:
+                data.sendto(packet, ("127.0.0.1", port + 1))
+                repeated, _ = control.recvfrom(128)
+                assert repeated == feedback
+    finally:
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        control.close()
+        data.close()
+
+
 def main():
     binary = sys.argv[1]
     run_case(binary, "--probe-note", ("bytes=903c64", "bytes=903c00"))
     run_case(binary, "--probe-sysex",
              ("SysEx complete bytes=4", "SysEx complete bytes=2004"))
     run_case(binary, None, (), use_config=True)
+    run_feedback_case(binary)
     with tempfile.TemporaryDirectory() as directory:
         bad_config = Path(directory) / "invalid.conf"
         bad_config.write_text("local_port=65535\n")

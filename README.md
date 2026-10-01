@@ -280,10 +280,12 @@ AROS MIDIHub is currently in the **initial implementation phase**. AppleMIDI
 control and RTP-MIDI packet codecs, a one-peer invitation state machine, host
 tests, an AROS package self-test, and a UDP diagnostic program are present.
 The program negotiates a session, exchanges CK packets, and bridges MIDI
-messages and SysEx through CAMD clusters on AROS. It does not yet calculate
-clock offset or schedule MIDI playback. Recovery journals, discovery,
-preferences, and synthesis remain to be built. The CAMD bridge has compiled
-and linked for Linux hosted but has not yet been exercised inside AROS.
+messages and SysEx through CAMD clusters on AROS. It acknowledges received
+RTP packets, including journal-only guard packets, with AppleMIDI `RS`
+feedback. It does not yet calculate clock offset or schedule future MIDI
+events. Applying recovery journals, discovery, Preferences, and connecting
+the synthesizer to CAMD remain to be done. The CAMD bridge has compiled and
+linked for Linux hosted but has not yet been exercised inside AROS.
 
 Run the portable codec tests with `make test`. For an AROS source checkout,
 place this repository at `contrib/extras/aros-midihub` and build the

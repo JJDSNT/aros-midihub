@@ -84,9 +84,12 @@ yet connected to CAMD, and AROS playback has not been run.
   by IP address and port can come first; mDNS/DNS-SD discovery can follow.
 - Apple's driver sends journals but accepts packets without them. For the
   first interoperability test, the sender can use `J=0`. The receiver should
-  at least identify and bound a present journal before applying it. Packet
-  loss and note recovery need explicit later work: without an outgoing
-  journal, the initial version does not claim full RFC 6295 recovery.
+  at least identify and bound a present journal before applying it. AppleMIDI
+  receiver feedback (`RS`) reports the most recent accepted RTP sequence on
+  the control port, including journal-only guard packets; MIDIHub now sends
+  this feedback. Packet loss and note recovery need explicit later work:
+  without interpreting incoming journals or sending outgoing journals, the
+  current version does not claim full RFC 6295 recovery.
 
 ## Recommended architecture
 

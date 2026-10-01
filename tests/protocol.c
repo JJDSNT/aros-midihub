@@ -65,6 +65,26 @@ static void apple_sync(void)
     assert(mh_apple_decode(encoded, sizeof(encoded), &packet) == -1);
 }
 
+static void apple_feedback(void)
+{
+    static const uint8_t feedback[] = {
+        0xff, 0xff, 'R', 'S', 0x89, 0xab, 0xcd, 0xef,
+        0x00, 0x01, 0x00, 0x02
+    };
+    struct mh_apple_packet packet;
+    uint8_t encoded[12];
+    size_t length;
+
+    assert(mh_apple_decode(feedback, sizeof(feedback), &packet) == 0);
+    assert(packet.command == MH_APPLE_RS && packet.ssrc == 0x89abcdef);
+    assert(packet.feedback_sequence == 0x00010002);
+    assert(mh_apple_encode(&packet, encoded, sizeof(encoded), &length) == 0);
+    assert(length == sizeof(feedback) && !memcmp(encoded, feedback, length));
+    assert(mh_apple_decode(feedback, sizeof(feedback) - 1, &packet) == -1);
+    assert(mh_apple_encode(&packet, encoded, sizeof(encoded) - 1,
+                           &length) == -1);
+}
+
 static void rtp_short(void)
 {
     static const uint8_t note[] = {0x90, 60, 100};
@@ -165,6 +185,39 @@ static void rtp_command_reader(void)
     packet.midi = (const uint8_t *)"\xf0";
     packet.midi_length = 1;
     mh_rtp_reader_init(&reader, &packet);
+    assert(mh_rtp_reader_next(&reader, &event) == -1);
+}
+
+static void rtp_system_common(void)
+{
+    static const uint8_t midi[] = {
+        0xf1, 0x7f, 0, 0xf2, 1, 2, 0, 0xf3, 4, 0, 0xf6
+    };
+    static const uint8_t broken_running_status[] = {
+        0x90, 60, 100, 0, 0xf1, 1, 0, 61, 101
+    };
+    struct mh_rtp_packet packet = {0};
+    struct mh_rtp_reader reader;
+    struct mh_midi_event event;
+
+    packet.midi = midi;
+    packet.midi_length = sizeof(midi);
+    mh_rtp_reader_init(&reader, &packet);
+    assert(mh_rtp_reader_next(&reader, &event) == 1 &&
+           event.length == 2 && event.bytes[0] == 0xf1);
+    assert(mh_rtp_reader_next(&reader, &event) == 1 &&
+           event.length == 3 && event.bytes[0] == 0xf2);
+    assert(mh_rtp_reader_next(&reader, &event) == 1 &&
+           event.length == 2 && event.bytes[0] == 0xf3);
+    assert(mh_rtp_reader_next(&reader, &event) == 1 &&
+           event.length == 1 && event.bytes[0] == 0xf6);
+    assert(mh_rtp_reader_next(&reader, &event) == 0);
+
+    packet.midi = broken_running_status;
+    packet.midi_length = sizeof(broken_running_status);
+    mh_rtp_reader_init(&reader, &packet);
+    assert(mh_rtp_reader_next(&reader, &event) == 1);
+    assert(mh_rtp_reader_next(&reader, &event) == 1);
     assert(mh_rtp_reader_next(&reader, &event) == -1);
 }
 
@@ -319,9 +372,11 @@ int main(void)
 {
     apple_exchange();
     apple_sync();
+    apple_feedback();
     rtp_short();
     rtp_journal_and_lengths();
     rtp_command_reader();
+    rtp_system_common();
     rtp_sysex();
     session_handshake();
     session_rejection();

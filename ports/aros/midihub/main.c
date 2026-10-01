@@ -45,7 +45,9 @@ struct runtime {
     int probe_sysex;
     int probe_state;
     int sync_ready;
+    int have_received_sequence;
     uint16_t sequence;
+    uint32_t received_sequence;
     uint64_t last_invite;
     uint64_t last_sync;
     uint64_t note_time;
@@ -130,6 +132,30 @@ static void send_sync(struct runtime *rt, uint64_t now)
         rt->last_sync = now;
 }
 
+static int send_feedback(struct runtime *rt, uint16_t sequence)
+{
+    struct mh_apple_packet feedback;
+    int16_t advance;
+    int fresh = 1;
+
+    if (!rt->have_received_sequence) {
+        rt->received_sequence = sequence;
+        rt->have_received_sequence = 1;
+    } else {
+        advance = (int16_t)(sequence - (uint16_t)rt->received_sequence);
+        if (advance <= 0)
+            fresh = 0;
+        else
+            rt->received_sequence += (uint16_t)advance;
+    }
+    memset(&feedback, 0, sizeof(feedback));
+    feedback.command = MH_APPLE_RS;
+    feedback.ssrc = rt->session.local_ssrc;
+    feedback.feedback_sequence = rt->received_sequence;
+    send_apple(rt, 0, &feedback);
+    return fresh;
+}
+
 static void receive_sync(struct runtime *rt,
                          const struct mh_apple_packet *incoming,
                          uint64_t now)
@@ -208,6 +234,8 @@ static void receive_packet(struct runtime *rt, int data_port)
                 receive_sync(rt, &packet, now);
             return;
         }
+        if (packet.command == MH_APPLE_RS)
+            return; /* No outgoing recovery journal to prune yet. */
         action = mh_session_receive(&rt->session, data_port, &packet,
                                     &response, &response_port);
         if (action == 1)
@@ -229,14 +257,25 @@ static void receive_packet(struct runtime *rt, int data_port)
             puts("MIDIHub: peer disconnected");
             rt->have_peer = 0;
             rt->sync_ready = 0;
+            rt->have_received_sequence = 0;
             mh_sysex_reset(&rt->sysex);
         }
         return;
     }
     if (!data_port || rt->session.phase != MH_SESSION_CONNECTED ||
         mh_rtp_decode(bytes, (size_t)count, &midi) != 0 ||
-        midi.ssrc != rt->session.peer_ssrc || !midi.midi_length)
+        midi.ssrc != rt->session.peer_ssrc)
         return;
+    mh_rtp_reader_init(&reader, &midi);
+    while ((action = mh_rtp_reader_next(&reader, &event)) == 1) {}
+    if (action < 0) {
+        puts("MIDIHub: unsupported or malformed MIDI command");
+        return;
+    }
+    if (!send_feedback(rt, midi.sequence))
+        return; /* A duplicate or older packet must not replay MIDI events. */
+    if (!midi.midi_length)
+        return; /* Guard packet: acknowledge its journal without MIDI output. */
     printf("MIDIHub: RTP-MIDI seq=%u timestamp=%lu length=%lu bytes=",
            (unsigned int)midi.sequence, (unsigned long)midi.timestamp,
            (unsigned long)midi.midi_length);
@@ -395,6 +434,7 @@ static void periodic(struct runtime *rt, uint64_t now)
         puts("MIDIHub: data invitation timed out");
         rt->session.phase = MH_SESSION_IDLE;
         rt->have_peer = 0;
+        rt->have_received_sequence = 0;
         mh_sysex_reset(&rt->sysex);
     }
 }

@@ -79,6 +79,13 @@ int mh_apple_decode(const uint8_t *data, size_t length,
             packet->timestamps[i] = read64(data + 12 + i * 8);
         return 0;
     }
+    if (command == MH_APPLE_RS) {
+        if (length != 12)
+            return -1;
+        packet->ssrc = read32(data + 4);
+        packet->feedback_sequence = read32(data + 8);
+        return 0;
+    }
     return -1;
 }
 
@@ -121,6 +128,14 @@ int mh_apple_encode(const struct mh_apple_packet *packet, uint8_t *data,
         memset(data + 9, 0, 3);
         for (i = 0; i < 3; ++i)
             write64(data + 12 + i * 8, packet->timestamps[i]);
+    } else if (packet->command == MH_APPLE_RS) {
+        if (capacity < 12)
+            return -1;
+        total = 12;
+        write16(data, 0xffff);
+        write16(data + 2, MH_APPLE_RS);
+        write32(data + 4, packet->ssrc);
+        write32(data + 8, packet->feedback_sequence);
     } else {
         return -1;
     }
