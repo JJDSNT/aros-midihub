@@ -2,6 +2,7 @@
 #include "midihub/rtpmidi.h"
 #include "midihub/session.h"
 #include "midihub/sender.h"
+#include "midihub/mdns.h"
 #include "midihub/timing.h"
 
 #include <assert.h>
@@ -397,6 +398,41 @@ static void outgoing_journal(void)
                                         &aftertouch) == 0);
 }
 
+static void mdns_discovery(void)
+{
+    static const uint8_t query[] = {
+        0x12, 0x34, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+        11, '_', 'a', 'p', 'p', 'l', 'e', '-', 'm', 'i', 'd', 'i',
+        4, '_', 'u', 'd', 'p', 5, 'l', 'o', 'c', 'a', 'l', 0,
+        0, 12, 0, 1
+    };
+    const uint8_t ip[] = {192, 168, 100, 20};
+    uint8_t output[512];
+    uint8_t broken[sizeof(query)];
+    size_t length;
+    int unicast;
+    assert(mh_mdns_query(query, sizeof(query), "AROS MIDIHub",
+                         "midihub-5004", &unicast) == 1);
+    assert(!unicast);
+    memcpy(broken, query, sizeof(query));
+    broken[sizeof(broken) - 2] = 0x80;
+    assert(mh_mdns_query(broken, sizeof(broken), "AROS MIDIHub",
+                         "midihub-5004", &unicast) == 1);
+    assert(unicast);
+    broken[12] = 0xc0;
+    broken[13] = 12;
+    assert(mh_mdns_query(broken, sizeof(broken), "AROS MIDIHub",
+                         "midihub-5004", &unicast) == -1);
+    assert(mh_mdns_build("AROS MIDIHub", "midihub-5004", ip,
+                         5004, 120, 0, output, sizeof(output), &length) == 0);
+    assert(length > 100 && output[2] == 0x84 && output[3] == 0 &&
+           output[6] == 0 && output[7] == 4);
+    assert(output[length - 4] == 192 && output[length - 3] == 168 &&
+           output[length - 2] == 100 && output[length - 1] == 20);
+    assert(mh_mdns_build("AROS MIDIHub", "midihub-5004", ip,
+                         5004, 120, 0, output, 20, &length) == -1);
+}
+
 static void rtp_command_reader(void)
 {
     static const uint8_t midi[] = {
@@ -680,6 +716,7 @@ int main(void)
     journal_channel_state();
     journal_controls();
     outgoing_journal();
+    mdns_discovery();
     rtp_command_reader();
     rtp_system_common();
     rtp_sysex();

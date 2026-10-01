@@ -4,11 +4,11 @@ CPPFLAGS ?= -Iinclude
 M68K_CC ?= m68k-aros-gcc
 M68K_CFLAGS ?= -O2 -Wall -Wextra -Werror -Wno-volatile-register-var -std=gnu99
 
-SOURCES = src/applemidi.c src/rtpmidi.c src/session.c src/config.c src/timing.c src/sender.c
+SOURCES = src/applemidi.c src/rtpmidi.c src/session.c src/config.c src/timing.c src/sender.c src/mdns.c
 PROGRAM_SOURCES = ports/aros/midihub/main.c ports/aros/midihub/camd_bridge.c
 HEADERS = include/midihub/applemidi.h include/midihub/rtpmidi.h \
           include/midihub/session.h include/midihub/config.h include/midihub/timing.h \
-          include/midihub/sender.h \
+          include/midihub/sender.h include/midihub/mdns.h \
           ports/aros/midihub/camd_bridge.h
 
 .PHONY: test test-network test-synth demo m68k synth-m68k clean

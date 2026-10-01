@@ -427,6 +427,45 @@ def run_outgoing_journal_case(binary):
         data.close()
 
 
+def run_mdns_case(binary):
+    """Resolve MIDIHub's AppleMIDI service over a local DNS-SD query."""
+    port = free_port_pair()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.settimeout(0.2)
+    query = (b"\x12\x34\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+             b"\x0b_apple-midi\x04_udp\x05local\x00\x00\x0c\x00\x01")
+    process = subprocess.Popen(
+        [binary, str(port)], stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT
+    )
+    try:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            sock.sendto(query, ("127.0.0.1", 5353))
+            try:
+                packet, source = sock.recvfrom(1024)
+            except socket.timeout:
+                continue
+            if (packet[:2] != b"\x12\x34" or b"AROS MIDIHub" not in packet):
+                continue
+            assert source[1] == 5353
+            assert packet[2:4] == b"\x84\x00"
+            assert packet[6:8] == b"\x00\x04"
+            assert struct.pack(">H", port) in packet
+            break
+        else:
+            raise AssertionError("MIDIHub did not answer AppleMIDI DNS-SD query")
+    finally:
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        sock.close()
+
+
 def main():
     binary = sys.argv[1]
     run_case(binary, "--probe-note", ("bytes=903c64", "bytes=903c00"))
@@ -435,6 +474,7 @@ def main():
     run_case(binary, None, (), use_config=True)
     run_feedback_case(binary)
     run_outgoing_journal_case(binary)
+    run_mdns_case(binary)
     with tempfile.TemporaryDirectory() as directory:
         bad_config = Path(directory) / "invalid.conf"
         bad_config.write_text("local_port=65535\n")

@@ -8,7 +8,8 @@ include $(SRCDIR)/config/aros.cfg
 #MM      linklibs-arosmidihub \
 #MM      contrib-aros-midihub-package \
 #MM      contrib-aros-midihub-program \
-#MM      contrib-aros-midihub-selftest
+#MM      contrib-aros-midihub-selftest \
+#MM      contrib-aros-midihub-camdprobe
 #MM contrib-aros-midihub-program : linklibs-arosmidihub
 #MM contrib-aros-midihub-selftest : linklibs-arosmidihub
 
@@ -24,7 +25,8 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
     libname=arosmidihub \
     files="$(MIDIHUB_ROOT)/src/applemidi $(MIDIHUB_ROOT)/src/rtpmidi \
            $(MIDIHUB_ROOT)/src/session $(MIDIHUB_ROOT)/src/config \
-           $(MIDIHUB_ROOT)/src/timing $(MIDIHUB_ROOT)/src/sender"
+           $(MIDIHUB_ROOT)/src/timing $(MIDIHUB_ROOT)/src/sender \
+           $(MIDIHUB_ROOT)/src/mdns"
 
 #MM- contrib-aros-midihub-package : \
 #MM      contrib-aros-midihub-package-startup \
@@ -53,6 +55,11 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
     progname=aros-midihub-selftest \
     files="$(MIDIHUB_ROOT)/ports/aros/selftest/selftest" \
     uselibs=arosmidihub \
+    targetdir=$(MIDIHUB_PACKAGE)/C
+
+%build_prog mmake=contrib-aros-midihub-camdprobe \
+    progname=MIDIHubCAMDProbe \
+    files="$(MIDIHUB_ROOT)/ports/aros/camd_probe" \
     targetdir=$(MIDIHUB_PACKAGE)/C
 
 # The bank is large and has a separate license, so this target is opt-in.

@@ -1,5 +1,10 @@
+#ifndef __AROS__
+#define _DEFAULT_SOURCE 1
+#endif
+
 #include <midihub/applemidi.h>
 #include <midihub/config.h>
+#include <midihub/mdns.h>
 #include <midihub/rtpmidi.h>
 #include <midihub/session.h>
 #include <midihub/sender.h>
@@ -39,6 +44,7 @@ static void stop_signal(int signal_number)
 struct runtime {
     int control;
     int data;
+    int mdns;
     struct sockaddr_in peer_control;
     struct sockaddr_in peer_data;
     int have_peer;
@@ -62,6 +68,12 @@ struct runtime {
     uint64_t note_time;
     uint64_t last_activity;
     unsigned int retries;
+    uint8_t mdns_ip[4];
+    char mdns_host[64];
+    char mdns_session[64];
+    uint16_t local_port;
+    uint64_t last_mdns_announce;
+    unsigned int mdns_announcements;
     struct mh_session session;
     struct mh_sysex_assembler sysex;
     struct mh_event_queue queue;
@@ -123,6 +135,96 @@ static int open_udp(uint16_t port)
         return -1;
     }
     return fd;
+}
+
+static int open_mdns(uint8_t address[4])
+{
+    struct sockaddr_in local;
+    struct sockaddr_in multicast;
+    struct ip_mreq membership;
+    socklen_t size = sizeof(local);
+    unsigned char ttl = 255;
+    int reuse = 1;
+    int probe = -1;
+    int fd = -1;
+
+    probe = socket(AF_INET, SOCK_DGRAM, 0);
+    if (probe < 0) return -1;
+    memset(&multicast, 0, sizeof(multicast));
+    multicast.sin_family = AF_INET;
+    multicast.sin_port = htons(MH_MDNS_PORT);
+    multicast.sin_addr.s_addr = htonl(0xe00000fbUL);
+    if (connect(probe, (const struct sockaddr *)&multicast,
+                sizeof(multicast)) < 0 ||
+        getsockname(probe, (struct sockaddr *)&local, &size) < 0) {
+        mh_close(probe);
+        return -1;
+    }
+    memcpy(address, &local.sin_addr.s_addr, 4);
+    mh_close(probe);
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return -1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const void *)&reuse,
+                   sizeof(reuse)) < 0)
+        goto fail;
+    memset(&local, 0, sizeof(local));
+    local.sin_family = AF_INET;
+    local.sin_addr.s_addr = htonl(INADDR_ANY);
+    local.sin_port = htons(MH_MDNS_PORT);
+    if (bind(fd, (const struct sockaddr *)&local, sizeof(local)) < 0)
+        goto fail;
+    memset(&membership, 0, sizeof(membership));
+    membership.imr_multiaddr.s_addr = multicast.sin_addr.s_addr;
+    membership.imr_interface.s_addr = htonl(INADDR_ANY);
+    if (setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP,
+                   (const void *)&membership, sizeof(membership)) < 0 ||
+        setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL,
+                   (const void *)&ttl, sizeof(ttl)) < 0)
+        goto fail;
+    return fd;
+fail:
+    mh_close(fd);
+    return -1;
+}
+
+static void send_mdns(struct runtime *rt, const struct sockaddr_in *to,
+                      uint32_t ttl, uint16_t query_id)
+{
+    struct sockaddr_in multicast;
+    uint8_t bytes[512];
+    size_t length;
+    if (rt->mdns < 0 ||
+        mh_mdns_build(rt->mdns_session, rt->mdns_host, rt->mdns_ip,
+                      rt->local_port, ttl, query_id,
+                      bytes, sizeof(bytes), &length) != 0)
+        return;
+    if (!to) {
+        memset(&multicast, 0, sizeof(multicast));
+        multicast.sin_family = AF_INET;
+        multicast.sin_addr.s_addr = htonl(0xe00000fbUL);
+        multicast.sin_port = htons(MH_MDNS_PORT);
+        to = &multicast;
+    }
+    sendto(rt->mdns, bytes, (int)length, 0,
+           (const struct sockaddr *)to, sizeof(*to));
+}
+
+static void receive_mdns(struct runtime *rt)
+{
+    struct sockaddr_in source;
+    socklen_t source_length = sizeof(source);
+    uint8_t packet[1500];
+    int unicast = 0;
+    int count = recvfrom(rt->mdns, packet, sizeof(packet), 0,
+                         (struct sockaddr *)&source, &source_length);
+    if (count <= 0 || source_length < sizeof(source) ||
+        source.sin_family != AF_INET ||
+        mh_mdns_query(packet, (size_t)count, rt->mdns_session,
+                      rt->mdns_host, &unicast) != 1)
+        return;
+    if (ntohs(source.sin_port) != MH_MDNS_PORT) unicast = 1;
+    send_mdns(rt, unicast ? &source : NULL, 120,
+              unicast ? (uint16_t)((packet[0] << 8) | packet[1]) : 0);
 }
 
 static int same_endpoint(const struct sockaddr_in *a,
@@ -898,6 +1000,15 @@ static void periodic(struct runtime *rt, uint64_t now)
     while (mh_queue_pop_due(&rt->queue, now, &event))
         deliver_short(rt, event.bytes, event.length);
 
+    if (rt->mdns >= 0 &&
+        (rt->mdns_announcements == 0 ||
+         elapsed_ticks(now, rt->last_mdns_announce) >=
+             (rt->mdns_announcements < 2 ? 10000u : 600000u))) {
+        send_mdns(rt, NULL, 120, 0);
+        rt->last_mdns_announce = now;
+        if (rt->mdns_announcements < 2) ++rt->mdns_announcements;
+    }
+
     if (rt->session.phase == MH_SESSION_INVITING_CONTROL ||
         rt->session.phase == MH_SESSION_INVITING_DATA) {
         if (elapsed_ticks(now, rt->last_invite) >= 10000) {
@@ -1032,7 +1143,9 @@ int main(int argc, char **argv)
         peer_ip = argv[argi + 1];
     memset(&rt, 0, sizeof(rt));
     reset_channel_state(&rt);
-    rt.control = rt.data = -1;
+    rt.control = rt.data = rt.mdns = -1;
+    rt.local_port = local_port;
+    strcpy(rt.mdns_session, config.session_name);
     rt.initiating = *peer_ip != 0;
     rt.probe_note = remaining == 4 &&
                     strcmp(argv[argi + 3], "--probe-note") == 0;
@@ -1087,6 +1200,12 @@ int main(int argc, char **argv)
                         strlen(config.session_name)) != 0)
         goto cleanup;
     rt.sequence = (uint16_t)rand();
+    snprintf(rt.mdns_host, sizeof(rt.mdns_host), "midihub-%04x-%08lx",
+             (unsigned int)local_port,
+             (unsigned long)rt.session.local_ssrc);
+    rt.mdns = open_mdns(rt.mdns_ip);
+    if (rt.mdns < 0)
+        puts("MIDIHub: Bonjour discovery unavailable");
     if (rt.initiating) {
         if (mh_session_invite(&rt.session,
                               ((uint32_t)rand() << 16) ^ (uint32_t)rand(),
@@ -1106,6 +1225,7 @@ int main(int argc, char **argv)
         FD_ZERO(&read_set);
         FD_SET(rt.control, &read_set);
         FD_SET(rt.data, &read_set);
+        if (rt.mdns >= 0) FD_SET(rt.mdns, &read_set);
         timeout.tv_sec = 0;
         timeout.tv_usec = 100000;
         if (mh_queue_next_due(&rt.queue, &next_due)) {
@@ -1116,12 +1236,16 @@ int main(int argc, char **argv)
         }
 #ifdef __AROS__
         signal_mask = SIGBREAKF_CTRL_C | (1UL << rt.camd.signal_bit);
-        ready = WaitSelect((rt.control > rt.data ? rt.control : rt.data) + 1,
+        ready = WaitSelect((rt.mdns > rt.control && rt.mdns > rt.data ?
+                            rt.mdns : rt.control > rt.data ? rt.control :
+                            rt.data) + 1,
                            &read_set, NULL, NULL, &timeout, &signal_mask);
         if (signal_mask & SIGBREAKF_CTRL_C)
             break;
 #else
-        ready = select((rt.control > rt.data ? rt.control : rt.data) + 1,
+        ready = select((rt.mdns > rt.control && rt.mdns > rt.data ?
+                        rt.mdns : rt.control > rt.data ? rt.control :
+                        rt.data) + 1,
                        &read_set, NULL, NULL, &timeout);
 #endif
         if (ready > 0) {
@@ -1129,6 +1253,8 @@ int main(int argc, char **argv)
                 receive_packet(&rt, 0);
             if (FD_ISSET(rt.data, &read_set))
                 receive_packet(&rt, 1);
+            if (rt.mdns >= 0 && FD_ISSET(rt.mdns, &read_set))
+                receive_mdns(&rt);
         }
         periodic(&rt, now_ticks());
         mh_camd_bridge_poll(&rt.camd, send_midi, &rt);
@@ -1141,6 +1267,10 @@ int main(int argc, char **argv)
     result = 0;
 
 cleanup:
+    if (rt.mdns >= 0) {
+        send_mdns(&rt, NULL, 0, 0);
+        mh_close(rt.mdns);
+    }
     if (rt.camd_opened) {
         mh_queue_reset(&rt.queue);
         release_active_notes(&rt);

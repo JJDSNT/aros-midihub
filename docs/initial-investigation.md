@@ -8,8 +8,11 @@ exchanges invitations and CK messages, and can send a test note. It estimates
 clock offset and schedules future short MIDI events. The CAMD bridge for
 short messages and SysEx is implemented. On Linux-hosted AROS, two MIDIHub
 processes opened the bridge, completed an AppleMIDI session over AROSTCP's
-loopback interface, and exchanged Note On and Note Off. An independent CAMD
-client has not yet verified delivery. Audio output is not yet integrated.
+loopback interface, and exchanged Note On and Note Off. A separate native CAMD
+client, `MIDIHubCAMDProbe`, sent both messages to `MIDIHub Out` and received
+both from `MIDIHub In` after the network round trip. The probe waits briefly
+after creating its links before sending the first message. Audio output is
+not yet integrated.
 
 Current protocol tests use vectors constructed from the specifications. They
 do not include captures from a real peer or establish interoperability with
@@ -85,7 +88,8 @@ yet connected to CAMD, and AROS playback has not been run.
   events are discarded. SysEx scheduling remains to be implemented. The
   initiator refreshes synchronization every 50 seconds.
 - Apple advertises `_apple-midi._udp` through Bonjour. Manual connection
-  by IP address and port can come first; mDNS/DNS-SD discovery can follow.
+  by IP address and port is supported. MIDIHub now advertises
+  `_apple-midi._udp.local` over IPv4 mDNS and answers DNS-SD browse queries.
 - Apple's driver sends journals but accepts packets without them. For the
   first interoperability test, the sender can use `J=0`. The receiver should
   at least identify and bound a present journal before applying it. AppleMIDI

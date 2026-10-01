@@ -62,7 +62,8 @@ Planned support includes:
 - Direct IP connections
 - Network MIDI discovery
 
-Discovery may later use mDNS/DNS-SD and the `_apple-midi._udp` service.
+MIDIHub advertises `_apple-midi._udp.local` over IPv4 mDNS and answers
+DNS-SD browse queries when the network stack has a multicast-capable interface.
 
 ## Additional MIDI Transports
 
@@ -103,6 +104,7 @@ For example:
 Bluetooth Low Energy MIDI is widely used by modern wireless MIDI controllers and instruments.
 
 BLE MIDI support can be explored as the Bluetooth capabilities available to AROS evolve.
+No Bluetooth transport is implemented yet.
 
 ### MIDI 2.0 / UMP
 
@@ -297,11 +299,18 @@ restore Program Change, bank selection, and Pitch Bend after packet loss.
 Chapter C value logs restore Control Change values; alternate toggle and
 count logs support sustain (64), All Sound Off (120), and All Notes Off (123).
 Other alternate logs still need their own recovery logic. Recovery of the
-remaining journal chapters, discovery, Preferences, and connecting the
+remaining journal chapters, Preferences, and connecting the
 synthesizer to CAMD remain to be done. A Linux-hosted AROS loopback run opened
 the CAMD bridge and completed AppleMIDI clock sync, Note On, and Note Off
-between two MIDIHub processes. Delivery to an independent CAMD client has
-not yet been observed.
+between two MIDIHub processes. The packaged `MIDIHubCAMDProbe` independently
+sent Note On and Note Off through `MIDIHub Out` and received both through
+`MIDIHub In` after the network round trip.
+
+MIDIHub advertises its control port as `_apple-midi._udp.local` over IPv4
+Bonjour/mDNS and answers DNS-SD browse queries. The configured session name
+is the visible service name. Discovery requires multicast reachability from
+the peer; WSL NAT and the AROS hosted build's unconfigured TAP interface
+currently prevent this from being an iPhone browse test inside AROS.
 
 Outgoing channel messages now include recovery journals for notes, Control
 Change, Program Change, Pitch Bend, Channel Aftertouch, and Poly Aftertouch.
@@ -333,6 +342,12 @@ The optional probe sends one Note On followed by Note Off. On AROS, the
 program uses the same arguments and `bsdsocket.library`. Press Ctrl-C to
 leave a session. See the [iPhone smoke test](docs/iphone-smoke-test.md) for
 testing a real AppleMIDI peer from WSL.
+
+To check CAMD locally in AROS, start two MIDIHub processes on loopback:
+`MIDIHub 5004` and `MIDIHub 5006 127.0.0.1 5004`. Once both report
+`session connected`, run `MIDIHubCAMDProbe`. It reports `round trip passed`
+after receiving its Note On and Note Off through both CAMD clusters and the
+network session. This requires AROSTCP and its loopback interface.
 
 `make m68k` builds `build/MIDIHub-m68k` with an AROS m68k SDK on `PATH`.
 If the compiler is elsewhere, pass `M68K_CC=/path/to/m68k-aros-gcc`.
