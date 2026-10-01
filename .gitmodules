@@ -1,0 +1,6 @@
+[submodule "third_party/TinySoundFont"]
+	path = third_party/TinySoundFont
+	url = https://github.com/schellingb/TinySoundFont.git
+[submodule "soundfonts/GeneralUser-GS"]
+	path = soundfonts/GeneralUser-GS
+	url = https://github.com/mrbumpy409/GeneralUser-GS.git

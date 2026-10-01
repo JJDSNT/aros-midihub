@@ -1,0 +1,56 @@
+# Native AROS MetaMake integration. Place this checkout at
+# contrib/extras/aros-midihub in the AROS source tree.
+
+include $(SRCDIR)/config/aros.cfg
+
+#MM- contrib : contrib-aros-midihub
+#MM- contrib-aros-midihub : \
+#MM      linklibs-arosmidihub \
+#MM      contrib-aros-midihub-package \
+#MM      contrib-aros-midihub-program \
+#MM      contrib-aros-midihub-selftest
+#MM contrib-aros-midihub-program : linklibs-arosmidihub
+#MM contrib-aros-midihub-selftest : linklibs-arosmidihub
+
+MIDIHUB_ROOT := $(SRCDIR)/$(CURDIR)
+MIDIHUB_PACKAGE := $(AROS_CONTRIB)/aros-midihub
+
+USER_INCLUDES := -I$(MIDIHUB_ROOT)/include
+# Older m68k AROS inline stubs intentionally use volatile register variables.
+USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
+
+%build_linklib mmake=linklibs-arosmidihub \
+    libname=arosmidihub \
+    files="$(MIDIHUB_ROOT)/src/applemidi $(MIDIHUB_ROOT)/src/rtpmidi \
+           $(MIDIHUB_ROOT)/src/session $(MIDIHUB_ROOT)/src/config"
+
+#MM- contrib-aros-midihub-package : \
+#MM      contrib-aros-midihub-package-startup \
+#MM      contrib-aros-midihub-package-registration \
+#MM      contrib-aros-midihub-package-license
+
+%copy_files_q mmake=contrib-aros-midihub-package-startup \
+    src="$(MIDIHUB_ROOT)/ports/aros/package/S" \
+    files="Package-Startup" dst="$(MIDIHUB_PACKAGE)/S"
+
+%copy_files_q mmake=contrib-aros-midihub-package-registration \
+    src="$(MIDIHUB_ROOT)/ports/aros/package/Packages" \
+    files="aros-midihub" dst="$(AROS_ENVARC)/SYS/Packages"
+
+%copy_files_q mmake=contrib-aros-midihub-package-license \
+    src="$(MIDIHUB_ROOT)" files="LICENSE" dst="$(MIDIHUB_PACKAGE)"
+
+%build_prog mmake=contrib-aros-midihub-program \
+    progname=MIDIHub \
+    files="$(MIDIHUB_ROOT)/ports/aros/midihub/main \
+           $(MIDIHUB_ROOT)/ports/aros/midihub/camd_bridge" \
+    uselibs=arosmidihub \
+    targetdir=$(MIDIHUB_PACKAGE)/C
+
+%build_prog mmake=contrib-aros-midihub-selftest \
+    progname=aros-midihub-selftest \
+    files="$(MIDIHUB_ROOT)/ports/aros/selftest/selftest" \
+    uselibs=arosmidihub \
+    targetdir=$(MIDIHUB_PACKAGE)/C
+
+%common

@@ -4,6 +4,16 @@
 
 AROS MIDIHub is an open-source project to expand MIDI support on the **AROS Research Operating System**, providing modern MIDI transports, network MIDI interoperability, and software synthesis using SoundFonts.
 
+The core and the AROS package are intended to work across all AROS targets. Networking, CAMD and audio are common AROS paths on every target, with no target-specific implementation in MIDIHub or direct hardware dependency for network MIDI. Hardware MIDI transports can be added separately.
+
+An initial investigation of the local AROS MIDI facilities, AppleMIDI protocol,
+and the planned `contrib/extras` package layout is recorded in
+[docs/investigacao-inicial.md](docs/investigacao-inicial.md).
+The network configuration format and the planned Preferences and SoundFont
+preview are described in [docs/preferences.md](docs/preferences.md).
+The SoundFont candidates and distribution decision are recorded in
+[docs/soundfonts.md](docs/soundfonts.md).
+
 The project aims to provide a common foundation for MIDI applications on AROS, allowing software to communicate with local devices, networked computers, synthesizers, controllers, and software instruments through multiple MIDI transports.
 
 ## Goals
@@ -104,7 +114,18 @@ The architecture should avoid assumptions that would prevent MIDI 2.0 transports
 
 AROS MIDIHub also intends to provide lightweight software MIDI synthesis.
 
-The initial implementation will investigate **TinySoundFont (TinySF)**.
+The synthesis engine must have an MIT or BSD license to fit the intended AROS
+package. TinySoundFont is small and MIT-licensed, but lacks SoundFont modulators
+needed by some GM banks. Candidate engines and remaining work are tracked in
+[docs/soundfonts.md](docs/soundfonts.md).
+
+The repository includes TinySoundFont and GeneralUser GS as pinned submodules
+for development. Clone with `git clone --recurse-submodules`, or run
+`git submodule update --init --recursive` in an existing checkout. Run
+`make test-synth` to render a note from GeneralUser GS to
+`build/generaluser-test.wav`. This confirms loading and PCM generation; it does
+not establish correct GeneralUser GS playback. TinySoundFont currently ignores
+SoundFont modulators, which GeneralUser GS uses extensively.
 
 TinySoundFont is a small SoundFont2 synthesizer implementation written in C/C++ and designed to be embedded directly into applications.
 
@@ -176,7 +197,7 @@ Several existing open-source projects can serve as implementation references.
 
 ### MIDIKit
 
-MIDIKit by Jonas Pommerening contains a C implementation of RTP-MIDI and is distributed under the BSD 2-Clause license.
+MIDIKit by Jonas Pommerening contains a C implementation of RTP-MIDI. Its exact license should be verified against the particular upstream source revision before reusing code.
 
 It is a particularly interesting reference for the initial AROS RTP-MIDI implementation because the RTP-MIDI functionality is already separated from much of the platform-specific code.
 
@@ -240,13 +261,46 @@ Network MIDI interoperability should eventually be tested with:
 
 ## Project Status
 
-AROS MIDIHub is currently in the **research and initial implementation phase**.
+AROS MIDIHub is currently in the **initial implementation phase**. AppleMIDI
+control and RTP-MIDI packet codecs, a one-peer invitation state machine, host
+tests, an AROS package self-test, and a UDP diagnostic program are present.
+The program negotiates a session, exchanges CK packets, and bridges MIDI
+messages and SysEx through CAMD clusters on AROS. It does not yet calculate
+clock offset or schedule MIDI playback. Recovery journals, discovery,
+preferences, and synthesis remain to be built. The CAMD bridge has compiled
+and linked for Linux hosted but has not yet been exercised inside AROS.
+
+Run the portable codec tests with `make test`. For an AROS source checkout,
+place this repository at `contrib/extras/aros-midihub` and build the
+`contrib-aros-midihub` MetaMake target. The package is intended to install
+under `SYS:Extras/aros-midihub`, with an `ENVARC:SYS/Packages` registration.
+
+On AROS, `MIDIHub` reads `ENV:MidiHub/Network`, falling back to
+`ENVARC:MidiHub/Network`. Use `MIDIHub --config file` to select a different
+file. Without a file it listens on control port 5004. The text file accepts
+`local_port`, `peer_ip`, `peer_port`, and `session_name`; see the example in
+[the configuration guide](docs/preferences.md). A Preferences application and
+SoundFont preview are planned but are not present yet.
+
+Run `make test-network` for a localhost test of invitations, CK exchange,
+Note On/Off traffic, and SysEx packets. `make demo` builds the same program on
+Linux. To listen, run `build/MIDIHub 5004`; to invite a listener at 5004 from
+another terminal, run `build/MIDIHub 5006 127.0.0.1 5004 --probe-note`.
+The optional probe sends one Note On followed by Note Off. On AROS, the
+program uses the same arguments and `bsdsocket.library`. Press Ctrl-C to
+leave a session.
+
+`make m68k` builds `build/MIDIHub-m68k` with an AROS m68k SDK on `PATH`.
+If the compiler is elsewhere, pass `M68K_CC=/path/to/m68k-aros-gcc`.
+The local Bellatrix SDK builds this executable successfully; execution on
+AROS m68k has not yet been verified.
 
 The first development target is establishing RTP-MIDI / AppleMIDI communication between AROS and another system over a local IP network.
 
 ## License
 
-The final project license will be selected to remain compatible with the AROS ecosystem and with the licenses of any source code incorporated into the project.
+The original MIDIHub code is licensed under [MIT](LICENSE), matching the
+approach used by aros-bluzing and remaining compatible with the AROS ecosystem.
 
 Third-party components retain their respective licenses and copyright notices.
 
