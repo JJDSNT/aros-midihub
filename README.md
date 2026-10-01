@@ -8,7 +8,7 @@ The core and the AROS package are intended to work across all AROS targets. Netw
 
 An initial investigation of the local AROS MIDI facilities, AppleMIDI protocol,
 and the planned `contrib/extras` package layout is recorded in
-[docs/investigacao-inicial.md](docs/investigacao-inicial.md).
+[docs/initial-investigation.md](docs/initial-investigation.md).
 The network configuration format and the planned Preferences and SoundFont
 preview are described in [docs/preferences.md](docs/preferences.md).
 The SoundFont candidates and distribution decision are recorded in

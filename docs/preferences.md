@@ -1,11 +1,11 @@
-# Configuração e futura aplicação de Preferences
+# Configuration and future Preferences application
 
-O programa de rede lê `ENV:MidiHub/Network` no AROS e, se o arquivo não
-existir, tenta `ENVARC:MidiHub/Network`. É um arquivo texto UTF-8 com uma
-opção `nome=valor` por linha; linhas vazias e iniciadas por `#` ou `;` são
-ignoradas. Também se pode selecionar um arquivo com `MIDIHub --config caminho`.
-O arquivo explícito precisa existir. Argumentos posicionais substituem as
-portas e o endereço do arquivo. Um exemplo:
+On AROS, the network program reads `ENV:MidiHub/Network` and falls back to
+`ENVARC:MidiHub/Network` if the first file does not exist. This is a UTF-8 text
+file with one `name=value` option per line. Empty lines and lines beginning
+with `#` or `;` are ignored. `MIDIHub --config path` selects a specific file,
+which must exist. Positional arguments override the ports and address in the
+file. For example:
 
 ```text
 local_port=5004
@@ -14,39 +14,39 @@ peer_port=5004
 session_name=AROS MIDIHub
 ```
 
-`local_port` e `peer_port` são portas de controle entre 1 e 65534; a porta
-seguinte é usada para dados. Para apenas receber convites, omita `peer_ip` e
-`peer_port` juntos. Sem arquivo, o programa escuta na porta 5004. O nome da
-sessão pode ter até 63 bytes. Um arquivo inválido impede o início do programa
-e não altera uma configuração já carregada.
+`local_port` and `peer_port` are control ports from 1 through 65534; the next
+port carries data. Omit both `peer_ip` and `peer_port` to receive invitations
+without initiating a connection. Without a file, the program listens on port
+5004. The session name can be at most 63 bytes. An invalid file prevents
+startup and does not alter an already loaded configuration.
 
 ## Preferences
 
-Uma futura `MIDIHubPrefs` deve editar os mesmos ajustes usando os botões
-`Use` (grava em `ENV:`), `Save` (grava em `ENV:` e `ENVARC:`) e `Cancel`.
-Assim, CLI e GUI compartilham o comportamento, e o serviço não depende da
-interface gráfica. A primeira página mostra nome da sessão, porta local,
-par remoto e estado da conexão. Um botão de teste poderá tentar uma sessão e
-mostrar convite, sincronização e mensagens recebidas. A implementação do
-serviço precisa expor esse estado à GUI antes desse botão existir.
+A future `MIDIHubPrefs` application should edit these same settings with
+`Use` (write to `ENV:`), `Save` (write to both `ENV:` and `ENVARC:`), and
+`Cancel`. The CLI and GUI would share behavior, while the service would not
+depend on the GUI. The first page should show the session name, local port,
+remote peer, and connection status. A test button could attempt a session and
+show invitations, synchronization, and received messages. The service must
+expose that state before this button can be implemented.
 
-Quando houver síntese, uma página SoundFont escolherá o arquivo `.sf2` com
-um requester, verificará se ele abre no motor de síntese e permitirá ajustar
-ganho, banco e programa padrão. A configuração de áudio deve usar o caminho
-comum de áudio do AROS e não presumir hardware ou target. O motor deve abrir
-uma cópia do SoundFont para validação antes de substituir o instrumento em
-uso; falhas não devem interromper notas já tocando.
+Once synthesis is integrated, a SoundFont page should select an `.sf2` file
+with a file requester, check that the engine can open it, and allow gain,
+bank, and default program settings. Audio configuration must use the common
+AROS audio path without assuming a particular target or device. The engine
+should validate a new SoundFont before replacing the one in use, so a failed
+load does not interrupt currently playing notes.
 
-A prévia deve enviar Note On/Off ao mesmo sintetizador e caminho de áudio
-usados pelos aplicativos CAMD. Uma pequena tecla virtual ou um botão `Testar`
-é suficiente inicialmente, com escolha de nota e intensidade. Isso verifica
-SoundFont, roteamento e áudio de uma vez. A página e sua prévia só devem ser
-ativadas quando o motor de síntese e a saída de áudio existirem. Não há
-SoundFont nem prévia implementados neste incremento.
+Preview should send Note On/Off through the same synthesizer and audio path
+used by CAMD clients. A small virtual key or `Test` button, with selectable
+note and velocity, is enough initially. This exercises the SoundFont, routing,
+and audio together. The page and preview should be enabled only after the
+synthesizer and audio output are integrated. The GeneralUser GS submodule and
+WAV smoke test exist, but live audio preview does not.
 
-O nome `MIDIHub` identifica o pacote. `RTP-MIDI` identifica o transporte,
-enquanto `AppleMIDI` identifica a negociação de sessão sobre esse transporte;
-eles formam uma única conexão e não duas portas CAMD. Se for criado um driver
-CAMD para portas disponíveis na inicialização, `rtpmidi` é um nome adequado
-para ele. A forma de comunicação entre esse driver e o serviço de rede ainda
-precisa ser definida e testada dentro do AROS.
+`MIDIHub` names the package. `RTP-MIDI` names the transport, while
+`AppleMIDI` names session negotiation over that transport; together they form
+one connection, not two CAMD ports. If a CAMD driver is added to make ports
+available at startup, `rtpmidi` would be an appropriate name. Communication
+between that driver and the network service still needs to be designed and
+tested inside AROS.
