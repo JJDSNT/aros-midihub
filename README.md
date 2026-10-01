@@ -302,6 +302,11 @@ synthesizer to CAMD remain to be done. The CAMD bridge has compiled and
 linked for Linux hosted but has not
 yet been exercised inside AROS.
 
+Outgoing channel messages now include recovery journals for notes, Control
+Change, Program Change, and Pitch Bend. The sender retains up to 32 packets
+and removes confirmed history when AppleMIDI `RS` feedback arrives. System
+messages and SysEx are sent without recovery journals.
+
 Run the portable codec tests with `make test`. For an AROS source checkout,
 place this repository at `contrib/extras/aros-midihub` and build the
 `contrib-aros-midihub` MetaMake target. The package is intended to install

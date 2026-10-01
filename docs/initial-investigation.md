@@ -99,7 +99,9 @@ yet connected to CAMD, and AROS playback has not been run.
   after covered packet loss. Chapter C value logs restore Control Change
   values. The toggle tool handles sustain (64), and the count tool handles
   All Sound Off (120) and All Notes Off (123). Other alternate logs, other
-  chapters, and outgoing journals remain to be implemented.
+  chapters, and system journals remain to be implemented. Outgoing channel
+  messages include journals from a bounded 32-packet history, trimmed by
+  AppleMIDI RS feedback. SysEx and system messages remain unprotected.
 
 ## Recommended architecture
 

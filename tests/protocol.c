@@ -1,6 +1,7 @@
 #include "midihub/applemidi.h"
 #include "midihub/rtpmidi.h"
 #include "midihub/session.h"
+#include "midihub/sender.h"
 #include "midihub/timing.h"
 
 #include <assert.h>
@@ -298,6 +299,73 @@ static void journal_controls(void)
                                        &controls) == -1);
 }
 
+static void outgoing_journal(void)
+{
+    const uint8_t on[] = {0x90, 60, 100};
+    const uint8_t off[] = {0x80, 60, 0};
+    const uint8_t bank[] = {0xb0, 0, 2};
+    const uint8_t program[] = {0xc0, 5};
+    const uint8_t pitch[] = {0xe0, 1, 32};
+    const uint8_t volume[] = {0xb0, 7, 90};
+    struct mh_sender sender;
+    struct mh_journal journal;
+    struct mh_journal_notes notes;
+    struct mh_journal_channel_state channel_state;
+    struct mh_journal_controls controls;
+    uint8_t bytes[256];
+    size_t length;
+
+    mh_sender_reset(&sender);
+    assert(mh_sender_journal(&sender, 100, 1000,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(length == 3 && bytes[0] == 0x80 && bytes[2] == 100);
+    mh_sender_record(&sender, 100, 1000, on, sizeof(on));
+    assert(mh_sender_journal(&sender, 101, 1050,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(journal.checkpoint == 100 && !journal.single_packet_safe &&
+           journal.channel_count == 1);
+    assert(mh_journal_decode_notes(&journal.channels[0], &notes) == 1);
+    assert(notes.log_count == 1 && notes.logs[0].number == 60 &&
+           notes.logs[0].velocity == 100 && notes.logs[0].simultaneous &&
+           !notes.logs[0].single_packet_safe);
+    mh_sender_record(&sender, 101, 1050, off, sizeof(off));
+    assert(mh_sender_journal(&sender, 102, 1100,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_notes(&journal.channels[0], &notes) == 1);
+    assert(notes.offbits[7] == 0x08 && notes.log_count == 0 &&
+           !notes.offbits_single_packet_safe);
+    mh_sender_ack(&sender, 100);
+    assert(sender.count == 1 && sender.events[0].sequence == 101);
+    mh_sender_ack(&sender, 101);
+    assert(sender.count == 0);
+    assert(mh_sender_journal(&sender, 102, 1100,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(length == 3 && bytes[2] == 102);
+
+    mh_sender_record(&sender, 102, 1100, bank, sizeof(bank));
+    mh_sender_record(&sender, 103, 1200, program, sizeof(program));
+    mh_sender_record(&sender, 104, 1300, pitch, sizeof(pitch));
+    mh_sender_record(&sender, 105, 1400, volume, sizeof(volume));
+    assert(mh_sender_journal(&sender, 106, 1500,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(journal.checkpoint == 102 && journal.channel_count == 1);
+    assert(mh_journal_decode_channel_state(&journal.channels[0],
+                                            &channel_state) == 1);
+    assert(channel_state.has_program && channel_state.program == 5 &&
+           channel_state.has_bank && channel_state.bank_msb == 2 &&
+           channel_state.has_pitch && channel_state.pitch_lsb == 1);
+    assert(mh_journal_decode_controls(&journal.channels[0],
+                                       &controls) == 1);
+    assert(controls.count == 2);
+    mh_sender_ack(&sender, 104);
+    assert(sender.count == 1 && sender.events[0].sequence == 105);
+    mh_sender_clear_history(&sender);
+    assert(sender.count == 0);
+}
+
 static void rtp_command_reader(void)
 {
     static const uint8_t midi[] = {
@@ -580,6 +648,7 @@ int main(void)
     journal_note_offs();
     journal_channel_state();
     journal_controls();
+    outgoing_journal();
     rtp_command_reader();
     rtp_system_common();
     rtp_sysex();

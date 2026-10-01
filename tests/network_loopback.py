@@ -314,6 +314,65 @@ def run_feedback_case(binary):
         log.close()
 
 
+def run_outgoing_journal_case(binary):
+    """Inspect journals sent to a raw AppleMIDI peer."""
+    port = free_port_pair()
+    control = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    data = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    control.bind(("127.0.0.1", port + 2))
+    data.bind(("127.0.0.1", port + 3))
+    control.settimeout(3)
+    data.settimeout(3)
+    process = subprocess.Popen(
+        [binary, str(port), "127.0.0.1", str(port + 2), "--probe-note"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT
+    )
+    peer_ssrc = 0x11223344
+    try:
+        invitation, _ = control.recvfrom(128)
+        assert invitation[:4] == b"\xff\xffIN"
+        accepted = (b"\xff\xffOK" + struct.pack(">I", 2) +
+                    invitation[8:12] + struct.pack(">I", peer_ssrc) +
+                    b"Peer\0")
+        control.sendto(accepted, ("127.0.0.1", port))
+        invitation, _ = data.recvfrom(128)
+        assert invitation[:4] == b"\xff\xffIN"
+        data.sendto(accepted, ("127.0.0.1", port + 1))
+        ck0, _ = data.recvfrom(128)
+        assert ck0[:4] == b"\xff\xffCK" and ck0[8] == 0
+        t1 = struct.unpack(">Q", ck0[12:20])[0]
+        ck1 = struct.pack(">4sIB3xQQQ", b"\xff\xffCK", peer_ssrc,
+                          1, t1, int(time.time() * 10000), 0)
+        data.sendto(ck1, ("127.0.0.1", port + 1))
+        ck2, _ = data.recvfrom(128)
+        assert ck2[:4] == b"\xff\xffCK" and ck2[8] == 2
+        first, _ = data.recvfrom(128)
+        assert first[:2] == b"\x80\xe1" and first[12] & 0x40
+        first_sequence = struct.unpack(">H", first[2:4])[0]
+        assert first[13:16] == b"\x90\x3c\x64"
+        assert first[16:] == struct.pack(">BH", 0x80, first_sequence)
+        second, _ = data.recvfrom(128)
+        assert second[:2] == b"\x80\xe1" and second[12] & 0x40
+        assert struct.unpack(">H", second[2:4])[0] == (first_sequence + 1) & 0xffff
+        assert second[13:16] == b"\x90\x3c\x00"
+        journal = second[16:]
+        assert journal[0] & 0x20 and journal[1:3] == first[2:4]
+        assert journal[5] == 0x08 and journal[6] & 0x7f == 1
+        assert journal[8] & 0x7f == 60 and journal[9] & 0x7f == 100
+        feedback = b"\xff\xffRS" + struct.pack(">II", peer_ssrc,
+                                                  (first_sequence + 1) & 0xffff)
+        control.sendto(feedback, ("127.0.0.1", port))
+    finally:
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        control.close()
+        data.close()
+
+
 def main():
     binary = sys.argv[1]
     run_case(binary, "--probe-note", ("bytes=903c64", "bytes=903c00"))
@@ -321,6 +380,7 @@ def main():
              ("SysEx complete bytes=4", "SysEx complete bytes=2004"))
     run_case(binary, None, (), use_config=True)
     run_feedback_case(binary)
+    run_outgoing_journal_case(binary)
     with tempfile.TemporaryDirectory() as directory:
         bad_config = Path(directory) / "invalid.conf"
         bad_config.write_text("local_port=65535\n")

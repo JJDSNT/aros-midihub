@@ -2,6 +2,7 @@
 #include <midihub/config.h>
 #include <midihub/rtpmidi.h>
 #include <midihub/session.h>
+#include <midihub/sender.h>
 #include <midihub/timing.h>
 #include "camd_bridge.h"
 
@@ -60,6 +61,7 @@ struct runtime {
     struct mh_session session;
     struct mh_sysex_assembler sysex;
     struct mh_event_queue queue;
+    struct mh_sender sender;
     uint8_t active_notes[16][128];
     uint8_t program[16];
     uint8_t program_known[16];
@@ -558,8 +560,12 @@ static void receive_packet(struct runtime *rt, int data_port)
                 receive_sync(rt, &packet, now);
             return;
         }
-        if (packet.command == MH_APPLE_RS)
-            return; /* No outgoing recovery journal to prune yet. */
+        if (packet.command == MH_APPLE_RS) {
+            if (!data_port && rt->session.phase == MH_SESSION_CONNECTED &&
+                packet.ssrc == rt->session.peer_ssrc)
+                mh_sender_ack(&rt->sender, packet.feedback_sequence);
+            return;
+        }
         action = mh_session_receive(&rt->session, data_port, &packet,
                                     &response, &response_port);
         if (action == 1)
@@ -588,6 +594,7 @@ static void receive_packet(struct runtime *rt, int data_port)
             mh_queue_reset(&rt->queue);
             release_active_notes(rt);
             reset_channel_state(rt);
+            mh_sender_reset(&rt->sender);
         }
         return;
     }
@@ -678,6 +685,7 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
     uint8_t wire[1100];
     uint8_t segment[1002];
     size_t wire_length;
+    size_t journal_length;
     size_t data_length;
     size_t offset;
     size_t chunk;
@@ -685,18 +693,34 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
     uint8_t head;
     uint8_t tail;
     size_t i;
+    uint32_t timestamp;
 
     if (rt->session.phase != MH_SESSION_CONNECTED || !message || !length)
         return -1;
     if (message[0] != 0xf0) {
-        if (mh_rtp_encode_short(rt->sequence, (uint32_t)now_ticks(),
+        timestamp = (uint32_t)now_ticks();
+        if (mh_rtp_encode_short(rt->sequence, timestamp,
                                 rt->session.local_ssrc, message, length,
                                 wire, sizeof(wire), &wire_length) != 0)
             return -1;
+        if (mh_sender_supported(message, length)) {
+            if (mh_sender_journal(&rt->sender, rt->sequence, timestamp,
+                                  wire + wire_length,
+                                  sizeof(wire) - wire_length,
+                                  &journal_length) != 0)
+                return -1;
+            wire[12] |= 0x40;
+            wire_length += journal_length;
+        }
         if (sendto(rt->data, wire, (int)wire_length, 0,
                    (const struct sockaddr *)&rt->peer_data,
                    sizeof(rt->peer_data)) != (int)wire_length)
             return -1;
+        if (mh_sender_supported(message, length))
+            mh_sender_record(&rt->sender, rt->sequence, timestamp,
+                              message, length);
+        else
+            mh_sender_clear_history(&rt->sender);
         ++rt->sequence;
         return 0;
     }
@@ -705,6 +729,7 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
     for (i = 1; i + 1 < length; ++i)
         if (message[i] & 0x80)
             return -1;
+    mh_sender_clear_history(&rt->sender);
     if (length <= 1002) {
         if (mh_rtp_encode_list(rt->sequence, (uint32_t)now_ticks(),
                                rt->session.local_ssrc, message, length,
