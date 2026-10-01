@@ -298,15 +298,16 @@ Chapter C value logs restore Control Change values; alternate toggle and
 count logs support sustain (64), All Sound Off (120), and All Notes Off (123).
 Other alternate logs still need their own recovery logic. Recovery of the
 remaining journal chapters, discovery, Preferences, and connecting the
-synthesizer to CAMD remain to be done. The CAMD bridge has compiled and
-linked for Linux hosted but has not
-yet been exercised inside AROS.
+synthesizer to CAMD remain to be done. A Linux-hosted AROS loopback run opened
+the CAMD bridge and completed AppleMIDI clock sync, Note On, and Note Off
+between two MIDIHub processes. Delivery to an independent CAMD client has
+not yet been observed.
 
 Outgoing channel messages now include recovery journals for notes, Control
 Change, Program Change, Pitch Bend, Channel Aftertouch, and Poly Aftertouch.
 The sender retains up to 32 packets and removes confirmed history when
-AppleMIDI `RS` feedback arrives. While
-unconfirmed history remains, it sends an empty MIDI guard packet once per
+AppleMIDI `RS` feedback arrives. While unconfirmed history remains, it sends
+an empty MIDI guard packet once per
 second so the peer can recover a lost final event. The initiator exchanges
 clocks three times during startup, then every 50 seconds. System messages
 and SysEx are sent without recovery journals. A responder closes a session
@@ -330,7 +331,8 @@ Linux. To listen, run `build/MIDIHub 5004`; to invite a listener at 5004 from
 another terminal, run `build/MIDIHub 5006 127.0.0.1 5004 --probe-note`.
 The optional probe sends one Note On followed by Note Off. On AROS, the
 program uses the same arguments and `bsdsocket.library`. Press Ctrl-C to
-leave a session.
+leave a session. See the [iPhone smoke test](docs/iphone-smoke-test.md) for
+testing a real AppleMIDI peer from WSL.
 
 `make m68k` builds `build/MIDIHub-m68k` with an AROS m68k SDK on `PATH`.
 If the compiler is elsewhere, pass `M68K_CC=/path/to/m68k-aros-gcc`.

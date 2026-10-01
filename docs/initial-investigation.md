@@ -6,8 +6,10 @@ packet codecs, invitation negotiation for one peer, host tests, a native
 self-test, and a UDP diagnostic program. The program opens both ports,
 exchanges invitations and CK messages, and can send a test note. It estimates
 clock offset and schedules future short MIDI events. The CAMD bridge for
-short messages and SysEx is implemented but has not been exercised inside a
-running AROS instance. Audio output is not yet integrated.
+short messages and SysEx is implemented. On Linux-hosted AROS, two MIDIHub
+processes opened the bridge, completed an AppleMIDI session over AROSTCP's
+loopback interface, and exchanged Note On and Note Off. An independent CAMD
+client has not yet verified delivery. Audio output is not yet integrated.
 
 Current protocol tests use vectors constructed from the specifications. They
 do not include captures from a real peer or establish interoperability with
@@ -23,8 +25,8 @@ self-test and MIDIHub linked in the Linux-hosted build. The network test also
 covers complete and segmented SysEx.
 
 The UDP program compiles and passes its loopback test on the host. The
-Linux-hosted `x86_64-aros-gcc` linked its AROS version. Running it inside
-AROS still requires a working Linux-hosted AROS environment. The Bellatrix
+Linux-hosted `x86_64-aros-gcc` linked its AROS version. A focused hosted AROS
+loopback run has now exercised MIDIHub with AROSTCP. The Bellatrix
 m68k GCC and its AROS libraries also linked `MIDIHub-m68k` through `make
 m68k`; that binary has not yet been run inside m68k AROS. The separate
 TinySoundFont smoke test renders GeneralUser GS to a WAV on the host and
