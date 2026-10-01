@@ -257,6 +257,28 @@ static void journal_channel_state(void)
                                             &state) == -1);
 }
 
+static void journal_controls(void)
+{
+    static const uint8_t controls_bytes[] = {
+        0x20, 0, 4, 0x00, 0x08, 0x40,
+        0x01, 0x07, 0x64, 0xc0, 0x81
+    };
+    struct mh_journal journal;
+    struct mh_journal_controls controls;
+
+    assert(mh_journal_decode(controls_bytes, sizeof(controls_bytes),
+                             &journal) == 0);
+    assert(mh_journal_decode_controls(&journal.channels[0],
+                                       &controls) == 1);
+    assert(controls.count == 2 && controls.logs[0].number == 7 &&
+           controls.logs[0].value == 100 && !controls.logs[0].alternate);
+    assert(controls.logs[1].number == 64 && controls.logs[1].alternate &&
+           controls.logs[1].single_packet_safe);
+    journal.channels[0].length--;
+    assert(mh_journal_decode_controls(&journal.channels[0],
+                                       &controls) == -1);
+}
+
 static void rtp_command_reader(void)
 {
     static const uint8_t midi[] = {
@@ -538,6 +560,7 @@ int main(void)
     journal_framing();
     journal_note_offs();
     journal_channel_state();
+    journal_controls();
     rtp_command_reader();
     rtp_system_common();
     rtp_sysex();

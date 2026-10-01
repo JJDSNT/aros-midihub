@@ -77,6 +77,22 @@ int mh_journal_decode_channel_state(
     const struct mh_journal_channel *channel,
     struct mh_journal_channel_state *state);
 
+struct mh_journal_control_log {
+    uint8_t number;
+    uint8_t value;
+    uint8_t alternate;
+    uint8_t single_packet_safe;
+};
+
+struct mh_journal_controls {
+    struct mh_journal_control_log logs[128];
+    size_t count;
+};
+
+/* Decode Chapter C logs; alternate tools are marked for separate handling. */
+int mh_journal_decode_controls(const struct mh_journal_channel *channel,
+                                struct mh_journal_controls *controls);
+
 /* Iterates MIDI 1.0 short commands in a decoded RTP-MIDI command section.
  * SysEx and unsupported system commands return -2; malformed data returns
  * -1. A result of 1 contains a command, and 0 means end of list. */

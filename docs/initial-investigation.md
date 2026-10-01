@@ -96,8 +96,9 @@ yet connected to CAMD, and AROS playback has not been run.
   matching future NoteOn events. It also recovers timely lost NoteOn commands
   when the journal's Y hint requests playback and clock sync is available.
   Chapters P and W restore Program Change, bank selection, and Pitch Bend
-  after covered packet loss. Other chapters and outgoing journals remain to
-  be implemented.
+  after covered packet loss. Chapter C value logs restore Control Change
+  values; alternate logs are skipped. Other chapters and outgoing journals
+  remain to be implemented.
 
 ## Recommended architecture
 

@@ -305,6 +305,48 @@ int mh_journal_decode_channel_state(
     return 1;
 }
 
+int mh_journal_decode_controls(const struct mh_journal_channel *channel,
+                                struct mh_journal_controls *controls)
+{
+    const uint8_t *data;
+    size_t length;
+    size_t offset = 3;
+    size_t count;
+    size_t i;
+    uint8_t seen[16] = {0};
+    uint8_t number;
+    if (!channel || !controls || !channel->data || channel->length < 3)
+        return -1;
+    memset(controls, 0, sizeof(*controls));
+    if (!(channel->chapters & 0x40))
+        return 0;
+    data = channel->data;
+    length = channel->length;
+    if (data[0] & 0x04)
+        return -1; /* Enhanced Chapter C requires a separate decoder. */
+    if (channel->chapters & 0x80) {
+        if (length - offset < 3) return -1;
+        offset += 3;
+    }
+    if (length - offset < 1) return -1;
+    count = (size_t)(data[offset] & 0x7f) + 1;
+    if (1 + count * 2 > length - offset) return -1;
+    controls->count = count;
+    for (i = 0; i < count; ++i) {
+        const uint8_t *log = data + offset + 1 + i * 2;
+        struct mh_journal_control_log *entry = &controls->logs[i];
+        number = log[0] & 0x7f;
+        if (seen[number / 8] & (0x80u >> (number % 8)))
+            return -1;
+        seen[number / 8] |= (uint8_t)(0x80u >> (number % 8));
+        entry->number = number;
+        entry->value = log[1] & 0x7f;
+        entry->alternate = !!(log[1] & 0x80);
+        entry->single_packet_safe = !!(log[0] & 0x80);
+    }
+    return 1;
+}
+
 void mh_rtp_reader_init(struct mh_rtp_reader *reader,
                         const struct mh_rtp_packet *packet)
 {

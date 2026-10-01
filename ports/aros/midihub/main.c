@@ -68,6 +68,8 @@ struct runtime {
     uint8_t bank_msb_known[16];
     uint8_t bank_lsb_known[16];
     uint16_t pitch[16];
+    uint8_t controllers[16][128];
+    uint8_t controller_known[16][128];
     struct mh_camd_bridge camd;
     int camd_opened;
 };
@@ -186,6 +188,8 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
         rt->program[channel] = bytes[1];
         rt->program_known[channel] = 1;
     } else if (length == 3 && (status & 0xf0) == 0xb0) {
+        rt->controllers[channel][bytes[1]] = bytes[2];
+        rt->controller_known[channel][bytes[1]] = 1;
         if (bytes[1] == 0) {
             rt->bank_msb[channel] = bytes[2];
             rt->bank_msb_known[channel] = 1;
@@ -207,6 +211,7 @@ static void reset_channel_state(struct runtime *rt)
     memset(rt->program_known, 0, sizeof(rt->program_known));
     memset(rt->bank_msb_known, 0, sizeof(rt->bank_msb_known));
     memset(rt->bank_lsb_known, 0, sizeof(rt->bank_lsb_known));
+    memset(rt->controller_known, 0, sizeof(rt->controller_known));
     for (channel = 0; channel < 16; ++channel)
         rt->pitch[channel] = 0x2000;
 }
@@ -287,6 +292,42 @@ static void recover_channel_state(struct runtime *rt,
             deliver_short(rt, message, 3);
             printf("MIDIHub: recovered Pitch Bend channel=%u value=%u\n",
                    channel, (unsigned int)pitch);
+        }
+    }
+}
+
+static void recover_controls(struct runtime *rt,
+                              const struct mh_journal *journal,
+                              int single_loss)
+{
+    struct mh_journal_controls controls;
+    uint8_t message[3];
+    size_t i;
+    size_t j;
+    unsigned int channel;
+    if (single_loss && journal->single_packet_safe)
+        return;
+    for (i = 0; i < journal->channel_count; ++i) {
+        const struct mh_journal_channel *entry = &journal->channels[i];
+        if (single_loss && entry->single_packet_safe)
+            continue;
+        if (mh_journal_decode_controls(entry, &controls) <= 0)
+            continue;
+        channel = entry->number;
+        message[0] = (uint8_t)(0xb0 | channel);
+        for (j = 0; j < controls.count; ++j) {
+            const struct mh_journal_control_log *log = &controls.logs[j];
+            if (log->alternate ||
+                (single_loss && log->single_packet_safe) ||
+                (rt->controller_known[channel][log->number] &&
+                 rt->controllers[channel][log->number] == log->value))
+                continue;
+            message[1] = log->number;
+            message[2] = log->value;
+            deliver_short(rt, message, sizeof(message));
+            printf("MIDIHub: recovered Control Change channel=%u controller=%u value=%u\n",
+                   channel, (unsigned int)log->number,
+                   (unsigned int)log->value);
         }
     }
 }
@@ -542,6 +583,7 @@ static void receive_packet(struct runtime *rt, int data_port)
         recover_channel_state(rt, &journal, sequence_advance == 2);
         recover_notes(rt, &journal, sequence_advance == 2,
                       midi.timestamp);
+        recover_controls(rt, &journal, sequence_advance == 2);
     }
     if (!midi.midi_length)
         return; /* Guard packet: acknowledge its journal without MIDI output. */
