@@ -100,3 +100,24 @@ int mh_queue_next_due(const struct mh_event_queue *queue, uint64_t *due)
     *due = queue->events[0].due;
     return 1;
 }
+
+size_t mh_queue_cancel_note_on(struct mh_event_queue *queue,
+                                uint8_t channel, uint8_t note)
+{
+    size_t read_index;
+    size_t write_index = 0;
+    if (!queue || channel >= 16 || note >= 128)
+        return 0;
+    for (read_index = 0; read_index < queue->count; ++read_index) {
+        const struct mh_queued_event *event = &queue->events[read_index];
+        if (event->length == 3 && event->bytes[0] == (uint8_t)(0x90 | channel) &&
+            event->bytes[1] == note && event->bytes[2] != 0)
+            continue;
+        if (write_index != read_index)
+            queue->events[write_index] = *event;
+        ++write_index;
+    }
+    read_index = queue->count - write_index;
+    queue->count = write_index;
+    return read_index;
+}

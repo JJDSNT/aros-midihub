@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 /* Apple Network MIDI RTP profile. The MIDI list and any recovery journal are
- * exposed as bounded byte spans; this layer does not interpret them. */
+ * exposed as bounded byte spans for separate decoding. */
 struct mh_rtp_packet {
     uint16_t sequence;
     uint32_t timestamp;
@@ -41,6 +41,9 @@ int mh_journal_decode(const uint8_t *data, size_t length,
                       struct mh_journal *journal);
 int mh_journal_covers_gap(uint16_t previous, uint16_t current,
                           uint16_t checkpoint);
+/* Extract Chapter N NoteOff bits. 0: absent, 1: decoded, -1: malformed. */
+int mh_journal_note_offs(const struct mh_journal_channel *channel,
+                         uint8_t offbits[16], int *single_packet_safe);
 
 /* Iterates MIDI 1.0 short commands in a decoded RTP-MIDI command section.
  * SysEx and unsupported system commands return -2; malformed data returns

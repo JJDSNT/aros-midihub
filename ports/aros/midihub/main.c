@@ -60,6 +60,7 @@ struct runtime {
     struct mh_session session;
     struct mh_sysex_assembler sysex;
     struct mh_event_queue queue;
+    uint8_t active_notes[16][128];
     struct mh_camd_bridge camd;
     int camd_opened;
 };
@@ -161,6 +162,87 @@ static int send_feedback(struct runtime *rt, uint16_t sequence)
     return fresh;
 }
 
+static void deliver_short(struct runtime *rt, const uint8_t *bytes,
+                          size_t length)
+{
+    uint8_t status = bytes[0];
+    unsigned int channel = status & 0x0f;
+    if (length == 3 && status >= 0x80 && status <= 0x9f) {
+        rt->active_notes[channel][bytes[1]] =
+            (status & 0xf0) == 0x90 && bytes[2] != 0;
+    } else if (length == 3 && (status & 0xf0) == 0xb0 &&
+               (bytes[1] == 120 || bytes[1] >= 123)) {
+        memset(rt->active_notes[channel], 0,
+               sizeof(rt->active_notes[channel]));
+    }
+    mh_camd_bridge_deliver(&rt->camd, bytes, length);
+}
+
+static void release_active_notes(struct runtime *rt)
+{
+    uint8_t message[3];
+    unsigned int channel;
+    unsigned int note;
+    message[2] = 0;
+    for (channel = 0; channel < 16; ++channel) {
+        message[0] = (uint8_t)(0x80 | channel);
+        for (note = 0; note < 128; ++note) {
+            if (!rt->active_notes[channel][note])
+                continue;
+            message[1] = (uint8_t)note;
+            deliver_short(rt, message, sizeof(message));
+        }
+    }
+}
+
+static void recover_note_offs(struct runtime *rt,
+                              const struct mh_journal *journal,
+                              int single_loss)
+{
+    uint8_t offbits[16];
+    uint8_t message[3];
+    size_t i;
+    unsigned int octave;
+    unsigned int bit;
+    unsigned int note;
+    size_t cancelled;
+    int safe;
+    int decoded;
+
+    if (single_loss && journal->single_packet_safe)
+        return;
+    for (i = 0; i < journal->channel_count; ++i) {
+        const struct mh_journal_channel *channel = &journal->channels[i];
+        if (single_loss && channel->single_packet_safe)
+            continue;
+        decoded = mh_journal_note_offs(channel, offbits, &safe);
+        if (decoded <= 0 || (single_loss && safe))
+            continue;
+        message[0] = (uint8_t)(0x80 | channel->number);
+        message[2] = 0;
+        for (octave = 0; octave < 16; ++octave) {
+            for (bit = 0; bit < 8; ++bit) {
+                note = octave * 8 + bit;
+                if (!(offbits[octave] & (0x80u >> bit)))
+                    continue;
+                cancelled = mh_queue_cancel_note_on(&rt->queue,
+                                                    channel->number,
+                                                    (uint8_t)note);
+                if (cancelled)
+                    printf("MIDIHub: cancelled %lu future Note On event(s) channel=%u note=%u\n",
+                           (unsigned long)cancelled,
+                           (unsigned int)channel->number, note);
+                if (!rt->active_notes[channel->number][note])
+                    continue;
+                message[1] = (uint8_t)note;
+                deliver_short(rt, message, sizeof(message));
+                printf("MIDIHub: recovered Note Off channel=%u note=%u\n",
+                       (unsigned int)channel->number, note);
+            }
+        }
+    }
+}
+
 static void receive_sync(struct runtime *rt,
                          const struct mh_apple_packet *incoming,
                          uint64_t now)
@@ -218,7 +300,8 @@ static void receive_packet(struct runtime *rt, int data_port)
     int response_port;
     int action;
     int sysex_result;
-    int16_t sequence_advance;
+    int16_t sequence_advance = 0;
+    uint16_t previous_sequence = 0;
     uint64_t now;
     size_t i;
 
@@ -278,6 +361,7 @@ static void receive_packet(struct runtime *rt, int data_port)
             rt->have_received_sequence = 0;
             mh_sysex_reset(&rt->sysex);
             mh_queue_reset(&rt->queue);
+            release_active_notes(rt);
         }
         return;
     }
@@ -298,20 +382,25 @@ static void receive_packet(struct runtime *rt, int data_port)
         return;
     }
     if (rt->have_received_sequence) {
+        previous_sequence = (uint16_t)rt->received_sequence;
         sequence_advance = (int16_t)(midi.sequence -
-                                     (uint16_t)rt->received_sequence);
+                                     previous_sequence);
         if (sequence_advance > 1) {
             printf("MIDIHub: %u RTP packet(s) lost; journal %s\n",
                    (unsigned int)(sequence_advance - 1),
                    !midi.journal ? "unavailable" :
                    mh_journal_covers_gap(
-                       (uint16_t)rt->received_sequence, midi.sequence,
-                       journal.checkpoint) ? "covers gap" :
+                       previous_sequence, midi.sequence, journal.checkpoint) ?
+                                             "covers gap" :
                                              "does not cover gap");
         }
     }
     if (!send_feedback(rt, midi.sequence))
         return; /* A duplicate or older packet must not replay MIDI events. */
+    if (sequence_advance > 1 && midi.journal &&
+        mh_journal_covers_gap(previous_sequence, midi.sequence,
+                              journal.checkpoint))
+        recover_note_offs(rt, &journal, sequence_advance == 2);
     if (!midi.midi_length)
         return; /* Guard packet: acknowledge its journal without MIDI output. */
     printf("MIDIHub: RTP-MIDI seq=%u timestamp=%lu length=%lu bytes=",
@@ -346,7 +435,7 @@ static void receive_packet(struct runtime *rt, int data_port)
                     puts("MIDIHub: future MIDI event discarded");
                 continue;
             }
-            mh_camd_bridge_deliver(&rt->camd, event.bytes, event.length);
+            deliver_short(rt, event.bytes, event.length);
         }
     }
     if (action < 0)
@@ -450,7 +539,7 @@ static void periodic(struct runtime *rt, uint64_t now)
     int data_port;
 
     while (mh_queue_pop_due(&rt->queue, now, &event))
-        mh_camd_bridge_deliver(&rt->camd, event.bytes, event.length);
+        deliver_short(rt, event.bytes, event.length);
 
     if (rt->session.phase == MH_SESSION_INVITING_CONTROL ||
         rt->session.phase == MH_SESSION_INVITING_DATA) {
@@ -491,6 +580,7 @@ static void periodic(struct runtime *rt, uint64_t now)
         rt->peer_to_local = 0;
         rt->sync_t1 = rt->sync_t2 = 0;
         rt->have_received_sequence = 0;
+        memset(rt->active_notes, 0, sizeof(rt->active_notes));
         mh_sysex_reset(&rt->sysex);
         mh_queue_reset(&rt->queue);
     }
@@ -669,6 +759,10 @@ int main(int argc, char **argv)
     result = 0;
 
 cleanup:
+    if (rt.camd_opened) {
+        mh_queue_reset(&rt.queue);
+        release_active_notes(&rt);
+    }
     if (rt.camd_opened)
         mh_camd_bridge_close(&rt.camd);
     if (rt.data >= 0)

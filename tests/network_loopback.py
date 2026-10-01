@@ -165,10 +165,34 @@ def run_feedback_case(binary):
         control.settimeout(2)
         feedback, _ = control.recvfrom(128)
         assert struct.unpack(">I", feedback[8:12])[0] == 0x10002
+        note_on = struct.pack(">BBHII", 0x80, 0xe1, 3, 100, peer_ssrc)
+        data.sendto(note_on + b"\x03\x90\x3c\x64",
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x10003
+        recovery = struct.pack(">BBHII", 0x80, 0xe1, 5, 100, peer_ssrc)
+        journal = b"\x20\x00\x04\x00\x06\x08\x00\x77\x08"
+        data.sendto(recovery + b"\x40" + journal,
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x10005
+        note_on = struct.pack(">BBHII", 0x80, 0xe1, 6, 100, peer_ssrc)
+        data.sendto(note_on + b"\x03\x90\x3c\x64",
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x10006
+        safe = struct.pack(">BBHII", 0x80, 0xe1, 8, 100, peer_ssrc)
+        safe_journal = b"\x20\x00\x07\x00\x06\x08\x80\x77\x08"
+        data.sendto(safe + b"\x40" + safe_journal,
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x10008
         log.seek(0)
         output = log.read().decode(errors="replace")
         assert "malformed recovery journal discarded" in output
         assert "1 RTP packet(s) lost; journal covers gap" in output
+        assert "recovered Note Off channel=0 note=60" in output
+        assert output.count("recovered Note Off channel=0 note=60") == 1
     finally:
         process.send_signal(signal.SIGINT)
         try:

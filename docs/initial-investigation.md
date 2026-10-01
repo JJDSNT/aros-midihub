@@ -91,8 +91,10 @@ yet connected to CAMD, and AROS playback has not been run.
   the control port, including journal-only guard packets; MIDIHub now sends
   this feedback. MIDIHub validates top-level journal framing and channel
   lengths, detects RTP sequence gaps, and reports whether the journal
-  checkpoint covers a gap. It does not yet interpret journal chapters or
-  send outgoing journals, so note recovery remains future work.
+  checkpoint covers a gap. It interprets Chapter N NoteOff bitfields to
+  release notes that are still active after a covered gap and to cancel
+  matching future NoteOn events. It does not yet recover NoteOn commands or
+  other chapters, or send outgoing journals.
 
 ## Recommended architecture
 

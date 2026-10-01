@@ -191,6 +191,33 @@ static void journal_framing(void)
     assert(!mh_journal_covers_gap(10, 11, 10));
 }
 
+static void journal_note_offs(void)
+{
+    static const uint8_t note_only[] = {
+        0x20, 0, 4, 0x00, 0x06, 0x08, 0x00, 0x77, 0x08
+    };
+    static const uint8_t preceded[] = {
+        0x20, 0, 4, 0x00, 0x10, 0xf8,
+        0x80, 1, 0,
+        0x00, 64, 127,
+        0x00, 0x02,
+        0x80, 0x00,
+        0x80, 0x77, 0x08
+    };
+    struct mh_journal journal;
+    uint8_t offbits[16];
+    int safe;
+
+    assert(mh_journal_decode(note_only, sizeof(note_only), &journal) == 0);
+    assert(mh_journal_note_offs(&journal.channels[0], offbits, &safe) == 1);
+    assert(!safe && offbits[7] == 0x08 && offbits[6] == 0);
+    assert(mh_journal_decode(preceded, sizeof(preceded), &journal) == 0);
+    assert(mh_journal_note_offs(&journal.channels[0], offbits, &safe) == 1);
+    assert(safe && offbits[7] == 0x08);
+    journal.channels[0].length--;
+    assert(mh_journal_note_offs(&journal.channels[0], offbits, &safe) == -1);
+}
+
 static void rtp_command_reader(void)
 {
     static const uint8_t midi[] = {
@@ -450,6 +477,11 @@ static void clock_and_queue(void)
     assert(mh_queue_pop_due(&queue, 300, &event) == 1 &&
            !memcmp(event.bytes, second, sizeof(second)));
     assert(mh_queue_next_due(&queue, &due) == 0);
+    assert(mh_queue_push(&queue, 300, first, sizeof(first)) == 0);
+    assert(mh_queue_push(&queue, 200, second, sizeof(second)) == 0);
+    assert(mh_queue_cancel_note_on(&queue, 0, 60) == 1);
+    assert(mh_queue_next_due(&queue, &due) == 1 && due == 200);
+    assert(mh_queue_cancel_note_on(&queue, 0, 60) == 0);
     assert(mh_queue_push(&queue, 400, first, sizeof(first)) == 0);
     mh_queue_reset(&queue);
     assert(mh_queue_pop_due(&queue, 400, &event) == 0);
@@ -463,6 +495,7 @@ int main(void)
     rtp_short();
     rtp_journal_and_lengths();
     journal_framing();
+    journal_note_offs();
     rtp_command_reader();
     rtp_system_common();
     rtp_sysex();

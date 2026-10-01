@@ -175,6 +175,68 @@ int mh_journal_covers_gap(uint16_t previous, uint16_t current,
            (uint16_t)(first_missing - checkpoint) < 0x8000;
 }
 
+int mh_journal_note_offs(const struct mh_journal_channel *channel,
+                         uint8_t offbits[16], int *single_packet_safe)
+{
+    const uint8_t *data;
+    size_t length;
+    size_t offset = 3;
+    size_t size;
+    size_t logs;
+    size_t off_count;
+    unsigned int low;
+    unsigned int high;
+
+    if (!channel || !offbits || !single_packet_safe || !channel->data ||
+        channel->length < 3)
+        return -1;
+    memset(offbits, 0, 16);
+    *single_packet_safe = 0;
+    if (!(channel->chapters & 0x08))
+        return 0;
+    data = channel->data;
+    length = channel->length;
+    if (channel->chapters & 0x80) {
+        if (length - offset < 3) return -1;
+        offset += 3; /* Chapter P. */
+    }
+    if (channel->chapters & 0x40) {
+        if (length - offset < 1 || (data[0] & 0x04))
+            return -1; /* Enhanced Chapter C needs separate decoding. */
+        size = 1 + 2 * ((size_t)(data[offset] & 0x7f) + 1);
+        if (size > length - offset) return -1;
+        offset += size;
+    }
+    if (channel->chapters & 0x20) {
+        if (length - offset < 2) return -1;
+        size = ((size_t)(data[offset] & 3) << 8) | data[offset + 1];
+        if (size < 2 || size > length - offset) return -1;
+        offset += size; /* Chapter M. */
+    }
+    if (channel->chapters & 0x10) {
+        if (length - offset < 2) return -1;
+        offset += 2; /* Chapter W. */
+    }
+    if (length - offset < 2) return -1;
+    *single_packet_safe = !!(data[offset] & 0x80);
+    logs = data[offset] & 0x7f;
+    low = data[offset + 1] >> 4;
+    high = data[offset + 1] & 0x0f;
+    if (low <= high)
+        off_count = high - low + 1;
+    else if (low == 15 && (high == 0 || high == 1))
+        off_count = 0;
+    else
+        return -1;
+    if (logs == 127 && low == 15 && high == 0)
+        ++logs;
+    size = 2 + logs * 2 + off_count;
+    if (size > length - offset) return -1;
+    if (off_count)
+        memcpy(offbits + low, data + offset + 2 + logs * 2, off_count);
+    return 1;
+}
+
 void mh_rtp_reader_init(struct mh_rtp_reader *reader,
                         const struct mh_rtp_packet *packet)
 {
