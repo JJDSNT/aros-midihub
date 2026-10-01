@@ -34,3 +34,18 @@ AddressSanitizer and UndefinedBehaviorSanitizer (`2124/2124` checks). An AROS
 build and a real BLE MIDI device exchange still need to be performed after
 the patch is applied. This patch does not add GATT Server support or the
 MIDIHub BLE MIDI transport itself.
+
+## USB MIDI CAMD fix
+
+`aros-usb-midi-camd.patch` applies to the same upstream AROS commit. It fixes
+the Poseidon USB MIDI class's CAMD receive buffer format, transmit ring
+handling, and failed port-open behavior. The modified AROS source is covered
+by [AROS-LICENSE](AROS-LICENSE).
+
+```sh
+git -C ~/AROS apply --check "$PWD/patches/aros-usb-midi-camd.patch"
+git -C ~/AROS apply "$PWD/patches/aros-usb-midi-camd.patch"
+```
+
+The patch passed `git apply --check`. Runtime status and the hardware test
+procedure are in [USB MIDI validation](../docs/usb-midi.md).

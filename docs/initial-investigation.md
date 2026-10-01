@@ -52,10 +52,11 @@ yet connected to CAMD, and AROS playback has not been run.
   `DEVS:Midi` is an alternative worth evaluating if ports must exist before
   the network session starts.
 - `rom/usb/classes/camdmidi/` contains a Poseidon class that creates a CAMD
-  driver for USB MIDI. Its `mmakefile.src` enables i386, x86_64, and ppc;
-  arm is disabled and aarch64 is absent. SysEx handling has `FIXME` comments.
-  This limits that USB class, not MIDIHub: the network bridge uses CAMD and
-  does not depend on a USB MIDI controller.
+  driver for USB MIDI. The current upstream `mmakefile.src` enables i386,
+  x86_64, arm, aarch64, and ppc. SysEx handling has `FIXME` comments.
+  MIDIHub's network bridge uses CAMD independently of the USB controller.
+  The October 2026 audit found receive and transmit defects; see
+  [USB MIDI validation](usb-midi.md).
 - `rom/usb/classes/simplemidi/` is another USB MIDI class, separate from
   CAMD integration. Do not assume both expose the same ports to applications.
 - A search found no usable native RTP-MIDI/AppleMIDI implementation for

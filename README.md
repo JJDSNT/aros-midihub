@@ -76,6 +76,9 @@ Potential transports include:
 Support for class-compliant USB MIDI devices through the AROS USB stack.
 
 This includes MIDI keyboards, controllers, interfaces and synthesizers.
+The upstream Poseidon/CAMD path, a source fix for discovered data-transfer
+defects, and the remaining physical test are documented in
+[USB MIDI validation](docs/usb-midi.md).
 
 ### Serial / DIN MIDI
 
