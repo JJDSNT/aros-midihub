@@ -2,6 +2,7 @@
 #include <midihub/config.h>
 #include <midihub/rtpmidi.h>
 #include <midihub/session.h>
+#include <midihub/timing.h>
 #include "camd_bridge.h"
 
 #include <arpa/inet.h>
@@ -45,6 +46,9 @@ struct runtime {
     int probe_sysex;
     int probe_state;
     int sync_ready;
+    int64_t peer_to_local;
+    uint64_t sync_t1;
+    uint64_t sync_t2;
     int have_received_sequence;
     uint16_t sequence;
     uint32_t received_sequence;
@@ -55,6 +59,7 @@ struct runtime {
     unsigned int retries;
     struct mh_session session;
     struct mh_sysex_assembler sysex;
+    struct mh_event_queue queue;
     struct mh_camd_bridge camd;
     int camd_opened;
 };
@@ -169,6 +174,8 @@ static void receive_sync(struct runtime *rt,
         response.ssrc = rt->session.local_ssrc;
         response.sync_count = 1;
         response.timestamps[1] = now;
+        rt->sync_t1 = incoming->timestamps[0];
+        rt->sync_t2 = now;
         send_apple(rt, 1, &response);
     } else if (incoming->sync_count == 1 && rt->initiating &&
                incoming->timestamps[0] == rt->last_sync) {
@@ -177,9 +184,16 @@ static void receive_sync(struct runtime *rt,
         response.sync_count = 2;
         response.timestamps[2] = now;
         send_apple(rt, 1, &response);
-        rt->sync_ready = 1;
-        puts("MIDIHub: clock exchange completed");
-    } else if (incoming->sync_count == 2 && !rt->initiating) {
+        if (mh_clock_offset(response.timestamps, 1,
+                            &rt->peer_to_local) == 0) {
+            rt->sync_ready = 1;
+            puts("MIDIHub: clock exchange completed");
+        }
+    } else if (incoming->sync_count == 2 && !rt->initiating &&
+               incoming->timestamps[0] == rt->sync_t1 &&
+               incoming->timestamps[1] == rt->sync_t2 && rt->sync_t2 &&
+               mh_clock_offset(incoming->timestamps, 0,
+                               &rt->peer_to_local) == 0) {
         rt->sync_ready = 1;
         puts("MIDIHub: clock exchange completed");
     }
@@ -257,8 +271,11 @@ static void receive_packet(struct runtime *rt, int data_port)
             puts("MIDIHub: peer disconnected");
             rt->have_peer = 0;
             rt->sync_ready = 0;
+            rt->peer_to_local = 0;
+            rt->sync_t1 = rt->sync_t2 = 0;
             rt->have_received_sequence = 0;
             mh_sysex_reset(&rt->sysex);
+            mh_queue_reset(&rt->queue);
         }
         return;
     }
@@ -297,6 +314,17 @@ static void receive_packet(struct runtime *rt, int data_port)
             } else if (sysex_result < 0)
                 puts("MIDIHub: SysEx segment discarded");
         } else {
+            uint64_t due;
+            now = now_ticks();
+            if (rt->sync_ready &&
+                mh_clock_due(event.timestamp, now, rt->peer_to_local,
+                             &due) == 0 && due > now) {
+                if (due - now > 100000 ||
+                    mh_queue_push(&rt->queue, due, event.bytes,
+                                  event.length) != 0)
+                    puts("MIDIHub: future MIDI event discarded");
+                continue;
+            }
             mh_camd_bridge_deliver(&rt->camd, event.bytes, event.length);
         }
     }
@@ -397,7 +425,11 @@ static void send_probe_sysex(struct runtime *rt)
 static void periodic(struct runtime *rt, uint64_t now)
 {
     struct mh_apple_packet packet;
+    struct mh_queued_event event;
     int data_port;
+
+    while (mh_queue_pop_due(&rt->queue, now, &event))
+        mh_camd_bridge_deliver(&rt->camd, event.bytes, event.length);
 
     if (rt->session.phase == MH_SESSION_INVITING_CONTROL ||
         rt->session.phase == MH_SESSION_INVITING_DATA) {
@@ -434,8 +466,12 @@ static void periodic(struct runtime *rt, uint64_t now)
         puts("MIDIHub: data invitation timed out");
         rt->session.phase = MH_SESSION_IDLE;
         rt->have_peer = 0;
+        rt->sync_ready = 0;
+        rt->peer_to_local = 0;
+        rt->sync_t1 = rt->sync_t2 = 0;
         rt->have_received_sequence = 0;
         mh_sysex_reset(&rt->sysex);
+        mh_queue_reset(&rt->queue);
     }
 }
 
@@ -452,6 +488,8 @@ int main(int argc, char **argv)
     struct mh_network_config config;
     const char *peer_ip;
     uint64_t now;
+    uint64_t next_due;
+    uint64_t wait_ticks;
     unsigned int seed;
     int argi = 1;
     int remaining;
@@ -577,6 +615,12 @@ int main(int argc, char **argv)
         FD_SET(rt.data, &read_set);
         timeout.tv_sec = 0;
         timeout.tv_usec = 100000;
+        if (mh_queue_next_due(&rt.queue, &next_due)) {
+            now = now_ticks();
+            wait_ticks = next_due > now ? next_due - now : 0;
+            if (wait_ticks < 1000)
+                timeout.tv_usec = (long)(wait_ticks * 100);
+        }
 #ifdef __AROS__
         signal_mask = SIGBREAKF_CTRL_C | (1UL << rt.camd.signal_bit);
         ready = WaitSelect((rt.control > rt.data ? rt.control : rt.data) + 1,

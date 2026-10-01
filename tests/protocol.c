@@ -1,6 +1,7 @@
 #include "midihub/applemidi.h"
 #include "midihub/rtpmidi.h"
 #include "midihub/session.h"
+#include "midihub/timing.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -368,6 +369,46 @@ static void session_rejection(void)
     assert(initiator.phase == MH_SESSION_IDLE);
 }
 
+static void clock_and_queue(void)
+{
+    const uint8_t first[] = {0x90, 60, 100};
+    const uint8_t second[] = {0x80, 60, 0};
+    uint64_t stamps[3] = {1000, 800, 1020};
+    uint64_t due;
+    int64_t offset;
+    struct mh_event_queue queue = {0};
+    struct mh_queued_event event;
+
+    assert(mh_clock_offset(stamps, 1, &offset) == 0 && offset == 210);
+    assert(mh_clock_due(800, 1010, offset, &due) == 0 && due == 1010);
+    assert(mh_clock_due(900, 1010, offset, &due) == 0 && due == 1110);
+    assert(mh_clock_offset(stamps, 0, &offset) == 0 && offset == -210);
+    assert(mh_clock_due(1010, 800, offset, &due) == 0 && due == 800);
+    assert(mh_clock_due(1110, 800, offset, &due) == 0 && due == 900);
+    stamps[2] = 999;
+    assert(mh_clock_offset(stamps, 1, &offset) == -1);
+
+    assert(mh_clock_due(0x64, UINT64_C(0x100000000), 0, &due) == 0 &&
+           due == UINT64_C(0x100000064));
+    assert(mh_clock_due(0xffffff9c, UINT64_C(0x100000000), 0,
+                        &due) == 0 && due == UINT64_C(0xffffff9c));
+    assert(mh_queue_push(&queue, 300, first, sizeof(first)) == 0);
+    assert(mh_queue_push(&queue, 200, second, sizeof(second)) == 0);
+    assert(mh_queue_push(&queue, 300, second, sizeof(second)) == 0);
+    assert(mh_queue_next_due(&queue, &due) == 1 && due == 200);
+    assert(mh_queue_pop_due(&queue, 199, &event) == 0);
+    assert(mh_queue_pop_due(&queue, 200, &event) == 1 &&
+           !memcmp(event.bytes, second, sizeof(second)));
+    assert(mh_queue_pop_due(&queue, 300, &event) == 1 &&
+           !memcmp(event.bytes, first, sizeof(first)));
+    assert(mh_queue_pop_due(&queue, 300, &event) == 1 &&
+           !memcmp(event.bytes, second, sizeof(second)));
+    assert(mh_queue_next_due(&queue, &due) == 0);
+    assert(mh_queue_push(&queue, 400, first, sizeof(first)) == 0);
+    mh_queue_reset(&queue);
+    assert(mh_queue_pop_due(&queue, 400, &event) == 0);
+}
+
 int main(void)
 {
     apple_exchange();
@@ -380,6 +421,7 @@ int main(void)
     rtp_sysex();
     session_handshake();
     session_rejection();
+    clock_and_queue();
     puts("protocol tests passed");
     return 0;
 }

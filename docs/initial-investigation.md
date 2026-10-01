@@ -77,9 +77,11 @@ yet connected to CAMD, and AROS playback has not been run.
   on the data port. `BY` closes the session. Tokens, SSRC values, and
   multibyte fields use network byte order.
 - `CK` synchronization uses timestamps in 100-microsecond units and a
-  three-message exchange. A receiver must honor future timestamps, even if
-  the initial scheduler is simple. The initiator refreshes synchronization
-  at least every 60 seconds.
+  three-message exchange. MIDIHub now estimates the clock offset and queues
+  future short MIDI messages for delivery at their RTP timestamps. The queue
+  holds up to 256 events and accepts at most 10 seconds of lookahead; later
+  events are discarded. SysEx scheduling remains to be implemented. The
+  initiator refreshes synchronization every 50 seconds.
 - Apple advertises `_apple-midi._udp` through Bonjour. Manual connection
   by IP address and port can come first; mDNS/DNS-SD discovery can follow.
 - Apple's driver sends journals but accepts packets without them. For the

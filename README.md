@@ -282,9 +282,12 @@ tests, an AROS package self-test, and a UDP diagnostic program are present.
 The program negotiates a session, exchanges CK packets, and bridges MIDI
 messages and SysEx through CAMD clusters on AROS. It acknowledges received
 RTP packets, including journal-only guard packets, with AppleMIDI `RS`
-feedback. It does not yet calculate clock offset or schedule future MIDI
-events. Applying recovery journals, discovery, Preferences, and connecting
-the synthesizer to CAMD remain to be done. The CAMD bridge has compiled and
+feedback. The CK exchange estimates the peer clock offset. Short MIDI
+messages with future RTP timestamps are queued for delivery to CAMD at the
+requested time, with a 10-second lookahead and 256-event limit. Events beyond
+those limits are discarded; SysEx is still delivered on receipt. Applying
+recovery journals, discovery, Preferences, and connecting the synthesizer to
+CAMD remain to be done. The CAMD bridge has compiled and
 linked for Linux hosted but has not yet been exercised inside AROS.
 
 Run the portable codec tests with `make test`. For an AROS source checkout,
