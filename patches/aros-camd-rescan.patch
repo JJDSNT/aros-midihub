@@ -1,0 +1,110 @@
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+index 6592397..a73e966 100644
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -223,6 +223,9 @@ struct CamdBase_intern{
+ 
+     struct SignalSemaphore *CLSemaphore;
+ 
++    /* Serialize DEVS:Midi scans without holding CLSemaphore over LoadSeg. */
++    struct SignalSemaphore DriverScanSemaphore;
++
+ };
+ 
+ #ifdef __AMIGAOS__
+diff --git a/workbench/libs/camd/init.c b/workbench/libs/camd/init.c
+index f091d2c..912bc5a 100644
+--- a/workbench/libs/camd/init.c
++++ b/workbench/libs/camd/init.c
+@@ -27,6 +27,7 @@ BOOL InitCamd(struct CamdBase *CamdBase){
+ 		return FALSE;
+ 	}
+ 	InitSemaphore(CB(CamdBase)->CLSemaphore);
++	InitSemaphore(&CB(CamdBase)->DriverScanSemaphore);
+ #ifndef __amigaos4__
+ 	NEWLIST(&CB(CamdBase)->mymidinodes);
+ 	NEWLIST(&CB(CamdBase)->midiclusters);
+diff --git a/workbench/libs/camd/rethinkcamd.c b/workbench/libs/camd/rethinkcamd.c
+index b582600..e10d765 100644
+--- a/workbench/libs/camd/rethinkcamd.c
++++ b/workbench/libs/camd/rethinkcamd.c
+@@ -5,6 +5,7 @@
+ */
+ 
+ #include <proto/exec.h>
++#include <proto/dos.h>
+ 
+ #include "camd_intern.h"
+ 
+@@ -20,7 +21,7 @@
+ 	struct CamdBase *, CamdBase, 36, Camd)
+ 
+ /*  FUNCTION
+-		Make camd reload midi preferences.
++		Load newly installed drivers from DEVS:Midi.
+ 
+     INPUTS
+ 
+@@ -28,11 +29,12 @@
+ 		0 on success.
+ 
+     NOTES
++		Existing drivers stay loaded, including drivers whose files have been
++		removed. Callers should disconnect devices in their transport worker.
+ 
+     EXAMPLE
+ 
+     BUGS
+-		Not implemented.
+ 
+     SEE ALSO
+ 
+@@ -45,11 +47,45 @@
+ *****************************************************************************/
+ {
+     AROS_LIBFUNC_INIT
+-
+-	aros_print_not_implemented("RethinkCAMD");
++	struct FileInfoBlock fib;
++	struct Drivers *driver;
++	BPTR lock;
++	char path[256];
++	BOOL loaded;
++
++	ObtainSemaphore(&CB(CamdBase)->DriverScanSemaphore);
++	lock = Lock((CONST_STRPTR)"DEVS:Midi", ACCESS_READ);
++	if(!lock) {
++		ReleaseSemaphore(&CB(CamdBase)->DriverScanSemaphore);
++		return 0;
++	}
++	if(!Examine(lock, &fib)) {
++		UnLock(lock);
++		ReleaseSemaphore(&CB(CamdBase)->DriverScanSemaphore);
++		return -1;
++	}
++	while(ExNext(lock, &fib)) {
++		if(fib.fib_DirEntryType > 0)
++			continue;
++		loaded = FALSE;
++		ObtainSemaphoreShared(CB(CamdBase)->CLSemaphore);
++		for(driver = CB(CamdBase)->drivers; driver; driver = driver->next) {
++			if(mystrcmp((char *)fib.fib_FileName,
++			            driver->mididevicedata->Name)) {
++				loaded = TRUE;
++				break;
++			}
++		}
++		ReleaseSemaphore(CB(CamdBase)->CLSemaphore);
++		if(!loaded) {
++			mysprintf(CamdBase, path, "DEVS:Midi/%s", fib.fib_FileName);
++			LoadDriver(path, CamdBase);
++		}
++	}
++	UnLock(lock);
++	ReleaseSemaphore(&CB(CamdBase)->DriverScanSemaphore);
+ 
+ 	return 0;
+ 
+    AROS_LIBFUNC_EXIT
+ }
+-

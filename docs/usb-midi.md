@@ -7,6 +7,8 @@ interface and creates a CAMD driver under `DEVS:Midi`. CAMD loads drivers
 from that directory and exposes their ports as MIDI clusters. The class is
 included in the common USB classes MetaMake target for supported CPU targets.
 MIDIHub can use these CAMD clusters without a USB-specific transport.
+This USB class and driver pair is the design reference for MIDIHub's other
+endpoints; see [the CAMD integration design](camd-integration.md).
 
 This is **not yet a physical USB MIDI pass**. The Linux hosted build in this
 workspace has `DEVS:Midi/hostmidi` but no `poseidon.library` or

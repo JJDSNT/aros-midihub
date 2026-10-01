@@ -41,8 +41,11 @@ static int received_byte(void *context, uint16_t timestamp, uint8_t byte)
 {
     struct ble_runtime *runtime = context;
     (void)timestamp;
-    if (byte >= 0xf8)
+    if (byte >= 0xf8) {
+        mh_camd_bridge_deliver(&runtime->camd, &byte, 1);
+        runtime->received++;
         return 0;
+    }
     if (runtime->sysex_length) {
         if (runtime->sysex_length == MH_SYSEX_MAX) {
             runtime->sysex_length = 0;
@@ -64,14 +67,22 @@ static int received_byte(void *context, uint16_t timestamp, uint8_t byte)
         return 0;
     }
     if (byte & 0x80) {
-        if (byte > 0xef) {
+        if (byte == 0xf6) {
+            mh_camd_bridge_deliver(&runtime->camd, &byte, 1);
+            runtime->received++;
+            runtime->message_length = runtime->message_needed = 0;
+            return 0;
+        }
+        if (byte > 0xef && byte != 0xf1 && byte != 0xf2 &&
+            byte != 0xf3) {
             runtime->message_length = runtime->message_needed = 0;
             return 0;
         }
         runtime->message[0] = byte;
         runtime->message_length = 1;
         runtime->message_needed = (byte & 0xf0) == 0xc0 ||
-                                  (byte & 0xf0) == 0xd0 ? 1 : 2;
+                                  (byte & 0xf0) == 0xd0 ||
+                                  byte == 0xf1 || byte == 0xf3 ? 1 : 2;
         return 0;
     }
     if (!runtime->message_needed)
@@ -126,9 +137,11 @@ int main(int argc, char **argv)
     struct BtEndpoint *endpoint;
     struct MsgPort *port = NULL;
     APTR read_channel = NULL;
+    APTR control_channel = NULL;
     uint8_t read_buffer[512];
     ULONG signals;
     IPTR max_packet = 20, can_read = 0, can_write = 0;
+    IPTR value_handle = 0;
     int result = 20;
 
     if (argc != 2) {
@@ -138,7 +151,7 @@ int main(int argc, char **argv)
     memset(&runtime, 0, sizeof(runtime));
     runtime.camd.signal_bit = -1;
     mh_ble_midi_decoder_init(&runtime.decoder);
-    BluetoothBase = OpenLibrary("bluetooth.library", 1);
+    BluetoothBase = OpenLibrary((CONST_STRPTR)"bluetooth.library", 1);
     if (!BluetoothBase) {
         printf("bluetooth.library is unavailable\n");
         return 20;
@@ -166,6 +179,7 @@ int main(int argc, char **argv)
                BEA_MaxPktSize, &max_packet,
                BEA_CanRead, &can_read,
                BEA_CanWrite, &can_write,
+               BEA_Handle, &value_handle,
                TAG_END);
     if (!can_read || !can_write) {
         printf("BLE MIDI characteristic lacks notify or write support\n");
@@ -175,6 +189,20 @@ int main(int argc, char **argv)
                          ? max_packet : 20;
     if (!(port = CreateMsgPort()))
         goto done;
+    control_channel = btAllocChannel(device, port, NULL);
+    if (!control_channel)
+        goto done;
+    btSetAttrs(BGA_CHANNEL, control_channel, BCHA_AutoConnect, TRUE,
+               TAG_END);
+    btChannelSetup(control_channel, BTPR_GATTREAD, (UWORD)value_handle, 0);
+    if (btDoChannel(control_channel, read_buffer, sizeof(read_buffer))) {
+        printf("BLE MIDI initial characteristic read failed\n");
+        goto done;
+    }
+    if (btGetChannelActual(control_channel))
+        printf("BLE MIDI peripheral returned data on initial read\n");
+    btFreeChannel(control_channel);
+    control_channel = NULL;
     read_channel = btAllocChannel(device, port, endpoint);
     runtime.write_channel = btAllocChannel(device, port, endpoint);
     if (!read_channel || !runtime.write_channel)
@@ -183,7 +211,8 @@ int main(int argc, char **argv)
     btSetAttrs(BGA_CHANNEL, runtime.write_channel, BCHA_AutoConnect, TRUE,
                TAG_END);
     btChannelSetup(read_channel, BTPR_READ, 0, 0);
-    btChannelSetup(runtime.write_channel, BTPR_WRITE, 0, 0);
+    btChannelSetup(runtime.write_channel, BTPR_GATTWRITENORSP,
+                   (UWORD)value_handle, 0);
     if (mh_camd_bridge_open_named(&runtime.camd, node_name, incoming_name,
                                    outgoing_name)) {
         printf("Cannot open CAMD\n");
@@ -216,7 +245,7 @@ int main(int argc, char **argv)
                             runtime.message_needed = 0;
                         }
                     } else {
-                        printf("BLE MIDI read error %ld\n", error);
+                        printf("BLE MIDI read error %ld\n", (long)error);
                         btDelayMS(250);
                     }
                     btSendChannel(read_channel, read_buffer,
@@ -238,6 +267,8 @@ done:
     }
     if (runtime.write_channel)
         btFreeChannel(runtime.write_channel);
+    if (control_channel)
+        btFreeChannel(control_channel);
     if (port)
         DeleteMsgPort(port);
     CloseLibrary(BluetoothBase);

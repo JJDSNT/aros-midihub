@@ -4,7 +4,8 @@ The optional `MIDIHubBLE` program connects to a registered BLE MIDI
 peripheral through AROS `bluetooth.library`. It finds the MIDI service
 `03B80E5A-EDE8-4B33-A751-6CE34EC4C700` and I/O characteristic
 `7772E5DB-3868-4112-A1A9-F2669D106BF3` by their 128-bit UUIDs, receives
-notifications, writes MIDI packets, and exposes `MIDIHub BLE In` and
+notifications, performs the initial GATT characteristic read, writes MIDI
+packets, and exposes `MIDIHub BLE In` and
 `MIDIHub BLE Out` through CAMD. The codec is portable and shared by all AROS
 targets.
 
@@ -30,15 +31,21 @@ as a BLE MIDI peripheral.
 
 The GATT patch passed AROS apply checks and portable stack tests. The BLE MIDI
 codec passes local packet tests covering channel messages, running status,
-timestamp wrap, and multi-packet SysEx. The AROS executable has not been
-built or run with a BLE radio; Bluetooth APIs are absent from the existing
-Linux hosted build in this workspace.
+timestamp wrap, and multi-packet SysEx. The `MIDIHubBLE` source compiled and
+linked with the existing AROS x64 GCC and headers generated from the current
+Bluetooth API. The full MetaMake target and patched `bluetooth.library` have
+not been built. The program has not been run with a BLE radio.
 
 The first runtime sends complete MIDI messages without transmit running
-status. Received real-time and System Common messages are decoded by the
-codec, but the current CAMD bridge handles channel messages and SysEx only.
-Incoming timestamps are parsed but CAMD receives messages immediately; clock
-correlation and scheduling are future work. One program instance handles one
-BLE peripheral.
+status. The CAMD bridge accepts channel messages, System Common, System
+Real-Time, and SysEx. Incoming timestamps are parsed but CAMD receives messages
+immediately; clock correlation and scheduling are future work. One program
+instance handles one BLE peripheral.
+
+The program is an integration probe. The planned package endpoint follows
+the existing USB CAMD driver contract so BLE, network, serial, and synthesis
+appear through the same CAMD interface. See
+[the CAMD integration design](camd-integration.md) for the startup and
+discovery constraints.
 
 Protocol reference: [MIDI Association BLE MIDI 1.0 specification](https://midi.org/midi-over-bluetooth-low-energy-ble-midi).

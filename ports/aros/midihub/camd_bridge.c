@@ -97,14 +97,27 @@ void mh_camd_bridge_deliver(struct mh_camd_bridge *bridge,
 {
     uint32_t packed;
     uint8_t status;
-    if (!bridge->to_clients || !message || length < 2 || length > 3)
+    size_t expected;
+    if (!bridge->to_clients || !message || length < 1 || length > 3)
         return;
     status = message[0];
-    if (status < 0x80 || status > 0xef ||
-        length != (((status & 0xf0) == 0xc0 ||
-                    (status & 0xf0) == 0xd0) ? 2u : 3u))
+    if (status >= 0x80 && status <= 0xef)
+        expected = ((status & 0xf0) == 0xc0 ||
+                    (status & 0xf0) == 0xd0) ? 2u : 3u;
+    else if (status == 0xf1 || status == 0xf3)
+        expected = 2;
+    else if (status == 0xf2)
+        expected = 3;
+    else if (status == 0xf6 || status >= 0xf8)
+        expected = 1;
+    else
         return;
-    packed = ((uint32_t)status << 24) | ((uint32_t)message[1] << 16) |
+    if (length != expected ||
+        (length > 1 && (message[1] & 0x80)) ||
+        (length > 2 && (message[2] & 0x80)))
+        return;
+    packed = ((uint32_t)status << 24) |
+             ((uint32_t)(length > 1 ? message[1] : 0) << 16) |
              ((uint32_t)(length == 3 ? message[2] : 0) << 8);
     PutMidi(bridge->to_clients, packed);
 }
@@ -144,10 +157,17 @@ void mh_camd_bridge_poll(struct mh_camd_bridge *bridge,
         bytes[0] = message.mm_Status;
         bytes[1] = message.mm_Data1;
         bytes[2] = message.mm_Data2;
-        if (bytes[0] < 0x80 || bytes[0] > 0xef)
+        if (bytes[0] >= 0x80 && bytes[0] <= 0xef)
+            length = ((bytes[0] & 0xf0) == 0xc0 ||
+                      (bytes[0] & 0xf0) == 0xd0) ? 2 : 3;
+        else if (bytes[0] == 0xf1 || bytes[0] == 0xf3)
+            length = 2;
+        else if (bytes[0] == 0xf2)
+            length = 3;
+        else if (bytes[0] == 0xf6 || bytes[0] >= 0xf8)
+            length = 1;
+        else
             continue;
-        length = ((bytes[0] & 0xf0) == 0xc0 ||
-                  (bytes[0] & 0xf0) == 0xd0) ? 2 : 3;
         output(context, bytes, length);
     }
 }

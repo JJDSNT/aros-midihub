@@ -49,3 +49,22 @@ git -C ~/AROS apply "$PWD/patches/aros-usb-midi-camd.patch"
 
 The patch passed `git apply --check`. Runtime status and the hardware test
 procedure are in [USB MIDI validation](../docs/usb-midi.md).
+
+## CAMD driver rescan
+
+`aros-camd-rescan.patch` applies to the same upstream AROS checkout. It makes
+the existing `RethinkCAMD()` entry rescan `DEVS:Midi` and load new driver files
+once, even when CAMD is already open. It serializes scans separately from the
+CAMD list lock so `LoadSeg` and driver initialization do not run while that
+list is locked. It does not unload a driver whose file is removed.
+
+```sh
+git -C ~/AROS apply --check "$PWD/patches/aros-camd-rescan.patch"
+git -C ~/AROS apply "$PWD/patches/aros-camd-rescan.patch"
+```
+
+The patch passed `git apply --check`, and its changed C files compiled with
+the AROS x64 GCC. A full CAMD build and native rescan test are pending. The
+driver lifecycle and the remaining removal issue are documented in
+[the CAMD integration design](../docs/camd-integration.md). The modified AROS
+source is covered by [AROS-LICENSE](AROS-LICENSE).

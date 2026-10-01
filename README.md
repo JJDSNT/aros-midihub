@@ -110,9 +110,10 @@ The optional [BLE MIDI central transport](docs/ble-midi.md) connects a
 registered BLE MIDI peripheral to CAMD through `bluetooth.library`. Its
 portable packet codec supports running status, timestamps and multi-packet
 SysEx. The [AROS GATT patch](patches/README.md) supplies 128-bit UUID
-discovery and Write Without Response. The runtime still needs a build and
-physical BLE test. AROS cannot advertise itself as a BLE MIDI peripheral
-until its Bluetooth stack has GATT server support.
+discovery and Write Without Response. The AROS x64 program compiles and links;
+the full package build and physical BLE test remain. AROS cannot advertise
+itself as a BLE MIDI peripheral until its Bluetooth stack has GATT server
+support.
 
 ### MIDI 2.0 / UMP
 
@@ -175,46 +176,35 @@ The synthesizer layer should allow:
 
 This makes it possible for AROS applications to play General MIDI-compatible instruments without requiring external MIDI hardware.
 
-## Proposed Architecture
+## CAMD integration architecture
 
-The project is intended to separate MIDI applications from individual transports.
+The existing Poseidon USB MIDI class is the design reference for every
+MIDIHub integration. AROS MIDI applications use `camd.library` clusters.
+Transport code converts between MIDI bytes and its own protocol at the edge;
+it does not require applications to use a MIDIHub-specific API.
 
-    +----------------------------------+
-    |        AROS Applications         |
-    +----------------------------------+
-                    |
-                    v
-    +----------------------------------+
-    |         MIDIHub Core             |
-    |                                  |
-    | MIDI routing                     |
-    | MIDI events                      |
-    | Virtual ports                    |
-    | Transport abstraction            |
-    +----------------------------------+
-          |          |          |
-          v          v          v
-       RTP-MIDI     USB       Serial
-          |
-      AppleMIDI
-          |
-       UDP / IP
+```text
+AROS MIDI applications <-> camd.library / CAMD clusters
+                              |          |          |          |
+                         USB MIDI   RTP-MIDI   BLE MIDI   future synth
+                         Poseidon    AppleMIDI  Bluetooth    |
+                              |          |          |     TinySoundFont
+                         USB device  UDP/IP   GATT device      |
+                                                              AHI
+```
 
-                    +
-                    |
-                    v
-
-    +----------------------------------+
-    |       Software Synthesizer       |
-    |                                  |
-    | TinySoundFont                    |
-    | SoundFont 2 (.sf2)               |
-    +----------------------------------+
-                    |
-                    v
-               AROS Audio
-
-This architecture allows transports and synthesizers to evolve independently.
+Poseidon currently writes a CAMD driver to `DEVS:Midi` for USB devices. CAMD
+loads that driver and creates its ports. MIDIHub's network and BLE programs
+currently create equivalent application-visible CAMD clusters as clients;
+the synthesizer is still a standalone test path. The intended package design
+is to give network, BLE, serial, and synthesis stable CAMD endpoints using the
+same driver contract as USB where practical. The driver and transport process
+must have an explicit lifecycle and message channel. CAMD currently scans
+`DEVS:Midi` only when `camd.library` initializes, so hot discovery also needs
+a CAMD rescan or ports installed before CAMD opens. A
+[rescan patch](patches/aros-camd-rescan.patch) uses the existing
+`RethinkCAMD()` entry for newly installed drivers. See
+[the CAMD integration design](docs/camd-integration.md).
 
 ## Initial Implementation Sources
 

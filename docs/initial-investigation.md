@@ -48,9 +48,10 @@ yet connected to CAMD, and AROS playback has not been run.
   `LoadSeg`, and creates `<driver>.in.<port>` and `<driver>.out.<port>`
   clusters. The USB MIDI class places a file there. This checkout has no
   MIDI/CAMD Preferences application in `workbench/prefs/` or `contrib/`.
-  MIDIHub currently creates clusters as a CAMD client. A virtual driver under
-  `DEVS:Midi` is an alternative worth evaluating if ports must exist before
-  the network session starts.
+  MIDIHub currently creates clusters as a CAMD client. The USB driver contract
+  is the reference for all MIDIHub endpoints; the planned stable virtual
+  driver ports and CAMD's startup-only scan are detailed in
+  [the CAMD integration design](camd-integration.md).
 - `rom/usb/classes/camdmidi/` contains a Poseidon class that creates a CAMD
   driver for USB MIDI. The current upstream `mmakefile.src` enables i386,
   x86_64, arm, aarch64, and ppc. SysEx handling has `FIXME` comments.
@@ -112,7 +113,7 @@ yet connected to CAMD, and AROS playback has not been run.
   Guard packets repeat pending recovery data after
   the last event. SysEx and system messages remain unprotected.
 
-## Recommended architecture
+## Initial network implementation
 
 ```text
 AROS MIDI applications <-> camd.library <-> MIDIHub CAMD integration
@@ -133,6 +134,11 @@ program `MIDIHub` can host the first bridge. The core preserves MIDI events
 as explicit bytes and timestamps. Conversion to CAMD `MidiMsg` belongs in
 AROS integration to avoid endianness errors and `PutMidi`'s three-byte
 limit. SysEx uses `PutSysEx` and `GetSysEx`.
+
+The long-term integration follows the existing USB CAMD driver model for all
+MIDIHub endpoints. The console bridge above is the first working network
+implementation; see [the CAMD integration design](camd-integration.md) for
+the driver lifecycle and migration sequence.
 
 ### First verifiable milestone
 
@@ -212,9 +218,10 @@ lists the MIDI service UUID.
 The [AROS source patch](../patches/README.md) implements the discovery change
 and ATT Write Command support, including the existing public
 `BTPR_GATTWRITENORSP` route. The optional [BLE MIDI central transport](ble-midi.md)
-now uses that path to connect a BLE MIDI peripheral to CAMD. Neither the
-patched `bluetooth.library` nor the AROS transport has been built or exercised
-with a BLE MIDI device.
+now uses that path to connect a BLE MIDI peripheral to CAMD. The AROS x64
+transport has compiled and linked with generated Bluetooth headers. The
+patched `bluetooth.library` and the runtime have not been exercised with a
+BLE MIDI device.
 
 ## Third-party code and licenses
 
