@@ -127,6 +127,16 @@ for development. Clone with `git clone --recurse-submodules`, or run
 not establish correct GeneralUser GS playback. TinySoundFont currently ignores
 SoundFont modulators, which GeneralUser GS uses extensively.
 
+For an AROS build, the optional MetaMake target
+`contrib-aros-midihub-soundfonttest` installs `SoundFontTest` and the test bank
+under `SYS:Extras/aros-midihub/`. Inside AROS, run
+`MIDIHUB:C/SoundFontTest MIDIHUB:SoundFonts/GeneralUser-GS.sf2 RAM:generaluser-test.wav`.
+`MIDIHUB:C/SoundFontPlay MIDIHUB:SoundFonts/GeneralUser-GS.sf2` renders the
+same test note and plays it through the default `ahi.device` unit. The normal
+package target does not include the bank or these test programs. Playback on
+68k remains unverified: the current TinySoundFont loader assumes little-endian
+SF2 data.
+
 TinySoundFont is a small SoundFont2 synthesizer implementation written in C/C++ and designed to be embedded directly into applications.
 
 The synthesizer layer should allow:

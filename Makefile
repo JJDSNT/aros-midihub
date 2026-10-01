@@ -29,11 +29,11 @@ synth-m68k: build/synth-render-m68k
 
 build/synth-render: tests/synth_render.c third_party/TinySoundFont/tsf.h
 	mkdir -p build
-	$(CC) -Ithird_party/TinySoundFont $(CFLAGS) -Wno-error -o $@ tests/synth_render.c -lm
+	$(CC) -Ithird_party/TinySoundFont $(CFLAGS) -o $@ tests/synth_render.c -lm
 
 build/synth-render-m68k: tests/synth_render.c third_party/TinySoundFont/tsf.h
 	mkdir -p build
-	$(M68K_CC) -Ithird_party/TinySoundFont $(M68K_CFLAGS) -Wno-error -o $@ tests/synth_render.c -lm
+	$(M68K_CC) -Ithird_party/TinySoundFont $(M68K_CFLAGS) -o $@ tests/synth_render.c -lm
 
 build/MIDIHub: $(SOURCES) $(HEADERS) $(PROGRAM_SOURCES)
 	mkdir -p build

@@ -15,7 +15,8 @@ include $(SRCDIR)/config/aros.cfg
 MIDIHUB_ROOT := $(SRCDIR)/$(CURDIR)
 MIDIHUB_PACKAGE := $(AROS_CONTRIB)/aros-midihub
 
-USER_INCLUDES := -I$(MIDIHUB_ROOT)/include
+USER_INCLUDES := -I$(MIDIHUB_ROOT)/include \
+    -I$(MIDIHUB_ROOT)/third_party/TinySoundFont
 # Older m68k AROS inline stubs intentionally use volatile register variables.
 USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
 
@@ -52,5 +53,25 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
     files="$(MIDIHUB_ROOT)/ports/aros/selftest/selftest" \
     uselibs=arosmidihub \
     targetdir=$(MIDIHUB_PACKAGE)/C
+
+# The bank is large and has a separate license, so this target is opt-in.
+#MM- contrib-aros-midihub-soundfonttest : \
+#MM      contrib-aros-midihub-soundfonttest-program \
+#MM      contrib-aros-midihub-soundfontplay-program \
+#MM      contrib-aros-midihub-soundfonttest-bank
+
+%build_prog mmake=contrib-aros-midihub-soundfonttest-program \
+    progname=SoundFontTest \
+    files="$(MIDIHUB_ROOT)/tests/synth_render" \
+    targetdir=$(MIDIHUB_PACKAGE)/C
+
+%build_prog mmake=contrib-aros-midihub-soundfontplay-program \
+    progname=SoundFontPlay \
+    files="$(MIDIHUB_ROOT)/ports/aros/soundfont_play" \
+    targetdir=$(MIDIHUB_PACKAGE)/C
+
+%copy_files_q mmake=contrib-aros-midihub-soundfonttest-bank \
+    src="$(MIDIHUB_ROOT)/soundfonts/GeneralUser-GS" \
+    files="GeneralUser-GS.sf2" dst="$(MIDIHUB_PACKAGE)/SoundFonts"
 
 %common

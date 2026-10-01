@@ -22,6 +22,14 @@ not verify sound fidelity:** TinySoundFont still ignores `pmod` and `imod`.
 Future work must implement and validate modulators, then compare output with
 the bank author's SoundFont specification test.
 
+The optional AROS MetaMake target `contrib-aros-midihub-soundfonttest` also
+installs `SoundFontTest`, `SoundFontPlay`, and the bank under
+`SYS:Extras/aros-midihub/`. `SoundFontPlay` renders the same note and sends
+it to the default `ahi.device` unit. Both AROS test programs compile for
+x86_64 hosted and m68k, but neither has been run inside AROS. The current
+TinySoundFont loader assumes little-endian SF2 data, so a successful m68k
+compile does not establish working m68k playback.
+
 The [GeneralUser GS license](../soundfonts/GeneralUser-GS/documentation/LICENSE.txt)
 allows use in software projects, but its author notes uncertain provenance for
 some samples. This submodule is a test bank. Selecting a bank for default
