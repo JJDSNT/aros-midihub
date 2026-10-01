@@ -107,7 +107,9 @@ The current upstream AROS tree includes `bluetooth.library`, an LE stack, ATT,
 and a GATT client. MIDIHub does not yet implement BLE MIDI. Its first Bluetooth
 milestone is to confirm the public integration path and add support for the
 128-bit MIDI service and characteristic UUIDs; the current GATT client header
-documents 16-bit-only service and characteristic discovery.
+documents 16-bit-only service and characteristic discovery. The precise
+limitation and follow-up work are tracked in
+[docs/initial-investigation.md](docs/initial-investigation.md#ble-midi-gatt-limitation).
 
 ### MIDI 2.0 / UMP
 

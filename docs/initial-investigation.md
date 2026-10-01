@@ -189,6 +189,26 @@ does not copy executables to `SYS:C` or modify `camd.library`.
 | BLE MIDI | Current AROS Bluetooth stack integration and 128-bit GATT UUID discovery |
 | MIDI 2.0/UMP | Event contract independent of three-byte `MidiMsg` |
 
+## BLE MIDI GATT limitation
+
+As of upstream AROS commit `13c7f81274825dd9bca047fc7caebfa21576a163`
+(October 1, 2026), `rom/bluetooth/stack/include/btcore/gatt_client.h`
+documents that GATT service and characteristic discovery reports only 16-bit
+UUIDs and skips custom 128-bit UUIDs. BLE MIDI uses a 128-bit service UUID
+(`03B80E5A-EDE8-4B33-A751-6CE34EC4C700`) and a 128-bit I/O characteristic
+UUID. Thus the current GATT client cannot identify a BLE MIDI endpoint through
+its normal discovery results. This is a known prerequisite for BLE MIDI, not
+an implemented MIDIHub transport.
+
+Follow-up: extend the AROS GATT discovery result types and parsers to retain
+128-bit service and characteristic UUIDs, add focused tests using BLE MIDI
+UUIDs, then define the public Bluetooth API that MIDIHub will use to subscribe
+to the MIDI characteristic and route its messages to CAMD. The upstream
+[GATT client header](https://github.com/aros-development-team/AROS/blob/13c7f81274825dd9bca047fc7caebfa21576a163/rom/bluetooth/stack/include/btcore/gatt_client.h)
+records the discovery restriction; Microsoft's
+[BLE MIDI transport documentation](https://microsoft.github.io/MIDI/kb/ble-midi-transport-architecture/)
+lists the MIDI service UUID.
+
 ## Third-party code and licenses
 
 - [TinySoundFont](https://github.com/schellingb/TinySoundFont) is MIT-licensed
