@@ -55,6 +55,9 @@ struct runtime {
     uint32_t received_sequence;
     uint64_t last_invite;
     uint64_t last_sync;
+    uint64_t last_rtp_send;
+    unsigned int sync_exchanges;
+    int sync_outstanding;
     uint64_t note_time;
     uint64_t last_activity;
     unsigned int retries;
@@ -147,8 +150,10 @@ static void send_sync(struct runtime *rt, uint64_t now)
     sync.command = MH_APPLE_CK;
     sync.ssrc = rt->session.local_ssrc;
     sync.timestamps[0] = now;
-    if (send_apple(rt, 1, &sync) == 0)
+    if (send_apple(rt, 1, &sync) == 0) {
         rt->last_sync = now;
+        rt->sync_outstanding = 1;
+    }
 }
 
 static int send_feedback(struct runtime *rt, uint16_t sequence)
@@ -487,6 +492,7 @@ static void receive_sync(struct runtime *rt,
         rt->sync_t2 = now;
         send_apple(rt, 1, &response);
     } else if (incoming->sync_count == 1 && rt->initiating &&
+               rt->sync_outstanding &&
                incoming->timestamps[0] == rt->last_sync) {
         response = *incoming;
         response.ssrc = rt->session.local_ssrc;
@@ -496,6 +502,9 @@ static void receive_sync(struct runtime *rt,
         if (mh_clock_offset(response.timestamps, 1,
                             &rt->peer_to_local) == 0) {
             rt->sync_ready = 1;
+            rt->sync_outstanding = 0;
+            if (rt->sync_exchanges < 3)
+                ++rt->sync_exchanges;
             puts("MIDIHub: clock exchange completed");
         }
     } else if (incoming->sync_count == 2 && !rt->initiating &&
@@ -589,6 +598,8 @@ static void receive_packet(struct runtime *rt, int data_port)
             rt->sync_ready = 0;
             rt->peer_to_local = 0;
             rt->sync_t1 = rt->sync_t2 = 0;
+            rt->sync_exchanges = 0;
+            rt->sync_outstanding = 0;
             rt->have_received_sequence = 0;
             mh_sysex_reset(&rt->sysex);
             mh_queue_reset(&rt->queue);
@@ -721,7 +732,9 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
                               message, length);
         else
             mh_sender_clear_history(&rt->sender);
+        rt->last_rtp_send = now_ticks();
         ++rt->sequence;
+        rt->last_rtp_send = now_ticks();
         return 0;
     }
     if (length < 2 || length > MH_SYSEX_MAX || message[length - 1] != 0xf7)
@@ -762,9 +775,32 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
                    sizeof(rt->peer_data)) != (int)wire_length)
             return -1;
         ++rt->sequence;
+        rt->last_rtp_send = now_ticks();
         offset += chunk;
     }
     return 0;
+}
+
+static void send_guard(struct runtime *rt, uint64_t now)
+{
+    uint8_t wire[1100];
+    size_t wire_length;
+    size_t journal_length;
+    uint32_t timestamp = (uint32_t)now;
+    if (mh_rtp_encode_list(rt->sequence, timestamp, rt->session.local_ssrc,
+                           NULL, 0, wire, sizeof(wire), &wire_length) != 0 ||
+        mh_sender_journal(&rt->sender, rt->sequence, timestamp,
+                          wire + wire_length, sizeof(wire) - wire_length,
+                          &journal_length) != 0)
+        return;
+    wire[12] |= 0x40;
+    wire_length += journal_length;
+    if (sendto(rt->data, wire, (int)wire_length, 0,
+               (const struct sockaddr *)&rt->peer_data,
+               sizeof(rt->peer_data)) == (int)wire_length) {
+        ++rt->sequence;
+        rt->last_rtp_send = now;
+    }
 }
 
 static void send_note(struct runtime *rt, uint8_t velocity)
@@ -811,8 +847,12 @@ static void periodic(struct runtime *rt, uint64_t now)
         }
     } else if (rt->session.phase == MH_SESSION_CONNECTED) {
         if (rt->initiating &&
-            elapsed_ticks(now, rt->last_sync) >= 500000)
+            elapsed_ticks(now, rt->last_sync) >=
+                (rt->sync_exchanges < 3 ? 10000u : 500000u))
             send_sync(rt, now);
+        if (rt->sender.count &&
+            elapsed_ticks(now, rt->last_rtp_send) >= 10000)
+            send_guard(rt, now);
         if (rt->probe_sysex && rt->sync_ready && rt->probe_state == 0) {
             send_probe_sysex(rt);
             rt->probe_state = 2;
@@ -834,6 +874,8 @@ static void periodic(struct runtime *rt, uint64_t now)
         rt->sync_ready = 0;
         rt->peer_to_local = 0;
         rt->sync_t1 = rt->sync_t2 = 0;
+        rt->sync_exchanges = 0;
+        rt->sync_outstanding = 0;
         rt->have_received_sequence = 0;
         memset(rt->active_notes, 0, sizeof(rt->active_notes));
         mh_sysex_reset(&rt->sysex);

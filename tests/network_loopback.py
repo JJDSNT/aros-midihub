@@ -359,9 +359,38 @@ def run_outgoing_journal_case(binary):
         assert journal[0] & 0x20 and journal[1:3] == first[2:4]
         assert journal[5] == 0x08 and journal[6] & 0x7f == 1
         assert journal[8] & 0x7f == 60 and journal[9] & 0x7f == 100
+        for _ in range(1):
+            ck0, _ = data.recvfrom(128)
+            assert ck0[:4] == b"\xff\xffCK" and ck0[8] == 0
+            t1 = struct.unpack(">Q", ck0[12:20])[0]
+            ck1 = struct.pack(">4sIB3xQQQ", b"\xff\xffCK", peer_ssrc,
+                              1, t1, int(time.time() * 10000), 0)
+            data.sendto(ck1, ("127.0.0.1", port + 1))
+            ck2, _ = data.recvfrom(128)
+            assert ck2[:4] == b"\xff\xffCK" and ck2[8] == 2
+            assert struct.unpack(">Q", ck2[12:20])[0] == t1
+        guard, _ = data.recvfrom(128)
+        assert guard[:2] == b"\x80\xe1" and guard[12] == 0x40
+        assert struct.unpack(">H", guard[2:4])[0] == (first_sequence + 2) & 0xffff
+        assert guard[13] & 0x20 and guard[14:16] == first[2:4]
         feedback = b"\xff\xffRS" + struct.pack(">II", peer_ssrc,
-                                                  (first_sequence + 1) & 0xffff)
+                                                  (first_sequence + 2) & 0xffff)
         control.sendto(feedback, ("127.0.0.1", port))
+        ck0, _ = data.recvfrom(128)
+        assert ck0[:4] == b"\xff\xffCK" and ck0[8] == 0
+        t1 = struct.unpack(">Q", ck0[12:20])[0]
+        ck1 = struct.pack(">4sIB3xQQQ", b"\xff\xffCK", peer_ssrc,
+                          1, t1, int(time.time() * 10000), 0)
+        data.sendto(ck1, ("127.0.0.1", port + 1))
+        ck2, _ = data.recvfrom(128)
+        assert ck2[:4] == b"\xff\xffCK" and ck2[8] == 2
+        data.settimeout(0.3)
+        try:
+            unexpected, _ = data.recvfrom(128)
+        except socket.timeout:
+            pass
+        else:
+            raise AssertionError(f"unexpected packet after startup sync: {unexpected!r}")
     finally:
         process.send_signal(signal.SIGINT)
         try:

@@ -319,6 +319,9 @@ static void outgoing_journal(void)
     assert(mh_sender_journal(&sender, 100, 1000,
                               bytes, sizeof(bytes), &length) == 0);
     assert(length == 3 && bytes[0] == 0x80 && bytes[2] == 100);
+    assert(mh_rtp_encode_list(100, 1000, 7, NULL, 0,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(length == 13 && mh_rtp_decode(bytes, length, &(struct mh_rtp_packet){0}) == 0);
     mh_sender_record(&sender, 100, 1000, on, sizeof(on));
     assert(mh_sender_journal(&sender, 101, 1050,
                               bytes, sizeof(bytes), &length) == 0);

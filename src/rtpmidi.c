@@ -61,7 +61,7 @@ int mh_rtp_encode_list(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
                        uint8_t *data, size_t capacity, size_t *length)
 {
     size_t header_length;
-    if (!midi || !data || !length || !midi_length || midi_length > 4095)
+    if ((!midi && midi_length) || !data || !length || midi_length > 4095)
         return -1;
     header_length = midi_length < 16 ? 13 : 14;
     if (capacity < header_length + midi_length)
@@ -75,7 +75,8 @@ int mh_rtp_encode_list(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
                          ((midi_length >> (header_length == 14 ? 8 : 0)) & 0x0f));
     if (header_length == 14)
         data[13] = (uint8_t)midi_length;
-    memcpy(data + header_length, midi, midi_length);
+    if (midi_length)
+        memcpy(data + header_length, midi, midi_length);
     *length = header_length + midi_length;
     return 0;
 }
