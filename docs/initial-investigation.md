@@ -97,8 +97,9 @@ yet connected to CAMD, and AROS playback has not been run.
   when the journal's Y hint requests playback and clock sync is available.
   Chapters P and W restore Program Change, bank selection, and Pitch Bend
   after covered packet loss. Chapter C value logs restore Control Change
-  values; alternate logs are skipped. Other chapters and outgoing journals
-  remain to be implemented.
+  values. The toggle tool handles sustain (64), and the count tool handles
+  All Sound Off (120) and All Notes Off (123). Other alternate logs, other
+  chapters, and outgoing journals remain to be implemented.
 
 ## Recommended architecture
 

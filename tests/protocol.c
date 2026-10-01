@@ -263,6 +263,14 @@ static void journal_controls(void)
         0x20, 0, 4, 0x00, 0x08, 0x40,
         0x01, 0x07, 0x64, 0xc0, 0x81
     };
+    static const uint8_t multiple_tools[] = {
+        0x20, 0, 4, 0x00, 0x08, 0x40,
+        0x01, 0x40, 0xc1, 0x40, 0x81
+    };
+    static const uint8_t repeated_tool[] = {
+        0x20, 0, 4, 0x00, 0x08, 0x40,
+        0x01, 0x07, 0x64, 0x07, 0x65
+    };
     struct mh_journal journal;
     struct mh_journal_controls controls;
 
@@ -273,8 +281,19 @@ static void journal_controls(void)
     assert(controls.count == 2 && controls.logs[0].number == 7 &&
            controls.logs[0].value == 100 && !controls.logs[0].alternate);
     assert(controls.logs[1].number == 64 && controls.logs[1].alternate &&
+           !controls.logs[1].count_tool && controls.logs[1].value == 1 &&
            controls.logs[1].single_packet_safe);
     journal.channels[0].length--;
+    assert(mh_journal_decode_controls(&journal.channels[0],
+                                       &controls) == -1);
+    assert(mh_journal_decode(multiple_tools, sizeof(multiple_tools),
+                             &journal) == 0);
+    assert(mh_journal_decode_controls(&journal.channels[0],
+                                       &controls) == 1);
+    assert(controls.logs[0].count_tool && controls.logs[0].value == 1 &&
+           controls.logs[1].alternate && !controls.logs[1].count_tool);
+    assert(mh_journal_decode(repeated_tool, sizeof(repeated_tool),
+                             &journal) == 0);
     assert(mh_journal_decode_controls(&journal.channels[0],
                                        &controls) == -1);
 }

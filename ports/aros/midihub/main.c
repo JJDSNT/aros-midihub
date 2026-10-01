@@ -70,6 +70,8 @@ struct runtime {
     uint16_t pitch[16];
     uint8_t controllers[16][128];
     uint8_t controller_known[16][128];
+    uint8_t sustain_toggles[16];
+    uint8_t controller_count[16][128];
     struct mh_camd_bridge camd;
     int camd_opened;
 };
@@ -188,6 +190,12 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
         rt->program[channel] = bytes[1];
         rt->program_known[channel] = 1;
     } else if (length == 3 && (status & 0xf0) == 0xb0) {
+        rt->controller_count[channel][bytes[1]] =
+            (uint8_t)((rt->controller_count[channel][bytes[1]] + 1) & 0x3f);
+        if (bytes[1] == 64 &&
+            (rt->controllers[channel][64] >= 64) != (bytes[2] >= 64))
+            rt->sustain_toggles[channel] =
+                (uint8_t)((rt->sustain_toggles[channel] + 1) & 0x3f);
         rt->controllers[channel][bytes[1]] = bytes[2];
         rt->controller_known[channel][bytes[1]] = 1;
         if (bytes[1] == 0) {
@@ -198,6 +206,12 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
             rt->bank_lsb_known[channel] = 1;
         } else if (bytes[1] == 121) {
             rt->pitch[channel] = 0x2000;
+            if (rt->controllers[channel][64] >= 64) {
+                rt->sustain_toggles[channel] =
+                    (uint8_t)((rt->sustain_toggles[channel] + 1) & 0x3f);
+                rt->controllers[channel][64] = 0;
+                rt->controller_known[channel][64] = 1;
+            }
         }
     } else if (length == 3 && (status & 0xf0) == 0xe0) {
         rt->pitch[channel] = (uint16_t)(bytes[1] | (bytes[2] << 7));
@@ -212,6 +226,9 @@ static void reset_channel_state(struct runtime *rt)
     memset(rt->bank_msb_known, 0, sizeof(rt->bank_msb_known));
     memset(rt->bank_lsb_known, 0, sizeof(rt->bank_lsb_known));
     memset(rt->controller_known, 0, sizeof(rt->controller_known));
+    memset(rt->controllers, 0, sizeof(rt->controllers));
+    memset(rt->sustain_toggles, 0, sizeof(rt->sustain_toggles));
+    memset(rt->controller_count, 0, sizeof(rt->controller_count));
     for (channel = 0; channel < 16; ++channel)
         rt->pitch[channel] = 0x2000;
 }
@@ -317,10 +334,39 @@ static void recover_controls(struct runtime *rt,
         message[0] = (uint8_t)(0xb0 | channel);
         for (j = 0; j < controls.count; ++j) {
             const struct mh_journal_control_log *log = &controls.logs[j];
-            if (log->alternate ||
-                (single_loss && log->single_packet_safe) ||
-                (rt->controller_known[channel][log->number] &&
-                 rt->controllers[channel][log->number] == log->value))
+            if (single_loss && log->single_packet_safe)
+                continue;
+            if (log->alternate) {
+                if (log->number == 64 && !log->count_tool &&
+                    rt->sustain_toggles[channel] != log->value) {
+                    message[1] = 64;
+                    if (rt->controllers[channel][64] >= 64) {
+                        message[2] = 0;
+                        deliver_short(rt, message, sizeof(message));
+                    }
+                    if (log->value & 1) {
+                        message[2] = 127;
+                        deliver_short(rt, message, sizeof(message));
+                    }
+                    rt->sustain_toggles[channel] = log->value;
+                    printf("MIDIHub: recovered Sustain toggle channel=%u count=%u\n",
+                           channel, (unsigned int)log->value);
+                } else if (log->count_tool &&
+                           (log->number == 120 || log->number == 123) &&
+                           rt->controller_count[channel][log->number] !=
+                           log->value) {
+                    message[1] = log->number;
+                    message[2] = 0;
+                    deliver_short(rt, message, sizeof(message));
+                    rt->controller_count[channel][log->number] = log->value;
+                    printf("MIDIHub: recovered controller count channel=%u controller=%u count=%u\n",
+                           channel, (unsigned int)log->number,
+                           (unsigned int)log->value);
+                }
+                continue;
+            }
+            if (rt->controller_known[channel][log->number] &&
+                rt->controllers[channel][log->number] == log->value)
                 continue;
             message[1] = log->number;
             message[2] = log->value;

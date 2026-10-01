@@ -81,6 +81,7 @@ struct mh_journal_control_log {
     uint8_t number;
     uint8_t value;
     uint8_t alternate;
+    uint8_t count_tool;
     uint8_t single_packet_safe;
 };
 

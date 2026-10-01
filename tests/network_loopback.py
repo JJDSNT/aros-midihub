@@ -254,6 +254,50 @@ def run_feedback_case(binary):
             if time.monotonic() >= deadline:
                 raise AssertionError(output)
             time.sleep(0.01)
+        sustain_on = struct.pack(">BBHII", 0x80, 0xe1, 16,
+                                 future & 0xffffffff, peer_ssrc)
+        data.sendto(sustain_on + b"\x03\xb0\x40\x7f",
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x10010
+        sustain_gap = struct.pack(">BBHII", 0x80, 0xe1, 18,
+                                  future & 0xffffffff, peer_ssrc)
+        sustain_journal = b"\x20\x00\x11\x00\x06\x40\x00\x40\x83"
+        data.sendto(sustain_gap + b"\x40" + sustain_journal,
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x10012
+        deadline = time.monotonic() + 1
+        while True:
+            log.seek(0)
+            output = log.read().decode(errors="replace")
+            if "recovered Sustain toggle channel=0 count=3" in output:
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(output)
+            time.sleep(0.01)
+        last_note = struct.pack(">BBHII", 0x80, 0xe1, 19,
+                                future & 0xffffffff, peer_ssrc)
+        data.sendto(last_note + b"\x03\x90\x3e\x64",
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x10013
+        all_notes_gap = struct.pack(">BBHII", 0x80, 0xe1, 21,
+                                    future & 0xffffffff, peer_ssrc)
+        all_notes_journal = b"\x20\x00\x14\x00\x06\x40\x00\x7b\xc1"
+        data.sendto(all_notes_gap + b"\x40" + all_notes_journal,
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x10015
+        deadline = time.monotonic() + 1
+        while True:
+            log.seek(0)
+            output = log.read().decode(errors="replace")
+            if "recovered controller count channel=0 controller=123 count=1" in output:
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(output)
+            time.sleep(0.01)
         assert "malformed recovery journal discarded" in output
         assert "1 RTP packet(s) lost; journal covers gap" in output
         assert "recovered Note Off channel=0 note=60" in output

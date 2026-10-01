@@ -295,10 +295,11 @@ Chapter N also recovers timely lost `Note On` commands when the sender's `Y`
 hint requests playback and the clocks are synchronized. Chapters P and W
 restore Program Change, bank selection, and Pitch Bend after packet loss.
 Chapter C value logs restore Control Change values; alternate toggle and
-count logs still need their own recovery logic. Recovery of the remaining
-journal chapters, discovery, Preferences, and connecting the synthesizer to
-CAMD remain to be
-done. The CAMD bridge has compiled and linked for Linux hosted but has not
+count logs support sustain (64), All Sound Off (120), and All Notes Off (123).
+Other alternate logs still need their own recovery logic. Recovery of the
+remaining journal chapters, discovery, Preferences, and connecting the
+synthesizer to CAMD remain to be done. The CAMD bridge has compiled and
+linked for Linux hosted but has not
 yet been exercised inside AROS.
 
 Run the portable codec tests with `make test`. For an AROS source checkout,
