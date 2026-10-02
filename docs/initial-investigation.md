@@ -109,11 +109,14 @@ linked for AROS x64 and m68k, but live AROS playback has not been run.
   after covered packet loss. Chapter C value logs restore Control Change
   values. The toggle tool handles sustain (64), and the count tool handles
   All Sound Off (120) and All Notes Off (123). Other alternate logs, other
-  chapters, and system journals remain to be implemented. Outgoing channel
-  messages include journals from a bounded 32-packet history, trimmed by
-  AppleMIDI RS feedback. Chapters T and A cover Channel and Poly Aftertouch.
-  Guard packets repeat pending recovery data after
-  the last event. SysEx and system messages remain unprotected.
+  channel chapters remain to be implemented. System Chapters D, V, and Q are
+  decoded. Chapters D and V recover System Reset, Tune Request, Song Select,
+  and Active Sense; Chapter Q is validated but sequencer-state replay remains
+  pending. Outgoing channel and D/V system messages include journals from a
+  bounded 32-packet history, trimmed by AppleMIDI RS feedback. Chapters T and
+  A cover Channel and Poly Aftertouch. Guard packets repeat pending recovery
+  data after the last event. SysEx, MIDI Time Code, and sequencer commands do
+  not yet have outgoing journal protection.
 
 ## Initial network implementation
 

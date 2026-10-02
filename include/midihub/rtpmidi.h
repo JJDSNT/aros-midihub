@@ -41,6 +41,35 @@ int mh_journal_decode(const uint8_t *data, size_t length,
                       struct mh_journal *journal);
 int mh_journal_covers_gap(uint16_t previous, uint16_t current,
                           uint16_t checkpoint);
+
+struct mh_journal_system_state {
+    int has_reset;
+    int reset_single_packet_safe;
+    uint8_t reset_count;
+    int has_tune_request;
+    int tune_single_packet_safe;
+    uint8_t tune_count;
+    int has_song_select;
+    int song_single_packet_safe;
+    uint8_t song;
+    int has_active_sense;
+    int active_sense_single_packet_safe;
+    uint8_t active_sense_count;
+    int has_sequencer;
+    int sequencer_single_packet_safe;
+    int sequencer_running;
+    int downbeat_played;
+    int has_clock;
+    uint32_t clock;
+    int has_time_tools;
+    uint32_t time_tools;
+};
+
+/* Decode standard commands in System Chapters D, V, and Q. Chapters F and
+ * X remain available as opaque bytes in mh_journal. */
+int mh_journal_decode_system(const struct mh_journal *journal,
+                             struct mh_journal_system_state *state);
+
 struct mh_journal_note_log {
     uint8_t number;
     uint8_t velocity;

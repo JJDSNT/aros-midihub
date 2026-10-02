@@ -176,6 +176,115 @@ int mh_journal_covers_gap(uint16_t previous, uint16_t current,
            (uint16_t)(first_missing - checkpoint) < 0x8000;
 }
 
+static int skip_undefined_common(const uint8_t *data, size_t length,
+                                 size_t *offset)
+{
+    size_t size;
+    if (length - *offset < 2) return -1;
+    size = ((size_t)(data[*offset] & 3) << 8) | data[*offset + 1];
+    if (size < 2 || size > length - *offset) return -1;
+    *offset += size;
+    return 0;
+}
+
+static int skip_undefined_realtime(const uint8_t *data, size_t length,
+                                   size_t *offset)
+{
+    size_t size;
+    if (length - *offset < 1) return -1;
+    size = data[*offset] & 0x1f;
+    if (size < 1 || size > length - *offset) return -1;
+    *offset += size;
+    return 0;
+}
+
+int mh_journal_decode_system(const struct mh_journal *journal,
+                             struct mh_journal_system_state *state)
+{
+    const uint8_t *data;
+    size_t length;
+    size_t offset = 2;
+    uint8_t toc;
+    uint8_t flags;
+    int decoded = 0;
+    if (!journal || !state) return -1;
+    memset(state, 0, sizeof(*state));
+    if (!journal->system) return 0;
+    data = journal->system;
+    length = journal->system_length;
+    if (length < 2 || (((size_t)(data[0] & 3) << 8) | data[1]) != length)
+        return -1;
+    toc = data[0];
+    if (toc & 0x40) {
+        if (offset >= length) return -1;
+        flags = data[offset++];
+        if (flags & 0x40) {
+            if (offset >= length) return -1;
+            state->has_reset = 1;
+            state->reset_single_packet_safe = !!(data[offset] & 0x80);
+            state->reset_count = data[offset++] & 0x7f;
+            decoded = 1;
+        }
+        if (flags & 0x20) {
+            if (offset >= length) return -1;
+            state->has_tune_request = 1;
+            state->tune_single_packet_safe = !!(data[offset] & 0x80);
+            state->tune_count = data[offset++] & 0x7f;
+            decoded = 1;
+        }
+        if (flags & 0x10) {
+            if (offset >= length) return -1;
+            state->has_song_select = 1;
+            state->song_single_packet_safe = !!(data[offset] & 0x80);
+            state->song = data[offset++] & 0x7f;
+            decoded = 1;
+        }
+        if ((flags & 0x08) && skip_undefined_common(data, length, &offset))
+            return -1;
+        if ((flags & 0x04) && skip_undefined_common(data, length, &offset))
+            return -1;
+        if ((flags & 0x02) && skip_undefined_realtime(data, length, &offset))
+            return -1;
+        if ((flags & 0x01) && skip_undefined_realtime(data, length, &offset))
+            return -1;
+    }
+    if (toc & 0x20) {
+        if (offset >= length) return -1;
+        state->has_active_sense = 1;
+        state->active_sense_single_packet_safe = !!(data[offset] & 0x80);
+        state->active_sense_count = data[offset++] & 0x7f;
+        decoded = 1;
+    }
+    if (toc & 0x10) {
+        if (offset >= length) return -1;
+        flags = data[offset++];
+        state->has_sequencer = 1;
+        state->sequencer_single_packet_safe = !!(flags & 0x80);
+        state->sequencer_running = !!(flags & 0x40);
+        state->downbeat_played = !!(flags & 0x20);
+        state->has_clock = !!(flags & 0x10);
+        state->has_time_tools = !!(flags & 0x08);
+        state->clock = (uint32_t)(flags & 7) << 16;
+        if (state->has_clock) {
+            if (length - offset < 2) return -1;
+            state->clock |= (uint32_t)data[offset] << 8 | data[offset + 1];
+            offset += 2;
+        }
+        if (state->has_time_tools) {
+            if (length - offset < 3) return -1;
+            state->time_tools = (uint32_t)data[offset] << 16 |
+                                (uint32_t)data[offset + 1] << 8 |
+                                data[offset + 2];
+            offset += 3;
+        }
+        decoded = 1;
+    }
+    /* Chapters F and X follow Q and remain intentionally opaque. */
+    if (!(toc & 0x0c) && offset != length) return -1;
+    if (offset > length) return -1;
+    return decoded;
+}
+
 int mh_journal_decode_aftertouch(const struct mh_journal_channel *channel,
                                   struct mh_journal_aftertouch *aftertouch)
 {

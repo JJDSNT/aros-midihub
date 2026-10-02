@@ -193,6 +193,43 @@ static void journal_framing(void)
     assert(!mh_journal_covers_gap(10, 11, 10));
 }
 
+static void journal_system(void)
+{
+    static const uint8_t bytes[] = {
+        0x40, 0x00, 0x04,
+        0x70, 0x0d,
+        0x70, 0x85, 0x03, 0x0c,
+        0x89,
+        0xfb, 0x12, 0x34, 0x01, 0x02, 0x03
+    };
+    uint8_t broken[sizeof(bytes)];
+    struct mh_journal journal;
+    struct mh_journal_system_state state;
+
+    assert(mh_journal_decode(bytes, sizeof(bytes), &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &state) == 1);
+    assert(state.has_reset && state.reset_single_packet_safe &&
+           state.reset_count == 5);
+    assert(state.has_tune_request && !state.tune_single_packet_safe &&
+           state.tune_count == 3);
+    assert(state.has_song_select && state.song == 12);
+    assert(state.has_active_sense && state.active_sense_single_packet_safe &&
+           state.active_sense_count == 9);
+    assert(state.has_sequencer && state.sequencer_single_packet_safe &&
+           state.sequencer_running && state.downbeat_played &&
+           state.has_clock && state.clock == 0x31234 &&
+           state.has_time_tools && state.time_tools == 0x010203);
+
+    memcpy(broken, bytes, sizeof(broken));
+    broken[4] = 12;
+    assert(mh_journal_decode(broken, sizeof(broken), &journal) == -1);
+    memcpy(broken, bytes, sizeof(broken));
+    broken[10] |= 0x10;
+    broken[4] = 10;
+    assert(mh_journal_decode(broken, 13, &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &state) == -1);
+}
+
 static void journal_note_offs(void)
 {
     static const uint8_t note_only[] = {
@@ -311,12 +348,17 @@ static void outgoing_journal(void)
     const uint8_t channel_pressure[] = {0xd0, 40};
     const uint8_t poly_pressure[] = {0xa0, 60, 50};
     const uint8_t reset_controllers[] = {0xb0, 121, 0};
+    const uint8_t system_reset[] = {0xff};
+    const uint8_t tune_request[] = {0xf6};
+    const uint8_t song_select[] = {0xf3, 9};
+    const uint8_t active_sense[] = {0xfe};
     struct mh_sender sender;
     struct mh_journal journal;
     struct mh_journal_notes notes;
     struct mh_journal_channel_state channel_state;
     struct mh_journal_controls controls;
     struct mh_journal_aftertouch aftertouch;
+    struct mh_journal_system_state system_state;
     uint8_t bytes[256];
     size_t length;
 
@@ -396,6 +438,35 @@ static void outgoing_journal(void)
     assert(mh_journal_decode(bytes, length, &journal) == 0);
     assert(mh_journal_decode_aftertouch(&journal.channels[0],
                                         &aftertouch) == 0);
+
+    assert(mh_sender_supported(system_reset, sizeof(system_reset)) &&
+           mh_sender_supported(tune_request, sizeof(tune_request)) &&
+           mh_sender_supported(song_select, sizeof(song_select)) &&
+           mh_sender_supported(active_sense, sizeof(active_sense)));
+    mh_sender_record(&sender, 300, 3000, system_reset,
+                     sizeof(system_reset));
+    assert(sender.count == 1);
+    mh_sender_record(&sender, 301, 3010, tune_request,
+                     sizeof(tune_request));
+    mh_sender_record(&sender, 302, 3020, song_select,
+                     sizeof(song_select));
+    mh_sender_record(&sender, 303, 3030, active_sense,
+                     sizeof(active_sense));
+    assert(mh_sender_journal(&sender, 304, 3040,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0 &&
+           journal.system && journal.channel_count == 0);
+    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(system_state.has_reset && system_state.reset_count == 1 &&
+           system_state.has_tune_request && system_state.tune_count == 1 &&
+           system_state.has_song_select && system_state.song == 9 &&
+           system_state.has_active_sense &&
+           system_state.active_sense_count == 1);
+    mh_sender_ack(&sender, 303);
+    assert(sender.count == 0);
+    assert(mh_sender_journal(&sender, 304, 3040,
+                              bytes, sizeof(bytes), &length) == 0 &&
+           length == 3);
 }
 
 static void mdns_discovery(void)
@@ -727,6 +798,7 @@ int main(void)
     rtp_short();
     rtp_journal_and_lengths();
     journal_framing();
+    journal_system();
     journal_note_offs();
     journal_channel_state();
     journal_controls();

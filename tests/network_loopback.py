@@ -323,6 +323,29 @@ def run_feedback_case(binary):
             if time.monotonic() >= deadline:
                 raise AssertionError(output)
             time.sleep(0.01)
+        system_gap = struct.pack(">BBHII", 0x80, 0xe1, 26,
+                                 int(time.time() * 10000) & 0xffffffff,
+                                 peer_ssrc)
+        system_journal = (
+            b"\x40\x00\x19"
+            b"\x60\x07\x70\x01\x01\x09\x01"
+        )
+        data.sendto(system_gap + b"\x40" + system_journal,
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x1001A
+        deadline = time.monotonic() + 1
+        while True:
+            log.seek(0)
+            output = log.read().decode(errors="replace")
+            if ("recovered System Reset" in output and
+                    "recovered Tune Request" in output and
+                    "recovered Song Select song=9" in output and
+                    "recovered Active Sense" in output):
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(output)
+            time.sleep(0.01)
         assert "malformed recovery journal discarded" in output
         assert "1 RTP packet(s) lost; journal covers gap" in output
         assert "recovered Note Off channel=0 note=60" in output

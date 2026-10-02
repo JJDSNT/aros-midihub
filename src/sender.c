@@ -17,7 +17,13 @@ void mh_sender_clear_history(struct mh_sender *sender)
 int mh_sender_supported(const uint8_t *message, size_t length)
 {
     uint8_t type;
-    if (!message || !length || message[0] < 0x80 || message[0] > 0xef)
+    if (!message || !length || message[0] < 0x80)
+        return 0;
+    if (message[0] == 0xf3)
+        return length == 2 && message[1] < 0x80;
+    if (message[0] == 0xf6 || message[0] == 0xfe || message[0] == 0xff)
+        return length == 1;
+    if (message[0] > 0xef)
         return 0;
     type = message[0] & 0xf0;
     if (type == 0xc0 || type == 0xd0)
@@ -49,6 +55,35 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
     memcpy(event->bytes, message, length);
     type = message[0] & 0xf0;
     channel = message[0] & 0x0f;
+    if (message[0] >= 0xf0) {
+        if (message[0] == 0xff) {
+            if (sender->count > 1) {
+                sender->events[0] = *event;
+                sender->count = 1;
+            }
+            memset(sender->bank_known, 0, sizeof(sender->bank_known));
+            memset(sender->sustain_on, 0, sizeof(sender->sustain_on));
+            memset(sender->sustain_toggle, 0,
+                   sizeof(sender->sustain_toggle));
+            memset(sender->reset_count, 0, sizeof(sender->reset_count));
+            memset(sender->active_notes, 0, sizeof(sender->active_notes));
+            sender->system_reset_count =
+                (uint8_t)((sender->system_reset_count + 1) & 0x7f);
+            sender->tune_request_count = 0;
+            sender->active_sense_count = 0;
+            sender->song_select_known = 0;
+        } else if (message[0] == 0xf6) {
+            sender->tune_request_count =
+                (uint8_t)((sender->tune_request_count + 1) & 0x7f);
+        } else if (message[0] == 0xfe) {
+            sender->active_sense_count =
+                (uint8_t)((sender->active_sense_count + 1) & 0x7f);
+        } else if (message[0] == 0xf3) {
+            sender->song_select = message[1];
+            sender->song_select_known = 1;
+        }
+        return;
+    }
     if (type == 0x80 || type == 0x90) {
         sender->active_notes[channel][message[1]] =
             (uint8_t)(type == 0x90 && message[2] != 0);
@@ -327,6 +362,92 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
     return 1;
 }
 
+static int build_system(const struct mh_sender *sender, uint16_t sequence,
+                        uint8_t *data, size_t capacity, size_t *length,
+                        int *recent)
+{
+    int reset = -1;
+    int tune = -1;
+    int song = -1;
+    int active = -1;
+    size_t i;
+    size_t start;
+    size_t d_header = 0;
+    uint8_t d_flags = 0;
+    int d_recent = 0;
+    if (!sender || !data || !length || !recent) return -1;
+    for (i = 0; i < sender->count; ++i) {
+        switch (sender->events[i].bytes[0]) {
+        case 0xff:
+            reset = (int)i;
+            tune = song = active = -1;
+            break;
+        case 0xf6: tune = (int)i; break;
+        case 0xf3: song = (int)i; break;
+        case 0xfe: active = (int)i; break;
+        default: break;
+        }
+    }
+    if (reset < 0 && tune < 0 && song < 0 && active < 0) return 0;
+    if (capacity - *length < 2) return -1;
+    start = *length;
+    *length += 2;
+    data[start] = 0;
+    data[start + 1] = 0;
+    *recent = 0;
+    if (reset >= 0 || tune >= 0 || song >= 0) {
+        if (*length >= capacity) return -1;
+        d_header = (*length)++;
+        if (reset >= 0) {
+            int is_recent = sender->events[reset].sequence ==
+                            (uint16_t)(sequence - 1);
+            d_flags |= 0x40;
+            d_recent |= is_recent;
+            if (put(data, capacity, length,
+                    (uint8_t)((is_recent ? 0 : 0x80) |
+                              sender->system_reset_count)) < 0)
+                return -1;
+        }
+        if (tune >= 0) {
+            int is_recent = sender->events[tune].sequence ==
+                            (uint16_t)(sequence - 1);
+            d_flags |= 0x20;
+            d_recent |= is_recent;
+            if (put(data, capacity, length,
+                    (uint8_t)((is_recent ? 0 : 0x80) |
+                              sender->tune_request_count)) < 0)
+                return -1;
+        }
+        if (song >= 0 && sender->song_select_known) {
+            int is_recent = sender->events[song].sequence ==
+                            (uint16_t)(sequence - 1);
+            d_flags |= 0x10;
+            d_recent |= is_recent;
+            if (put(data, capacity, length,
+                    (uint8_t)((is_recent ? 0 : 0x80) |
+                              sender->song_select)) < 0)
+                return -1;
+        }
+        data[d_header] = (uint8_t)((d_recent ? 0 : 0x80) | d_flags);
+        data[start] |= 0x40;
+        *recent |= d_recent;
+    }
+    if (active >= 0) {
+        int is_recent = sender->events[active].sequence ==
+                        (uint16_t)(sequence - 1);
+        if (put(data, capacity, length,
+                (uint8_t)((is_recent ? 0 : 0x80) |
+                          sender->active_sense_count)) < 0)
+            return -1;
+        data[start] |= 0x20;
+        *recent |= is_recent;
+    }
+    data[start] = (uint8_t)(data[start] |
+                            ((*length - start) >> 8));
+    data[start + 1] = (uint8_t)(*length - start);
+    return 1;
+}
+
 int mh_sender_journal(const struct mh_sender *sender, uint16_t sequence,
                       uint32_t timestamp, uint8_t *data, size_t capacity,
                       size_t *length)
@@ -334,6 +455,7 @@ int mh_sender_journal(const struct mh_sender *sender, uint16_t sequence,
     size_t used = 3;
     unsigned int channel;
     unsigned int channel_count = 0;
+    int has_system = 0;
     int recent = 0;
     int any_recent = 0;
     int result;
@@ -341,6 +463,12 @@ int mh_sender_journal(const struct mh_sender *sender, uint16_t sequence,
     if (!sender || !data || !length || capacity < 3)
         return -1;
     checkpoint = sender->count ? sender->events[0].sequence : sequence;
+    result = build_system(sender, sequence, data, capacity, &used, &recent);
+    if (result < 0) return -1;
+    if (result > 0) {
+        has_system = 1;
+        any_recent |= recent;
+    }
     for (channel = 0; channel < 16; ++channel) {
         result = build_channel(sender, channel, sequence, timestamp,
                                data, capacity, &used, &recent);
@@ -351,6 +479,7 @@ int mh_sender_journal(const struct mh_sender *sender, uint16_t sequence,
         }
     }
     data[0] = (uint8_t)((any_recent ? 0 : 0x80) |
+                        (has_system ? 0x40 : 0) |
                         (channel_count ? 0x20 | (channel_count - 1) : 0));
     data[1] = (uint8_t)(checkpoint >> 8);
     data[2] = (uint8_t)checkpoint;

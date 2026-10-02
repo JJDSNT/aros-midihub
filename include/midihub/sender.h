@@ -28,6 +28,11 @@ struct mh_sender {
     uint8_t sustain_toggle[16];
     uint8_t reset_count[16][2];
     uint8_t active_notes[16][128];
+    uint8_t system_reset_count;
+    uint8_t tune_request_count;
+    uint8_t active_sense_count;
+    uint8_t song_select;
+    uint8_t song_select_known;
 };
 
 void mh_sender_reset(struct mh_sender *sender);

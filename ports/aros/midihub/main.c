@@ -94,9 +94,16 @@ struct runtime {
     uint8_t channel_pressure_known[16];
     uint8_t poly_pressure[16][128];
     uint8_t poly_pressure_known[16][128];
+    uint8_t reset_count;
+    uint8_t tune_request_count;
+    uint8_t active_sense_count;
+    uint8_t song_select;
+    uint8_t song_select_known;
     struct mh_camd_bridge camd;
     int camd_opened;
 };
+
+static void reset_channel_state(struct runtime *rt);
 
 static uint64_t now_ticks(void)
 {
@@ -292,6 +299,23 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
 {
     uint8_t status = bytes[0];
     unsigned int channel = status & 0x0f;
+    if (status == 0xff && length == 1) {
+        rt->reset_count = (uint8_t)((rt->reset_count + 1) & 0x7f);
+        rt->tune_request_count = 0;
+        rt->active_sense_count = 0;
+        rt->song_select_known = 0;
+        memset(rt->active_notes, 0, sizeof(rt->active_notes));
+        reset_channel_state(rt);
+    } else if (status == 0xf6 && length == 1) {
+        rt->tune_request_count =
+            (uint8_t)((rt->tune_request_count + 1) & 0x7f);
+    } else if (status == 0xfe && length == 1) {
+        rt->active_sense_count =
+            (uint8_t)((rt->active_sense_count + 1) & 0x7f);
+    } else if (status == 0xf3 && length == 2) {
+        rt->song_select = bytes[1];
+        rt->song_select_known = 1;
+    }
     if (length == 3 && status >= 0x80 && status <= 0x9f) {
         rt->active_notes[channel][bytes[1]] =
             (status & 0xf0) == 0x90 ? bytes[2] : 0;
@@ -640,6 +664,46 @@ static void recover_aftertouch(struct runtime *rt,
     }
 }
 
+static void recover_system(struct runtime *rt,
+                           const struct mh_journal_system_state *state,
+                           int single_loss)
+{
+    uint8_t message[2];
+    if (state->has_reset &&
+        (!single_loss || !state->reset_single_packet_safe) &&
+        rt->reset_count != state->reset_count) {
+        message[0] = 0xff;
+        deliver_short(rt, message, 1);
+        rt->reset_count = state->reset_count;
+        puts("MIDIHub: recovered System Reset");
+    }
+    if (state->has_tune_request &&
+        (!single_loss || !state->tune_single_packet_safe) &&
+        rt->tune_request_count != state->tune_count) {
+        message[0] = 0xf6;
+        deliver_short(rt, message, 1);
+        rt->tune_request_count = state->tune_count;
+        puts("MIDIHub: recovered Tune Request");
+    }
+    if (state->has_song_select &&
+        (!single_loss || !state->song_single_packet_safe) &&
+        (!rt->song_select_known || rt->song_select != state->song)) {
+        message[0] = 0xf3;
+        message[1] = state->song;
+        deliver_short(rt, message, 2);
+        printf("MIDIHub: recovered Song Select song=%u\n",
+               (unsigned int)state->song);
+    }
+    if (state->has_active_sense &&
+        (!single_loss || !state->active_sense_single_packet_safe) &&
+        rt->active_sense_count != state->active_sense_count) {
+        message[0] = 0xfe;
+        deliver_short(rt, message, 1);
+        rt->active_sense_count = state->active_sense_count;
+        puts("MIDIHub: recovered Active Sense");
+    }
+}
+
 static void receive_sync(struct runtime *rt,
                          const struct mh_apple_packet *incoming,
                          uint64_t now)
@@ -695,6 +759,7 @@ static void receive_packet(struct runtime *rt, int data_port)
     struct mh_apple_packet response;
     struct mh_rtp_packet midi;
     struct mh_journal journal;
+    struct mh_journal_system_state system_state;
     struct mh_rtp_reader reader;
     struct mh_midi_event event;
     const uint8_t *sysex_message;
@@ -702,6 +767,7 @@ static void receive_packet(struct runtime *rt, int data_port)
     int response_port;
     int action;
     int sysex_result;
+    int system_decoded = 0;
     int16_t sequence_advance = 0;
     uint16_t previous_sequence = 0;
     uint64_t now;
@@ -786,6 +852,13 @@ static void receive_packet(struct runtime *rt, int data_port)
         puts("MIDIHub: malformed recovery journal discarded");
         return;
     }
+    if (midi.journal && journal.system) {
+        system_decoded = mh_journal_decode_system(&journal, &system_state);
+        if (system_decoded < 0) {
+            puts("MIDIHub: malformed system recovery journal discarded");
+            return;
+        }
+    }
     mh_rtp_reader_init(&reader, &midi);
     while ((action = mh_rtp_reader_next(&reader, &event)) == 1) {}
     if (action < 0) {
@@ -811,6 +884,9 @@ static void receive_packet(struct runtime *rt, int data_port)
     if (sequence_advance > 1 && midi.journal &&
         mh_journal_covers_gap(previous_sequence, midi.sequence,
                               journal.checkpoint)) {
+        if (system_decoded > 0 &&
+            !(sequence_advance == 2 && journal.single_packet_safe))
+            recover_system(rt, &system_state, sequence_advance == 2);
         recover_channel_state(rt, &journal, sequence_advance == 2);
         recover_notes(rt, &journal, sequence_advance == 2,
                       midi.timestamp);

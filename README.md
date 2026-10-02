@@ -309,15 +309,19 @@ is the visible service name. Discovery requires multicast reachability from
 the peer; WSL NAT and the AROS hosted build's unconfigured TAP interface
 currently prevent this from being an iPhone browse test inside AROS.
 
-Outgoing channel messages now include recovery journals for notes, Control
-Change, Program Change, Pitch Bend, Channel Aftertouch, and Poly Aftertouch.
+Outgoing messages now include recovery journals for notes, Control Change,
+Program Change, Pitch Bend, Channel Aftertouch, Poly Aftertouch, System
+Reset, Tune Request, Song Select, and Active Sense. The receiver decodes
+System Chapters D, V, and Q; it recovers the D/V commands and validates Q
+while sequencer-state replay remains pending.
 The sender retains up to 32 packets and removes confirmed history when
 AppleMIDI `RS` feedback arrives. While unconfirmed history remains, it sends
 an empty MIDI guard packet once per
 second so the peer can recover a lost final event. The initiator exchanges
-clocks three times during startup, then every 50 seconds. System messages
-and SysEx are sent without recovery journals. A responder closes a session
-after two minutes without peer clock synchronization and releases active notes.
+clocks three times during startup, then every 50 seconds. SysEx, MIDI Time
+Code, and sequencer commands are not yet protected by outgoing journals. A
+responder closes a session after two minutes without peer clock
+synchronization and releases active notes.
 
 Run the portable codec tests with `make test`. For an AROS source checkout,
 place this repository at `contrib/extras/aros-midihub` and build the
