@@ -148,10 +148,17 @@ For an AROS build, the optional MetaMake target
 under `SYS:Extras/aros-midihub/`. Inside AROS, run
 `MIDIHUB:C/SoundFontTest MIDIHUB:SoundFonts/GeneralUser-GS.sf2 RAM:generaluser-test.wav`.
 `MIDIHUB:C/SoundFontPlay MIDIHUB:SoundFonts/GeneralUser-GS.sf2` renders the
-same test note and plays it through the default `ahi.device` unit. The normal
-package target does not include the bank or these test programs. Playback on
+same test note and plays it through the default `ahi.device` unit. The optional
+`contrib-aros-midihub-synth` target installs `MIDIHubSynth`, which accepts
+CAMD messages on `MIDIHub Synth` and renders continuously through AHI with a
+SoundFont supplied on its command line or configured in
+`ENV:MidiHub/SoundFont` or `ENVARC:MidiHub/SoundFont`. The normal package
+target does not include the synth, bank, or test programs. Playback on
 68k remains unverified: the current TinySoundFont loader assumes little-endian
 SF2 data.
+
+The [live synthesizer guide](docs/synth-camd.md) gives the build and CAMD
+probe commands. Live AHI playback remains to be tested in AROS.
 
 TinySoundFont is a small SoundFont2 synthesizer implementation written in C/C++ and designed to be embedded directly into applications.
 
@@ -186,24 +193,18 @@ it does not require applications to use a MIDIHub-specific API.
 ```text
 AROS MIDI applications <-> camd.library / CAMD clusters
                               |          |          |          |
-                         USB MIDI   RTP-MIDI   BLE MIDI   future synth
+                         USB MIDI   RTP-MIDI   BLE MIDI   MIDIHub Synth
                          Poseidon    AppleMIDI  Bluetooth    |
                               |          |          |     TinySoundFont
                          USB device  UDP/IP   GATT device      |
                                                               AHI
 ```
 
-Poseidon currently writes a CAMD driver to `DEVS:Midi` for USB devices. CAMD
-loads that driver and creates its ports. MIDIHub's network and BLE programs
-currently create equivalent application-visible CAMD clusters as clients;
-the synthesizer is still a standalone test path. The intended package design
-is to give network, BLE, serial, and synthesis stable CAMD endpoints using the
-same driver contract as USB where practical. The driver and transport process
-must have an explicit lifecycle and message channel. CAMD currently scans
-`DEVS:Midi` only when `camd.library` initializes, so hot discovery also needs
-a CAMD rescan or ports installed before CAMD opens. A
-[rescan patch](patches/aros-camd-rescan.patch) uses the existing
-`RethinkCAMD()` entry for newly installed drivers. See
+Poseidon writes a driver to `DEVS:Midi` for USB devices; CAMD loads it and
+creates its ports. MIDIHub's network, BLE, and synth programs create virtual
+CAMD ports directly. Both mechanisms give applications the same CAMD interface.
+The [rescan patch](patches/aros-camd-rescan.patch) helps drivers installed
+after CAMD opens, but the current virtual ports do not depend on it. See
 [the CAMD integration design](docs/camd-integration.md).
 
 ## Initial Implementation Sources
@@ -226,43 +227,23 @@ librtpmidid provides a more recent implementation of RTP-MIDI and AppleMIDI and 
 
 ### TinySoundFont
 
-TinySoundFont will be investigated as the initial SoundFont2 synthesis engine.
+TinySoundFont is the current MIT-licensed SF2 engine. It powers the WAV and
+AHI diagnostics and the optional CAMD synthesizer. Missing SoundFont
+modulators and big-endian loading still require work before reliable GM/GS
+playback can be claimed across targets.
 
-Its small codebase and minimal dependencies make it particularly suitable for AROS.
+## Next milestones
 
-## Development Strategy
-
-The initial development can be divided into independent layers:
-
-    Phase 1
-    RTP-MIDI packet implementation
-          |
-          v
-    Phase 2
-    AppleMIDI session protocol
-          |
-          v
-    Phase 3
-    AROS MIDI integration
-          |
-          v
-    Phase 4
-    TinySoundFont / SF2 synthesis
-          |
-          v
-    Phase 5
-    Additional transports
-          |
-          +-- USB MIDI
-          +-- Virtual MIDI
-          +-- Serial MIDI
-          +-- BLE MIDI
-          |
-          v
-    Phase 6
-    MIDI 2.0 / UMP investigation
-
-The components should remain usable independently whenever possible.
+- Run `MIDIHubSynth` with a native CAMD client and audible AHI output, then
+  add SoundFont and preview controls to Preferences.
+- Test the Poseidon USB MIDI fixes with a physical device, including SysEx
+  and reconnect behavior.
+- Test BLE MIDI against a physical peripheral and the patched AROS GATT
+  client. AROS advertising as a BLE MIDI peripheral needs GATT server work.
+- Verify AppleMIDI interoperability and discovery with iOS/macOS on a network
+  where AROS multicast traffic is reachable.
+- Implement and verify SoundFont modulators and big-endian SF2 loading before
+  treating GeneralUser GS as a reliable bank on all targets.
 
 ## Interoperability Targets
 
@@ -297,8 +278,9 @@ restore Program Change, bank selection, and Pitch Bend after packet loss.
 Chapter C value logs restore Control Change values; alternate toggle and
 count logs support sustain (64), All Sound Off (120), and All Notes Off (123).
 Other alternate logs still need their own recovery logic. Recovery of the
-remaining journal chapters, Preferences, and connecting the
-synthesizer to CAMD remain to be done. A Linux-hosted AROS loopback run opened
+remaining journal chapters and Preferences remain to be done. The optional
+CAMD synthesizer now builds, but live AROS audio playback is unverified. A
+Linux-hosted AROS loopback run opened
 the CAMD bridge and completed AppleMIDI clock sync, Note On, and Note Off
 between two MIDIHub processes. The packaged `MIDIHubCAMDProbe` independently
 sent Note On and Note Off through `MIDIHub Out` and received both through

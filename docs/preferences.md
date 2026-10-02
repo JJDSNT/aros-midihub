@@ -30,34 +30,38 @@ remote peer, and connection status. A test button could attempt a session and
 show invitations, synchronization, and received messages. The service must
 expose that state before this button can be implemented.
 
-Once synthesis is integrated, a SoundFont page should select an `.sf2` file
+The future SoundFont page should select an `.sf2` file
 with a file requester, check that the engine can open it, and allow gain,
 bank, and default program settings. Audio configuration must use the common
 AROS audio path without assuming a particular target or device. The engine
 should validate a new SoundFont before replacing the one in use, so a failed
 load does not interrupt currently playing notes.
 
+The optional `MIDIHubSynth` service now reads a plain SoundFont path from
+`ENV:MidiHub/SoundFont`, falling back to `ENVARC:MidiHub/SoundFont`; an
+explicit command-line path overrides both. This is the initial storage
+contract for the future SoundFont page. The service loads the path at startup;
+live bank switching is not implemented yet.
+
 AHI Preferences already has a **Music unit**. Its AHI documentation defines
 this as the default audio mode for applications using AHI's low-level API
 (`AHI_NO_UNIT`); it does not configure MIDI or CAMD ports, instruments, or
 SoundFonts. MIDIHub should use the existing AHI audio mode preferences for
 its synthesizer output and keep SoundFont selection and MIDI routing in its
-own configuration. The current `SoundFontPlay` diagnostic opens AHI unit 0,
-so switching live synthesis to the Music unit requires an explicit playback
-test. See the upstream AHI
+own configuration. `SoundFontPlay` and `MIDIHubSynth` use AHI's device API on
+unit 0. Selecting the Music unit instead would require a separate low-level
+AHI playback implementation and test. See the upstream AHI
 [user guide](https://github.com/aros-development-team/AROS/blob/13c7f81274825dd9bca047fc7caebfa21576a163/workbench/devs/AHI/Docs/ahiusr.texinfo)
 and [AHI Preferences implementation](https://github.com/aros-development-team/AROS/blob/13c7f81274825dd9bca047fc7caebfa21576a163/workbench/devs/AHI/AHI/support.c).
 
 Preview should send Note On/Off through the same synthesizer and audio path
 used by CAMD clients. A small virtual key or `Test` button, with selectable
 note and velocity, is enough initially. This exercises the SoundFont, routing,
-and audio together. The page and preview should be enabled only after the
-synthesizer and audio output are integrated. The GeneralUser GS submodule and
-WAV smoke test exist, but live audio preview does not.
+and audio together. `MIDIHubCAMDProbe --synth` already sends a fixed note
+through this path. A GUI preview with selectable note and velocity remains to
+be implemented after native audio playback is verified.
 
 `MIDIHub` names the package. `RTP-MIDI` names the transport, while
 `AppleMIDI` names session negotiation over that transport; together they form
-one connection, not two CAMD ports. If a CAMD driver is added to make ports
-available at startup, `rtpmidi` would be an appropriate name. Communication
-between that driver and the network service still needs to be designed and
-tested inside AROS.
+one connection, not two CAMD ports. The network, BLE, and synth programs
+create their virtual CAMD ports directly when started.

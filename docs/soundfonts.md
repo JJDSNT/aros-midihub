@@ -76,9 +76,10 @@ needed modulators and check big-endian portability. SF2Lib remains an MIT
 alternative if that implementation costs more than porting it. TinySoundFont
 is included as a submodule. MIDIHub's synthesis wrapper accepts note,
 Control Change, Program Change, and pitch-bend messages and renders mono PCM;
-the WAV and AHI test programs both use it. Channel pressure, polyphonic
-pressure, and synthesizer SysEx still need support. The CAMD port is not yet
-connected to the synthesizer.
+the WAV and AHI test programs both use it. The optional
+[live CAMD synthesizer](synth-camd.md) now routes those messages from a CAMD
+receiver to continuous AHI output. Channel pressure, polyphonic pressure, and
+synthesizer SysEx still need support. Live AROS playback remains untested.
 
 ## Distribution
 

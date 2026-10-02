@@ -71,6 +71,14 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
     uselibs=arosmidihub \
     targetdir=$(MIDIHUB_PACKAGE)/C
 
+# The live synthesizer is opt-in and accepts a user-selected SoundFont.
+#MM contrib-aros-midihub-synth : linklibs-arosmidihub
+
+%build_prog mmake=contrib-aros-midihub-synth \
+    progname=MIDIHubSynth \
+    files="$(MIDIHUB_ROOT)/ports/aros/synth_service $(MIDIHUB_ROOT)/src/synth" \
+    targetdir=$(MIDIHUB_PACKAGE)/C
+
 # The bank is large and has a separate license, so this target is opt-in.
 #MM- contrib-aros-midihub-soundfonttest : \
 #MM      contrib-aros-midihub-soundfonttest-program \

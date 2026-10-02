@@ -1,6 +1,6 @@
 # Initial investigation — AROS MIDIHub
 
-Status: October 1, 2026. This document records verified findings and the
+Status: October 2, 2026. This document records verified findings and the
 implementation sequence. The first increment includes AppleMIDI and RTP-MIDI
 packet codecs, invitation negotiation for one peer, host tests, a native
 self-test, and a UDP diagnostic program. The program opens both ports,
@@ -34,8 +34,9 @@ m68k GCC and its AROS libraries also linked `MIDIHub-m68k` through `make
 m68k`; that binary has not yet been run inside m68k AROS. The separate
 TinySoundFont smoke test renders GeneralUser GS to a WAV on the host and
 compiles for m68k. A separate optional program sends the same rendered note
-to `ahi.device`; both use the MIDIHub synthesis wrapper. The wrapper is not
-yet connected to CAMD, and AROS playback has not been run.
+to `ahi.device`; both use the MIDIHub synthesis wrapper. The optional
+`MIDIHubSynth` process connects CAMD input to continuous AHI output and has
+linked for AROS x64 and m68k, but live AROS playback has not been run.
 
 ## Existing facilities in the local AROS checkout
 
@@ -48,9 +49,9 @@ yet connected to CAMD, and AROS playback has not been run.
   `LoadSeg`, and creates `<driver>.in.<port>` and `<driver>.out.<port>`
   clusters. The USB MIDI class places a file there. This checkout has no
   MIDI/CAMD Preferences application in `workbench/prefs/` or `contrib/`.
-  MIDIHub currently creates clusters as a CAMD client. The USB driver contract
-  is the reference for all MIDIHub endpoints; the planned stable virtual
-  driver ports and CAMD's startup-only scan are detailed in
+  MIDIHub creates virtual clusters as a CAMD client. The USB driver's CAMD
+  contract is a reference for all MIDIHub endpoints; CAMD's startup-only
+  driver scan affects `DEVS:Midi` drivers, not those virtual clusters. See
   [the CAMD integration design](camd-integration.md).
 - `rom/usb/classes/camdmidi/` contains a Poseidon class that creates a CAMD
   driver for USB MIDI. The current upstream `mmakefile.src` enables i386,
@@ -135,10 +136,10 @@ as explicit bytes and timestamps. Conversion to CAMD `MidiMsg` belongs in
 AROS integration to avoid endianness errors and `PutMidi`'s three-byte
 limit. SysEx uses `PutSysEx` and `GetSysEx`.
 
-The long-term integration follows the existing USB CAMD driver model for all
-MIDIHub endpoints. The console bridge above is the first working network
-implementation; see [the CAMD integration design](camd-integration.md) for
-the driver lifecycle and migration sequence.
+The existing USB implementation defines the CAMD interface expected by MIDI
+applications. Network and BLE already expose virtual CAMD ports through the
+client API; they do not need USB-style driver binaries. See
+[the CAMD integration design](camd-integration.md) for the two lifecycles.
 
 ### First verifiable milestone
 

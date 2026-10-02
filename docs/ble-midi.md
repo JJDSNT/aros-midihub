@@ -42,10 +42,8 @@ Real-Time, and SysEx. Incoming timestamps are parsed but CAMD receives messages
 immediately; clock correlation and scheduling are future work. One program
 instance handles one BLE peripheral.
 
-The program is an integration probe. The planned package endpoint follows
-the existing USB CAMD driver contract so BLE, network, serial, and synthesis
-appear through the same CAMD interface. See
-[the CAMD integration design](camd-integration.md) for the startup and
-discovery constraints.
+The program creates virtual CAMD ports through the client API. This gives
+applications the same CAMD interface as USB MIDI without installing a
+`DEVS:Midi` driver. See [the CAMD integration design](camd-integration.md).
 
 Protocol reference: [MIDI Association BLE MIDI 1.0 specification](https://midi.org/midi-over-bluetooth-low-energy-ble-midi).

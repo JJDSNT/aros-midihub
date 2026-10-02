@@ -17,11 +17,11 @@ open and close a port and exchange MIDI bytes with the class. USB hardware
 access stays inside Poseidon. The source is in AROS
 `rom/usb/classes/camdmidi/` and `workbench/libs/camd/`.
 
-MIDIHub currently uses CAMD client nodes for the network and BLE programs.
-This provides standard CAMD clusters and already permits AROS applications to
-use those transports. It does not give them USB's `DEVS:Midi` driver lifecycle
-or automatic binding. The SoundFont programs currently render test notes via
-AHI and do not expose a CAMD endpoint.
+MIDIHub uses CAMD client nodes to create virtual ports for network, BLE, and
+the SoundFont synthesizer. These are standard CAMD clusters: applications can
+send to and receive from them without a `DEVS:Midi` driver. The USB driver's
+value as a reference is its CAMD contract and its device lifecycle, not a
+requirement that every software endpoint copy its binary driver mechanism.
 
 ## Target architecture
 
@@ -40,12 +40,11 @@ receive port: it consumes CAMD MIDI messages and produces PCM through AHI.
 Network discovery and BLE binding should update the endpoint state without
 requiring applications to understand AppleMIDI or GATT.
 
-The USB driver's `MidiDeviceData` and port callbacks are the preferred model
-for installed MIDIHub ports. A transport worker can own sockets, GATT channels,
-or synthesis state while the CAMD driver presents those ports to applications.
-The worker-to-driver message channel, queue bounds, ownership, and shutdown
-sequence need to be designed and verified before replacing the working
-application bridges. The portable MIDI codecs and synth can remain unchanged.
+The existing CAMD client approach is appropriate for the network, BLE, and
+synth processes because each process already owns its sockets, GATT channels,
+or audio stream. A `DEVS:Midi` driver is appropriate when AROS needs a native
+device binding such as Poseidon's USB class. The portable codecs and synth
+remain independent of either registration mechanism.
 
 ## CAMD lifecycle constraint
 
@@ -53,8 +52,10 @@ The current AROS CAMD implementation scans `DEVS:Midi` during `InitCamd()`.
 It does not watch the directory for new drivers. Its existing public
 `RethinkCAMD()` entry is a stub. Poseidon writes a USB driver when a device
 binds, so its ports depend on CAMD being initialized after that file exists.
-A dynamically discovered BLE or network peer cannot simply write a new driver
-file and expect an already open CAMD library to expose it.
+This affects newly installed `DEVS:Midi` drivers, including a USB device
+bound after CAMD opens. MIDIHub's virtual ports are created through CAMD's
+normal client API when their processes start, so they do not have this
+limitation.
 
 [The CAMD rescan patch](../patches/aros-camd-rescan.patch) implements
 `RethinkCAMD()` as a serialized scan that adds drivers absent from the loaded
@@ -62,31 +63,26 @@ list. A service that installs a new driver can call it without reopening CAMD.
 The patch does not unload removed drivers or detach live CAMD clients; that
 requires a separate safe removal design and runtime tests.
 
-The first driver-based MIDIHub package should install stable virtual ports
-before CAMD initializes. Dynamic peers can attach to those ports through a
-worker service. If individual ports per peer are needed, CAMD must gain a
-safe driver removal or dynamic port registration path; that change belongs in
-an AROS patch with tests for open clients, device removal, and reconnection.
-Avoid making each connection create a persistent driver file with a stale
-device address or IP address.
+Driver removal still needs a safe lifecycle before the rescan patch can be
+used for fully dynamic hardware drivers. A transport service with virtual
+CAMD ports can instead release its links when it exits. Peer-specific virtual
+ports may be added through the same CAMD client API, with stable naming and
+clear ownership; persistent files containing stale device addresses or IP
+addresses are unnecessary.
 
 ## Implementation sequence
 
-1. Specify the installed port names and direction from the user's point of
-   view. Use the same conventions for USB, network, BLE, serial, and synth.
-2. Extract a bounded CAMD byte and SysEx exchange service from the existing
-   network and BLE client bridges. Confirm its behavior with native CAMD
-   clients on Linux-hosted AROS.
-3. Add one static `DEVS:Midi` driver for a MIDIHub virtual endpoint and test
-   CAMD's load, open, close, transmit, receive, and unload callbacks. Keep
-   transport workers outside the driver binary.
-4. Move network and BLE onto that endpoint, then add the synthesizer receive
-   port and SoundFont/AHI preferences. Serial can use the same contract when
-   a serial backend is available.
-5. Extend CAMD for dynamic driver or port registration only if stable ports
-   cannot meet multi-peer routing requirements. Test hot discovery and removal
-   on a target with the relevant physical transport.
-
-The current `MIDIHub` and `MIDIHubBLE` programs remain useful integration
-probes until the driver-based ports pass those tests. USB physical I/O and
-BLE physical I/O still require devices and AROS targets that expose them.
+1. Keep port names and directions clear to CAMD clients across network, BLE,
+   USB, serial, and synth. The name of the source or destination should be
+   visible without knowing the transport's internal implementation.
+2. Validate the new `MIDIHub Synth` receive port with a native CAMD sender
+   and live AHI playback. Add SoundFont selection and preview using this same
+   path.
+3. Validate USB and BLE with physical devices, including binding, message
+   transfer, SysEx, disconnection, and reconnection. The USB driver can use
+   `RethinkCAMD()` after it is written if CAMD is already open.
+4. Add peer-specific virtual ports only when multi-peer routing needs them.
+   Keep network and BLE processes responsible for their own transport state.
+5. Extend CAMD driver removal only for hardware drivers that need it, with
+   tests for clients holding open links. Virtual MIDIHub ports can continue
+   to use the existing CAMD client lifecycle.
