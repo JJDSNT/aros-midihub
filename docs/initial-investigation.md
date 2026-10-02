@@ -111,13 +111,15 @@ linked for AROS x64 and m68k, but live AROS playback has not been run.
   All Sound Off (120) and All Notes Off (123). Other alternate logs, other
   channel chapters remain to be implemented. System Chapters D, V, and Q are
   decoded. Chapters D and V recover System Reset, Tune Request, Song Select,
-  and Active Sense; Chapter Q is validated but sequencer-state replay remains
-  pending. Outgoing channel and D/V system messages, plus Chapter Q sequencer
-  state, include journals from a bounded 32-packet history, trimmed by
-  AppleMIDI RS feedback. Chapter Q covers Start, Continue, Stop, MIDI Clock,
-  and Song Position Pointer. Chapters T and A cover Channel and Poly
-  Aftertouch. Guard packets repeat pending recovery data after the last event.
-  SysEx and MIDI Time Code do not yet have outgoing journal protection.
+  and Active Sense. Chapter Q recovers standard sequencer transport, downbeat,
+  and positions in the MIDI Song Position Pointer range. Larger positions and
+  optional TIMETOOLS data are validated without position replay. Outgoing
+  channel and D/V system messages, plus Chapter Q sequencer state, include
+  journals from a bounded 32-packet history, trimmed by AppleMIDI RS feedback.
+  Chapter Q covers Start, Continue, Stop, MIDI Clock, and Song Position
+  Pointer. Chapters T and A cover Channel and Poly Aftertouch. Guard packets
+  repeat pending recovery data after the last event. SysEx and MIDI Time Code
+  do not yet have outgoing journal protection.
 
 ## Initial network implementation
 

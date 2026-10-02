@@ -99,6 +99,11 @@ struct runtime {
     uint8_t active_sense_count;
     uint8_t song_select;
     uint8_t song_select_known;
+    uint8_t sequencer_known;
+    uint8_t sequencer_running;
+    uint8_t sequencer_downbeat;
+    uint8_t sequencer_start_at_zero;
+    uint32_t sequencer_clock;
     struct mh_camd_bridge camd;
     int camd_opened;
 };
@@ -304,6 +309,11 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
         rt->tune_request_count = 0;
         rt->active_sense_count = 0;
         rt->song_select_known = 0;
+        rt->sequencer_known = 0;
+        rt->sequencer_running = 0;
+        rt->sequencer_downbeat = 0;
+        rt->sequencer_start_at_zero = 0;
+        rt->sequencer_clock = 0;
         memset(rt->active_notes, 0, sizeof(rt->active_notes));
         reset_channel_state(rt);
     } else if (status == 0xf6 && length == 1) {
@@ -315,6 +325,35 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
     } else if (status == 0xf3 && length == 2) {
         rt->song_select = bytes[1];
         rt->song_select_known = 1;
+    } else if (status == 0xf2 && length == 3) {
+        rt->sequencer_known = 1;
+        rt->sequencer_downbeat = 0;
+        rt->sequencer_start_at_zero = 0;
+        rt->sequencer_clock =
+            ((((uint32_t)bytes[2] << 7) | bytes[1]) * 6) & 0x7ffff;
+    } else if (status == 0xfa && length == 1) {
+        rt->sequencer_known = 1;
+        rt->sequencer_running = 1;
+        rt->sequencer_downbeat = 0;
+        rt->sequencer_start_at_zero = 1;
+        rt->sequencer_clock = 0;
+    } else if (status == 0xfb && length == 1) {
+        rt->sequencer_known = 1;
+        rt->sequencer_running = 1;
+        rt->sequencer_start_at_zero = 0;
+    } else if (status == 0xfc && length == 1) {
+        rt->sequencer_known = 1;
+        rt->sequencer_running = 0;
+        rt->sequencer_start_at_zero = 0;
+    } else if (status == 0xf8 && length == 1) {
+        rt->sequencer_known = 1;
+        rt->sequencer_start_at_zero = 0;
+        if (rt->sequencer_running) {
+            if (!rt->sequencer_downbeat)
+                rt->sequencer_downbeat = 1;
+            else
+                rt->sequencer_clock = (rt->sequencer_clock + 1) & 0x7ffff;
+        }
     }
     if (length == 3 && status >= 0x80 && status <= 0x9f) {
         rt->active_notes[channel][bytes[1]] =
@@ -668,7 +707,11 @@ static void recover_system(struct runtime *rt,
                            const struct mh_journal_system_state *state,
                            int single_loss)
 {
-    uint8_t message[2];
+    uint8_t message[3];
+    uint32_t clock;
+    uint32_t remainder;
+    unsigned int i;
+    int start_at_zero;
     if (state->has_reset &&
         (!single_loss || !state->reset_single_packet_safe) &&
         rt->reset_count != state->reset_count) {
@@ -702,6 +745,65 @@ static void recover_system(struct runtime *rt,
         rt->active_sense_count = state->active_sense_count;
         puts("MIDIHub: recovered Active Sense");
     }
+    if (!state->has_sequencer ||
+        (single_loss && state->sequencer_single_packet_safe) ||
+        state->has_time_tools)
+        return;
+    clock = state->has_clock ? state->clock : 0;
+    start_at_zero = state->sequencer_running &&
+                    !state->downbeat_played && !state->has_clock;
+    if (rt->sequencer_known &&
+        rt->sequencer_running == state->sequencer_running &&
+        rt->sequencer_downbeat == state->downbeat_played &&
+        rt->sequencer_clock == clock &&
+        rt->sequencer_start_at_zero == start_at_zero)
+        return;
+
+    /* C=0, N=1, D=0 is the RFC 6295 encoding for Start at zero. */
+    if (start_at_zero) {
+        message[0] = 0xfa;
+        deliver_short(rt, message, 1);
+        puts("MIDIHub: recovered sequencer Start");
+        return;
+    }
+
+    /* Song Position Pointer plus at most six Clocks recreates every position
+     * representable by MIDI's 14-bit SPP command. */
+    if (clock > 98303) {
+        if (!state->sequencer_running && rt->sequencer_running) {
+            message[0] = 0xfc;
+            deliver_short(rt, message, 1);
+            puts("MIDIHub: recovered sequencer Stop; "
+                 "position exceeds MIDI SPP range");
+        }
+        return;
+    }
+    if (rt->sequencer_running) {
+        message[0] = 0xfc;
+        deliver_short(rt, message, 1);
+    }
+    message[0] = 0xf2;
+    message[1] = (uint8_t)((clock / 6) & 0x7f);
+    message[2] = (uint8_t)(((clock / 6) >> 7) & 0x7f);
+    deliver_short(rt, message, 3);
+    remainder = clock % 6;
+    if (state->downbeat_played) {
+        message[0] = 0xfb;
+        deliver_short(rt, message, 1);
+        message[0] = 0xf8;
+        for (i = 0; i <= remainder; ++i)
+            deliver_short(rt, message, 1);
+        if (!state->sequencer_running) {
+            message[0] = 0xfc;
+            deliver_short(rt, message, 1);
+        }
+    } else if (state->sequencer_running) {
+        message[0] = 0xfb;
+        deliver_short(rt, message, 1);
+    }
+    printf("MIDIHub: recovered sequencer state running=%u clock=%lu downbeat=%u\n",
+           (unsigned int)state->sequencer_running,
+           (unsigned long)clock, (unsigned int)state->downbeat_played);
 }
 
 static void receive_sync(struct runtime *rt,
