@@ -76,8 +76,8 @@ struct mh_journal_system_state {
     size_t sysex_length;
 };
 
-/* Decode standard commands in System Chapters D, V, Q, and F. Chapter X
- * remains available as opaque bytes in mh_journal. */
+/* Decode standard commands in System Chapters D, V, Q, and F. Chapter X is
+ * exposed as a bounded span for mh_journal_decode_sysex(). */
 int mh_journal_decode_system(const struct mh_journal *journal,
                              struct mh_journal_system_state *state);
 
@@ -122,6 +122,23 @@ struct mh_journal_notes {
 /* Decode Chapter N. 0: absent, 1: decoded, -1: malformed. */
 int mh_journal_decode_notes(const struct mh_journal_channel *channel,
                             struct mh_journal_notes *notes);
+
+struct mh_journal_note_extra {
+    uint8_t number;
+    uint8_t value;
+    uint8_t velocity;
+    uint8_t single_packet_safe;
+};
+
+struct mh_journal_note_extras {
+    struct mh_journal_note_extra logs[128];
+    size_t count;
+};
+
+/* Decode Chapter E note reference counts and release velocities. */
+int mh_journal_decode_note_extras(
+    const struct mh_journal_channel *channel,
+    struct mh_journal_note_extras *extras);
 
 struct mh_journal_channel_state {
     int has_program;

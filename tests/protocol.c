@@ -308,6 +308,30 @@ static void journal_note_offs(void)
     assert(mh_journal_decode_notes(&journal.channels[0], &notes) == -1);
 }
 
+static void journal_note_extras(void)
+{
+    static const uint8_t bytes[] = {
+        0x20, 0, 4, 0x00, 0x08, 0x04,
+        0x01, 0xbc, 0x02, 0x3c, 0xad
+    };
+    uint8_t broken[sizeof(bytes)];
+    struct mh_journal journal;
+    struct mh_journal_note_extras extras;
+
+    assert(mh_journal_decode(bytes, sizeof(bytes), &journal) == 0);
+    assert(mh_journal_decode_note_extras(&journal.channels[0], &extras) == 1);
+    assert(extras.count == 2 && extras.logs[0].number == 60 &&
+           !extras.logs[0].velocity && extras.logs[0].value == 2 &&
+           extras.logs[0].single_packet_safe &&
+           extras.logs[1].number == 60 && extras.logs[1].velocity &&
+           extras.logs[1].value == 45 &&
+           !extras.logs[1].single_packet_safe);
+    memcpy(broken, bytes, sizeof(broken));
+    broken[10] = 0x02; /* Duplicate count log for note 60. */
+    assert(mh_journal_decode(broken, sizeof(broken), &journal) == 0);
+    assert(mh_journal_decode_note_extras(&journal.channels[0], &extras) == -1);
+}
+
 static void journal_channel_state(void)
 {
     static const uint8_t state_bytes[] = {
@@ -412,6 +436,7 @@ static void outgoing_journal(void)
     struct mh_sender sender;
     struct mh_journal journal;
     struct mh_journal_notes notes;
+    struct mh_journal_note_extras note_extras;
     struct mh_journal_channel_state channel_state;
     struct mh_journal_controls controls;
     struct mh_journal_aftertouch aftertouch;
@@ -451,6 +476,32 @@ static void outgoing_journal(void)
     assert(mh_sender_journal(&sender, 102, 1100,
                               bytes, sizeof(bytes), &length) == 0);
     assert(length == 3 && bytes[2] == 102);
+
+    mh_sender_reset(&sender);
+    mh_sender_record(&sender, 102, 1100, on, sizeof(on));
+    mh_sender_record(&sender, 103, 1150, on, sizeof(on));
+    assert(mh_sender_journal(&sender, 104, 1200,
+                             bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_note_extras(&journal.channels[0],
+                                         &note_extras) == 1);
+    assert(note_extras.count == 1 && !note_extras.logs[0].velocity &&
+           note_extras.logs[0].number == 60 &&
+           note_extras.logs[0].value == 2);
+    {
+        const uint8_t release[] = {0x80, 60, 45};
+        mh_sender_record(&sender, 104, 1200, release, sizeof(release));
+    }
+    assert(mh_sender_journal(&sender, 105, 1250,
+                             bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_note_extras(&journal.channels[0],
+                                         &note_extras) == 1);
+    assert(note_extras.count == 2 && !note_extras.logs[0].velocity &&
+           note_extras.logs[0].value == 1 &&
+           note_extras.logs[1].velocity &&
+           note_extras.logs[1].value == 45);
+    mh_sender_reset(&sender);
 
     mh_sender_record(&sender, 102, 1100, bank, sizeof(bank));
     mh_sender_record(&sender, 103, 1200, program, sizeof(program));
@@ -1038,6 +1089,7 @@ int main(void)
     journal_framing();
     journal_system();
     journal_note_offs();
+    journal_note_extras();
     journal_channel_state();
     journal_controls();
     outgoing_journal();

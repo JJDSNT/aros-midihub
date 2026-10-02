@@ -574,6 +574,86 @@ int mh_journal_decode_notes(const struct mh_journal_channel *channel,
     return 1;
 }
 
+int mh_journal_decode_note_extras(
+    const struct mh_journal_channel *channel,
+    struct mh_journal_note_extras *extras)
+{
+    const uint8_t *data;
+    size_t length;
+    size_t offset = 3;
+    size_t size;
+    size_t logs;
+    size_t off_count;
+    size_t i;
+    unsigned int low;
+    unsigned int high;
+    uint8_t seen_count[16] = {0};
+    uint8_t seen_velocity[16] = {0};
+
+    if (!channel || !extras || !channel->data || channel->length < 3)
+        return -1;
+    memset(extras, 0, sizeof(*extras));
+    if (!(channel->chapters & 0x04))
+        return 0;
+    data = channel->data;
+    length = channel->length;
+    if (channel->chapters & 0x80) {
+        if (length - offset < 3) return -1;
+        offset += 3;
+    }
+    if (channel->chapters & 0x40) {
+        if (length - offset < 1 || (data[0] & 0x04)) return -1;
+        size = 1 + 2 * ((size_t)(data[offset] & 0x7f) + 1);
+        if (size > length - offset) return -1;
+        offset += size;
+    }
+    if (channel->chapters & 0x20) {
+        if (length - offset < 2) return -1;
+        size = ((size_t)(data[offset] & 3) << 8) | data[offset + 1];
+        if (size < 2 || size > length - offset) return -1;
+        offset += size;
+    }
+    if (channel->chapters & 0x10) {
+        if (length - offset < 2) return -1;
+        offset += 2;
+    }
+    if (channel->chapters & 0x08) {
+        if (length - offset < 2) return -1;
+        logs = data[offset] & 0x7f;
+        low = data[offset + 1] >> 4;
+        high = data[offset + 1] & 0x0f;
+        if (low <= high)
+            off_count = high - low + 1;
+        else if (low == 15 && (high == 0 || high == 1))
+            off_count = 0;
+        else
+            return -1;
+        if (logs == 127 && low == 15 && high == 0) ++logs;
+        size = 2 + logs * 2 + off_count;
+        if (size > length - offset) return -1;
+        offset += size;
+    }
+    if (length - offset < 1) return -1;
+    logs = (size_t)(data[offset] & 0x7f) + 1;
+    size = 1 + logs * 2;
+    if (size > length - offset) return -1;
+    extras->count = logs;
+    for (i = 0; i < logs; ++i) {
+        const uint8_t *raw = data + offset + 1 + i * 2;
+        struct mh_journal_note_extra *entry = &extras->logs[i];
+        uint8_t number = raw[0] & 0x7f;
+        uint8_t mask = (uint8_t)(0x80u >> (number % 8));
+        uint8_t *seen = raw[1] & 0x80 ? seen_velocity : seen_count;
+        if (seen[number / 8] & mask) return -1;
+        seen[number / 8] |= mask;
+        entry->number = number;
+        entry->velocity = !!(raw[1] & 0x80);
+        entry->value = raw[1] & 0x7f;
+        entry->single_packet_safe = !!(raw[0] & 0x80);
+    }
+    return 1;
+}
+
 int mh_journal_decode_channel_state(
     const struct mh_journal_channel *channel,
     struct mh_journal_channel_state *state)

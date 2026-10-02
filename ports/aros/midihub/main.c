@@ -79,6 +79,7 @@ struct runtime {
     struct mh_event_queue queue;
     struct mh_sender sender;
     uint8_t active_notes[16][128];
+    uint8_t note_count[16][128];
     uint8_t program[16];
     uint8_t program_known[16];
     uint8_t bank_msb[16];
@@ -320,6 +321,7 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
         rt->sequencer_clock = 0;
         rt->mtc_full_known = 0;
         memset(rt->active_notes, 0, sizeof(rt->active_notes));
+        memset(rt->note_count, 0, sizeof(rt->note_count));
         reset_channel_state(rt);
     } else if (status == 0xf6 && length == 1) {
         rt->tune_request_count =
@@ -361,12 +363,22 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
         }
     }
     if (length == 3 && status >= 0x80 && status <= 0x9f) {
-        rt->active_notes[channel][bytes[1]] =
-            (status & 0xf0) == 0x90 ? bytes[2] : 0;
+        int note_on = (status & 0xf0) == 0x90 && bytes[2];
+        if (note_on) {
+            if (rt->note_count[channel][bytes[1]] < 127)
+                ++rt->note_count[channel][bytes[1]];
+            rt->active_notes[channel][bytes[1]] = bytes[2];
+        } else {
+            if (rt->note_count[channel][bytes[1]])
+                --rt->note_count[channel][bytes[1]];
+            rt->active_notes[channel][bytes[1]] = 0;
+        }
     } else if (length == 3 && (status & 0xf0) == 0xb0 &&
                (bytes[1] == 120 || bytes[1] >= 123)) {
         memset(rt->active_notes[channel], 0,
                sizeof(rt->active_notes[channel]));
+        memset(rt->note_count[channel], 0,
+               sizeof(rt->note_count[channel]));
     }
     if (length == 2 && (status & 0xf0) == 0xc0) {
         rt->program[channel] = bytes[1];
@@ -474,10 +486,10 @@ static void release_active_notes(struct runtime *rt)
     for (channel = 0; channel < 16; ++channel) {
         message[0] = (uint8_t)(0x80 | channel);
         for (note = 0; note < 128; ++note) {
-            if (!rt->active_notes[channel][note])
-                continue;
             message[1] = (uint8_t)note;
-            deliver_short(rt, message, sizeof(message));
+            while (rt->note_count[channel][note])
+                deliver_short(rt, message, sizeof(message));
+            rt->active_notes[channel][note] = 0;
         }
     }
 }
@@ -615,7 +627,11 @@ static void recover_notes(struct runtime *rt,
                           int single_loss, uint32_t timestamp)
 {
     struct mh_journal_notes notes;
+    struct mh_journal_note_extras extras;
     uint8_t message[3];
+    uint8_t release_velocity[128];
+    uint8_t desired_count[128];
+    uint8_t count_known[128];
     size_t i;
     size_t log_index;
     unsigned int octave;
@@ -623,6 +639,7 @@ static void recover_notes(struct runtime *rt,
     unsigned int note;
     size_t cancelled;
     int decoded;
+    int extras_decoded;
     uint64_t due;
     uint64_t now;
     int timely;
@@ -634,10 +651,26 @@ static void recover_notes(struct runtime *rt,
         if (single_loss && channel->single_packet_safe)
             continue;
         decoded = mh_journal_decode_notes(channel, &notes);
-        if (decoded <= 0)
+        extras_decoded = mh_journal_decode_note_extras(channel, &extras);
+        if (decoded < 0 || extras_decoded < 0 ||
+            (!decoded && !extras_decoded))
             continue;
+        memset(release_velocity, 64, sizeof(release_velocity));
+        memset(desired_count, 0, sizeof(desired_count));
+        memset(count_known, 0, sizeof(count_known));
+        for (log_index = 0; log_index < extras.count; ++log_index) {
+            const struct mh_journal_note_extra *extra =
+                &extras.logs[log_index];
+            if (single_loss && extra->single_packet_safe)
+                continue;
+            if (extra->velocity)
+                release_velocity[extra->number] = extra->value;
+            else {
+                desired_count[extra->number] = extra->value;
+                count_known[extra->number] = 1;
+            }
+        }
         message[0] = (uint8_t)(0x80 | channel->number);
-        message[2] = 0;
         for (octave = 0; octave < 16 &&
                          (!single_loss || !notes.offbits_single_packet_safe);
              ++octave) {
@@ -652,9 +685,11 @@ static void recover_notes(struct runtime *rt,
                     printf("MIDIHub: cancelled %lu future Note On event(s) channel=%u note=%u\n",
                            (unsigned long)cancelled,
                            (unsigned int)channel->number, note);
-                if (!rt->active_notes[channel->number][note])
+                if (!rt->active_notes[channel->number][note] &&
+                    !rt->note_count[channel->number][note])
                     continue;
                 message[1] = (uint8_t)note;
+                message[2] = release_velocity[note];
                 deliver_short(rt, message, sizeof(message));
                 printf("MIDIHub: recovered Note Off channel=%u note=%u\n",
                        (unsigned int)channel->number, note);
@@ -676,7 +711,7 @@ static void recover_notes(struct runtime *rt,
             if (rt->active_notes[channel->number][log->number]) {
                 message[0] = (uint8_t)(0x80 | channel->number);
                 message[1] = log->number;
-                message[2] = 0;
+                message[2] = release_velocity[log->number];
                 deliver_short(rt, message, sizeof(message));
             }
             if (!log->simultaneous || !timely)
@@ -696,6 +731,39 @@ static void recover_notes(struct runtime *rt,
                    (unsigned int)channel->number,
                    (unsigned int)log->number,
                    (unsigned int)log->velocity);
+        }
+        for (note = 0; note < 128; ++note) {
+            uint8_t velocity = rt->active_notes[channel->number][note];
+            if (!count_known[note]) continue;
+            if (!velocity) {
+                for (log_index = 0; log_index < notes.log_count; ++log_index)
+                    if (notes.logs[log_index].number == note) {
+                        velocity = notes.logs[log_index].velocity;
+                        break;
+                    }
+            }
+            if (!velocity) velocity = 64;
+            while (rt->note_count[channel->number][note] <
+                   desired_count[note]) {
+                message[0] = (uint8_t)(0x90 | channel->number);
+                message[1] = (uint8_t)note;
+                message[2] = velocity;
+                deliver_short(rt, message, sizeof(message));
+                printf("MIDIHub: recovered duplicate Note On channel=%u note=%u count=%u\n",
+                       (unsigned int)channel->number, note,
+                       (unsigned int)rt->note_count[channel->number][note]);
+            }
+            while (rt->note_count[channel->number][note] >
+                   desired_count[note]) {
+                message[0] = (uint8_t)(0x80 | channel->number);
+                message[1] = (uint8_t)note;
+                message[2] = release_velocity[note];
+                deliver_short(rt, message, sizeof(message));
+                printf("MIDIHub: recovered counted Note Off channel=%u note=%u count=%u velocity=%u\n",
+                       (unsigned int)channel->number, note,
+                       (unsigned int)rt->note_count[channel->number][note],
+                       (unsigned int)message[2]);
+            }
         }
     }
 }

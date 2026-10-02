@@ -108,8 +108,10 @@ linked for AROS x64 and m68k, but live AROS playback has not been run.
   Chapters P and W restore Program Change, bank selection, and Pitch Bend
   after covered packet loss. Chapter C value logs restore Control Change
   values. The toggle tool handles sustain (64), and the count tool handles
-  All Sound Off (120) and All Notes Off (123). Other alternate logs, other
-  channel chapters remain to be implemented. System Chapters D, V, Q, and F
+  All Sound Off (120) and All Notes Off (123). Chapter E protects repeated
+  Note On reference counts and non-default Note Off release velocities.
+  Other alternate logs and Chapter M remain to be implemented. System
+  Chapters D, V, Q, and F
   are decoded. Chapters D and V recover System Reset, Tune Request, Song Select,
   and Active Sense. Chapter Q recovers standard sequencer transport, downbeat,
   and positions in the MIDI Song Position Pointer range. Larger positions and

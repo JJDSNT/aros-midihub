@@ -294,8 +294,10 @@ hint requests playback and the clocks are synchronized. Chapters P and W
 restore Program Change, bank selection, and Pitch Bend after packet loss.
 Chapter C value logs restore Control Change values; alternate toggle and
 count logs support sustain (64), All Sound Off (120), and All Notes Off (123).
-Other alternate logs, Chapters M and E, extended Chapter X history, and
-Preferences remain to be implemented. The optional
+Chapter E now protects repeated Note On reference counts and non-default
+Note Off release velocities, supplementing Chapter N recovery. Other
+alternate logs, Chapter M, extended Chapter X history, and Preferences remain
+to be implemented. The optional
 CAMD synthesizer now builds, but live AROS audio playback is unverified. A
 Linux-hosted AROS loopback run opened
 the CAMD bridge and completed AppleMIDI clock sync, Note On, and Note Off
@@ -312,6 +314,8 @@ currently prevent this from being an iPhone browse test inside AROS.
 Outgoing messages now include recovery journals for notes, Control Change,
 Program Change, Pitch Bend, Channel Aftertouch, Poly Aftertouch, System
 Reset, Tune Request, Song Select, Active Sense, and Chapter Q sequencer state.
+Chapter E encodes and recovers repeated Note On reference counts and Note Off
+release velocities.
 Chapter Q tracks Start, Continue, Stop, MIDI Clock, and Song Position Pointer.
 The receiver decodes System Chapters D, V, Q, and F and recovers the standard
 commands. Chapter Q recovery rebuilds transport, downbeat, and positions in

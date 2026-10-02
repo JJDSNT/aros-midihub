@@ -177,6 +177,9 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
                    sizeof(sender->sustain_toggle));
             memset(sender->reset_count, 0, sizeof(sender->reset_count));
             memset(sender->active_notes, 0, sizeof(sender->active_notes));
+            memset(sender->note_count, 0, sizeof(sender->note_count));
+            memset(sender->release_velocity, 0,
+                   sizeof(sender->release_velocity));
             sender->system_reset_count =
                 (uint8_t)((sender->system_reset_count + 1) & 0x7f);
             sender->tune_request_count = 0;
@@ -239,8 +242,18 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
         return;
     }
     if (type == 0x80 || type == 0x90) {
-        sender->active_notes[channel][message[1]] =
-            (uint8_t)(type == 0x90 && message[2] != 0);
+        int note_on = type == 0x90 && message[2] != 0;
+        if (note_on) {
+            if (sender->note_count[channel][message[1]] != UINT16_MAX)
+                ++sender->note_count[channel][message[1]];
+            sender->active_notes[channel][message[1]] = message[2];
+        } else {
+            if (sender->note_count[channel][message[1]])
+                --sender->note_count[channel][message[1]];
+            sender->release_velocity[channel][message[1]] =
+                type == 0x80 ? message[2] : 64;
+            sender->active_notes[channel][message[1]] = 0;
+        }
     } else if (type == 0xb0) {
         event->recovery_value = message[2];
         if (message[1] == 0) {
@@ -268,9 +281,12 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
                 (uint8_t)((sender->sustain_toggle[channel] + 1) & 0x3f);
             sender->sustain_on[channel] = 0;
         }
-        if (message[1] == 120 || message[1] >= 123)
+        if (message[1] == 120 || message[1] >= 123) {
             memset(sender->active_notes[channel], 0,
                    sizeof(sender->active_notes[channel]));
+            memset(sender->note_count[channel], 0,
+                   sizeof(sender->note_count[channel]));
+        }
     } else if (type == 0xc0) {
         event->bank_msb = sender->bank_msb[channel];
         event->bank_lsb = sender->bank_lsb[channel];
@@ -384,6 +400,9 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
     size_t start = *length;
     size_t control_count = 0;
     size_t note_on_count = 0;
+    size_t note_extra_count = 0;
+    size_t note_count_logs = 0;
+    size_t release_logs = 0;
     size_t poly_count = 0;
     uint8_t offbits[16] = {0};
     unsigned int low = 16;
@@ -427,7 +446,9 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
         if (latest_note[i] >= 0) {
             const struct mh_sent_event *event =
                 &sender->events[latest_note[i]];
-            if ((event->bytes[0] & 0xf0) == 0x90 && event->bytes[2])
+            int note_on = (event->bytes[0] & 0xf0) == 0x90 &&
+                          event->bytes[2];
+            if (note_on)
                 ++note_on_count;
             else {
                 offbits[i / 8] |= (uint8_t)(0x80u >> (i % 8));
@@ -436,10 +457,18 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
                 if (event->sequence == (uint16_t)(sequence - 1))
                     off_recent = 1;
             }
+            if ((note_on && sender->note_count[channel][i] > 1) ||
+                (!note_on && sender->note_count[channel][i] > 0))
+                ++note_count_logs;
+            if (!note_on && sender->release_velocity[channel][i] != 64)
+                ++release_logs;
         }
     }
+    note_extra_count = note_count_logs + release_logs;
+    if (note_extra_count > 128) note_extra_count = 128;
     if (program < 0 && pitch < 0 && !control_count &&
-        !note_on_count && low == 16 && aftertouch < 0 && !poly_count)
+        !note_on_count && low == 16 && !note_extra_count &&
+        aftertouch < 0 && !poly_count)
         return 0;
     if (capacity - *length < 3) return -1;
     *length += 3;
@@ -527,6 +556,53 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
             for (i = low; i <= high; ++i)
                 if (put(data, capacity, length, offbits[i]) < 0)
                     return -1;
+    }
+    if (note_extra_count) {
+        size_t header = *length;
+        size_t emitted = 0;
+        size_t velocity_budget = 128 - note_count_logs;
+        int extras_recent = 0;
+        toc |= 0x04;
+        if (put(data, capacity, length, 0) < 0) return -1;
+        for (i = 0; i < sender->count; ++i) {
+            const struct mh_sent_event *event = &sender->events[i];
+            int note_on;
+            int is_recent;
+            if (((event->bytes[0] & 0xf0) != 0x80 &&
+                 (event->bytes[0] & 0xf0) != 0x90) ||
+                (event->bytes[0] & 0x0f) != channel ||
+                latest_note[event->bytes[1]] != (int)i)
+                continue;
+            number = event->bytes[1];
+            note_on = (event->bytes[0] & 0xf0) == 0x90 && event->bytes[2];
+            is_recent = event->sequence == (uint16_t)(sequence - 1);
+            if ((note_on && sender->note_count[channel][number] > 1) ||
+                (!note_on && sender->note_count[channel][number] > 0)) {
+                uint16_t count = sender->note_count[channel][number];
+                if (put(data, capacity, length,
+                        (uint8_t)((is_recent ? 0 : 0x80) | number)) < 0 ||
+                    put(data, capacity, length,
+                        (uint8_t)(count > 127 ? 127 : count)) < 0)
+                    return -1;
+                ++emitted;
+                extras_recent |= is_recent;
+            }
+            if (!note_on && sender->release_velocity[channel][number] != 64 &&
+                velocity_budget) {
+                if (put(data, capacity, length,
+                        (uint8_t)((is_recent ? 0 : 0x80) | number)) < 0 ||
+                    put(data, capacity, length,
+                        (uint8_t)(0x80 |
+                            sender->release_velocity[channel][number])) < 0)
+                    return -1;
+                --velocity_budget;
+                ++emitted;
+                extras_recent |= is_recent;
+            }
+        }
+        data[header] = (uint8_t)((extras_recent ? 0 : 0x80) |
+                                 (emitted - 1));
+        *recent |= extras_recent;
     }
     if (aftertouch >= 0) {
         const struct mh_sent_event *event = &sender->events[aftertouch];
