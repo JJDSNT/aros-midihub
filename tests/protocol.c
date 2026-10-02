@@ -335,8 +335,8 @@ static void journal_note_extras(void)
 static void journal_parameters(void)
 {
     static const uint8_t value[] = {
-        0x20, 0, 4, 0x00, 0x0a, 0x20,
-        0xa0, 0x07, 0x00, 0x00, 0xc2, 0x02, 0x00
+        0x20, 0, 4, 0x00, 0x0c, 0x20,
+        0xa0, 0x09, 0x00, 0x00, 0xe2, 0x02, 0x00, 0x00, 0x03
     };
     static const uint8_t pending[] = {
         0x20, 0, 4, 0x00, 0x06, 0x20, 0x40, 0x03, 0x81
@@ -355,7 +355,9 @@ static void journal_parameters(void)
            parameters.logs[0].has_entry_msb &&
            parameters.logs[0].entry_msb == 2 &&
            parameters.logs[0].has_entry_lsb &&
-           parameters.logs[0].entry_lsb == 0);
+           parameters.logs[0].entry_lsb == 0 &&
+           parameters.logs[0].has_adjust &&
+           parameters.logs[0].adjust == 3);
     assert(mh_journal_decode(pending, sizeof(pending), &journal) == 0);
     assert(mh_journal_decode_parameters(&journal.channels[0],
                                         &parameters) == 1);
@@ -448,6 +450,7 @@ static void outgoing_journal(void)
     const uint8_t rpn_lsb[] = {0xb0, 100, 0};
     const uint8_t data_msb[] = {0xb0, 6, 2};
     const uint8_t data_lsb[] = {0xb0, 38, 25};
+    const uint8_t data_increment[] = {0xb0, 96, 0};
     const uint8_t system_reset[] = {0xff};
     const uint8_t tune_request[] = {0xf6};
     const uint8_t song_select[] = {0xf3, 9};
@@ -561,6 +564,17 @@ static void outgoing_journal(void)
            parameters.logs[0].entry_msb == 2 &&
            parameters.logs[0].has_entry_lsb &&
            parameters.logs[0].entry_lsb == 25);
+    mh_sender_record(&sender, 109, 1450, data_increment,
+                     sizeof(data_increment));
+    mh_sender_record(&sender, 110, 1500, data_increment,
+                     sizeof(data_increment));
+    assert(mh_sender_journal(&sender, 111, 1550,
+                             bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_parameters(&journal.channels[0],
+                                        &parameters) == 1);
+    assert(parameters.logs[0].has_adjust &&
+           parameters.logs[0].adjust == 2);
     mh_sender_reset(&sender);
 
     mh_sender_record(&sender, 102, 1100, bank, sizeof(bank));

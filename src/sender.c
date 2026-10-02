@@ -435,6 +435,7 @@ struct parameter_build_log {
     int last_event;
     int entry_msb;
     int entry_lsb;
+    int adjust;
 };
 
 static int build_parameters(const struct mh_sender *sender,
@@ -471,11 +472,15 @@ static int build_parameters(const struct mh_sender *sender,
             logs[j].last_event = (int)i;
             logs[j].entry_msb = -1;
             logs[j].entry_lsb = -1;
+            logs[j].adjust = 0;
             ++log_count;
         }
         logs[j].last_event = (int)i;
         if (controller == 6) logs[j].entry_msb = (int)i;
         if (controller == 38) logs[j].entry_lsb = (int)i;
+        if (controller == 6 || controller == 38) logs[j].adjust = 0;
+        if (controller == 96 && logs[j].adjust < 16383) ++logs[j].adjust;
+        if (controller == 97 && logs[j].adjust > -16383) --logs[j].adjust;
     }
     if (!activity) return 0;
     if (capacity - *length < 2) return -1;
@@ -495,7 +500,8 @@ static int build_parameters(const struct mh_sender *sender,
                       (log->entry_msb < 0 || log->entry_lsb > log->entry_msb);
         uint8_t toc = (uint8_t)(0x02 |
                       (log->entry_msb >= 0 ? 0x80 : 0) |
-                      (has_lsb ? 0x40 : 0));
+                      (has_lsb ? 0x40 : 0) |
+                      (log->adjust ? 0x20 : 0));
         if (put(data, capacity, length,
                 (uint8_t)((is_recent ? 0 : 0x80) |
                           (log->number & 0x7f))) < 0 ||
@@ -512,6 +518,15 @@ static int build_parameters(const struct mh_sender *sender,
             put(data, capacity, length,
                 sender->events[log->entry_lsb].bytes[2]) < 0)
             return -1;
+        if (log->adjust) {
+            unsigned int magnitude = (unsigned int)(
+                log->adjust < 0 ? -log->adjust : log->adjust);
+            if (put(data, capacity, length,
+                    (uint8_t)((log->adjust < 0 ? 0x80 : 0) |
+                              (magnitude >> 8))) < 0 ||
+                put(data, capacity, length, (uint8_t)magnitude) < 0)
+                return -1;
+        }
     }
     if (*length - start > 1023) return -1;
     data[start] = (uint8_t)((chapter_recent ? 0 : 0x80) |

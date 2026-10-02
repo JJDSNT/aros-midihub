@@ -644,7 +644,8 @@ static void recover_parameters(struct runtime *rt,
         for (j = 0; j < parameters.count; ++j) {
             const struct mh_journal_parameter_log *log = &parameters.logs[j];
             if ((single_loss && log->single_packet_safe) ||
-                (!log->has_entry_msb && !log->has_entry_lsb))
+                (!log->has_entry_msb && !log->has_entry_lsb &&
+                 !log->has_adjust))
                 continue;
             message[1] = (uint8_t)(log->nrpn ? 99 : 101);
             message[2] = (uint8_t)(log->number >> 7);
@@ -662,15 +663,22 @@ static void recover_parameters(struct runtime *rt,
                 message[2] = log->entry_lsb;
                 deliver_short(rt, message, sizeof(message));
             }
+            if (log->has_adjust) {
+                unsigned int count = (unsigned int)(
+                    log->adjust < 0 ? -log->adjust : log->adjust);
+                message[1] = (uint8_t)(log->adjust < 0 ? 97 : 96);
+                message[2] = 0;
+                while (count--) deliver_short(rt, message, sizeof(message));
+            }
             replayed = 1;
             last_nrpn = log->nrpn;
-            printf("MIDIHub: recovered %s parameter=%u entry=%s%u%s\n",
+            printf("MIDIHub: recovered %s parameter=%u entry=%s%u%s adjust=%d\n",
                    log->nrpn ? "NRPN" : "RPN",
                    (unsigned int)log->number,
                    log->has_entry_msb ? "MSB:" : "",
                    (unsigned int)(log->has_entry_msb ? log->entry_msb :
                                   log->entry_lsb),
-                   log->has_entry_lsb ? "+LSB" : "");
+                   log->has_entry_lsb ? "+LSB" : "", (int)log->adjust);
         }
         if (parameters.has_pending &&
             (!single_loss || !parameters.single_packet_safe)) {

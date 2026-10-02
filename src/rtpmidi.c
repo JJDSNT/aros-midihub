@@ -842,7 +842,13 @@ int mh_journal_decode_parameters(const struct mh_journal_channel *channel,
             log->entry_lsb = chapter[position++] & 0x7f;
         }
         if (toc & 0x20) {
+            unsigned int magnitude;
             if (chapter_length - position < 2) return -1;
+            magnitude = ((unsigned int)(chapter[position] & 0x3f) << 8) |
+                        chapter[position + 1];
+            log->has_adjust = 1;
+            log->adjust = (int16_t)((chapter[position] & 0x80) ?
+                                    -(int)magnitude : (int)magnitude);
             position += 2;
         }
         if (toc & 0x10) {

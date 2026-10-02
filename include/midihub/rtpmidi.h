@@ -185,6 +185,8 @@ struct mh_journal_parameter_log {
     uint8_t entry_msb;
     uint8_t has_entry_lsb;
     uint8_t entry_lsb;
+    uint8_t has_adjust;
+    int16_t adjust;
     uint8_t has_count;
     uint8_t count;
 };

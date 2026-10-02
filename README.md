@@ -296,10 +296,10 @@ Chapter C value logs restore Control Change values; alternate toggle and
 count logs support sustain (64), All Sound Off (120), and All Notes Off (123).
 Chapter E now protects repeated Note On reference counts and non-default
 Note Off release velocities, supplementing Chapter N recovery. Other
-alternate logs, Chapter M Data Increment/Decrement and transaction-count
-tools, extended Chapter X history, and Preferences remain to be implemented.
+alternate logs, the Chapter M transaction-count tool, extended Chapter X
+history, and Preferences remain to be implemented.
 Chapter M now decodes RPN/NRPN logs and protects parameter selection plus
-Data Entry MSB/LSB values. The optional
+Data Entry MSB/LSB and Data Increment/Decrement operations. The optional
 CAMD synthesizer now builds, but live AROS audio playback is unverified. A
 Linux-hosted AROS loopback run opened
 the CAMD bridge and completed AppleMIDI clock sync, Note On, and Note Off
@@ -319,8 +319,8 @@ Reset, Tune Request, Song Select, Active Sense, and Chapter Q sequencer state.
 Chapter E encodes and recovers repeated Note On reference counts and Note Off
 release velocities.
 Chapter M encodes and recovers RPN/NRPN selection, pending selector MSBs, and
-Data Entry MSB/LSB fields. Increment/decrement and transaction-count tools are
-decoded structurally but are not replayed yet.
+Data Entry MSB/LSB fields plus Data Increment/Decrement adjustments. The
+transaction-count tool is decoded structurally but is not replayed yet.
 Chapter Q tracks Start, Continue, Stop, MIDI Clock, and Song Position Pointer.
 The receiver decodes System Chapters D, V, Q, and F and recovers the standard
 commands. Chapter Q recovery rebuilds transport, downbeat, and positions in
