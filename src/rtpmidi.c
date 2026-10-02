@@ -279,8 +279,50 @@ int mh_journal_decode_system(const struct mh_journal *journal,
         }
         decoded = 1;
     }
-    /* Chapters F and X follow Q and remain intentionally opaque. */
-    if (!(toc & 0x0c) && offset != length) return -1;
+    if (toc & 0x08) {
+        size_t i;
+        if (offset >= length) return -1;
+        flags = data[offset++];
+        state->has_mtc = 1;
+        state->mtc_single_packet_safe = !!(flags & 0x80);
+        state->mtc_has_complete = !!(flags & 0x40);
+        state->mtc_has_partial = !!(flags & 0x20);
+        state->mtc_complete_quarter_frame = !!(flags & 0x10);
+        state->mtc_reverse = !!(flags & 0x08);
+        state->mtc_point = flags & 7;
+        if (!state->mtc_has_complete && state->mtc_complete_quarter_frame)
+            return -1;
+        if (!state->mtc_has_partial &&
+            state->mtc_point != (state->mtc_reverse ? 0 : 7))
+            return -1;
+        if (state->mtc_has_partial &&
+            ((!state->mtc_reverse && state->mtc_point > 6) ||
+             (state->mtc_reverse && state->mtc_point < 1)))
+            return -1;
+        if (state->mtc_has_complete) {
+            if (length - offset < 4) return -1;
+            if (state->mtc_complete_quarter_frame) {
+                for (i = 0; i < 8; ++i)
+                    state->mtc_complete[i] =
+                        (uint8_t)((data[offset + i / 2] >>
+                                   (i % 2 ? 0 : 4)) & 0x0f);
+            } else {
+                memcpy(state->mtc_complete, data + offset, 4);
+            }
+            offset += 4;
+        }
+        if (state->mtc_has_partial) {
+            if (length - offset < 4) return -1;
+            for (i = 0; i < 8; ++i)
+                state->mtc_partial[i] =
+                    (uint8_t)((data[offset + i / 2] >>
+                               (i % 2 ? 0 : 4)) & 0x0f);
+            offset += 4;
+        }
+        decoded = 1;
+    }
+    /* Chapter X follows F and remains intentionally opaque. */
+    if (!(toc & 0x04) && offset != length) return -1;
     if (offset > length) return -1;
     return decoded;
 }

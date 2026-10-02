@@ -63,10 +63,19 @@ struct mh_journal_system_state {
     uint32_t clock;
     int has_time_tools;
     uint32_t time_tools;
+    int has_mtc;
+    int mtc_single_packet_safe;
+    int mtc_has_complete;
+    int mtc_complete_quarter_frame;
+    int mtc_has_partial;
+    int mtc_reverse;
+    uint8_t mtc_point;
+    uint8_t mtc_complete[8];
+    uint8_t mtc_partial[8];
 };
 
-/* Decode standard commands in System Chapters D, V, and Q. Chapters F and
- * X remain available as opaque bytes in mh_journal. */
+/* Decode standard commands in System Chapters D, V, Q, and F. Chapter X
+ * remains available as opaque bytes in mh_journal. */
 int mh_journal_decode_system(const struct mh_journal *journal,
                              struct mh_journal_system_state *state);
 

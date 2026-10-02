@@ -109,8 +109,8 @@ linked for AROS x64 and m68k, but live AROS playback has not been run.
   after covered packet loss. Chapter C value logs restore Control Change
   values. The toggle tool handles sustain (64), and the count tool handles
   All Sound Off (120) and All Notes Off (123). Other alternate logs, other
-  channel chapters remain to be implemented. System Chapters D, V, and Q are
-  decoded. Chapters D and V recover System Reset, Tune Request, Song Select,
+  channel chapters remain to be implemented. System Chapters D, V, Q, and F
+  are decoded. Chapters D and V recover System Reset, Tune Request, Song Select,
   and Active Sense. Chapter Q recovers standard sequencer transport, downbeat,
   and positions in the MIDI Song Position Pointer range. Larger positions and
   optional TIMETOOLS data are validated without position replay. Outgoing
@@ -119,7 +119,8 @@ linked for AROS x64 and m68k, but live AROS playback has not been run.
   Chapter Q covers Start, Continue, Stop, MIDI Clock, and Song Position
   Pointer. Chapters T and A cover Channel and Poly Aftertouch. Guard packets
   repeat pending recovery data after the last event. SysEx and MIDI Time Code
-  do not yet have outgoing journal protection.
+  do not yet have outgoing journal protection. Chapter F complete and partial
+  MIDI Time Code fields are validated, while MTC replay remains pending.
 
 ## Initial network implementation
 

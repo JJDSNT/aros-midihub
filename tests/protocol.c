@@ -202,7 +202,17 @@ static void journal_system(void)
         0x89,
         0xfb, 0x12, 0x34, 0x01, 0x02, 0x03
     };
+    static const uint8_t mtc_bytes[] = {
+        0x40, 0x00, 0x04,
+        0x08, 0x0b,
+        0xf3, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef
+    };
+    static const uint8_t mtc_full_frame[] = {
+        0x40, 0x00, 0x04,
+        0x08, 0x07, 0x47, 0x61, 0x02, 0x03, 0x04
+    };
     uint8_t broken[sizeof(bytes)];
+    uint8_t mtc_broken[sizeof(mtc_bytes)];
     struct mh_journal journal;
     struct mh_journal_system_state state;
 
@@ -228,6 +238,26 @@ static void journal_system(void)
     broken[4] = 10;
     assert(mh_journal_decode(broken, 13, &journal) == 0);
     assert(mh_journal_decode_system(&journal, &state) == -1);
+
+    assert(mh_journal_decode(mtc_bytes, sizeof(mtc_bytes), &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &state) == 1);
+    assert(state.has_mtc && state.mtc_single_packet_safe &&
+           state.mtc_has_complete && state.mtc_complete_quarter_frame &&
+           state.mtc_has_partial && !state.mtc_reverse &&
+           state.mtc_point == 3);
+    assert(state.mtc_complete[0] == 0 && state.mtc_complete[7] == 7 &&
+           state.mtc_partial[0] == 8 && state.mtc_partial[7] == 15);
+    memcpy(mtc_broken, mtc_bytes, sizeof(mtc_broken));
+    mtc_broken[5] = 0x13; /* Q without COMPLETE is invalid. */
+    assert(mh_journal_decode(mtc_broken, sizeof(mtc_broken), &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &state) == -1);
+    assert(mh_journal_decode(mtc_full_frame, sizeof(mtc_full_frame),
+                             &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &state) == 1);
+    assert(state.has_mtc && state.mtc_has_complete &&
+           !state.mtc_complete_quarter_frame && !state.mtc_has_partial &&
+           state.mtc_point == 7 && state.mtc_complete[0] == 0x61 &&
+           state.mtc_complete[3] == 0x04);
 }
 
 static void journal_note_offs(void)

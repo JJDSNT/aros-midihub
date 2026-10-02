@@ -313,10 +313,12 @@ Outgoing messages now include recovery journals for notes, Control Change,
 Program Change, Pitch Bend, Channel Aftertouch, Poly Aftertouch, System
 Reset, Tune Request, Song Select, Active Sense, and Chapter Q sequencer state.
 Chapter Q tracks Start, Continue, Stop, MIDI Clock, and Song Position Pointer.
-The receiver decodes System Chapters D, V, and Q and recovers their standard
+The receiver decodes System Chapters D, V, Q, and F and recovers the standard
 commands. Chapter Q recovery rebuilds transport, downbeat, and positions in
 the MIDI Song Position Pointer range. Positions above that range and the
 optional TIMETOOLS correction remain validation-only.
+Chapter F complete and partial MIDI Time Code fields are decoded and validated;
+MTC replay and outgoing Chapter F generation remain pending.
 The sender retains up to 32 packets and removes confirmed history when
 AppleMIDI `RS` feedback arrives. While unconfirmed history remains, it sends
 an empty MIDI guard packet once per
