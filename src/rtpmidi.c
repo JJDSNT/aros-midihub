@@ -747,6 +747,117 @@ int mh_journal_decode_controls(const struct mh_journal_channel *channel,
     return 1;
 }
 
+int mh_journal_decode_parameters(const struct mh_journal_channel *channel,
+                                 struct mh_journal_parameters *parameters)
+{
+    const uint8_t *data;
+    const uint8_t *chapter;
+    size_t length;
+    size_t offset = 3;
+    size_t chapter_length;
+    size_t position;
+    size_t i;
+    uint8_t header;
+    int compressed;
+
+    if (!channel || !parameters || !channel->data || channel->length < 3)
+        return -1;
+    memset(parameters, 0, sizeof(*parameters));
+    if (!(channel->chapters & 0x20)) return 0;
+    data = channel->data;
+    length = channel->length;
+    if (channel->chapters & 0x80) {
+        if (length - offset < 3) return -1;
+        offset += 3;
+    }
+    if (channel->chapters & 0x40) {
+        size_t size;
+        if (length - offset < 1 || (data[0] & 0x04)) return -1;
+        size = 1 + 2 * ((size_t)(data[offset] & 0x7f) + 1);
+        if (size > length - offset) return -1;
+        offset += size;
+    }
+    if (length - offset < 2) return -1;
+    chapter = data + offset;
+    header = chapter[0];
+    chapter_length = ((size_t)(header & 3) << 8) | chapter[1];
+    if (chapter_length < 2 || chapter_length > length - offset ||
+        ((header & 0x18) == 0x18))
+        return -1;
+    parameters->single_packet_safe = !!(header & 0x80);
+    parameters->has_pending = !!(header & 0x40);
+    parameters->transaction_open = !!(header & 0x20);
+    position = 2;
+    if (parameters->has_pending) {
+        if (position >= chapter_length || parameters->transaction_open)
+            return -1;
+        parameters->pending_nrpn = !!(chapter[position] & 0x80);
+        parameters->pending_msb = chapter[position] & 0x7f;
+        ++position;
+    }
+    compressed = !!(header & 0x04) && !!(header & 0x18);
+    while (position < chapter_length) {
+        struct mh_journal_parameter_log *log;
+        uint8_t toc;
+        uint8_t lsb;
+        uint8_t msb;
+        int nrpn;
+        if (parameters->count == 128) return -1;
+        if (chapter_length - position < (size_t)(compressed ? 2 : 3))
+            return -1;
+        lsb = chapter[position] & 0x7f;
+        if (compressed) {
+            msb = 0;
+            nrpn = !!(header & 0x08);
+            toc = chapter[position + 1];
+            position += 2;
+        } else {
+            nrpn = !!(chapter[position + 1] & 0x80);
+            msb = chapter[position + 1] & 0x7f;
+            toc = chapter[position + 2];
+            position += 3;
+        }
+        if (lsb == 0x7f && msb == 0x7f) return -1;
+        for (i = 0; i < parameters->count; ++i)
+            if (parameters->logs[i].number == (uint16_t)((msb << 7) | lsb) &&
+                parameters->logs[i].nrpn == nrpn)
+                return -1;
+        if ((toc & 0xf0) && !(toc & 0x02)) return -1;
+        if ((toc & 0x08) && !(toc & 0x04)) return -1;
+        log = &parameters->logs[parameters->count++];
+        log->number = (uint16_t)((msb << 7) | lsb);
+        log->nrpn = (uint8_t)nrpn;
+        log->single_packet_safe = !!(chapter[position -
+            (compressed ? 2 : 3)] & 0x80);
+        log->value_tool = !!(toc & 0x02);
+        log->count_tool = !!(toc & 0x04);
+        if (toc & 0x80) {
+            if (position >= chapter_length) return -1;
+            log->has_entry_msb = 1;
+            log->entry_msb = chapter[position++] & 0x7f;
+        }
+        if (toc & 0x40) {
+            if (position >= chapter_length) return -1;
+            log->has_entry_lsb = 1;
+            log->entry_lsb = chapter[position++] & 0x7f;
+        }
+        if (toc & 0x20) {
+            if (chapter_length - position < 2) return -1;
+            position += 2;
+        }
+        if (toc & 0x10) {
+            if (chapter_length - position < 2) return -1;
+            position += 2;
+        }
+        if (toc & 0x08) {
+            if (position >= chapter_length) return -1;
+            log->has_count = 1;
+            log->count = chapter[position++] & 0x7f;
+        }
+    }
+    return position == chapter_length ? 1 : -1;
+}
+
 void mh_rtp_reader_init(struct mh_rtp_reader *reader,
                         const struct mh_rtp_packet *packet)
 {

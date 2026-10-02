@@ -26,6 +26,9 @@ struct mh_sent_event {
     uint8_t bank_lsb;
     uint8_t bank_known;
     uint8_t system_kind;
+    uint16_t parameter;
+    uint8_t parameter_valid;
+    uint8_t parameter_nrpn;
 };
 
 struct mh_sender {
@@ -40,6 +43,12 @@ struct mh_sender {
     uint8_t active_notes[16][128];
     uint16_t note_count[16][128];
     uint8_t release_velocity[16][128];
+    uint8_t parameter_msb[16];
+    uint8_t parameter_lsb[16];
+    uint8_t parameter_nrpn[16];
+    uint8_t parameter_type_known[16];
+    uint8_t parameter_pending[16];
+    uint8_t parameter_valid[16];
     uint8_t system_reset_count;
     uint8_t tune_request_count;
     uint8_t active_sense_count;

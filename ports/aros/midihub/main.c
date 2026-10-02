@@ -622,6 +622,74 @@ static void recover_controls(struct runtime *rt,
     }
 }
 
+static void recover_parameters(struct runtime *rt,
+                               const struct mh_journal *journal,
+                               int single_loss)
+{
+    struct mh_journal_parameters parameters;
+    uint8_t message[3];
+    size_t i;
+    size_t j;
+    int replayed = 0;
+    int last_nrpn = 0;
+
+    if (single_loss && journal->single_packet_safe) return;
+    for (i = 0; i < journal->channel_count; ++i) {
+        const struct mh_journal_channel *channel = &journal->channels[i];
+        if (single_loss && channel->single_packet_safe) continue;
+        if (mh_journal_decode_parameters(channel, &parameters) <= 0)
+            continue;
+        message[0] = (uint8_t)(0xb0 | channel->number);
+        replayed = 0;
+        for (j = 0; j < parameters.count; ++j) {
+            const struct mh_journal_parameter_log *log = &parameters.logs[j];
+            if ((single_loss && log->single_packet_safe) ||
+                (!log->has_entry_msb && !log->has_entry_lsb))
+                continue;
+            message[1] = (uint8_t)(log->nrpn ? 99 : 101);
+            message[2] = (uint8_t)(log->number >> 7);
+            deliver_short(rt, message, sizeof(message));
+            message[1] = (uint8_t)(log->nrpn ? 98 : 100);
+            message[2] = (uint8_t)(log->number & 0x7f);
+            deliver_short(rt, message, sizeof(message));
+            if (log->has_entry_msb) {
+                message[1] = 6;
+                message[2] = log->entry_msb;
+                deliver_short(rt, message, sizeof(message));
+            }
+            if (log->has_entry_lsb) {
+                message[1] = 38;
+                message[2] = log->entry_lsb;
+                deliver_short(rt, message, sizeof(message));
+            }
+            replayed = 1;
+            last_nrpn = log->nrpn;
+            printf("MIDIHub: recovered %s parameter=%u entry=%s%u%s\n",
+                   log->nrpn ? "NRPN" : "RPN",
+                   (unsigned int)log->number,
+                   log->has_entry_msb ? "MSB:" : "",
+                   (unsigned int)(log->has_entry_msb ? log->entry_msb :
+                                  log->entry_lsb),
+                   log->has_entry_lsb ? "+LSB" : "");
+        }
+        if (parameters.has_pending &&
+            (!single_loss || !parameters.single_packet_safe)) {
+            message[1] = (uint8_t)(parameters.pending_nrpn ? 99 : 101);
+            message[2] = parameters.pending_msb;
+            deliver_short(rt, message, sizeof(message));
+            printf("MIDIHub: recovered pending %s MSB=%u\n",
+                   parameters.pending_nrpn ? "NRPN" : "RPN",
+                   (unsigned int)parameters.pending_msb);
+        } else if (replayed && !parameters.transaction_open) {
+            message[1] = (uint8_t)(last_nrpn ? 99 : 101);
+            message[2] = 0x7f;
+            deliver_short(rt, message, sizeof(message));
+            message[1] = (uint8_t)(last_nrpn ? 98 : 100);
+            deliver_short(rt, message, sizeof(message));
+        }
+    }
+}
+
 static void recover_notes(struct runtime *rt,
                           const struct mh_journal *journal,
                           int single_loss, uint32_t timestamp)
@@ -1193,6 +1261,7 @@ static void receive_packet(struct runtime *rt, int data_port)
         recover_channel_state(rt, &journal, sequence_advance == 2);
         recover_notes(rt, &journal, sequence_advance == 2,
                       midi.timestamp);
+        recover_parameters(rt, &journal, sequence_advance == 2);
         recover_controls(rt, &journal, sequence_advance == 2);
         recover_aftertouch(rt, &journal, sequence_advance == 2);
     }

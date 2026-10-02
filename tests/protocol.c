@@ -332,6 +332,43 @@ static void journal_note_extras(void)
     assert(mh_journal_decode_note_extras(&journal.channels[0], &extras) == -1);
 }
 
+static void journal_parameters(void)
+{
+    static const uint8_t value[] = {
+        0x20, 0, 4, 0x00, 0x0a, 0x20,
+        0xa0, 0x07, 0x00, 0x00, 0xc2, 0x02, 0x00
+    };
+    static const uint8_t pending[] = {
+        0x20, 0, 4, 0x00, 0x06, 0x20, 0x40, 0x03, 0x81
+    };
+    uint8_t broken[sizeof(value)];
+    struct mh_journal journal;
+    struct mh_journal_parameters parameters;
+
+    assert(mh_journal_decode(value, sizeof(value), &journal) == 0);
+    assert(mh_journal_decode_parameters(&journal.channels[0],
+                                        &parameters) == 1);
+    assert(parameters.single_packet_safe && parameters.transaction_open &&
+           !parameters.has_pending && parameters.count == 1 &&
+           parameters.logs[0].number == 0 && !parameters.logs[0].nrpn &&
+           parameters.logs[0].value_tool &&
+           parameters.logs[0].has_entry_msb &&
+           parameters.logs[0].entry_msb == 2 &&
+           parameters.logs[0].has_entry_lsb &&
+           parameters.logs[0].entry_lsb == 0);
+    assert(mh_journal_decode(pending, sizeof(pending), &journal) == 0);
+    assert(mh_journal_decode_parameters(&journal.channels[0],
+                                        &parameters) == 1);
+    assert(parameters.has_pending && parameters.pending_nrpn &&
+           parameters.pending_msb == 1 && !parameters.transaction_open &&
+           parameters.count == 0);
+    memcpy(broken, value, sizeof(broken));
+    broken[10] = 0xc0; /* Value fields without the value tool. */
+    assert(mh_journal_decode(broken, sizeof(broken), &journal) == 0);
+    assert(mh_journal_decode_parameters(&journal.channels[0],
+                                        &parameters) == -1);
+}
+
 static void journal_channel_state(void)
 {
     static const uint8_t state_bytes[] = {
@@ -407,6 +444,10 @@ static void outgoing_journal(void)
     const uint8_t channel_pressure[] = {0xd0, 40};
     const uint8_t poly_pressure[] = {0xa0, 60, 50};
     const uint8_t reset_controllers[] = {0xb0, 121, 0};
+    const uint8_t rpn_msb[] = {0xb0, 101, 0};
+    const uint8_t rpn_lsb[] = {0xb0, 100, 0};
+    const uint8_t data_msb[] = {0xb0, 6, 2};
+    const uint8_t data_lsb[] = {0xb0, 38, 25};
     const uint8_t system_reset[] = {0xff};
     const uint8_t tune_request[] = {0xf6};
     const uint8_t song_select[] = {0xf3, 9};
@@ -439,6 +480,7 @@ static void outgoing_journal(void)
     struct mh_journal_note_extras note_extras;
     struct mh_journal_channel_state channel_state;
     struct mh_journal_controls controls;
+    struct mh_journal_parameters parameters;
     struct mh_journal_aftertouch aftertouch;
     struct mh_journal_system_state system_state;
     uint8_t bytes[256];
@@ -501,6 +543,24 @@ static void outgoing_journal(void)
            note_extras.logs[0].value == 1 &&
            note_extras.logs[1].velocity &&
            note_extras.logs[1].value == 45);
+    mh_sender_reset(&sender);
+
+    mh_sender_record(&sender, 105, 1250, rpn_msb, sizeof(rpn_msb));
+    mh_sender_record(&sender, 106, 1300, rpn_lsb, sizeof(rpn_lsb));
+    mh_sender_record(&sender, 107, 1350, data_msb, sizeof(data_msb));
+    mh_sender_record(&sender, 108, 1400, data_lsb, sizeof(data_lsb));
+    assert(mh_sender_journal(&sender, 109, 1450,
+                             bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_controls(&journal.channels[0], &controls) == 0);
+    assert(mh_journal_decode_parameters(&journal.channels[0],
+                                        &parameters) == 1);
+    assert(parameters.transaction_open && parameters.count == 1 &&
+           parameters.logs[0].number == 0 && !parameters.logs[0].nrpn &&
+           parameters.logs[0].has_entry_msb &&
+           parameters.logs[0].entry_msb == 2 &&
+           parameters.logs[0].has_entry_lsb &&
+           parameters.logs[0].entry_lsb == 25);
     mh_sender_reset(&sender);
 
     mh_sender_record(&sender, 102, 1100, bank, sizeof(bank));
@@ -1090,6 +1150,7 @@ int main(void)
     journal_system();
     journal_note_offs();
     journal_note_extras();
+    journal_parameters();
     journal_channel_state();
     journal_controls();
     outgoing_journal();

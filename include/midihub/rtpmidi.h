@@ -175,6 +175,34 @@ struct mh_journal_controls {
 int mh_journal_decode_controls(const struct mh_journal_channel *channel,
                                 struct mh_journal_controls *controls);
 
+struct mh_journal_parameter_log {
+    uint16_t number;
+    uint8_t nrpn;
+    uint8_t single_packet_safe;
+    uint8_t value_tool;
+    uint8_t count_tool;
+    uint8_t has_entry_msb;
+    uint8_t entry_msb;
+    uint8_t has_entry_lsb;
+    uint8_t entry_lsb;
+    uint8_t has_count;
+    uint8_t count;
+};
+
+struct mh_journal_parameters {
+    int single_packet_safe;
+    int has_pending;
+    int pending_nrpn;
+    uint8_t pending_msb;
+    int transaction_open;
+    struct mh_journal_parameter_log logs[128];
+    size_t count;
+};
+
+/* Decode Chapter M RPN/NRPN state and bounded parameter logs. */
+int mh_journal_decode_parameters(const struct mh_journal_channel *channel,
+                                 struct mh_journal_parameters *parameters);
+
 struct mh_journal_poly_pressure {
     uint8_t number;
     uint8_t pressure;

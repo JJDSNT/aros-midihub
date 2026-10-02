@@ -180,6 +180,12 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
             memset(sender->note_count, 0, sizeof(sender->note_count));
             memset(sender->release_velocity, 0,
                    sizeof(sender->release_velocity));
+            memset(sender->parameter_type_known, 0,
+                   sizeof(sender->parameter_type_known));
+            memset(sender->parameter_pending, 0,
+                   sizeof(sender->parameter_pending));
+            memset(sender->parameter_valid, 0,
+                   sizeof(sender->parameter_valid));
             sender->system_reset_count =
                 (uint8_t)((sender->system_reset_count + 1) & 0x7f);
             sender->tune_request_count = 0;
@@ -256,6 +262,35 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
         }
     } else if (type == 0xb0) {
         event->recovery_value = message[2];
+        if (message[1] == 101 || message[1] == 99) {
+            sender->parameter_nrpn[channel] = message[1] == 99;
+            sender->parameter_type_known[channel] = 1;
+            sender->parameter_msb[channel] = message[2];
+            sender->parameter_pending[channel] = 1;
+            sender->parameter_valid[channel] = 0;
+        } else if ((message[1] == 100 || message[1] == 98) &&
+                   sender->parameter_type_known[channel] &&
+                   sender->parameter_nrpn[channel] == (message[1] == 98)) {
+            sender->parameter_lsb[channel] = message[2];
+            sender->parameter_pending[channel] = 0;
+            sender->parameter_valid[channel] =
+                sender->parameter_msb[channel] != 0x7f || message[2] != 0x7f;
+            if (sender->parameter_valid[channel]) {
+                event->parameter = (uint16_t)(
+                    ((uint16_t)sender->parameter_msb[channel] << 7) |
+                    message[2]);
+                event->parameter_valid = 1;
+                event->parameter_nrpn = sender->parameter_nrpn[channel];
+            }
+        } else if ((message[1] == 6 || message[1] == 38 ||
+                    message[1] == 96 || message[1] == 97) &&
+                   sender->parameter_valid[channel]) {
+            event->parameter = (uint16_t)(
+                ((uint16_t)sender->parameter_msb[channel] << 7) |
+                sender->parameter_lsb[channel]);
+            event->parameter_valid = 1;
+            event->parameter_nrpn = sender->parameter_nrpn[channel];
+        }
         if (message[1] == 0) {
             sender->bank_msb[channel] = message[2];
             sender->bank_known[channel] |= 1;
@@ -280,6 +315,10 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
             sender->sustain_toggle[channel] =
                 (uint8_t)((sender->sustain_toggle[channel] + 1) & 0x3f);
             sender->sustain_on[channel] = 0;
+        }
+        if (message[1] == 121) {
+            sender->parameter_pending[channel] = 0;
+            sender->parameter_valid[channel] = 0;
         }
         if (message[1] == 120 || message[1] >= 123) {
             memset(sender->active_notes[channel], 0,
@@ -384,6 +423,107 @@ static int put(uint8_t *data, size_t capacity, size_t *length, uint8_t value)
     return 0;
 }
 
+static int parameter_controller(uint8_t number)
+{
+    return number == 6 || number == 38 || number == 96 || number == 97 ||
+           (number >= 98 && number <= 101);
+}
+
+struct parameter_build_log {
+    uint16_t number;
+    uint8_t nrpn;
+    int last_event;
+    int entry_msb;
+    int entry_lsb;
+};
+
+static int build_parameters(const struct mh_sender *sender,
+                            unsigned int channel, uint16_t sequence,
+                            uint8_t *data, size_t capacity, size_t *length,
+                            int *recent)
+{
+    struct parameter_build_log logs[MH_SENDER_HISTORY];
+    size_t log_count = 0;
+    size_t i;
+    size_t j;
+    size_t start;
+    int activity = 0;
+    int chapter_recent = 0;
+
+    for (i = 0; i < sender->count; ++i) {
+        const struct mh_sent_event *event = &sender->events[i];
+        uint8_t controller;
+        if ((event->bytes[0] & 0xf0) != 0xb0 ||
+            (event->bytes[0] & 0x0f) != channel)
+            continue;
+        controller = event->bytes[1];
+        if (!parameter_controller(controller)) continue;
+        activity = 1;
+        if (event->sequence == (uint16_t)(sequence - 1)) chapter_recent = 1;
+        if (!event->parameter_valid) continue;
+        for (j = 0; j < log_count; ++j)
+            if (logs[j].number == event->parameter &&
+                logs[j].nrpn == event->parameter_nrpn)
+                break;
+        if (j == log_count) {
+            logs[j].number = event->parameter;
+            logs[j].nrpn = event->parameter_nrpn;
+            logs[j].last_event = (int)i;
+            logs[j].entry_msb = -1;
+            logs[j].entry_lsb = -1;
+            ++log_count;
+        }
+        logs[j].last_event = (int)i;
+        if (controller == 6) logs[j].entry_msb = (int)i;
+        if (controller == 38) logs[j].entry_lsb = (int)i;
+    }
+    if (!activity) return 0;
+    if (capacity - *length < 2) return -1;
+    start = *length;
+    *length += 2;
+    if (sender->parameter_pending[channel]) {
+        if (put(data, capacity, length,
+                (uint8_t)((sender->parameter_nrpn[channel] ? 0x80 : 0) |
+                          sender->parameter_msb[channel])) < 0)
+            return -1;
+    }
+    for (i = 0; i < log_count; ++i) {
+        const struct parameter_build_log *log = &logs[i];
+        const struct mh_sent_event *last = &sender->events[log->last_event];
+        int is_recent = last->sequence == (uint16_t)(sequence - 1);
+        int has_lsb = log->entry_lsb >= 0 &&
+                      (log->entry_msb < 0 || log->entry_lsb > log->entry_msb);
+        uint8_t toc = (uint8_t)(0x02 |
+                      (log->entry_msb >= 0 ? 0x80 : 0) |
+                      (has_lsb ? 0x40 : 0));
+        if (put(data, capacity, length,
+                (uint8_t)((is_recent ? 0 : 0x80) |
+                          (log->number & 0x7f))) < 0 ||
+            put(data, capacity, length,
+                (uint8_t)((log->nrpn ? 0x80 : 0) |
+                          (log->number >> 7))) < 0 ||
+            put(data, capacity, length, toc) < 0)
+            return -1;
+        if (log->entry_msb >= 0 &&
+            put(data, capacity, length,
+                sender->events[log->entry_msb].bytes[2]) < 0)
+            return -1;
+        if (has_lsb &&
+            put(data, capacity, length,
+                sender->events[log->entry_lsb].bytes[2]) < 0)
+            return -1;
+    }
+    if (*length - start > 1023) return -1;
+    data[start] = (uint8_t)((chapter_recent ? 0 : 0x80) |
+                  (sender->parameter_pending[channel] ? 0x40 : 0) |
+                  (!sender->parameter_pending[channel] &&
+                   sender->parameter_valid[channel] ? 0x20 : 0) |
+                  ((*length - start) >> 8));
+    data[start + 1] = (uint8_t)(*length - start);
+    *recent = chapter_recent;
+    return 1;
+}
+
 static int build_channel(const struct mh_sender *sender, unsigned int channel,
                          uint16_t sequence, uint32_t timestamp,
                          uint8_t *data, size_t capacity, size_t *length,
@@ -396,6 +536,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
     int pitch = -1;
     int aftertouch = -1;
     int reset_controllers = -1;
+    int has_parameter = 0;
     size_t i;
     size_t start = *length;
     size_t control_count = 0;
@@ -421,7 +562,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
         type = event->bytes[0] & 0xf0;
         if (type == 0x80 || type == 0x90)
             latest_note[event->bytes[1]] = (int)i;
-        else if (type == 0xb0)
+        else if (type == 0xb0 && !parameter_controller(event->bytes[1]))
             latest_control[event->bytes[1]] = (int)i;
         else if (type == 0xa0)
             latest_poly[event->bytes[1]] = (int)i;
@@ -433,6 +574,8 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
             pitch = (int)i;
         if (type == 0xb0 && event->bytes[1] == 121)
             reset_controllers = (int)i;
+        if (type == 0xb0 && parameter_controller(event->bytes[1]))
+            has_parameter = 1;
     }
     if (aftertouch <= reset_controllers)
         aftertouch = -1;
@@ -468,7 +611,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
     if (note_extra_count > 128) note_extra_count = 128;
     if (program < 0 && pitch < 0 && !control_count &&
         !note_on_count && low == 16 && !note_extra_count &&
-        aftertouch < 0 && !poly_count)
+        aftertouch < 0 && !poly_count && !has_parameter)
         return 0;
     if (capacity - *length < 3) return -1;
     *length += 3;
@@ -514,6 +657,17 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
         data[header] = (uint8_t)((control_recent ? 0 : 0x80) |
                                  (control_count - 1));
         *recent |= control_recent;
+    }
+    {
+        int parameter_recent = 0;
+        int parameter_result = build_parameters(sender, channel, sequence,
+                                                data, capacity, length,
+                                                &parameter_recent);
+        if (parameter_result < 0) return -1;
+        if (parameter_result > 0) {
+            toc |= 0x20;
+            *recent |= parameter_recent;
+        }
     }
     if (pitch >= 0) {
         const struct mh_sent_event *event = &sender->events[pitch];

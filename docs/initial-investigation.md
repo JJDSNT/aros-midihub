@@ -110,8 +110,10 @@ linked for AROS x64 and m68k, but live AROS playback has not been run.
   values. The toggle tool handles sustain (64), and the count tool handles
   All Sound Off (120) and All Notes Off (123). Chapter E protects repeated
   Note On reference counts and non-default Note Off release velocities.
-  Other alternate logs and Chapter M remain to be implemented. System
-  Chapters D, V, Q, and F
+  Chapter M protects RPN/NRPN selection, pending selector MSBs, and Data Entry
+  MSB/LSB values. Its increment/decrement and transaction-count tools are
+  bounded and decoded but are not replayed yet. Other alternate logs remain
+  to be implemented. System Chapters D, V, Q, and F
   are decoded. Chapters D and V recover System Reset, Tune Request, Song Select,
   and Active Sense. Chapter Q recovers standard sequencer transport, downbeat,
   and positions in the MIDI Song Position Pointer range. Larger positions and
