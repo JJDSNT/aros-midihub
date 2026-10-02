@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 enum { SAMPLE_RATE = 44100, SECONDS = 2, BLOCK_SAMPLES = 512 };
 
@@ -37,22 +38,60 @@ int main(int argc, char **argv)
     const uint8_t program[] = {0xc0, 0};
     const uint8_t note_on[] = {0x90, 60, 127};
     const uint8_t note_off[] = {0x80, 60, 0};
+    const uint8_t key_pressure[] = {0xa0, 60, 64};
+    const uint8_t channel_pressure[] = {0xd0, 64};
+    const uint8_t gm_system_on[] = {0xf0, 0x7e, 0x7f, 0x09, 0x01, 0xf7};
     unsigned sample_index = 0;
     unsigned nonzero = 0;
     int result = 1;
+    enum mh_synth_backend backend = MH_SYNTH_TINY;
 
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s BANK.sf2 OUTPUT.wav\n", argv[0]);
+    if (argc != 3 && argc != 4) {
+        fprintf(stderr, "Usage: %s BANK.sf2 OUTPUT.wav [tiny|fluid]\n",
+                argv[0]);
         return 2;
     }
-    synth = mh_synth_open(argv[1], SAMPLE_RATE);
+    if (argc == 4) {
+        if (strcmp(argv[3], "fluid") == 0)
+            backend = MH_SYNTH_FLUID;
+        else if (strcmp(argv[3], "tiny") != 0) {
+            fprintf(stderr, "Unknown backend: %s\n", argv[3]);
+            return 2;
+        }
+    }
+    if (!mh_synth_has_backend(backend)) {
+        fprintf(stderr, "Backend unavailable: %s\n",
+                mh_synth_backend_name(backend));
+        return 2;
+    }
+    synth = mh_synth_open_backend(argv[1], SAMPLE_RATE, backend);
     if (!synth) {
         fprintf(stderr, "Could not load SoundFont: %s\n", argv[1]);
+        return 1;
+    }
+    if (backend == MH_SYNTH_FLUID &&
+        mh_synth_send_sysex(synth, gm_system_on, sizeof(gm_system_on)) != 0) {
+        fprintf(stderr, "FluidSynth SysEx failed\n");
+        mh_synth_close(synth);
+        return 1;
+    }
+    if (backend == MH_SYNTH_TINY &&
+        mh_synth_send_sysex(synth, gm_system_on, sizeof(gm_system_on)) != 1) {
+        fprintf(stderr, "TinySoundFont accepted unsupported SysEx\n");
+        mh_synth_close(synth);
         return 1;
     }
     if (mh_synth_send(synth, program, sizeof(program)) != 0 ||
         mh_synth_send(synth, note_on, sizeof(note_on)) != 0) {
         fprintf(stderr, "Could not start note\n");
+        mh_synth_close(synth);
+        return 1;
+    }
+    if (backend == MH_SYNTH_FLUID &&
+        (mh_synth_send(synth, key_pressure, sizeof(key_pressure)) != 0 ||
+         mh_synth_send(synth, channel_pressure,
+                       sizeof(channel_pressure)) != 0)) {
+        fprintf(stderr, "FluidSynth extended MIDI messages failed\n");
         mh_synth_close(synth);
         return 1;
     }

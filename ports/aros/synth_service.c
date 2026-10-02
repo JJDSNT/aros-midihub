@@ -13,7 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { SAMPLE_RATE = 44100, BLOCK_FRAMES = 2048 };
+enum { SAMPLE_RATE = 44100, BLOCK_FRAMES = 2048, SYSEX_CAPACITY = 4096 };
 
 struct Library *CamdBase;
 
@@ -26,6 +26,7 @@ struct synth_runtime {
     int16_t *samples[2];
     int audio_open;
     int pending[2];
+    uint8_t sysex[SYSEX_CAPACITY];
     LONG midi_signal;
     unsigned long messages;
 };
@@ -62,18 +63,40 @@ static int read_bank_path(const char *file_name, char *path, size_t capacity)
     return 0;
 }
 
+static int parse_backend(const char *name, enum mh_synth_backend *backend)
+{
+    if (strcmp(name, "tiny") == 0) {
+        *backend = MH_SYNTH_TINY;
+        return 0;
+    }
+    if (strcmp(name, "fluid") == 0) {
+        *backend = MH_SYNTH_FLUID;
+        return 0;
+    }
+    return -1;
+}
+
 static void receive_midi(struct synth_runtime *rt)
 {
     MidiMsg msg;
     uint8_t bytes[3];
     size_t length;
+    ULONG sysex_length;
 
     while (GetMidi(rt->node, &msg)) {
         bytes[0] = msg.mm_Status;
         bytes[1] = msg.mm_Data1;
         bytes[2] = msg.mm_Data2;
         if (bytes[0] == 0xf0) {
-            SkipSysEx(rt->node);
+            sysex_length = QuerySysEx(rt->node);
+            if (sysex_length >= 2 && sysex_length <= sizeof(rt->sysex) &&
+                GetSysEx(rt->node, rt->sysex, sysex_length) == sysex_length) {
+                if (mh_synth_send_sysex(rt->synth, rt->sysex,
+                                        sysex_length) == 0)
+                    rt->messages++;
+            } else {
+                SkipSysEx(rt->node);
+            }
             continue;
         }
         if (bytes[0] < 0x80 || bytes[0] > 0xef)
@@ -156,7 +179,7 @@ int main(int argc, char **argv)
     struct TagItem node_tags[] = {
         {MIDI_Name, (IPTR)node_name},
         {MIDI_MsgQueue, 256},
-        {MIDI_SysExSize, 4096},
+        {MIDI_SysExSize, SYSEX_CAPACITY},
         {MIDI_RecvSignal, 0},
         {TAG_DONE, 0}
     };
@@ -167,30 +190,58 @@ int main(int argc, char **argv)
     };
     struct synth_runtime rt;
     char configured_bank[1024];
-    const char *bank_path;
+    char configured_backend[32];
+    const char *bank_path = NULL;
+    enum mh_synth_backend backend = MH_SYNTH_TINY;
+    int backend_on_command_line = 0;
+    int arg;
     ULONG signals;
     int done[2];
     int result = 20;
     unsigned index;
 
-    if (argc > 2) {
-        printf("Usage: MIDIHubSynth [BANK.sf2]\n");
+    for (arg = 1; arg < argc; ++arg) {
+        if (strcmp(argv[arg], "--backend") == 0) {
+            if (++arg >= argc || parse_backend(argv[arg], &backend)) {
+                puts("Usage: MIDIHubSynth [--backend tiny|fluid] [BANK.sf2]");
+                return 20;
+            }
+            backend_on_command_line = 1;
+        } else if (!bank_path) {
+            bank_path = argv[arg];
+        } else {
+            puts("Usage: MIDIHubSynth [--backend tiny|fluid] [BANK.sf2]");
+            return 20;
+        }
+    }
+    if (!backend_on_command_line &&
+        (read_bank_path("ENV:MidiHub/Backend", configured_backend,
+                        sizeof(configured_backend)) == 0 ||
+         read_bank_path("ENVARC:MidiHub/Backend", configured_backend,
+                        sizeof(configured_backend)) == 0) &&
+        parse_backend(configured_backend, &backend)) {
+        printf("Unknown synth backend: %s\n", configured_backend);
         return 20;
     }
-    if (argc == 2)
-        bank_path = argv[1];
-    else if (read_bank_path("ENV:MidiHub/SoundFont", configured_bank,
-                            sizeof(configured_bank)) == 0 ||
-             read_bank_path("ENVARC:MidiHub/SoundFont", configured_bank,
-                            sizeof(configured_bank)) == 0)
-        bank_path = configured_bank;
-    else {
-        puts("Set ENV:MidiHub/SoundFont or pass BANK.sf2");
+    if (!mh_synth_has_backend(backend)) {
+        printf("Synth backend '%s' is unavailable in this build\n",
+               mh_synth_backend_name(backend));
         return 20;
+    }
+    if (!bank_path) {
+        if (read_bank_path("ENV:MidiHub/SoundFont", configured_bank,
+                           sizeof(configured_bank)) == 0 ||
+            read_bank_path("ENVARC:MidiHub/SoundFont", configured_bank,
+                           sizeof(configured_bank)) == 0)
+            bank_path = configured_bank;
+        else {
+            puts("Set ENV:MidiHub/SoundFont or pass BANK.sf2");
+            return 20;
+        }
     }
     memset(&rt, 0, sizeof(rt));
     rt.midi_signal = -1;
-    rt.synth = mh_synth_open(bank_path, SAMPLE_RATE);
+    rt.synth = mh_synth_open_backend(bank_path, SAMPLE_RATE, backend);
     if (!rt.synth) {
         printf("Cannot load SoundFont: %s\n", bank_path);
         goto out;
@@ -236,7 +287,8 @@ int main(int argc, char **argv)
     }
     queue_audio(&rt, 0, NULL);
     queue_audio(&rt, 1, rt.audio[0]);
-    printf("MIDIHub Synth: CAMD port '%s', bank %s\n", port_name, bank_path);
+    printf("MIDIHub Synth: CAMD port '%s', backend %s, bank %s\n",
+           port_name, mh_synth_backend_name(backend), bank_path);
     result = 0;
     for (;;) {
         signals = Wait((1UL << rt.midi_signal) |

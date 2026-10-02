@@ -3,6 +3,8 @@ CFLAGS ?= -O2 -g -Wall -Wextra -Werror -std=c99
 CPPFLAGS ?= -Iinclude
 M68K_CC ?= m68k-aros-gcc
 M68K_CFLAGS ?= -O2 -Wall -Wextra -Werror -Wno-volatile-register-var -std=gnu99
+FLUIDSYNTH_CFLAGS ?= $(shell pkg-config --cflags fluidsynth 2>/dev/null)
+FLUIDSYNTH_LIBS ?= $(shell pkg-config --libs fluidsynth 2>/dev/null)
 
 SOURCES = src/applemidi.c src/rtpmidi.c src/session.c src/config.c src/timing.c src/sender.c src/mdns.c
 PROGRAM_SOURCES = ports/aros/midihub/main.c ports/aros/midihub/camd_bridge.c
@@ -11,7 +13,7 @@ HEADERS = include/midihub/applemidi.h include/midihub/rtpmidi.h \
           include/midihub/sender.h include/midihub/mdns.h \
           ports/aros/midihub/camd_bridge.h
 
-.PHONY: test test-network test-synth demo m68k synth-m68k clean
+.PHONY: test test-network test-synth test-synth-fluid demo m68k synth-m68k clean
 
 test: build/protocol-test build/ble-midi-test
 	./build/protocol-test
@@ -31,11 +33,23 @@ test-network: build/MIDIHub
 test-synth: build/synth-render
 	./build/synth-render soundfonts/GeneralUser-GS/GeneralUser-GS.sf2 build/generaluser-test.wav
 
+test-synth-fluid: build/synth-render-fluid
+	./build/synth-render-fluid soundfonts/GeneralUser-GS/GeneralUser-GS.sf2 build/generaluser-fluid-test.wav fluid
+
 synth-m68k: build/synth-render-m68k
 
 build/synth-render: tests/synth_render.c src/synth.c include/midihub/synth.h third_party/TinySoundFont/tsf.h
 	mkdir -p build
 	$(CC) $(CPPFLAGS) -Ithird_party/TinySoundFont $(CFLAGS) -o $@ tests/synth_render.c src/synth.c -lm
+
+# Opt-in: FluidSynth is an external LGPL library, never part of the AROS package.
+build/synth-render-fluid: tests/synth_render.c src/synth.c include/midihub/synth.h third_party/TinySoundFont/tsf.h
+	@test -n "$(FLUIDSYNTH_LIBS)" || { echo "Set FLUIDSYNTH_CFLAGS and FLUIDSYNTH_LIBS, or install an external FluidSynth development package"; exit 1; }
+	mkdir -p build
+	$(CC) $(CPPFLAGS) -Ithird_party/TinySoundFont $(CFLAGS) \
+	    -DMIDIHUB_ENABLE_FLUIDSYNTH $(FLUIDSYNTH_CFLAGS) \
+	    -o $@ tests/synth_render.c src/synth.c \
+	    $(FLUIDSYNTH_LIBS) -lm
 
 build/synth-render-m68k: tests/synth_render.c src/synth.c include/midihub/synth.h third_party/TinySoundFont/tsf.h
 	mkdir -p build

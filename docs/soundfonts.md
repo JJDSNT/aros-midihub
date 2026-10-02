@@ -71,6 +71,15 @@ FluidLite (LGPL) and SpessaSynth C (Apache-2.0) were examined but are excluded
 from MIDIHub integration by that license criterion. An experimental
 SpessaSynth C build remained only in `/tmp`.
 
+The [FluidSynth project](https://github.com/FluidSynth/fluidsynth) is licensed
+under LGPL-2.1 or later. MIDIHub now provides an opt-in adapter compiled only
+against an external FluidSynth installation; the repository and normal AROS
+package contain no FluidSynth library or headers. This leaves TinySoundFont
+as the bundled MIT backend while allowing FluidSynth's SoundFont rendering
+to be evaluated separately. The host `make test-synth-fluid` test rendered
+GeneralUser GS with an external FluidSynth 2.3 library. An AROS FluidSynth
+port and native validation are still pending.
+
 TinySoundFont is the first engine candidate: implement and validate the
 needed modulators and check big-endian portability. SF2Lib remains an MIT
 alternative if that implementation costs more than porting it. TinySoundFont
@@ -79,7 +88,8 @@ Control Change, Program Change, and pitch-bend messages and renders mono PCM;
 the WAV and AHI test programs both use it. The optional
 [live CAMD synthesizer](synth-camd.md) now routes those messages from a CAMD
 receiver to continuous AHI output. Channel pressure, polyphonic pressure, and
-synthesizer SysEx still need support. Live AROS playback remains untested.
+synthesizer SysEx are passed to the optional FluidSynth backend; TinySoundFont
+does not implement them. Live AROS playback remains untested.
 
 ## Distribution
 

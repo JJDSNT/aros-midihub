@@ -125,10 +125,19 @@ The architecture should avoid assumptions that would prevent MIDI 2.0 transports
 
 AROS MIDIHub also intends to provide lightweight software MIDI synthesis.
 
-The synthesis engine must have an MIT or BSD license to fit the intended AROS
+The bundled synthesis engine must have an MIT or BSD license to fit the intended AROS
 package. TinySoundFont is small and MIT-licensed, but lacks SoundFont modulators
 needed by some GM banks. Candidate engines and remaining work are tracked in
 [docs/soundfonts.md](docs/soundfonts.md).
+
+The synth interface also supports an opt-in
+[FluidSynth](https://github.com/FluidSynth/fluidsynth) backend when compiled
+against an external FluidSynth installation. TinySoundFont remains the default
+and the only backend in the normal AROS package. FluidSynth is LGPL-licensed;
+its source and binaries are not included in this repository or the AROS
+package. `make test-synth-fluid` builds a separate host test when its
+development package is available. An AROS FluidSynth port is still needed
+before that backend can run inside AROS.
 
 The repository includes TinySoundFont and GeneralUser GS as pinned submodules
 for development. Clone with `git clone --recurse-submodules`, or run
@@ -139,9 +148,11 @@ not establish correct GeneralUser GS playback. TinySoundFont currently ignores
 SoundFont modulators, which GeneralUser GS uses extensively.
 
 The `src/synth.c` wrapper accepts complete MIDI channel messages and renders
-mono PCM. It currently handles notes, Control Change, Program Change, and
-pitch bend. The WAV and AHI test programs use this same wrapper. Channel
-pressure, polyphonic pressure, and synthesizer SysEx are not yet implemented.
+mono PCM. Both backends handle notes, Control Change, Program Change, and
+pitch bend. FluidSynth also handles channel pressure, polyphonic pressure,
+and recognized synthesizer SysEx messages. TinySoundFont does not support
+those three message classes. The WAV and AHI test programs use this same
+wrapper.
 
 For an AROS build, the optional MetaMake target
 `contrib-aros-midihub-soundfonttest` installs `SoundFontTest` and the test bank
@@ -156,6 +167,11 @@ SoundFont supplied on its command line or configured in
 target does not include the synth, bank, or test programs. Playback on
 68k remains unverified: the current TinySoundFont loader assumes little-endian
 SF2 data.
+
+`MIDIHubSynth --backend tiny|fluid` selects the engine. Without that option it
+reads `ENV:MidiHub/Backend`, then `ENVARC:MidiHub/Backend`, and defaults to
+`tiny`. Selecting `fluid` requires a build with the external FluidSynth SDK;
+the normal AROS build reports that the backend is unavailable.
 
 The [live synthesizer guide](docs/synth-camd.md) gives the build and CAMD
 probe commands. Live AHI playback remains to be tested in AROS.
@@ -227,7 +243,7 @@ librtpmidid provides a more recent implementation of RTP-MIDI and AppleMIDI and 
 
 ### TinySoundFont
 
-TinySoundFont is the current MIT-licensed SF2 engine. It powers the WAV and
+TinySoundFont is the default MIT-licensed SF2 engine. It powers the WAV and
 AHI diagnostics and the optional CAMD synthesizer. Missing SoundFont
 modulators and big-endian loading still require work before reliable GM/GS
 playback can be claimed across targets.

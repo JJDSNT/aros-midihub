@@ -27,11 +27,30 @@ half a second. To use another application, connect its CAMD sender to
 When a SoundFont path is configured, start the service with
 `MIDIHUB:C/MIDIHubSynth` and no argument.
 
-The service accepts the channel messages currently supported by
-`mh_synth_send`: Note On/Off, Control Change, Program Change, and pitch bend.
-Channel pressure, polyphonic pressure, and synthesizer SysEx are still
-unsupported. CAMD SysEx is consumed and discarded. MIDI messages are applied
-when they arrive; the service does not yet schedule them by CAMD timestamp.
+## Synth backend
+
+TinySoundFont is the default backend. Use `--backend tiny` or
+`--backend fluid` to select explicitly. Without that option, the service reads
+the one-line file `ENV:MidiHub/Backend`, then `ENVARC:MidiHub/Backend`, and
+defaults to `tiny`. The configured value must be `tiny` or `fluid`.
+
+The default AROS build includes TinySoundFont only. If `fluid` is selected
+there, the service reports that the backend is unavailable. An opt-in build
+with `MIDIHUB_ENABLE_FLUIDSYNTH` and an external FluidSynth library makes both
+engines selectable in the same program. The host smoke test for that build is
+`make test-synth-fluid`; it needs an external FluidSynth development package
+or explicit `FLUIDSYNTH_CFLAGS` and `FLUIDSYNTH_LIBS`. No AROS FluidSynth port
+is present in the current checkout, so FluidSynth has not been built or run
+inside AROS. The CAMD port and AHI output code are shared between backends.
+
+Both backends accept Note On/Off, Control Change, Program Change, and pitch
+bend through `mh_synth_send`. FluidSynth additionally accepts channel
+pressure, polyphonic pressure, and recognized synthesizer SysEx. CAMD supplies
+complete SysEx messages to the service through its separate SysEx queue;
+messages unsupported by the selected backend are consumed without affecting
+playback. TinySoundFont does not handle pressure or SysEx. MIDI messages are
+applied when they arrive; the service does not yet schedule them by CAMD
+timestamp.
 
 AHI playback uses two 2048-frame buffers at 44.1 kHz. This is a first live
 path, not a latency or underrun guarantee. The source compiled and linked

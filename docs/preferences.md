@@ -43,6 +43,12 @@ explicit command-line path overrides both. This is the initial storage
 contract for the future SoundFont page. The service loads the path at startup;
 live bank switching is not implemented yet.
 
+The service also reads `ENV:MidiHub/Backend`, falling back to
+`ENVARC:MidiHub/Backend`. The value is `tiny` or `fluid`; the CLI
+`--backend` option overrides it. The default AROS package provides `tiny`.
+Preferences should show `fluid` only when an external FluidSynth-enabled
+build is installed, and should identify an unavailable backend before saving.
+
 AHI Preferences already has a **Music unit**. Its AHI documentation defines
 this as the default audio mode for applications using AHI's low-level API
 (`AHI_NO_UNIT`); it does not configure MIDI or CAMD ports, instruments, or
