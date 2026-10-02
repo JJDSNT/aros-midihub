@@ -294,8 +294,8 @@ hint requests playback and the clocks are synchronized. Chapters P and W
 restore Program Change, bank selection, and Pitch Bend after packet loss.
 Chapter C value logs restore Control Change values; alternate toggle and
 count logs support sustain (64), All Sound Off (120), and All Notes Off (123).
-Other alternate logs still need their own recovery logic. Recovery of the
-remaining journal chapters and Preferences remain to be done. The optional
+Other alternate logs, Chapters M and E, extended Chapter X history, and
+Preferences remain to be implemented. The optional
 CAMD synthesizer now builds, but live AROS audio playback is unverified. A
 Linux-hosted AROS loopback run opened
 the CAMD bridge and completed AppleMIDI clock sync, Note On, and Note Off
@@ -330,9 +330,8 @@ The sender retains up to 32 packets and removes confirmed history when
 AppleMIDI `RS` feedback arrives. While unconfirmed history remains, it sends
 an empty MIDI guard packet once per
 second so the peer can recover a lost final event. The initiator exchanges
-clocks three times during startup, then every 50 seconds. SysEx and MIDI Time
-Code are not yet protected by outgoing journals. A responder closes a
-session after two minutes without peer clock
+clocks three times during startup, then every 50 seconds. A responder closes
+a session after two minutes without peer clock
 synchronization and releases active notes.
 
 Run the portable codec tests with `make test`. For an AROS source checkout,
