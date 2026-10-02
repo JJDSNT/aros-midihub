@@ -311,15 +311,16 @@ currently prevent this from being an iPhone browse test inside AROS.
 
 Outgoing messages now include recovery journals for notes, Control Change,
 Program Change, Pitch Bend, Channel Aftertouch, Poly Aftertouch, System
-Reset, Tune Request, Song Select, and Active Sense. The receiver decodes
-System Chapters D, V, and Q; it recovers the D/V commands and validates Q
-while sequencer-state replay remains pending.
+Reset, Tune Request, Song Select, Active Sense, and Chapter Q sequencer state.
+Chapter Q tracks Start, Continue, Stop, MIDI Clock, and Song Position Pointer.
+The receiver decodes System Chapters D, V, and Q; it recovers the D/V commands
+and validates Q while sequencer-state replay remains pending.
 The sender retains up to 32 packets and removes confirmed history when
 AppleMIDI `RS` feedback arrives. While unconfirmed history remains, it sends
 an empty MIDI guard packet once per
 second so the peer can recover a lost final event. The initiator exchanges
-clocks three times during startup, then every 50 seconds. SysEx, MIDI Time
-Code, and sequencer commands are not yet protected by outgoing journals. A
+clocks three times during startup, then every 50 seconds. SysEx and MIDI Time
+Code are not yet protected by outgoing journals. A
 responder closes a session after two minutes without peer clock
 synchronization and releases active notes.
 

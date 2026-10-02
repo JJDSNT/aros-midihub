@@ -19,9 +19,13 @@ int mh_sender_supported(const uint8_t *message, size_t length)
     uint8_t type;
     if (!message || !length || message[0] < 0x80)
         return 0;
+    if (message[0] == 0xf2)
+        return length == 3 && message[1] < 0x80 && message[2] < 0x80;
     if (message[0] == 0xf3)
         return length == 2 && message[1] < 0x80;
-    if (message[0] == 0xf6 || message[0] == 0xfe || message[0] == 0xff)
+    if (message[0] == 0xf6 || message[0] == 0xf8 ||
+        message[0] == 0xfa || message[0] == 0xfb ||
+        message[0] == 0xfc || message[0] == 0xfe || message[0] == 0xff)
         return length == 1;
     if (message[0] > 0xef)
         return 0;
@@ -72,6 +76,11 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
             sender->tune_request_count = 0;
             sender->active_sense_count = 0;
             sender->song_select_known = 0;
+            sender->sequencer_known = 0;
+            sender->sequencer_running = 0;
+            sender->sequencer_downbeat = 0;
+            sender->sequencer_start_at_zero = 0;
+            sender->sequencer_clock = 0;
         } else if (message[0] == 0xf6) {
             sender->tune_request_count =
                 (uint8_t)((sender->tune_request_count + 1) & 0x7f);
@@ -81,6 +90,36 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
         } else if (message[0] == 0xf3) {
             sender->song_select = message[1];
             sender->song_select_known = 1;
+        } else if (message[0] == 0xf2) {
+            sender->sequencer_known = 1;
+            sender->sequencer_downbeat = 0;
+            sender->sequencer_start_at_zero = 0;
+            sender->sequencer_clock =
+                ((((uint32_t)message[2] << 7) | message[1]) * 6) & 0x7ffff;
+        } else if (message[0] == 0xfa) {
+            sender->sequencer_known = 1;
+            sender->sequencer_running = 1;
+            sender->sequencer_downbeat = 0;
+            sender->sequencer_start_at_zero = 1;
+            sender->sequencer_clock = 0;
+        } else if (message[0] == 0xfb) {
+            sender->sequencer_known = 1;
+            sender->sequencer_running = 1;
+            sender->sequencer_start_at_zero = 0;
+        } else if (message[0] == 0xfc) {
+            sender->sequencer_known = 1;
+            sender->sequencer_running = 0;
+            sender->sequencer_start_at_zero = 0;
+        } else if (message[0] == 0xf8) {
+            sender->sequencer_known = 1;
+            sender->sequencer_start_at_zero = 0;
+            if (sender->sequencer_running) {
+                if (!sender->sequencer_downbeat)
+                    sender->sequencer_downbeat = 1;
+                else
+                    sender->sequencer_clock =
+                        (sender->sequencer_clock + 1) & 0x7ffff;
+            }
         }
         return;
     }
@@ -370,6 +409,7 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
     int tune = -1;
     int song = -1;
     int active = -1;
+    int sequencer = -1;
     size_t i;
     size_t start;
     size_t d_header = 0;
@@ -380,15 +420,21 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
         switch (sender->events[i].bytes[0]) {
         case 0xff:
             reset = (int)i;
-            tune = song = active = -1;
+            tune = song = active = sequencer = -1;
             break;
         case 0xf6: tune = (int)i; break;
         case 0xf3: song = (int)i; break;
         case 0xfe: active = (int)i; break;
+        case 0xf2:
+        case 0xf8:
+        case 0xfa:
+        case 0xfb:
+        case 0xfc: sequencer = (int)i; break;
         default: break;
         }
     }
-    if (reset < 0 && tune < 0 && song < 0 && active < 0) return 0;
+    if (reset < 0 && tune < 0 && song < 0 && active < 0 && sequencer < 0)
+        return 0;
     if (capacity - *length < 2) return -1;
     start = *length;
     *length += 2;
@@ -440,6 +486,30 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
                           sender->active_sense_count)) < 0)
             return -1;
         data[start] |= 0x20;
+        *recent |= is_recent;
+    }
+    if (sequencer >= 0 && sender->sequencer_known) {
+        int is_recent = sender->events[sequencer].sequence ==
+                        (uint16_t)(sequence - 1);
+        int has_clock = !(sender->sequencer_running &&
+                          !sender->sequencer_downbeat &&
+                          sender->sequencer_start_at_zero &&
+                          sender->sequencer_clock == 0);
+        uint8_t q_header = (uint8_t)((is_recent ? 0 : 0x80) |
+                           (sender->sequencer_running ? 0x40 : 0) |
+                           (sender->sequencer_downbeat ? 0x20 : 0));
+        if (has_clock)
+            q_header = (uint8_t)(q_header | 0x10 |
+                                 (sender->sequencer_clock >> 16));
+        if (put(data, capacity, length, q_header) < 0)
+            return -1;
+        if (has_clock &&
+            (put(data, capacity, length,
+                 (uint8_t)(sender->sequencer_clock >> 8)) < 0 ||
+             put(data, capacity, length,
+                 (uint8_t)sender->sequencer_clock) < 0))
+            return -1;
+        data[start] |= 0x10;
         *recent |= is_recent;
     }
     data[start] = (uint8_t)(data[start] |

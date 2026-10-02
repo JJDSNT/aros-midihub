@@ -352,6 +352,11 @@ static void outgoing_journal(void)
     const uint8_t tune_request[] = {0xf6};
     const uint8_t song_select[] = {0xf3, 9};
     const uint8_t active_sense[] = {0xfe};
+    const uint8_t start[] = {0xfa};
+    const uint8_t continue_playback[] = {0xfb};
+    const uint8_t clock[] = {0xf8};
+    const uint8_t stop[] = {0xfc};
+    const uint8_t song_position[] = {0xf2, 1, 0};
     struct mh_sender sender;
     struct mh_journal journal;
     struct mh_journal_notes notes;
@@ -442,7 +447,13 @@ static void outgoing_journal(void)
     assert(mh_sender_supported(system_reset, sizeof(system_reset)) &&
            mh_sender_supported(tune_request, sizeof(tune_request)) &&
            mh_sender_supported(song_select, sizeof(song_select)) &&
-           mh_sender_supported(active_sense, sizeof(active_sense)));
+           mh_sender_supported(active_sense, sizeof(active_sense)) &&
+           mh_sender_supported(start, sizeof(start)) &&
+           mh_sender_supported(continue_playback,
+                               sizeof(continue_playback)) &&
+           mh_sender_supported(clock, sizeof(clock)) &&
+           mh_sender_supported(stop, sizeof(stop)) &&
+           mh_sender_supported(song_position, sizeof(song_position)));
     mh_sender_record(&sender, 300, 3000, system_reset,
                      sizeof(system_reset));
     assert(sender.count == 1);
@@ -467,6 +478,54 @@ static void outgoing_journal(void)
     assert(mh_sender_journal(&sender, 304, 3040,
                               bytes, sizeof(bytes), &length) == 0 &&
            length == 3);
+
+    mh_sender_record(&sender, 400, 4000, start, sizeof(start));
+    assert(mh_sender_journal(&sender, 401, 4010,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(system_state.has_sequencer && system_state.sequencer_running &&
+           !system_state.downbeat_played && !system_state.has_clock &&
+           !system_state.sequencer_single_packet_safe);
+
+    mh_sender_record(&sender, 401, 4010, clock, sizeof(clock));
+    assert(mh_sender_journal(&sender, 402, 4020,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(system_state.sequencer_running && system_state.downbeat_played &&
+           system_state.has_clock && system_state.clock == 0);
+
+    mh_sender_record(&sender, 402, 4020, clock, sizeof(clock));
+    mh_sender_record(&sender, 403, 4030, stop, sizeof(stop));
+    assert(mh_sender_journal(&sender, 404, 4040,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(!system_state.sequencer_running &&
+           system_state.downbeat_played && system_state.has_clock &&
+           system_state.clock == 1);
+
+    mh_sender_record(&sender, 404, 4040, song_position,
+                     sizeof(song_position));
+    assert(mh_sender_journal(&sender, 405, 4050,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(!system_state.sequencer_running &&
+           !system_state.downbeat_played && system_state.has_clock &&
+           system_state.clock == 6);
+
+    mh_sender_reset(&sender);
+    mh_sender_record(&sender, 500, 5000, continue_playback,
+                     sizeof(continue_playback));
+    assert(mh_sender_journal(&sender, 501, 5010,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(system_state.sequencer_running &&
+           !system_state.downbeat_played && system_state.has_clock &&
+           system_state.clock == 0);
 }
 
 static void mdns_discovery(void)

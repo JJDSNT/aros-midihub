@@ -33,6 +33,11 @@ struct mh_sender {
     uint8_t active_sense_count;
     uint8_t song_select;
     uint8_t song_select_known;
+    uint8_t sequencer_known;
+    uint8_t sequencer_running;
+    uint8_t sequencer_downbeat;
+    uint8_t sequencer_start_at_zero;
+    uint32_t sequencer_clock;
 };
 
 void mh_sender_reset(struct mh_sender *sender);
