@@ -395,6 +395,18 @@ static void outgoing_journal(void)
     const uint8_t mtc_full_frame[] = {
         0xf0, 0x7f, 0x7f, 0x01, 0x01, 0x61, 0x02, 0x03, 0x04, 0xf7
     };
+    const uint8_t mtc_forward[][2] = {
+        {0xf1, 0x04}, {0xf1, 0x10}, {0xf1, 0x23}, {0xf1, 0x30},
+        {0xf1, 0x42}, {0xf1, 0x50}, {0xf1, 0x61}, {0xf1, 0x76}
+    };
+    const uint8_t mtc_drop[][2] = {
+        {0xf1, 0x0d}, {0xf1, 0x11}, {0xf1, 0x2b}, {0xf1, 0x33},
+        {0xf1, 0x40}, {0xf1, 0x50}, {0xf1, 0x60}, {0xf1, 0x74}
+    };
+    const uint8_t mtc_reverse[][2] = {
+        {0xf1, 0x04}, {0xf1, 0x76}, {0xf1, 0x61}, {0xf1, 0x50},
+        {0xf1, 0x42}, {0xf1, 0x30}, {0xf1, 0x23}, {0xf1, 0x10}
+    };
     struct mh_sender sender;
     struct mh_journal journal;
     struct mh_journal_notes notes;
@@ -404,6 +416,7 @@ static void outgoing_journal(void)
     struct mh_journal_system_state system_state;
     uint8_t bytes[256];
     size_t length;
+    size_t mtc_index;
 
     mh_sender_reset(&sender);
     assert(mh_sender_journal(&sender, 100, 1000,
@@ -492,6 +505,7 @@ static void outgoing_journal(void)
            mh_sender_supported(clock, sizeof(clock)) &&
            mh_sender_supported(stop, sizeof(stop)) &&
            mh_sender_supported(song_position, sizeof(song_position)));
+    assert(mh_sender_supported(mtc_forward[0], sizeof(mtc_forward[0])));
     mh_sender_record(&sender, 300, 3000, system_reset,
                      sizeof(system_reset));
     assert(sender.count == 1);
@@ -578,6 +592,75 @@ static void outgoing_journal(void)
            !system_state.mtc_single_packet_safe &&
            system_state.mtc_complete[0] == 0x61 &&
            system_state.mtc_complete[3] == 0x04);
+
+    mh_sender_reset(&sender);
+    for (mtc_index = 0; mtc_index < 4; ++mtc_index)
+        mh_sender_record(&sender, (uint16_t)(700 + mtc_index),
+                         (uint32_t)(7000 + mtc_index),
+                         mtc_forward[mtc_index], sizeof(mtc_forward[0]));
+    assert(mh_sender_journal(&sender, 704, 7010,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(system_state.has_mtc && !system_state.mtc_has_complete &&
+           system_state.mtc_has_partial && !system_state.mtc_reverse &&
+           system_state.mtc_point == 3 &&
+           system_state.mtc_partial[0] == 4 &&
+           system_state.mtc_partial[2] == 3);
+    for (; mtc_index < 8; ++mtc_index)
+        mh_sender_record(&sender, (uint16_t)(700 + mtc_index),
+                         (uint32_t)(7000 + mtc_index),
+                         mtc_forward[mtc_index], sizeof(mtc_forward[0]));
+    assert(mh_sender_journal(&sender, 708, 7020,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(system_state.mtc_has_complete &&
+           system_state.mtc_complete_quarter_frame &&
+           !system_state.mtc_has_partial && !system_state.mtc_reverse &&
+           system_state.mtc_complete[0] == 6 &&
+           system_state.mtc_complete[2] == 3 &&
+           system_state.mtc_complete[4] == 2 &&
+           system_state.mtc_complete[6] == 1);
+
+    mh_sender_reset(&sender);
+    for (mtc_index = 0; mtc_index < 8; ++mtc_index)
+        mh_sender_record(&sender, (uint16_t)(800 + mtc_index),
+                         (uint32_t)(8000 + mtc_index),
+                         mtc_drop[mtc_index], sizeof(mtc_drop[0]));
+    assert(mh_sender_journal(&sender, 808, 8020,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(system_state.mtc_complete[0] == 3 &&
+           system_state.mtc_complete[2] == 0 &&
+           system_state.mtc_complete[4] == 1 &&
+           system_state.mtc_complete[7] == 4);
+
+    mh_sender_reset(&sender);
+    for (mtc_index = 0; mtc_index < 4; ++mtc_index)
+        mh_sender_record(&sender, (uint16_t)(900 + mtc_index),
+                         (uint32_t)(9000 + mtc_index),
+                         mtc_reverse[mtc_index], sizeof(mtc_reverse[0]));
+    assert(mh_sender_journal(&sender, 904, 9010,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(system_state.mtc_has_partial && system_state.mtc_reverse &&
+           system_state.mtc_point == 5);
+    for (; mtc_index < 8; ++mtc_index)
+        mh_sender_record(&sender, (uint16_t)(900 + mtc_index),
+                         (uint32_t)(9000 + mtc_index),
+                         mtc_reverse[mtc_index], sizeof(mtc_reverse[0]));
+    assert(mh_sender_journal(&sender, 908, 9020,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(system_state.mtc_has_complete &&
+           system_state.mtc_complete_quarter_frame &&
+           !system_state.mtc_has_partial && system_state.mtc_reverse &&
+           system_state.mtc_complete[0] == 4 &&
+           system_state.mtc_complete[6] == 1);
 }
 
 static void mdns_discovery(void)

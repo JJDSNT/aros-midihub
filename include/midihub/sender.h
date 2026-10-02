@@ -38,8 +38,14 @@ struct mh_sender {
     uint8_t sequencer_downbeat;
     uint8_t sequencer_start_at_zero;
     uint32_t sequencer_clock;
-    uint8_t mtc_full_frame[4];
-    uint8_t mtc_full_known;
+    uint8_t mtc_complete[8];
+    uint8_t mtc_complete_known;
+    uint8_t mtc_complete_quarter_frame;
+    uint8_t mtc_qf_nibbles[8];
+    uint8_t mtc_qf_seen;
+    uint8_t mtc_partial_mask;
+    uint8_t mtc_qf_direction;
+    uint8_t mtc_qf_point;
 };
 
 void mh_sender_reset(struct mh_sender *sender);

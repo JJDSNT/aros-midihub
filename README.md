@@ -320,7 +320,8 @@ optional TIMETOOLS correction remain validation-only.
 Chapter F complete and partial MIDI Time Code fields are decoded and validated.
 Universal Real Time MTC Full Frame SysEx commands receive outgoing Chapter F
 protection and are recovered after covered loss. Quarter Frame generation and
-replay remain pending.
+recovery support contiguous forward and reverse sequences, partial frames,
+the forward two-frame correction, and 29.97 drop-frame rollover.
 The sender retains up to 32 packets and removes confirmed history when
 AppleMIDI `RS` feedback arrives. While unconfirmed history remains, it sends
 an empty MIDI guard packet once per

@@ -418,6 +418,42 @@ def run_feedback_case(binary):
             if time.monotonic() >= deadline:
                 raise AssertionError(output)
             time.sleep(0.01)
+        qf_gap = struct.pack(">BBHII", 0x80, 0xe1, 36,
+                             int(time.time() * 10000) & 0xffffffff,
+                             peer_ssrc)
+        qf_journal = b"\x40\x00\x23\x08\x07\x57\x60\x30\x20\x16"
+        data.sendto(qf_gap + b"\x40" + qf_journal,
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x10024
+        deadline = time.monotonic() + 1
+        while True:
+            log.seek(0)
+            output = log.read().decode(errors="replace")
+            if "recovered MTC Quarter Frame position 61:02:03:06" in output:
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(output)
+            time.sleep(0.01)
+
+        qf_partial_gap = struct.pack(">BBHII", 0x80, 0xe1, 38,
+                                     int(time.time() * 10000) & 0xffffffff,
+                                     peer_ssrc)
+        qf_partial_journal = b"\x40\x00\x25\x08\x07\x23\x40\x30\x00\x00"
+        data.sendto(qf_partial_gap + b"\x40" + qf_partial_journal,
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x10026
+        deadline = time.monotonic() + 1
+        while True:
+            log.seek(0)
+            output = log.read().decode(errors="replace")
+            if ("recovered MTC Quarter Frame partial direction=forward point=3"
+                    in output):
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(output)
+            time.sleep(0.01)
         assert "malformed recovery journal discarded" in output
         assert "1 RTP packet(s) lost; journal covers gap" in output
         assert "recovered Note Off channel=0 note=60" in output

@@ -3,6 +3,106 @@
 #include <string.h>
 
 enum { MH_TOOL_VALUE, MH_TOOL_TOGGLE, MH_TOOL_COUNT };
+enum { MH_MTC_UNKNOWN, MH_MTC_FORWARD, MH_MTC_REVERSE };
+
+static int mtc_valid(const uint8_t nibbles[8])
+{
+    unsigned int frame = nibbles[0] | ((nibbles[1] & 1) << 4);
+    unsigned int second = nibbles[2] | ((nibbles[3] & 3) << 4);
+    unsigned int minute = nibbles[4] | ((nibbles[5] & 3) << 4);
+    unsigned int hour = nibbles[6] | ((nibbles[7] & 1) << 4);
+    unsigned int rate = (nibbles[7] >> 1) & 3;
+    unsigned int fps = rate == 0 ? 24 : rate == 1 ? 25 : 30;
+    return !(nibbles[7] & 8) && frame < fps && second < 60 &&
+           minute < 60 && hour < 24;
+}
+
+static int mtc_offset_forward(uint8_t nibbles[8])
+{
+    unsigned int frame = nibbles[0] | ((nibbles[1] & 1) << 4);
+    unsigned int second = nibbles[2] | ((nibbles[3] & 3) << 4);
+    unsigned int minute = nibbles[4] | ((nibbles[5] & 3) << 4);
+    unsigned int hour = nibbles[6] | ((nibbles[7] & 1) << 4);
+    unsigned int rate = (nibbles[7] >> 1) & 3;
+    unsigned int fps = rate == 0 ? 24 : rate == 1 ? 25 : 30;
+    unsigned int step;
+    if (!mtc_valid(nibbles)) return -1;
+    for (step = 0; step < 2; ++step) {
+        if (++frame < fps) continue;
+        frame = 0;
+        if (++second < 60) continue;
+        second = 0;
+        if (++minute >= 60) {
+            minute = 0;
+            hour = (hour + 1) % 24;
+        }
+        if (rate == 2 && minute % 10)
+            frame = 2;
+    }
+    nibbles[0] = (uint8_t)(frame & 15);
+    nibbles[1] = (uint8_t)(frame >> 4);
+    nibbles[2] = (uint8_t)(second & 15);
+    nibbles[3] = (uint8_t)(second >> 4);
+    nibbles[4] = (uint8_t)(minute & 15);
+    nibbles[5] = (uint8_t)(minute >> 4);
+    nibbles[6] = (uint8_t)(hour & 15);
+    nibbles[7] = (uint8_t)((hour >> 4) | (rate << 1));
+    return 0;
+}
+
+static void mtc_record_quarter_frame(struct mh_sender *sender, uint8_t data)
+{
+    unsigned int type = data >> 4;
+    unsigned int previous = sender->mtc_qf_point;
+    sender->mtc_qf_nibbles[type] = data & 15;
+    sender->mtc_qf_seen |= (uint8_t)(1u << type);
+
+    if (sender->mtc_qf_direction == MH_MTC_FORWARD &&
+        type == ((previous + 1) & 7)) {
+        if (type == 0) sender->mtc_partial_mask = 1;
+        else sender->mtc_partial_mask |= (uint8_t)(1u << type);
+    } else if (sender->mtc_qf_direction == MH_MTC_REVERSE &&
+               type == ((previous + 7) & 7)) {
+        if (type == 7) sender->mtc_partial_mask = 0x80;
+        else if (type >= 2)
+            sender->mtc_partial_mask |= (uint8_t)(1u << type);
+        else
+            sender->mtc_partial_mask = 0;
+    } else if (type == 0) {
+        sender->mtc_qf_direction = MH_MTC_FORWARD;
+        sender->mtc_partial_mask = 1;
+        sender->mtc_qf_seen = 1;
+    } else if (type == 7) {
+        sender->mtc_qf_direction = MH_MTC_REVERSE;
+        sender->mtc_partial_mask = 0x80;
+        sender->mtc_qf_seen =
+            (uint8_t)(previous == 0 && (sender->mtc_qf_seen & 1) ?
+                      0x81 : 0x80);
+    } else {
+        sender->mtc_qf_direction = MH_MTC_UNKNOWN;
+        sender->mtc_partial_mask = 0;
+        sender->mtc_qf_seen = (uint8_t)(1u << type);
+    }
+    sender->mtc_qf_point = (uint8_t)type;
+
+    if (sender->mtc_qf_direction == MH_MTC_FORWARD && type == 7 &&
+        sender->mtc_partial_mask == 0xff) {
+        memcpy(sender->mtc_complete, sender->mtc_qf_nibbles, 8);
+        if (mtc_offset_forward(sender->mtc_complete) == 0) {
+            sender->mtc_complete_known = 1;
+            sender->mtc_complete_quarter_frame = 1;
+        }
+        sender->mtc_partial_mask = 0;
+    } else if (sender->mtc_qf_direction == MH_MTC_REVERSE && type == 1 &&
+               (sender->mtc_qf_seen & 0xff) == 0xff) {
+        memcpy(sender->mtc_complete, sender->mtc_qf_nibbles, 8);
+        if (mtc_valid(sender->mtc_complete)) {
+            sender->mtc_complete_known = 1;
+            sender->mtc_complete_quarter_frame = 1;
+        }
+        sender->mtc_partial_mask = 0;
+    }
+}
 
 void mh_sender_reset(struct mh_sender *sender)
 {
@@ -19,6 +119,8 @@ int mh_sender_supported(const uint8_t *message, size_t length)
     uint8_t type;
     if (!message || !length || message[0] < 0x80)
         return 0;
+    if (message[0] == 0xf1)
+        return length == 2 && message[1] < 0x80;
     if (message[0] == 0xf2)
         return length == 3 && message[1] < 0x80 && message[2] < 0x80;
     if (message[0] == 0xf3)
@@ -81,7 +183,12 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
             sender->sequencer_downbeat = 0;
             sender->sequencer_start_at_zero = 0;
             sender->sequencer_clock = 0;
-            sender->mtc_full_known = 0;
+            sender->mtc_complete_known = 0;
+            sender->mtc_complete_quarter_frame = 0;
+            sender->mtc_qf_seen = 0;
+            sender->mtc_partial_mask = 0;
+            sender->mtc_qf_direction = MH_MTC_UNKNOWN;
+            sender->mtc_qf_point = 0;
         } else if (message[0] == 0xf6) {
             sender->tune_request_count =
                 (uint8_t)((sender->tune_request_count + 1) & 0x7f);
@@ -121,6 +228,8 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
                     sender->sequencer_clock =
                         (sender->sequencer_clock + 1) & 0x7ffff;
             }
+        } else if (message[0] == 0xf1) {
+            mtc_record_quarter_frame(sender, message[1]);
         }
         return;
     }
@@ -188,8 +297,13 @@ int mh_sender_record_sysex(struct mh_sender *sender, uint16_t sequence,
     event->timestamp = timestamp;
     event->bytes[0] = 0xf0;
     event->length = 1;
-    memcpy(sender->mtc_full_frame, message + 5, 4);
-    sender->mtc_full_known = 1;
+    memset(sender->mtc_complete, 0, sizeof(sender->mtc_complete));
+    memcpy(sender->mtc_complete, message + 5, 4);
+    sender->mtc_complete_known = 1;
+    sender->mtc_complete_quarter_frame = 0;
+    sender->mtc_qf_seen = 0;
+    sender->mtc_partial_mask = 0;
+    sender->mtc_qf_direction = MH_MTC_UNKNOWN;
     return 1;
 }
 
@@ -462,6 +576,7 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
         case 0xfb:
         case 0xfc: sequencer = (int)i; break;
         case 0xf0: mtc = (int)i; break;
+        case 0xf1: mtc = (int)i; break;
         default: break;
         }
     }
@@ -545,16 +660,46 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
         data[start] |= 0x10;
         *recent |= is_recent;
     }
-    if (mtc >= 0 && sender->mtc_full_known) {
+    if (mtc >= 0) {
         int is_recent = sender->events[mtc].sequence ==
                         (uint16_t)(sequence - 1);
-        if (put(data, capacity, length,
-                (uint8_t)((is_recent ? 0 : 0x80) | 0x47)) < 0)
+        uint8_t f_header = (uint8_t)((is_recent ? 0 : 0x80) |
+                           (sender->mtc_complete_known ? 0x40 : 0) |
+                           (sender->mtc_partial_mask ? 0x20 : 0) |
+                           (sender->mtc_complete_known &&
+                            sender->mtc_complete_quarter_frame ? 0x10 : 0) |
+                           (sender->mtc_qf_direction == MH_MTC_REVERSE ?
+                            0x08 : 0) |
+                           (sender->mtc_partial_mask ? sender->mtc_qf_point :
+                            sender->mtc_qf_direction == MH_MTC_REVERSE ?
+                            0 : 7));
+        if (put(data, capacity, length, f_header) < 0)
             return -1;
-        for (i = 0; i < 4; ++i)
-            if (put(data, capacity, length,
-                    sender->mtc_full_frame[i]) < 0)
-                return -1;
+        if (sender->mtc_complete_known) {
+            if (sender->mtc_complete_quarter_frame) {
+                for (i = 0; i < 8; i += 2)
+                    if (put(data, capacity, length,
+                            (uint8_t)((sender->mtc_complete[i] << 4) |
+                                      sender->mtc_complete[i + 1])) < 0)
+                        return -1;
+            } else {
+                for (i = 0; i < 4; ++i)
+                    if (put(data, capacity, length,
+                            sender->mtc_complete[i]) < 0)
+                        return -1;
+            }
+        }
+        if (sender->mtc_partial_mask) {
+            for (i = 0; i < 8; i += 2) {
+                uint8_t high = sender->mtc_partial_mask & (1u << i) ?
+                               sender->mtc_qf_nibbles[i] : 0;
+                uint8_t low = sender->mtc_partial_mask & (1u << (i + 1)) ?
+                              sender->mtc_qf_nibbles[i + 1] : 0;
+                if (put(data, capacity, length,
+                        (uint8_t)((high << 4) | low)) < 0)
+                    return -1;
+            }
+        }
         data[start] |= 0x08;
         *recent |= is_recent;
     }

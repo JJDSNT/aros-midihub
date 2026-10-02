@@ -198,6 +198,18 @@ static int skip_undefined_realtime(const uint8_t *data, size_t length,
     return 0;
 }
 
+static int valid_mtc_nibbles(const uint8_t nibbles[8])
+{
+    unsigned int rate = (nibbles[7] >> 1) & 3;
+    unsigned int fps = rate == 0 ? 24 : rate == 1 ? 25 : 30;
+    unsigned int frame = nibbles[0] | ((nibbles[1] & 1) << 4);
+    unsigned int second = nibbles[2] | ((nibbles[3] & 3) << 4);
+    unsigned int minute = nibbles[4] | ((nibbles[5] & 3) << 4);
+    unsigned int hour = nibbles[6] | ((nibbles[7] & 1) << 4);
+    return !(nibbles[7] & 8) && frame < fps && second < 60 &&
+           minute < 60 && hour < 24;
+}
+
 int mh_journal_decode_system(const struct mh_journal *journal,
                              struct mh_journal_system_state *state)
 {
@@ -306,6 +318,7 @@ int mh_journal_decode_system(const struct mh_journal *journal,
                     state->mtc_complete[i] =
                         (uint8_t)((data[offset + i / 2] >>
                                    (i % 2 ? 0 : 4)) & 0x0f);
+                if (!valid_mtc_nibbles(state->mtc_complete)) return -1;
             } else {
                 for (i = 0; i < 4; ++i)
                     if (data[offset + i] & 0x80) return -1;

@@ -779,6 +779,48 @@ static void recover_system(struct runtime *rt,
                (unsigned int)state->mtc_complete[2],
                (unsigned int)state->mtc_complete[3]);
     }
+    if (state->has_mtc && state->mtc_has_complete &&
+        state->mtc_complete_quarter_frame &&
+        (!single_loss || !state->mtc_single_packet_safe)) {
+        uint8_t full_frame[10] = {
+            0xf0, 0x7f, 0x7f, 0x01, 0x01, 0, 0, 0, 0, 0xf7
+        };
+        full_frame[5] = (uint8_t)(state->mtc_complete[6] |
+                                  (state->mtc_complete[7] << 4));
+        full_frame[6] = (uint8_t)(state->mtc_complete[4] |
+                                  (state->mtc_complete[5] << 4));
+        full_frame[7] = (uint8_t)(state->mtc_complete[2] |
+                                  (state->mtc_complete[3] << 4));
+        full_frame[8] = (uint8_t)(state->mtc_complete[0] |
+                                  (state->mtc_complete[1] << 4));
+        if (!rt->mtc_full_known ||
+            memcmp(rt->mtc_full_frame, full_frame + 5, 4) != 0) {
+            deliver_sysex(rt, full_frame, sizeof(full_frame));
+            printf("MIDIHub: recovered MTC Quarter Frame position "
+                   "%02x:%02x:%02x:%02x\n",
+                   (unsigned int)full_frame[5],
+                   (unsigned int)full_frame[6],
+                   (unsigned int)full_frame[7],
+                   (unsigned int)full_frame[8]);
+        }
+    }
+    if (state->has_mtc && state->mtc_has_partial &&
+        (!single_loss || !state->mtc_single_packet_safe)) {
+        int point = state->mtc_point;
+        int type = state->mtc_reverse ? 7 : 0;
+        int step = state->mtc_reverse ? -1 : 1;
+        for (;;) {
+            message[0] = 0xf1;
+            message[1] = (uint8_t)((type << 4) |
+                                    state->mtc_partial[type]);
+            deliver_short(rt, message, 2);
+            if (type == point) break;
+            type += step;
+        }
+        printf("MIDIHub: recovered MTC Quarter Frame partial direction=%s point=%u\n",
+               state->mtc_reverse ? "reverse" : "forward",
+               (unsigned int)state->mtc_point);
+    }
     if (!state->has_sequencer ||
         (single_loss && state->sequencer_single_packet_safe) ||
         state->has_time_tools)

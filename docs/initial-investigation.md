@@ -122,8 +122,9 @@ linked for AROS x64 and m68k, but live AROS playback has not been run.
   do not yet have complete outgoing journal protection. Chapter F complete
   and partial MIDI Time Code fields are validated. Universal Real Time MTC
   Full Frame SysEx commands receive outgoing Chapter F protection and are
-  recovered after covered loss. Quarter Frame generation and replay remain
-  pending.
+  recovered after covered loss. Quarter Frame generation and recovery support
+  contiguous forward and reverse sequences, partial frames, the forward
+  two-frame correction, and 29.97 drop-frame rollover.
 
 ## Initial network implementation
 
