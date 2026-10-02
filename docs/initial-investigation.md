@@ -5,7 +5,7 @@ implementation sequence. The first increment includes AppleMIDI and RTP-MIDI
 packet codecs, invitation negotiation for one peer, host tests, a native
 self-test, and a UDP diagnostic program. The program opens both ports,
 exchanges invitations and CK messages, and can send a test note. It estimates
-clock offset and schedules future short MIDI events. The CAMD bridge for
+clock offset and schedules future MIDI and SysEx events. The CAMD bridge for
 short messages and SysEx is implemented. On Linux-hosted AROS, two MIDIHub
 processes opened the bridge, completed an AppleMIDI session over AROSTCP's
 loopback interface, and exchanged Note On and Note Off. A separate native CAMD
@@ -86,10 +86,11 @@ linked for AROS x64 and m68k, but live AROS playback has not been run.
   multibyte fields use network byte order.
 - `CK` synchronization uses timestamps in 100-microsecond units and a
   three-message exchange. MIDIHub now estimates the clock offset and queues
-  future short MIDI messages for delivery at their RTP timestamps. The queue
-  holds up to 256 events and accepts at most 10 seconds of lookahead; later
-  events are discarded. SysEx scheduling remains to be implemented. The
-  initiator refreshes synchronization every 50 seconds.
+  future short MIDI messages and completed SysEx for delivery at their RTP
+  timestamps. The shared queue holds up to 256 events, accepts at most 10
+  seconds of lookahead, and limits queued SysEx payloads to 64 KiB; later or
+  excess events are discarded. The initiator refreshes synchronization every
+  50 seconds.
 - Apple advertises `_apple-midi._udp` through Bonjour. Manual connection
   by IP address and port is supported. MIDIHub now advertises
   `_apple-midi._udp.local` over IPv4 mDNS and answers DNS-SD browse queries.

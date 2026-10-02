@@ -129,6 +129,7 @@ enum { MH_SYSEX_MAX = 4096 };
 struct mh_sysex_assembler {
     uint8_t bytes[MH_SYSEX_MAX];
     size_t length;
+    uint32_t timestamp;
     uint16_t last_sequence;
     uint8_t active;
 };

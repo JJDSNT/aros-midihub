@@ -535,7 +535,8 @@ static const uint8_t first[] = {0xf0, 0x7d, 1, 0xf0};
     assert(mh_sysex_feed(&assembler, &event, 1, &message,
                           &message_length) == 1);
     assert(message_length == sizeof(complete) &&
-           !memcmp(message, complete, message_length));
+           !memcmp(message, complete, message_length) &&
+           assembler.timestamp == 100);
 
     assert(mh_rtp_encode_list(2, 101, 7, first, sizeof(first),
                               wire, sizeof(wire), &wire_length) == 0);
@@ -552,11 +553,13 @@ static const uint8_t first[] = {0xf0, 0x7d, 1, 0xf0};
     assert(mh_sysex_feed(&assembler, &event, 3, &message,
                           &message_length) == 1);
     assert(message_length == sizeof(complete) &&
-           !memcmp(message, complete, message_length));
+           !memcmp(message, complete, message_length) &&
+           assembler.timestamp == 101);
 
     mh_sysex_reset(&assembler);
     event.sysex = first;
     event.sysex_length = sizeof(first);
+    event.timestamp = 200;
     assert(mh_sysex_feed(&assembler, &event, 7, &message,
                           &message_length) == 0);
     event.sysex = last;
@@ -661,6 +664,7 @@ static void clock_and_queue(void)
 {
     const uint8_t first[] = {0x90, 60, 100};
     const uint8_t second[] = {0x80, 60, 0};
+    const uint8_t sysex[] = {0xf0, 0x7d, 1, 0xf7};
     uint64_t stamps[3] = {1000, 800, 1020};
     uint64_t due;
     int64_t offset;
@@ -694,13 +698,24 @@ static void clock_and_queue(void)
     assert(mh_queue_next_due(&queue, &due) == 0);
     assert(mh_queue_push(&queue, 300, first, sizeof(first)) == 0);
     assert(mh_queue_push(&queue, 200, second, sizeof(second)) == 0);
+    assert(mh_queue_push_sysex(&queue, 250, sysex, sizeof(sysex)) == 0);
+    assert(queue.sysex_bytes == sizeof(sysex));
     assert(mh_queue_cancel_note_on(&queue, 0, 60) == 1);
     assert(!mh_queue_has_note_on(&queue, 0, 60));
     assert(mh_queue_next_due(&queue, &due) == 1 && due == 200);
     assert(mh_queue_cancel_note_on(&queue, 0, 60) == 0);
+    assert(mh_queue_pop_due(&queue, 200, &event) == 1 && !event.sysex);
+    mh_queue_event_release(&event);
+    assert(mh_queue_pop_due(&queue, 250, &event) == 1 &&
+           event.sysex_length == sizeof(sysex) &&
+           !memcmp(event.sysex, sysex, sizeof(sysex)) &&
+           queue.sysex_bytes == 0);
+    mh_queue_event_release(&event);
     assert(mh_queue_push(&queue, 400, first, sizeof(first)) == 0);
+    assert(mh_queue_push_sysex(&queue, 350, sysex, sizeof(sysex)) == 0);
     assert(mh_queue_has_note_on(&queue, 0, 60));
     mh_queue_reset(&queue);
+    assert(queue.sysex_bytes == 0);
     assert(mh_queue_pop_due(&queue, 400, &event) == 0);
 }
 

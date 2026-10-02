@@ -833,8 +833,19 @@ static void receive_packet(struct runtime *rt, int data_port)
             sysex_result = mh_sysex_feed(&rt->sysex, &event, midi.sequence,
                                           &sysex_message, &sysex_length);
             if (sysex_result == 1) {
+                uint64_t due;
                 printf("MIDIHub: SysEx complete bytes=%lu\n",
                        (unsigned long)sysex_length);
+                now = now_ticks();
+                if (rt->sync_ready &&
+                    mh_clock_due(rt->sysex.timestamp, now,
+                                 rt->peer_to_local, &due) == 0 && due > now) {
+                    if (due - now > 100000 ||
+                        mh_queue_push_sysex(&rt->queue, due, sysex_message,
+                                            sysex_length) != 0)
+                        puts("MIDIHub: future SysEx event discarded");
+                    continue;
+                }
                 mh_camd_bridge_deliver_sysex(&rt->camd, sysex_message,
                                              sysex_length);
             } else if (sysex_result < 0)
@@ -997,8 +1008,14 @@ static void periodic(struct runtime *rt, uint64_t now)
     struct mh_queued_event event;
     int data_port;
 
-    while (mh_queue_pop_due(&rt->queue, now, &event))
-        deliver_short(rt, event.bytes, event.length);
+    while (mh_queue_pop_due(&rt->queue, now, &event)) {
+        if (event.sysex)
+            mh_camd_bridge_deliver_sysex(&rt->camd, event.sysex,
+                                         event.sysex_length);
+        else
+            deliver_short(rt, event.bytes, event.length);
+        mh_queue_event_release(&event);
+    }
 
     if (rt->mdns >= 0 &&
         (rt->mdns_announcements == 0 ||

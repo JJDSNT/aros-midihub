@@ -578,6 +578,7 @@ int mh_sysex_feed(struct mh_sysex_assembler *assembler,
         }
         memcpy(assembler->bytes, segment, size - (tail == 0xf0));
         assembler->length = size - (tail == 0xf0);
+        assembler->timestamp = event->timestamp;
         assembler->active = tail == 0xf0;
     } else if (head == 0xf7 && assembler->active &&
                (sequence == assembler->last_sequence ||

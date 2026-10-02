@@ -279,10 +279,11 @@ tests, an AROS package self-test, and a UDP diagnostic program are present.
 The program negotiates a session, exchanges CK packets, and bridges MIDI
 messages and SysEx through CAMD clusters on AROS. It acknowledges received
 RTP packets, including journal-only guard packets, with AppleMIDI `RS`
-feedback. The CK exchange estimates the peer clock offset. Short MIDI
-messages with future RTP timestamps are queued for delivery to CAMD at the
-requested time, with a 10-second lookahead and 256-event limit. Events beyond
-those limits are discarded; SysEx is still delivered on receipt. Incoming
+feedback. The CK exchange estimates the peer clock offset. MIDI messages and
+completed SysEx with future RTP timestamps are queued for delivery to CAMD at
+the requested time, with a 10-second lookahead and 256-event limit. Queued
+SysEx data is additionally limited to 64 KiB. Events beyond those limits are
+discarded. Incoming
 recovery journal framing is checked before feedback is sent. Sequence gaps
 and whether a journal checkpoint covers them are reported. Chapter N now
 recovers missed `Note Off` commands for notes the receiver still considers

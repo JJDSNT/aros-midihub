@@ -1,6 +1,7 @@
 #include "midihub/timing.h"
 
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 int mh_clock_offset(const uint64_t timestamps[3], int is_initiator,
@@ -58,7 +59,23 @@ int mh_clock_due(uint32_t timestamp, uint64_t local_now,
 
 void mh_queue_reset(struct mh_event_queue *queue)
 {
-    if (queue) queue->count = 0;
+    size_t i;
+    if (!queue) return;
+    for (i = 0; i < queue->count; ++i)
+        free(queue->events[i].sysex);
+    memset(queue->events, 0, sizeof(queue->events));
+    queue->count = 0;
+    queue->sysex_bytes = 0;
+}
+
+static size_t mh_queue_position(struct mh_event_queue *queue, uint64_t due)
+{
+    size_t position = queue->count;
+    while (position && queue->events[position - 1].due > due) {
+        queue->events[position] = queue->events[position - 1];
+        --position;
+    }
+    return position;
 }
 
 int mh_queue_push(struct mh_event_queue *queue, uint64_t due,
@@ -68,15 +85,34 @@ int mh_queue_push(struct mh_event_queue *queue, uint64_t due,
     if (!queue || !bytes || length == 0 || length > 3 ||
         queue->count == MH_EVENT_QUEUE_CAP)
         return -1;
-    position = queue->count;
-    while (position && queue->events[position - 1].due > due) {
-        queue->events[position] = queue->events[position - 1];
-        --position;
-    }
+    position = mh_queue_position(queue, due);
+    memset(&queue->events[position], 0, sizeof(queue->events[position]));
     queue->events[position].due = due;
     queue->events[position].length = (uint8_t)length;
     memcpy(queue->events[position].bytes, bytes, length);
     ++queue->count;
+    return 0;
+}
+
+int mh_queue_push_sysex(struct mh_event_queue *queue, uint64_t due,
+                        const uint8_t *bytes, size_t length)
+{
+    uint8_t *copy;
+    size_t position;
+    if (!queue || !bytes || length < 2 || bytes[0] != 0xf0 ||
+        bytes[length - 1] != 0xf7 || queue->count == MH_EVENT_QUEUE_CAP ||
+        length > MH_EVENT_QUEUE_SYSEX_BYTES - queue->sysex_bytes)
+        return -1;
+    copy = malloc(length);
+    if (!copy) return -1;
+    memcpy(copy, bytes, length);
+    position = mh_queue_position(queue, due);
+    memset(&queue->events[position], 0, sizeof(queue->events[position]));
+    queue->events[position].due = due;
+    queue->events[position].sysex = copy;
+    queue->events[position].sysex_length = length;
+    ++queue->count;
+    queue->sysex_bytes += length;
     return 0;
 }
 
@@ -86,11 +122,24 @@ int mh_queue_pop_due(struct mh_event_queue *queue, uint64_t now,
     if (!queue || !event || !queue->count || queue->events[0].due > now)
         return 0;
     *event = queue->events[0];
+    if (event->sysex)
+        queue->sysex_bytes -= event->sysex_length;
     --queue->count;
     if (queue->count)
         memmove(queue->events, queue->events + 1,
                 queue->count * sizeof(queue->events[0]));
+    memset(&queue->events[queue->count], 0,
+           sizeof(queue->events[queue->count]));
     return 1;
+}
+
+void mh_queue_event_release(struct mh_queued_event *event)
+{
+    if (!event) return;
+    free(event->sysex);
+    event->sysex = NULL;
+    event->sysex_length = 0;
+    event->length = 0;
 }
 
 int mh_queue_next_due(const struct mh_event_queue *queue, uint64_t *due)
