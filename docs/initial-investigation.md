@@ -119,8 +119,11 @@ linked for AROS x64 and m68k, but live AROS playback has not been run.
   Chapter Q covers Start, Continue, Stop, MIDI Clock, and Song Position
   Pointer. Chapters T and A cover Channel and Poly Aftertouch. Guard packets
   repeat pending recovery data after the last event. SysEx and MIDI Time Code
-  do not yet have outgoing journal protection. Chapter F complete and partial
-  MIDI Time Code fields are validated, while MTC replay remains pending.
+  do not yet have complete outgoing journal protection. Chapter F complete
+  and partial MIDI Time Code fields are validated. Universal Real Time MTC
+  Full Frame SysEx commands receive outgoing Chapter F protection and are
+  recovered after covered loss. Quarter Frame generation and replay remain
+  pending.
 
 ## Initial network implementation
 

@@ -38,6 +38,8 @@ struct mh_sender {
     uint8_t sequencer_downbeat;
     uint8_t sequencer_start_at_zero;
     uint32_t sequencer_clock;
+    uint8_t mtc_full_frame[4];
+    uint8_t mtc_full_known;
 };
 
 void mh_sender_reset(struct mh_sender *sender);
@@ -46,6 +48,9 @@ int mh_sender_supported(const uint8_t *message, size_t length);
 void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
                       uint32_t timestamp, const uint8_t *message,
                       size_t length);
+int mh_sender_record_sysex(struct mh_sender *sender, uint16_t sequence,
+                           uint32_t timestamp, const uint8_t *message,
+                           size_t length);
 void mh_sender_ack(struct mh_sender *sender, uint32_t extended_sequence);
 int mh_sender_journal(const struct mh_sender *sender, uint16_t sequence,
                       uint32_t timestamp, uint8_t *data, size_t capacity,

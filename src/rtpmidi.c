@@ -307,6 +307,8 @@ int mh_journal_decode_system(const struct mh_journal *journal,
                         (uint8_t)((data[offset + i / 2] >>
                                    (i % 2 ? 0 : 4)) & 0x0f);
             } else {
+                for (i = 0; i < 4; ++i)
+                    if (data[offset + i] & 0x80) return -1;
                 memcpy(state->mtc_complete, data + offset, 4);
             }
             offset += 4;

@@ -104,6 +104,8 @@ struct runtime {
     uint8_t sequencer_downbeat;
     uint8_t sequencer_start_at_zero;
     uint32_t sequencer_clock;
+    uint8_t mtc_full_frame[4];
+    uint8_t mtc_full_known;
     struct mh_camd_bridge camd;
     int camd_opened;
 };
@@ -314,6 +316,7 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
         rt->sequencer_downbeat = 0;
         rt->sequencer_start_at_zero = 0;
         rt->sequencer_clock = 0;
+        rt->mtc_full_known = 0;
         memset(rt->active_notes, 0, sizeof(rt->active_notes));
         reset_channel_state(rt);
     } else if (status == 0xf6 && length == 1) {
@@ -406,6 +409,21 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
         rt->pitch[channel] = (uint16_t)(bytes[1] | (bytes[2] << 7));
     }
     mh_camd_bridge_deliver(&rt->camd, bytes, length);
+}
+
+static void deliver_sysex(struct runtime *rt, const uint8_t *message,
+                          size_t length)
+{
+    size_t i;
+    if (length == 10 && message[0] == 0xf0 && message[1] == 0x7f &&
+        message[3] == 0x01 && message[4] == 0x01 && message[9] == 0xf7) {
+        for (i = 1; i < 9 && !(message[i] & 0x80); ++i) {}
+        if (i == 9) {
+            memcpy(rt->mtc_full_frame, message + 5, 4);
+            rt->mtc_full_known = 1;
+        }
+    }
+    mh_camd_bridge_deliver_sysex(&rt->camd, message, length);
 }
 
 static void reset_channel_state(struct runtime *rt)
@@ -745,6 +763,22 @@ static void recover_system(struct runtime *rt,
         rt->active_sense_count = state->active_sense_count;
         puts("MIDIHub: recovered Active Sense");
     }
+    if (state->has_mtc && state->mtc_has_complete &&
+        !state->mtc_complete_quarter_frame &&
+        (!single_loss || !state->mtc_single_packet_safe) &&
+        (!rt->mtc_full_known ||
+         memcmp(rt->mtc_full_frame, state->mtc_complete, 4) != 0)) {
+        uint8_t full_frame[10] = {
+            0xf0, 0x7f, 0x7f, 0x01, 0x01, 0, 0, 0, 0, 0xf7
+        };
+        memcpy(full_frame + 5, state->mtc_complete, 4);
+        deliver_sysex(rt, full_frame, sizeof(full_frame));
+        printf("MIDIHub: recovered MTC Full Frame %02x:%02x:%02x:%02x\n",
+               (unsigned int)state->mtc_complete[0],
+               (unsigned int)state->mtc_complete[1],
+               (unsigned int)state->mtc_complete[2],
+               (unsigned int)state->mtc_complete[3]);
+    }
     if (!state->has_sequencer ||
         (single_loss && state->sequencer_single_packet_safe) ||
         state->has_time_tools)
@@ -1024,8 +1058,7 @@ static void receive_packet(struct runtime *rt, int data_port)
                         puts("MIDIHub: future SysEx event discarded");
                     continue;
                 }
-                mh_camd_bridge_deliver_sysex(&rt->camd, sysex_message,
-                                             sysex_length);
+                deliver_sysex(rt, sysex_message, sysex_length);
             } else if (sysex_result < 0)
                 puts("MIDIHub: SysEx segment discarded");
         } else {
@@ -1062,6 +1095,7 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
     uint8_t tail;
     size_t i;
     uint32_t timestamp;
+    uint16_t first_sequence;
 
     if (rt->session.phase != MH_SESSION_CONNECTED || !message || !length)
         return -1;
@@ -1101,6 +1135,7 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
             return -1;
     mh_sender_clear_history(&rt->sender);
     timestamp = (uint32_t)now_ticks();
+    first_sequence = rt->sequence;
     if (length <= 1002) {
         if (mh_rtp_encode_list(rt->sequence, timestamp,
                                rt->session.local_ssrc, message, length,
@@ -1111,6 +1146,8 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
             return -1;
         ++rt->sequence;
         rt->last_rtp_send = now_ticks();
+        mh_sender_record_sysex(&rt->sender, first_sequence, timestamp,
+                               message, length);
         return 0;
     }
     data_length = length - 2;
@@ -1137,6 +1174,8 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
         rt->last_rtp_send = now_ticks();
         offset += chunk;
     }
+    mh_sender_record_sysex(&rt->sender, first_sequence, timestamp,
+                           message, length);
     return 0;
 }
 
@@ -1190,8 +1229,7 @@ static void periodic(struct runtime *rt, uint64_t now)
 
     while (mh_queue_pop_due(&rt->queue, now, &event)) {
         if (event.sysex)
-            mh_camd_bridge_deliver_sysex(&rt->camd, event.sysex,
-                                         event.sysex_length);
+            deliver_sysex(rt, event.sysex, event.sysex_length);
         else
             deliver_short(rt, event.bytes, event.length);
         mh_queue_event_release(&event);

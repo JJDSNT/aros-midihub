@@ -258,6 +258,11 @@ static void journal_system(void)
            !state.mtc_complete_quarter_frame && !state.mtc_has_partial &&
            state.mtc_point == 7 && state.mtc_complete[0] == 0x61 &&
            state.mtc_complete[3] == 0x04);
+    memcpy(mtc_broken, mtc_full_frame, sizeof(mtc_full_frame));
+    mtc_broken[6] = 0xe1;
+    assert(mh_journal_decode(mtc_broken, sizeof(mtc_full_frame),
+                             &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &state) == -1);
 }
 
 static void journal_note_offs(void)
@@ -387,6 +392,9 @@ static void outgoing_journal(void)
     const uint8_t clock[] = {0xf8};
     const uint8_t stop[] = {0xfc};
     const uint8_t song_position[] = {0xf2, 1, 0};
+    const uint8_t mtc_full_frame[] = {
+        0xf0, 0x7f, 0x7f, 0x01, 0x01, 0x61, 0x02, 0x03, 0x04, 0xf7
+    };
     struct mh_sender sender;
     struct mh_journal journal;
     struct mh_journal_notes notes;
@@ -556,6 +564,20 @@ static void outgoing_journal(void)
     assert(system_state.sequencer_running &&
            !system_state.downbeat_played && system_state.has_clock &&
            system_state.clock == 0);
+
+    mh_sender_reset(&sender);
+    assert(mh_sender_record_sysex(&sender, 600, 6000, mtc_full_frame,
+                                  sizeof(mtc_full_frame)) == 1);
+    assert(mh_sender_journal(&sender, 601, 6010,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(system_state.has_mtc && system_state.mtc_has_complete &&
+           !system_state.mtc_complete_quarter_frame &&
+           !system_state.mtc_has_partial &&
+           !system_state.mtc_single_packet_safe &&
+           system_state.mtc_complete[0] == 0x61 &&
+           system_state.mtc_complete[3] == 0x04);
 }
 
 static void mdns_discovery(void)

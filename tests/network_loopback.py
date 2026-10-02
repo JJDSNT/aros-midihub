@@ -401,6 +401,23 @@ def run_feedback_case(binary):
             if time.monotonic() >= deadline:
                 raise AssertionError(output)
             time.sleep(0.01)
+        mtc_gap = struct.pack(">BBHII", 0x80, 0xe1, 34,
+                              int(time.time() * 10000) & 0xffffffff,
+                              peer_ssrc)
+        mtc_journal = b"\x40\x00\x21\x08\x07\x47\x61\x02\x03\x04"
+        data.sendto(mtc_gap + b"\x40" + mtc_journal,
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x10022
+        deadline = time.monotonic() + 1
+        while True:
+            log.seek(0)
+            output = log.read().decode(errors="replace")
+            if "recovered MTC Full Frame 61:02:03:04" in output:
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(output)
+            time.sleep(0.01)
         assert "malformed recovery journal discarded" in output
         assert "1 RTP packet(s) lost; journal covers gap" in output
         assert "recovered Note Off channel=0 note=60" in output

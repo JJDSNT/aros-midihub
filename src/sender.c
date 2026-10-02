@@ -81,6 +81,7 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
             sender->sequencer_downbeat = 0;
             sender->sequencer_start_at_zero = 0;
             sender->sequencer_clock = 0;
+            sender->mtc_full_known = 0;
         } else if (message[0] == 0xf6) {
             sender->tune_request_count =
                 (uint8_t)((sender->tune_request_count + 1) & 0x7f);
@@ -161,6 +162,35 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
         event->bank_lsb = sender->bank_lsb[channel];
         event->bank_known = sender->bank_known[channel];
     }
+}
+
+int mh_sender_record_sysex(struct mh_sender *sender, uint16_t sequence,
+                           uint32_t timestamp, const uint8_t *message,
+                           size_t length)
+{
+    struct mh_sent_event *event;
+    size_t i;
+    if (!sender || !message || length != 10 || message[0] != 0xf0 ||
+        message[1] != 0x7f || message[3] != 0x01 || message[4] != 0x01 ||
+        message[9] != 0xf7)
+        return 0;
+    for (i = 1; i < 9; ++i)
+        if (message[i] & 0x80)
+            return 0;
+    if (sender->count == MH_SENDER_HISTORY) {
+        memmove(sender->events, sender->events + 1,
+                (MH_SENDER_HISTORY - 1) * sizeof(sender->events[0]));
+        --sender->count;
+    }
+    event = &sender->events[sender->count++];
+    memset(event, 0, sizeof(*event));
+    event->sequence = sequence;
+    event->timestamp = timestamp;
+    event->bytes[0] = 0xf0;
+    event->length = 1;
+    memcpy(sender->mtc_full_frame, message + 5, 4);
+    sender->mtc_full_known = 1;
+    return 1;
 }
 
 void mh_sender_ack(struct mh_sender *sender, uint32_t extended_sequence)
@@ -410,6 +440,7 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
     int song = -1;
     int active = -1;
     int sequencer = -1;
+    int mtc = -1;
     size_t i;
     size_t start;
     size_t d_header = 0;
@@ -420,7 +451,7 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
         switch (sender->events[i].bytes[0]) {
         case 0xff:
             reset = (int)i;
-            tune = song = active = sequencer = -1;
+            tune = song = active = sequencer = mtc = -1;
             break;
         case 0xf6: tune = (int)i; break;
         case 0xf3: song = (int)i; break;
@@ -430,10 +461,12 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
         case 0xfa:
         case 0xfb:
         case 0xfc: sequencer = (int)i; break;
+        case 0xf0: mtc = (int)i; break;
         default: break;
         }
     }
-    if (reset < 0 && tune < 0 && song < 0 && active < 0 && sequencer < 0)
+    if (reset < 0 && tune < 0 && song < 0 && active < 0 && sequencer < 0 &&
+        mtc < 0)
         return 0;
     if (capacity - *length < 2) return -1;
     start = *length;
@@ -510,6 +543,19 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
                  (uint8_t)sender->sequencer_clock) < 0))
             return -1;
         data[start] |= 0x10;
+        *recent |= is_recent;
+    }
+    if (mtc >= 0 && sender->mtc_full_known) {
+        int is_recent = sender->events[mtc].sequence ==
+                        (uint16_t)(sequence - 1);
+        if (put(data, capacity, length,
+                (uint8_t)((is_recent ? 0 : 0x80) | 0x47)) < 0)
+            return -1;
+        for (i = 0; i < 4; ++i)
+            if (put(data, capacity, length,
+                    sender->mtc_full_frame[i]) < 0)
+                return -1;
+        data[start] |= 0x08;
         *recent |= is_recent;
     }
     data[start] = (uint8_t)(data[start] |
