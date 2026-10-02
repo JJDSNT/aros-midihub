@@ -1232,7 +1232,6 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
     for (i = 1; i + 1 < length; ++i)
         if (message[i] & 0x80)
             return -1;
-    mh_sender_clear_history(&rt->sender);
     timestamp = (uint32_t)now_ticks();
     first_sequence = rt->sequence;
     if (length <= 1002) {
@@ -1245,8 +1244,9 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
             return -1;
         ++rt->sequence;
         rt->last_rtp_send = now_ticks();
-        mh_sender_record_sysex(&rt->sender, first_sequence, timestamp,
-                               message, length);
+        if (!mh_sender_record_sysex(&rt->sender, first_sequence, timestamp,
+                                    message, length))
+            mh_sender_clear_history(&rt->sender);
         return 0;
     }
     data_length = length - 2;
@@ -1273,8 +1273,9 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
         rt->last_rtp_send = now_ticks();
         offset += chunk;
     }
-    mh_sender_record_sysex(&rt->sender, first_sequence, timestamp,
-                           message, length);
+    if (!mh_sender_record_sysex(&rt->sender, first_sequence, timestamp,
+                                message, length))
+        mh_sender_clear_history(&rt->sender);
     return 0;
 }
 

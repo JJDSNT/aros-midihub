@@ -6,6 +6,14 @@
 
 #define MH_SENDER_HISTORY 32
 #define MH_SYSEX_JOURNAL_MAX 512
+#define MH_SYSEX_JOURNAL_LOGS 4
+
+struct mh_sent_sysex {
+    uint16_t sequence;
+    uint8_t count;
+    size_t length;
+    uint8_t data[MH_SYSEX_JOURNAL_MAX];
+};
 
 struct mh_sent_event {
     uint16_t sequence;
@@ -48,8 +56,8 @@ struct mh_sender {
     uint8_t mtc_partial_mask;
     uint8_t mtc_qf_direction;
     uint8_t mtc_qf_point;
-    uint8_t sysex_data[MH_SYSEX_JOURNAL_MAX];
-    size_t sysex_length;
+    struct mh_sent_sysex sysex_logs[MH_SYSEX_JOURNAL_LOGS];
+    size_t sysex_log_count;
     uint8_t sysex_count;
 };
 

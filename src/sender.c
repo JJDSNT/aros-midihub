@@ -112,7 +112,10 @@ void mh_sender_reset(struct mh_sender *sender)
 
 void mh_sender_clear_history(struct mh_sender *sender)
 {
-    if (sender) sender->count = 0;
+    if (sender) {
+        sender->count = 0;
+        sender->sysex_log_count = 0;
+    }
 }
 
 int mh_sender_supported(const uint8_t *message, size_t length)
@@ -190,6 +193,7 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
             sender->mtc_partial_mask = 0;
             sender->mtc_qf_direction = MH_MTC_UNKNOWN;
             sender->mtc_qf_point = 0;
+            sender->sysex_log_count = 0;
         } else if (message[0] == 0xf6) {
             sender->tune_request_count =
                 (uint8_t)((sender->tune_request_count + 1) & 0x7f);
@@ -279,7 +283,10 @@ int mh_sender_record_sysex(struct mh_sender *sender, uint16_t sequence,
                            size_t length)
 {
     struct mh_sent_event *event;
+    struct mh_sent_sysex *log;
+    size_t pending = 0;
     size_t i;
+    int is_mtc;
     if (!sender || !message || length < 2 || message[0] != 0xf0 ||
         message[length - 1] != 0xf7 ||
         length - 2 > MH_SYSEX_JOURNAL_MAX)
@@ -287,6 +294,15 @@ int mh_sender_record_sysex(struct mh_sender *sender, uint16_t sequence,
     for (i = 1; i + 1 < length; ++i)
         if (message[i] & 0x80)
             return 0;
+    is_mtc = length == 10 && message[1] == 0x7f &&
+             message[3] == 0x01 && message[4] == 0x01;
+    if (!is_mtc) {
+        for (i = 0; i < sender->sysex_log_count; ++i)
+            pending += sender->sysex_logs[i].length;
+        if (sender->sysex_log_count == MH_SYSEX_JOURNAL_LOGS ||
+            pending + length - 2 > MH_SYSEX_JOURNAL_MAX)
+            mh_sender_clear_history(sender);
+    }
     if (sender->count == MH_SENDER_HISTORY) {
         memmove(sender->events, sender->events + 1,
                 (MH_SENDER_HISTORY - 1) * sizeof(sender->events[0]));
@@ -298,8 +314,7 @@ int mh_sender_record_sysex(struct mh_sender *sender, uint16_t sequence,
     event->timestamp = timestamp;
     event->bytes[0] = 0xf0;
     event->length = 1;
-    if (length == 10 && message[1] == 0x7f && message[3] == 0x01 &&
-        message[4] == 0x01) {
+    if (is_mtc) {
         event->system_kind = MH_SYSTEM_MTC;
         memset(sender->mtc_complete, 0, sizeof(sender->mtc_complete));
         memcpy(sender->mtc_complete, message + 5, 4);
@@ -310,9 +325,12 @@ int mh_sender_record_sysex(struct mh_sender *sender, uint16_t sequence,
         sender->mtc_qf_direction = MH_MTC_UNKNOWN;
     } else {
         event->system_kind = MH_SYSTEM_SYSEX;
-        sender->sysex_length = length - 2;
-        memcpy(sender->sysex_data, message + 1, sender->sysex_length);
         ++sender->sysex_count;
+        log = &sender->sysex_logs[sender->sysex_log_count++];
+        log->sequence = sequence;
+        log->count = sender->sysex_count;
+        log->length = length - 2;
+        memcpy(log->data, message + 1, log->length);
     }
     return 1;
 }
@@ -330,6 +348,16 @@ void mh_sender_ack(struct mh_sender *sender, uint32_t extended_sequence)
         sender->count -= remove_count;
         memmove(sender->events, sender->events + remove_count,
                 sender->count * sizeof(sender->events[0]));
+    }
+    remove_count = 0;
+    while (remove_count < sender->sysex_log_count &&
+           (uint16_t)(sequence - sender->sysex_logs[remove_count].sequence) <
+           0x8000)
+        ++remove_count;
+    if (remove_count) {
+        sender->sysex_log_count -= remove_count;
+        memmove(sender->sysex_logs, sender->sysex_logs + remove_count,
+                sender->sysex_log_count * sizeof(sender->sysex_logs[0]));
     }
 }
 
@@ -565,7 +593,6 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
     int active = -1;
     int sequencer = -1;
     int mtc = -1;
-    int sysex = -1;
     size_t i;
     size_t start;
     size_t d_header = 0;
@@ -576,7 +603,7 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
         switch (sender->events[i].bytes[0]) {
         case 0xff:
             reset = (int)i;
-            tune = song = active = sequencer = mtc = sysex = -1;
+            tune = song = active = sequencer = mtc = -1;
             break;
         case 0xf6: tune = (int)i; break;
         case 0xf3: song = (int)i; break;
@@ -589,15 +616,13 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
         case 0xf0:
             if (sender->events[i].system_kind == MH_SYSTEM_MTC)
                 mtc = (int)i;
-            else if (sender->events[i].system_kind == MH_SYSTEM_SYSEX)
-                sysex = (int)i;
             break;
         case 0xf1: mtc = (int)i; break;
         default: break;
         }
     }
     if (reset < 0 && tune < 0 && song < 0 && active < 0 && sequencer < 0 &&
-        mtc < 0 && sysex < 0)
+        mtc < 0 && sender->sysex_log_count == 0)
         return 0;
     if (capacity - *length < 2) return -1;
     start = *length;
@@ -719,23 +744,27 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
         data[start] |= 0x08;
         *recent |= is_recent;
     }
-    if (sysex >= 0) {
-        int is_recent = sender->events[sysex].sequence ==
-                        (uint16_t)(sequence - 1);
-        uint8_t x_header = (uint8_t)((is_recent ? 0 : 0x80) | 0x27 |
-                                     (sender->sysex_length ? 0x08 : 0));
-        if (put(data, capacity, length, x_header) < 0)
-            return -1;
-        if (put(data, capacity, length, sender->sysex_count) < 0)
-            return -1;
-        for (i = 0; i < sender->sysex_length; ++i) {
-            uint8_t value = sender->sysex_data[i];
-            if (i + 1 == sender->sysex_length) value |= 0x80;
-            if (put(data, capacity, length, value) < 0)
+    if (sender->sysex_log_count) {
+        for (i = 0; i < sender->sysex_log_count; ++i) {
+            const struct mh_sent_sysex *log = &sender->sysex_logs[i];
+            size_t data_index;
+            int is_recent = log->sequence == (uint16_t)(sequence - 1);
+            uint8_t x_header = (uint8_t)((is_recent ? 0 : 0x80) | 0x27 |
+                                         (log->length ? 0x08 : 0));
+            if (i == 0 && sender->sysex_log_count > 1)
+                x_header &= 0x7f;
+            if (put(data, capacity, length, x_header) < 0 ||
+                put(data, capacity, length, log->count) < 0)
                 return -1;
+            for (data_index = 0; data_index < log->length; ++data_index) {
+                uint8_t value = log->data[data_index];
+                if (data_index + 1 == log->length) value |= 0x80;
+                if (put(data, capacity, length, value) < 0)
+                    return -1;
+            }
+            *recent |= is_recent;
         }
         data[start] |= 0x04;
-        *recent |= is_recent;
     }
     data[start] = (uint8_t)(data[start] |
                             ((*length - start) >> 8));
