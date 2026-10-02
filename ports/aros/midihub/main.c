@@ -922,8 +922,9 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
         if (message[i] & 0x80)
             return -1;
     mh_sender_clear_history(&rt->sender);
+    timestamp = (uint32_t)now_ticks();
     if (length <= 1002) {
-        if (mh_rtp_encode_list(rt->sequence, (uint32_t)now_ticks(),
+        if (mh_rtp_encode_list(rt->sequence, timestamp,
                                rt->session.local_ssrc, message, length,
                                wire, sizeof(wire), &wire_length) != 0 ||
             sendto(rt->data, wire, (int)wire_length, 0,
@@ -931,6 +932,7 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
                    sizeof(rt->peer_data)) != (int)wire_length)
             return -1;
         ++rt->sequence;
+        rt->last_rtp_send = now_ticks();
         return 0;
     }
     data_length = length - 2;
@@ -945,7 +947,7 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
         memcpy(segment + 1, message + 1 + offset, chunk);
         segment[chunk + 1] = tail;
         segment_length = chunk + 2;
-        if (mh_rtp_encode_list(rt->sequence, (uint32_t)now_ticks(),
+        if (mh_rtp_encode_list(rt->sequence, timestamp,
                                rt->session.local_ssrc, segment,
                                segment_length, wire, sizeof(wire),
                                &wire_length) != 0 ||
