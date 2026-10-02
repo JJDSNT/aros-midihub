@@ -336,10 +336,69 @@ int mh_journal_decode_system(const struct mh_journal *journal,
         }
         decoded = 1;
     }
-    /* Chapter X follows F and remains intentionally opaque. */
-    if (!(toc & 0x04) && offset != length) return -1;
+    if (toc & 0x04) {
+        if (offset >= length) return -1;
+        state->sysex = data + offset;
+        state->sysex_length = length - offset;
+        offset = length;
+        decoded = 1;
+    }
+    if (offset != length) return -1;
     if (offset > length) return -1;
     return decoded;
+}
+
+int mh_journal_decode_sysex(const struct mh_journal_system_state *state,
+                            struct mh_journal_sysex *sysex)
+{
+    size_t offset = 0;
+    if (!state || !sysex) return -1;
+    memset(sysex, 0, sizeof(*sysex));
+    if (!state->sysex) return 0;
+    while (offset < state->sysex_length) {
+        struct mh_journal_sysex_log *log;
+        uint8_t flags;
+        unsigned int bytes = 0;
+        uint32_t first = 0;
+        if (sysex->count == MH_JOURNAL_SYSEX_LOGS) return -1;
+        log = &sysex->logs[sysex->count++];
+        flags = state->sysex[offset++];
+        log->single_packet_safe = !!(flags & 0x80);
+        log->list_tool = !!(flags & 0x04);
+        log->status = flags & 3;
+        if (flags & 0x40) {
+            if (offset >= state->sysex_length) return -1;
+            log->has_tcount = 1;
+            log->tcount = state->sysex[offset++];
+        }
+        if (flags & 0x20) {
+            if (offset >= state->sysex_length) return -1;
+            log->has_count = 1;
+            log->count = state->sysex[offset++];
+        }
+        if (flags & 0x10) {
+            uint8_t value;
+            log->has_first = 1;
+            do {
+                if (offset >= state->sysex_length || bytes++ == 4)
+                    return -1;
+                value = state->sysex[offset++];
+                first = (first << 7) | (value & 0x7f);
+            } while (value & 0x80);
+            log->first = first;
+        }
+        if (flags & 0x08) {
+            size_t start = offset;
+            while (offset < state->sysex_length &&
+                   !(state->sysex[offset++] & 0x80)) {}
+            if (offset == start ||
+                !(state->sysex[offset - 1] & 0x80))
+                return -1;
+            log->data = state->sysex + start;
+            log->data_length = offset - start;
+        }
+    }
+    return sysex->count ? 1 : 0;
 }
 
 int mh_journal_decode_aftertouch(const struct mh_journal_channel *channel,

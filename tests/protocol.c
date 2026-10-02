@@ -395,6 +395,7 @@ static void outgoing_journal(void)
     const uint8_t mtc_full_frame[] = {
         0xf0, 0x7f, 0x7f, 0x01, 0x01, 0x61, 0x02, 0x03, 0x04, 0xf7
     };
+    const uint8_t short_sysex[] = {0xf0, 0x7d, 0x01, 0x02, 0xf7};
     const uint8_t mtc_forward[][2] = {
         {0xf1, 0x04}, {0xf1, 0x10}, {0xf1, 0x23}, {0xf1, 0x30},
         {0xf1, 0x42}, {0xf1, 0x50}, {0xf1, 0x61}, {0xf1, 0x76}
@@ -661,6 +662,28 @@ static void outgoing_journal(void)
            !system_state.mtc_has_partial && system_state.mtc_reverse &&
            system_state.mtc_complete[0] == 4 &&
            system_state.mtc_complete[6] == 1);
+
+    mh_sender_reset(&sender);
+    assert(mh_sender_record_sysex(&sender, 1000, 10000, short_sysex,
+                                  sizeof(short_sysex)) == 1);
+    assert(mh_sender_journal(&sender, 1001, 10010,
+                              bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    {
+        struct mh_journal_sysex sysex;
+        assert(mh_journal_decode_sysex(&system_state, &sysex) == 1);
+        assert(sysex.count == 1 && sysex.logs[0].list_tool &&
+               sysex.logs[0].status == 3 && sysex.logs[0].has_count &&
+               sysex.logs[0].count == 1 && !sysex.logs[0].has_first &&
+               sysex.logs[0].data_length == 3 &&
+               sysex.logs[0].data[0] == 0x7d &&
+               sysex.logs[0].data[2] == 0x82);
+        bytes[length - 1] &= 0x7f;
+        assert(mh_journal_decode(bytes, length, &journal) == 0);
+        assert(mh_journal_decode_system(&journal, &system_state) == 1);
+        assert(mh_journal_decode_sysex(&system_state, &sysex) == -1);
+    }
 }
 
 static void mdns_discovery(void)

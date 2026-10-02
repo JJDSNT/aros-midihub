@@ -72,12 +72,38 @@ struct mh_journal_system_state {
     uint8_t mtc_point;
     uint8_t mtc_complete[8];
     uint8_t mtc_partial[8];
+    const uint8_t *sysex;
+    size_t sysex_length;
 };
 
 /* Decode standard commands in System Chapters D, V, Q, and F. Chapter X
  * remains available as opaque bytes in mh_journal. */
 int mh_journal_decode_system(const struct mh_journal *journal,
                              struct mh_journal_system_state *state);
+
+#define MH_JOURNAL_SYSEX_LOGS 32
+struct mh_journal_sysex_log {
+    int single_packet_safe;
+    int list_tool;
+    uint8_t status;
+    int has_tcount;
+    uint8_t tcount;
+    int has_count;
+    uint8_t count;
+    int has_first;
+    uint32_t first;
+    const uint8_t *data;
+    size_t data_length;
+};
+
+struct mh_journal_sysex {
+    struct mh_journal_sysex_log logs[MH_JOURNAL_SYSEX_LOGS];
+    size_t count;
+};
+
+/* Decode Chapter X command logs. */
+int mh_journal_decode_sysex(const struct mh_journal_system_state *state,
+                            struct mh_journal_sysex *sysex);
 
 struct mh_journal_note_log {
     uint8_t number;

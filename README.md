@@ -322,6 +322,10 @@ Universal Real Time MTC Full Frame SysEx commands receive outgoing Chapter F
 protection and are recovered after covered loss. Quarter Frame generation and
 recovery support contiguous forward and reverse sequences, partial frames,
 the forward two-frame correction, and 29.97 drop-frame rollover.
+Chapter X protects the most recent completed non-MTC SysEx command when it has
+at most 512 data bytes, using the list tool and a COUNT identity, and recovers
+it after covered loss. Keeping several unconfirmed SysEx commands, larger
+commands, and unfinished commands in Chapter X remains to be implemented.
 The sender retains up to 32 packets and removes confirmed history when
 AppleMIDI `RS` feedback arrives. While unconfirmed history remains, it sends
 an empty MIDI guard packet once per

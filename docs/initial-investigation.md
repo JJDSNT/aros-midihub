@@ -125,6 +125,10 @@ linked for AROS x64 and m68k, but live AROS playback has not been run.
   recovered after covered loss. Quarter Frame generation and recovery support
   contiguous forward and reverse sequences, partial frames, the forward
   two-frame correction, and 29.97 drop-frame rollover.
+  Chapter X protects the most recent completed non-MTC SysEx command when it
+  has at most 512 data bytes, using the list tool and a COUNT identity.
+  Retaining several unconfirmed SysEx commands, larger commands, and
+  unfinished commands remains outside journal recovery.
 
 ## Initial network implementation
 

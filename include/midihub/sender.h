@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #define MH_SENDER_HISTORY 32
+#define MH_SYSEX_JOURNAL_MAX 512
 
 struct mh_sent_event {
     uint16_t sequence;
@@ -16,6 +17,7 @@ struct mh_sent_event {
     uint8_t bank_msb;
     uint8_t bank_lsb;
     uint8_t bank_known;
+    uint8_t system_kind;
 };
 
 struct mh_sender {
@@ -46,6 +48,9 @@ struct mh_sender {
     uint8_t mtc_partial_mask;
     uint8_t mtc_qf_direction;
     uint8_t mtc_qf_point;
+    uint8_t sysex_data[MH_SYSEX_JOURNAL_MAX];
+    size_t sysex_length;
+    uint8_t sysex_count;
 };
 
 void mh_sender_reset(struct mh_sender *sender);

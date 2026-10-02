@@ -106,11 +106,13 @@ struct runtime {
     uint32_t sequencer_clock;
     uint8_t mtc_full_frame[4];
     uint8_t mtc_full_known;
+    uint8_t sysex_count;
     struct mh_camd_bridge camd;
     int camd_opened;
 };
 
 static void reset_channel_state(struct runtime *rt);
+static void reset_system_state(struct runtime *rt);
 
 static uint64_t now_ticks(void)
 {
@@ -415,14 +417,18 @@ static void deliver_sysex(struct runtime *rt, const uint8_t *message,
                           size_t length)
 {
     size_t i;
-    if (length == 10 && message[0] == 0xf0 && message[1] == 0x7f &&
-        message[3] == 0x01 && message[4] == 0x01 && message[9] == 0xf7) {
+    int mtc = length == 10 && message[0] == 0xf0 && message[1] == 0x7f &&
+              message[3] == 0x01 && message[4] == 0x01 &&
+              message[9] == 0xf7;
+    if (mtc) {
         for (i = 1; i < 9 && !(message[i] & 0x80); ++i) {}
         if (i == 9) {
             memcpy(rt->mtc_full_frame, message + 5, 4);
             rt->mtc_full_known = 1;
         }
-    }
+    } else if (length >= 2 && message[0] == 0xf0 &&
+               message[length - 1] == 0xf7)
+        ++rt->sysex_count;
     mh_camd_bridge_deliver_sysex(&rt->camd, message, length);
 }
 
@@ -441,6 +447,22 @@ static void reset_channel_state(struct runtime *rt)
     memset(rt->poly_pressure_known, 0, sizeof(rt->poly_pressure_known));
     for (channel = 0; channel < 16; ++channel)
         rt->pitch[channel] = 0x2000;
+}
+
+static void reset_system_state(struct runtime *rt)
+{
+    rt->reset_count = 0;
+    rt->tune_request_count = 0;
+    rt->active_sense_count = 0;
+    rt->song_select = 0;
+    rt->song_select_known = 0;
+    rt->sequencer_known = 0;
+    rt->sequencer_running = 0;
+    rt->sequencer_downbeat = 0;
+    rt->sequencer_start_at_zero = 0;
+    rt->sequencer_clock = 0;
+    rt->mtc_full_known = 0;
+    rt->sysex_count = 0;
 }
 
 static void release_active_notes(struct runtime *rt)
@@ -821,6 +843,34 @@ static void recover_system(struct runtime *rt,
                state->mtc_reverse ? "reverse" : "forward",
                (unsigned int)state->mtc_point);
     }
+    if (state->sysex) {
+        struct mh_journal_sysex sysex;
+        if (mh_journal_decode_sysex(state, &sysex) > 0) {
+            size_t log_index;
+            for (log_index = 0; log_index < sysex.count; ++log_index) {
+                const struct mh_journal_sysex_log *log =
+                    &sysex.logs[log_index];
+                uint8_t recovered[MH_SYSEX_JOURNAL_MAX + 2];
+                size_t data_index;
+                if ((single_loss && log->single_packet_safe) ||
+                    log->status != 3 || log->has_first || !log->has_count ||
+                    rt->sysex_count == log->count ||
+                    log->data_length > MH_SYSEX_JOURNAL_MAX)
+                    continue;
+                recovered[0] = 0xf0;
+                for (data_index = 0; data_index < log->data_length;
+                     ++data_index)
+                    recovered[data_index + 1] =
+                        (uint8_t)(log->data[data_index] & 0x7f);
+                recovered[log->data_length + 1] = 0xf7;
+                deliver_sysex(rt, recovered, log->data_length + 2);
+                rt->sysex_count = log->count;
+                printf("MIDIHub: recovered SysEx bytes=%lu count=%u\n",
+                       (unsigned long)(log->data_length + 2),
+                       (unsigned int)log->count);
+            }
+        }
+    }
     if (!state->has_sequencer ||
         (single_loss && state->sequencer_single_packet_safe) ||
         state->has_time_tools)
@@ -938,6 +988,7 @@ static void receive_packet(struct runtime *rt, int data_port)
     struct mh_rtp_packet midi;
     struct mh_journal journal;
     struct mh_journal_system_state system_state;
+    struct mh_journal_sysex sysex_state;
     struct mh_rtp_reader reader;
     struct mh_midi_event event;
     const uint8_t *sysex_message;
@@ -1016,6 +1067,7 @@ static void receive_packet(struct runtime *rt, int data_port)
             mh_queue_reset(&rt->queue);
             release_active_notes(rt);
             reset_channel_state(rt);
+            reset_system_state(rt);
             mh_sender_reset(&rt->sender);
         }
         return;
@@ -1034,6 +1086,11 @@ static void receive_packet(struct runtime *rt, int data_port)
         system_decoded = mh_journal_decode_system(&journal, &system_state);
         if (system_decoded < 0) {
             puts("MIDIHub: malformed system recovery journal discarded");
+            return;
+        }
+        if (system_state.sysex &&
+            mh_journal_decode_sysex(&system_state, &sysex_state) < 0) {
+            puts("MIDIHub: malformed SysEx recovery journal discarded");
             return;
         }
     }
@@ -1315,6 +1372,7 @@ static void periodic(struct runtime *rt, uint64_t now)
             mh_queue_reset(&rt->queue);
             release_active_notes(rt);
             reset_channel_state(rt);
+            reset_system_state(rt);
             mh_sender_reset(&rt->sender);
             return;
         }
