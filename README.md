@@ -33,6 +33,35 @@ Initial areas of development include:
 
 The architecture should remain extensible so additional transports and MIDI standards can be incorporated over time.
 
+## Long-term architecture goal
+
+MIDIHub is intended to incubate and validate modern MIDI capabilities for AROS, not to become a permanent parallel MIDI subsystem.
+
+The preferred long-term architecture is to upstream reusable MIDI infrastructure into AROS whenever it is mature and generally useful. Transport and operating-system integration should live in the appropriate native subsystem: CAMD for MIDI-facing integration, the USB stack for USB MIDI, the Bluetooth stack for BLE MIDI, and the network stack or appropriate AROS components for network MIDI. MIDI applications should continue to see standard AROS/CAMD interfaces rather than requiring a MIDIHub-specific runtime API.
+
+In that target architecture, the ideal final form of this project is primarily **`MIDIHub.prefs`**: a unified Preferences application for discovering, configuring, enabling, monitoring, and connecting the MIDI facilities provided by AROS. Optional user-space components such as a SoundFont synthesizer may remain separate where they do not naturally belong in the operating-system transport layer.
+
+```text
+                         MIDIHub.prefs
+                              |
+             configuration / status / discovery
+                              |
+          +-------------------+-------------------+
+          |                   |                   |
+         CAMD             Bluetooth            Network
+          |                   |                   |
+      USB MIDI          BLE MIDI /           AppleMIDI /
+      virtual ports     btmidi.class         RTP-MIDI / UMP
+          |                   |                   |
+          +-------------------+-------------------+
+                              |
+                       AROS applications
+```
+
+This is an architectural direction, not a requirement to move experimental code upstream prematurely. MIDIHub may implement missing capabilities locally while they are being developed and tested. Once a capability is stable and belongs generically to AROS, upstreaming it and removing the duplicate MIDIHub runtime code is considered progress toward the project goal.
+
+Consequently, agents and contributors should avoid creating permanent MIDIHub-specific abstractions when an AROS-native interface can reasonably provide the same capability. A shrinking MIDIHub runtime due to successful upstream integration is an intended outcome, not a loss of project scope.
+
 ## Network MIDI
 
 ### RTP-MIDI
