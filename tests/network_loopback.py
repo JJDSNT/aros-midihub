@@ -271,7 +271,8 @@ def run_feedback_case(binary):
         while True:
             log.seek(0)
             output = log.read().decode(errors="replace")
-            if "recovered Sustain toggle channel=0 count=3" in output:
+            if ("recovered controller toggle channel=0 controller=64 count=3"
+                    in output):
                 break
             if time.monotonic() >= deadline:
                 raise AssertionError(output)

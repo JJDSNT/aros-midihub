@@ -293,8 +293,10 @@ Chapter N also recovers timely lost `Note On` commands when the sender's `Y`
 hint requests playback and the clocks are synchronized. Chapters P and W
 restore Program Change, bank selection, and Pitch Bend after packet loss.
 Chapter C value logs restore Control Change values; alternate toggle and
-count logs support sustain (64), All Sound Off (120), and All Notes Off (123).
-Chapter E now protects repeated Note On reference counts and non-default
+count logs support switch controllers 64–69, All Sound Off (120), All Notes
+Off (123), Omni Off/On (124/125), and Poly Mode (127). Chapter E now protects
+repeated Note On reference counts and
+non-default
 Note Off release velocities, supplementing Chapter N recovery. Other
 alternate logs, extended Chapter X history, and Preferences remain to be
 implemented.

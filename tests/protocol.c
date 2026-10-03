@@ -454,6 +454,9 @@ static void outgoing_journal(void)
     const uint8_t data_msb[] = {0xb0, 6, 2};
     const uint8_t data_lsb[] = {0xb0, 38, 25};
     const uint8_t data_increment[] = {0xb0, 96, 0};
+    const uint8_t soft_on[] = {0xb0, 67, 127};
+    const uint8_t soft_off[] = {0xb0, 67, 0};
+    const uint8_t omni_on[] = {0xb0, 125, 0};
     const uint8_t system_reset[] = {0xff};
     const uint8_t tune_request[] = {0xf6};
     const uint8_t song_select[] = {0xf3, 9};
@@ -588,6 +591,29 @@ static void outgoing_journal(void)
                                         &parameters) == 1);
     assert(parameters.logs[0].has_adjust &&
            parameters.logs[0].adjust == 2);
+    mh_sender_reset(&sender);
+
+    mh_sender_record(&sender, 112, 1600, soft_on, sizeof(soft_on));
+    mh_sender_record(&sender, 113, 1650, soft_off, sizeof(soft_off));
+    mh_sender_record(&sender, 114, 1700, soft_on, sizeof(soft_on));
+    assert(mh_sender_journal(&sender, 115, 1750,
+                             bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_controls(&journal.channels[0], &controls) == 1);
+    assert(controls.count == 1 && controls.logs[0].number == 67 &&
+           controls.logs[0].alternate && !controls.logs[0].count_tool &&
+           controls.logs[0].value == 3);
+    mh_sender_reset(&sender);
+
+    mh_sender_record(&sender, 116, 1800, omni_on, sizeof(omni_on));
+    mh_sender_record(&sender, 117, 1850, omni_on, sizeof(omni_on));
+    assert(mh_sender_journal(&sender, 118, 1900,
+                             bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_controls(&journal.channels[0], &controls) == 1);
+    assert(controls.count == 1 && controls.logs[0].number == 125 &&
+           controls.logs[0].alternate && controls.logs[0].count_tool &&
+           controls.logs[0].value == 2);
     mh_sender_reset(&sender);
 
     mh_sender_record(&sender, 102, 1100, bank, sizeof(bank));

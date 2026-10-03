@@ -139,6 +139,14 @@ static struct mh_parameter_counter *parameter_counter(
     return free_entry;
 }
 
+static int count_controller_index(uint8_t number)
+{
+    if (number == 120) return 0;
+    if (number >= 123 && number <= 125) return number - 122;
+    if (number == 127) return 4;
+    return -1;
+}
+
 int mh_sender_supported(const uint8_t *message, size_t length)
 {
     uint8_t type;
@@ -193,10 +201,10 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
                 sender->count = 1;
             }
             memset(sender->bank_known, 0, sizeof(sender->bank_known));
-            memset(sender->sustain_on, 0, sizeof(sender->sustain_on));
-            memset(sender->sustain_toggle, 0,
-                   sizeof(sender->sustain_toggle));
-            memset(sender->reset_count, 0, sizeof(sender->reset_count));
+            memset(sender->switch_on, 0, sizeof(sender->switch_on));
+            memset(sender->switch_toggle, 0,
+                   sizeof(sender->switch_toggle));
+            memset(sender->mode_count, 0, sizeof(sender->mode_count));
             memset(sender->active_notes, 0, sizeof(sender->active_notes));
             memset(sender->note_count, 0, sizeof(sender->note_count));
             memset(sender->release_velocity, 0,
@@ -340,24 +348,33 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
         } else if (message[1] == 32) {
             sender->bank_lsb[channel] = message[2];
             sender->bank_known[channel] |= 2;
-        } else if (message[1] == 64) {
+        } else if (message[1] >= 64 && message[1] <= 69) {
+            unsigned int switch_index = message[1] - 64;
             uint8_t on = message[2] >= 64;
-            if (sender->sustain_on[channel] != on)
-                sender->sustain_toggle[channel] =
-                    (uint8_t)((sender->sustain_toggle[channel] + 1) & 0x3f);
-            sender->sustain_on[channel] = on;
+            if (sender->switch_on[channel][switch_index] != on)
+                sender->switch_toggle[channel][switch_index] =
+                    (uint8_t)((sender->switch_toggle[channel][switch_index] +
+                               1) & 0x3f);
+            sender->switch_on[channel][switch_index] = on;
             event->tool = MH_TOOL_TOGGLE;
-            event->recovery_value = sender->sustain_toggle[channel];
-        } else if (message[1] == 120 || message[1] == 123) {
-            unsigned int index = message[1] == 120 ? 0 : 1;
-            sender->reset_count[channel][index] =
-                (uint8_t)((sender->reset_count[channel][index] + 1) & 0x3f);
+            event->recovery_value =
+                sender->switch_toggle[channel][switch_index];
+        } else if (count_controller_index(message[1]) >= 0) {
+            unsigned int index = (unsigned int)
+                count_controller_index(message[1]);
+            sender->mode_count[channel][index] = (uint8_t)(
+                (sender->mode_count[channel][index] + 1) & 0x3f);
             event->tool = MH_TOOL_COUNT;
-            event->recovery_value = sender->reset_count[channel][index];
-        } else if (message[1] == 121 && sender->sustain_on[channel]) {
-            sender->sustain_toggle[channel] =
-                (uint8_t)((sender->sustain_toggle[channel] + 1) & 0x3f);
-            sender->sustain_on[channel] = 0;
+            event->recovery_value = sender->mode_count[channel][index];
+        } else if (message[1] == 121) {
+            unsigned int switch_index;
+            for (switch_index = 0; switch_index < 6; ++switch_index) {
+                if (!sender->switch_on[channel][switch_index]) continue;
+                sender->switch_toggle[channel][switch_index] = (uint8_t)(
+                    (sender->switch_toggle[channel][switch_index] + 1) &
+                    0x3f);
+                sender->switch_on[channel][switch_index] = 0;
+            }
         }
         if (message[1] == 121) {
             sender->parameter_pending[channel] = 0;

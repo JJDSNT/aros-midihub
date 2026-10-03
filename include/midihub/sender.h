@@ -49,9 +49,9 @@ struct mh_sender {
     uint8_t bank_msb[16];
     uint8_t bank_lsb[16];
     uint8_t bank_known[16];
-    uint8_t sustain_on[16];
-    uint8_t sustain_toggle[16];
-    uint8_t reset_count[16][2];
+    uint8_t switch_on[16][6];
+    uint8_t switch_toggle[16][6];
+    uint8_t mode_count[16][5];
     uint8_t active_notes[16][128];
     uint16_t note_count[16][128];
     uint8_t release_velocity[16][128];

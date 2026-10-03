@@ -107,8 +107,9 @@ linked for AROS x64 and m68k, but live AROS playback has not been run.
   when the journal's Y hint requests playback and clock sync is available.
   Chapters P and W restore Program Change, bank selection, and Pitch Bend
   after covered packet loss. Chapter C value logs restore Control Change
-  values. The toggle tool handles sustain (64), and the count tool handles
-  All Sound Off (120) and All Notes Off (123). Chapter E protects repeated
+  values. The toggle tool handles switch controllers 64–69, and the count
+  tool handles All Sound Off (120), All Notes Off (123), Omni Off/On
+  (124/125), and Poly Mode (127). Chapter E protects repeated
   Note On reference counts and non-default Note Off release velocities.
   Chapter M protects RPN/NRPN selection, pending selector MSBs, and Data Entry
   MSB/LSB values plus Data Increment/Decrement adjustments. Its

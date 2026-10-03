@@ -89,7 +89,7 @@ struct runtime {
     uint16_t pitch[16];
     uint8_t controllers[16][128];
     uint8_t controller_known[16][128];
-    uint8_t sustain_toggles[16];
+    uint8_t switch_toggles[16][6];
     uint8_t controller_count[16][128];
     uint8_t parameter_msb[16];
     uint8_t parameter_lsb[16];
@@ -333,6 +333,12 @@ static struct mh_parameter_counter *runtime_parameter_counter(
     return free_entry;
 }
 
+static int count_controller(uint8_t number)
+{
+    return number == 120 || (number >= 123 && number <= 125) ||
+           number == 127;
+}
+
 static void deliver_short(struct runtime *rt, const uint8_t *bytes,
                           size_t length)
 {
@@ -416,10 +422,12 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
         uint8_t controller = bytes[1];
         rt->controller_count[channel][bytes[1]] =
             (uint8_t)((rt->controller_count[channel][bytes[1]] + 1) & 0x3f);
-        if (bytes[1] == 64 &&
-            (rt->controllers[channel][64] >= 64) != (bytes[2] >= 64))
-            rt->sustain_toggles[channel] =
-                (uint8_t)((rt->sustain_toggles[channel] + 1) & 0x3f);
+        if (bytes[1] >= 64 && bytes[1] <= 69 &&
+            (rt->controllers[channel][bytes[1]] >= 64) != (bytes[2] >= 64)) {
+            unsigned int switch_index = bytes[1] - 64;
+            rt->switch_toggles[channel][switch_index] = (uint8_t)(
+                (rt->switch_toggles[channel][switch_index] + 1) & 0x3f);
+        }
         rt->controllers[channel][bytes[1]] = bytes[2];
         rt->controller_known[channel][bytes[1]] = 1;
         if (controller == 101 || controller == 99) {
@@ -463,11 +471,15 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
                    sizeof(rt->poly_pressure[channel]));
             memset(rt->poly_pressure_known[channel], 1,
                    sizeof(rt->poly_pressure_known[channel]));
-            if (rt->controllers[channel][64] >= 64) {
-                rt->sustain_toggles[channel] =
-                    (uint8_t)((rt->sustain_toggles[channel] + 1) & 0x3f);
-                rt->controllers[channel][64] = 0;
-                rt->controller_known[channel][64] = 1;
+            unsigned int switch_index;
+            for (switch_index = 0; switch_index < 6; ++switch_index) {
+                unsigned int number = switch_index + 64;
+                if (rt->controllers[channel][number] >= 64)
+                    rt->switch_toggles[channel][switch_index] = (uint8_t)(
+                        (rt->switch_toggles[channel][switch_index] + 1) &
+                        0x3f);
+                rt->controllers[channel][number] = 0;
+                rt->controller_known[channel][number] = 1;
             }
         }
     } else if (length == 2 && (status & 0xf0) == 0xd0) {
@@ -509,7 +521,7 @@ static void reset_channel_state(struct runtime *rt)
     memset(rt->bank_lsb_known, 0, sizeof(rt->bank_lsb_known));
     memset(rt->controller_known, 0, sizeof(rt->controller_known));
     memset(rt->controllers, 0, sizeof(rt->controllers));
-    memset(rt->sustain_toggles, 0, sizeof(rt->sustain_toggles));
+    memset(rt->switch_toggles, 0, sizeof(rt->switch_toggles));
     memset(rt->controller_count, 0, sizeof(rt->controller_count));
     memset(rt->parameter_type_known, 0,
            sizeof(rt->parameter_type_known));
@@ -643,10 +655,12 @@ static void recover_controls(struct runtime *rt,
             if (single_loss && log->single_packet_safe)
                 continue;
             if (log->alternate) {
-                if (log->number == 64 && !log->count_tool &&
-                    rt->sustain_toggles[channel] != log->value) {
-                    message[1] = 64;
-                    if (rt->controllers[channel][64] >= 64) {
+                if (log->number >= 64 && log->number <= 69 &&
+                    !log->count_tool &&
+                    rt->switch_toggles[channel][log->number - 64] !=
+                    log->value) {
+                    message[1] = log->number;
+                    if (rt->controllers[channel][log->number] >= 64) {
                         message[2] = 0;
                         deliver_short(rt, message, sizeof(message));
                     }
@@ -654,11 +668,12 @@ static void recover_controls(struct runtime *rt,
                         message[2] = 127;
                         deliver_short(rt, message, sizeof(message));
                     }
-                    rt->sustain_toggles[channel] = log->value;
-                    printf("MIDIHub: recovered Sustain toggle channel=%u count=%u\n",
-                           channel, (unsigned int)log->value);
+                    rt->switch_toggles[channel][log->number - 64] = log->value;
+                    printf("MIDIHub: recovered controller toggle channel=%u controller=%u count=%u\n",
+                           channel, (unsigned int)log->number,
+                           (unsigned int)log->value);
                 } else if (log->count_tool &&
-                           (log->number == 120 || log->number == 123) &&
+                           count_controller(log->number) &&
                            rt->controller_count[channel][log->number] !=
                            log->value) {
                     message[1] = log->number;
