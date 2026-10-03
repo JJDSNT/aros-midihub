@@ -91,6 +91,13 @@ struct runtime {
     uint8_t controller_known[16][128];
     uint8_t sustain_toggles[16];
     uint8_t controller_count[16][128];
+    uint8_t parameter_msb[16];
+    uint8_t parameter_lsb[16];
+    uint8_t parameter_nrpn[16];
+    uint8_t parameter_type_known[16];
+    uint8_t parameter_pending[16];
+    uint8_t parameter_valid[16];
+    struct mh_parameter_counter parameter_counts[MH_PARAMETER_STATES];
     uint8_t channel_pressure[16];
     uint8_t channel_pressure_known[16];
     uint8_t poly_pressure[16][128];
@@ -304,6 +311,28 @@ static int send_feedback(struct runtime *rt, uint16_t sequence)
     return fresh;
 }
 
+static struct mh_parameter_counter *runtime_parameter_counter(
+    struct runtime *rt, unsigned int channel, int nrpn, uint16_t number,
+    int create)
+{
+    size_t i;
+    struct mh_parameter_counter *free_entry = NULL;
+    for (i = 0; i < MH_PARAMETER_STATES; ++i) {
+        struct mh_parameter_counter *entry = &rt->parameter_counts[i];
+        if (entry->used && entry->channel == channel &&
+            entry->nrpn == nrpn && entry->number == number)
+            return entry;
+        if (!entry->used && !free_entry) free_entry = entry;
+    }
+    if (!create || !free_entry) return NULL;
+    memset(free_entry, 0, sizeof(*free_entry));
+    free_entry->used = 1;
+    free_entry->channel = (uint8_t)channel;
+    free_entry->nrpn = (uint8_t)nrpn;
+    free_entry->number = number;
+    return free_entry;
+}
+
 static void deliver_short(struct runtime *rt, const uint8_t *bytes,
                           size_t length)
 {
@@ -384,6 +413,7 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
         rt->program[channel] = bytes[1];
         rt->program_known[channel] = 1;
     } else if (length == 3 && (status & 0xf0) == 0xb0) {
+        uint8_t controller = bytes[1];
         rt->controller_count[channel][bytes[1]] =
             (uint8_t)((rt->controller_count[channel][bytes[1]] + 1) & 0x3f);
         if (bytes[1] == 64 &&
@@ -392,6 +422,33 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
                 (uint8_t)((rt->sustain_toggles[channel] + 1) & 0x3f);
         rt->controllers[channel][bytes[1]] = bytes[2];
         rt->controller_known[channel][bytes[1]] = 1;
+        if (controller == 101 || controller == 99) {
+            rt->parameter_nrpn[channel] = controller == 99;
+            rt->parameter_type_known[channel] = 1;
+            rt->parameter_msb[channel] = bytes[2];
+            rt->parameter_pending[channel] = 1;
+            rt->parameter_valid[channel] = 0;
+        } else if ((controller == 100 || controller == 98) &&
+                   rt->parameter_type_known[channel] &&
+                   rt->parameter_nrpn[channel] == (controller == 98)) {
+            struct mh_parameter_counter *counter;
+            uint16_t number;
+            rt->parameter_lsb[channel] = bytes[2];
+            rt->parameter_pending[channel] = 0;
+            rt->parameter_valid[channel] =
+                rt->parameter_msb[channel] != 0x7f || bytes[2] != 0x7f;
+            if (rt->parameter_valid[channel]) {
+                number = (uint16_t)(
+                    ((uint16_t)rt->parameter_msb[channel] << 7) | bytes[2]);
+                counter = runtime_parameter_counter(
+                    rt, channel, rt->parameter_nrpn[channel], number, 1);
+                if (counter)
+                    counter->count = (uint8_t)((counter->count + 1) & 0x7f);
+            }
+        } else if (controller == 121) {
+            rt->parameter_pending[channel] = 0;
+            rt->parameter_valid[channel] = 0;
+        }
         if (bytes[1] == 0) {
             rt->bank_msb[channel] = bytes[2];
             rt->bank_msb_known[channel] = 1;
@@ -454,6 +511,11 @@ static void reset_channel_state(struct runtime *rt)
     memset(rt->controllers, 0, sizeof(rt->controllers));
     memset(rt->sustain_toggles, 0, sizeof(rt->sustain_toggles));
     memset(rt->controller_count, 0, sizeof(rt->controller_count));
+    memset(rt->parameter_type_known, 0,
+           sizeof(rt->parameter_type_known));
+    memset(rt->parameter_pending, 0, sizeof(rt->parameter_pending));
+    memset(rt->parameter_valid, 0, sizeof(rt->parameter_valid));
+    memset(rt->parameter_counts, 0, sizeof(rt->parameter_counts));
     memset(rt->channel_pressure_known, 0,
            sizeof(rt->channel_pressure_known));
     memset(rt->poly_pressure_known, 0, sizeof(rt->poly_pressure_known));
@@ -643,9 +705,15 @@ static void recover_parameters(struct runtime *rt,
         replayed = 0;
         for (j = 0; j < parameters.count; ++j) {
             const struct mh_journal_parameter_log *log = &parameters.logs[j];
+            struct mh_parameter_counter *counter = runtime_parameter_counter(
+                rt, channel->number, log->nrpn, log->number, 0);
+            int had_counter = counter != NULL;
+            uint8_t previous_count = counter ? counter->count : 0;
+            int count_mismatch = log->has_count &&
+                (!counter || counter->count != log->count);
             if ((single_loss && log->single_packet_safe) ||
                 (!log->has_entry_msb && !log->has_entry_lsb &&
-                 !log->has_adjust))
+                 !log->has_adjust && !count_mismatch))
                 continue;
             message[1] = (uint8_t)(log->nrpn ? 99 : 101);
             message[2] = (uint8_t)(log->number >> 7);
@@ -670,15 +738,30 @@ static void recover_parameters(struct runtime *rt,
                 message[2] = 0;
                 while (count--) deliver_short(rt, message, sizeof(message));
             }
+            if (log->has_count) {
+                counter = runtime_parameter_counter(
+                    rt, channel->number, log->nrpn, log->number, 1);
+                if (counter) counter->count = log->count;
+            } else {
+                counter = runtime_parameter_counter(
+                    rt, channel->number, log->nrpn, log->number, 0);
+                if (counter) {
+                    counter->count = previous_count;
+                    if (!had_counter) counter->used = 0;
+                }
+            }
             replayed = 1;
             last_nrpn = log->nrpn;
-            printf("MIDIHub: recovered %s parameter=%u entry=%s%u%s adjust=%d\n",
+            printf("MIDIHub: recovered %s parameter=%u entry=%s%u%s adjust=%d",
                    log->nrpn ? "NRPN" : "RPN",
                    (unsigned int)log->number,
                    log->has_entry_msb ? "MSB:" : "",
                    (unsigned int)(log->has_entry_msb ? log->entry_msb :
                                   log->entry_lsb),
                    log->has_entry_lsb ? "+LSB" : "", (int)log->adjust);
+            if (log->has_count)
+                printf(" count=%u", (unsigned int)log->count);
+            putchar('\n');
         }
         if (parameters.has_pending &&
             (!single_loss || !parameters.single_packet_safe)) {

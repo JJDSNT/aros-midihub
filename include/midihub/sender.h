@@ -7,6 +7,15 @@
 #define MH_SENDER_HISTORY 32
 #define MH_SYSEX_JOURNAL_MAX 512
 #define MH_SYSEX_JOURNAL_LOGS 4
+#define MH_PARAMETER_STATES 128
+
+struct mh_parameter_counter {
+    uint16_t number;
+    uint8_t channel;
+    uint8_t nrpn;
+    uint8_t count;
+    uint8_t used;
+};
 
 struct mh_sent_sysex {
     uint16_t sequence;
@@ -29,6 +38,9 @@ struct mh_sent_event {
     uint16_t parameter;
     uint8_t parameter_valid;
     uint8_t parameter_nrpn;
+    uint8_t parameter_initiated;
+    uint8_t parameter_count_known;
+    uint8_t parameter_count;
 };
 
 struct mh_sender {
@@ -49,6 +61,7 @@ struct mh_sender {
     uint8_t parameter_type_known[16];
     uint8_t parameter_pending[16];
     uint8_t parameter_valid[16];
+    struct mh_parameter_counter parameter_counts[MH_PARAMETER_STATES];
     uint8_t system_reset_count;
     uint8_t tune_request_count;
     uint8_t active_sense_count;

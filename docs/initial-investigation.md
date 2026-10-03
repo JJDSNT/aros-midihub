@@ -112,9 +112,11 @@ linked for AROS x64 and m68k, but live AROS playback has not been run.
   Note On reference counts and non-default Note Off release velocities.
   Chapter M protects RPN/NRPN selection, pending selector MSBs, and Data Entry
   MSB/LSB values plus Data Increment/Decrement adjustments. Its
-  transaction-count tool is bounded and decoded but is not replayed yet.
-  Other alternate logs remain to be implemented. System Chapters D, V, Q,
-  and F
+  transaction-count tool tracks up to 128 distinct channel, type, and
+  parameter combinations, identifies missed selections, and suppresses
+  count-only recovery when the receiver has already observed the count. Other
+  alternate logs remain to be
+  implemented. System Chapters D, V, Q, and F
   are decoded. Chapters D and V recover System Reset, Tune Request, Song Select,
   and Active Sense. Chapter Q recovers standard sequencer transport, downbeat,
   and positions in the MIDI Song Position Pointer range. Larger positions and

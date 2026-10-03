@@ -521,7 +521,7 @@ def run_feedback_case(binary):
                                     peer_ssrc)
         parameter_journal = (
             b"\x20\x00\x2d"
-            b"\x00\x0a\x20\xa0\x07\x00\x00\xc2\x02\x00"
+            b"\x00\x0b\x20\xa0\x08\x00\x00\xce\x02\x00\x01"
         )
         data.sendto(parameter_gap + b"\x40" + parameter_journal,
                     ("127.0.0.1", port + 1))
@@ -536,6 +536,22 @@ def run_feedback_case(binary):
             if time.monotonic() >= deadline:
                 raise AssertionError(output)
             time.sleep(0.01)
+        duplicate_parameter_gap = struct.pack(">BBHII", 0x80, 0xe1, 48,
+                                              int(time.time() * 10000) &
+                                              0xffffffff, peer_ssrc)
+        duplicate_parameter_journal = (
+            b"\x20\x00\x2f"
+            b"\x00\x09\x20\x20\x06\x00\x00\x0c\x01"
+        )
+        data.sendto(duplicate_parameter_gap + b"\x40" +
+                    duplicate_parameter_journal,
+                    ("127.0.0.1", port + 1))
+        feedback, _ = control.recvfrom(128)
+        assert struct.unpack(">I", feedback[8:12])[0] == 0x10030
+        time.sleep(0.05)
+        log.seek(0)
+        output = log.read().decode(errors="replace")
+        assert output.count("recovered RPN parameter=0") == 1
         assert "malformed recovery journal discarded" in output
         assert "1 RTP packet(s) lost; journal covers gap" in output
         assert "recovered Note Off channel=0 note=60" in output

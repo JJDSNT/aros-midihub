@@ -118,6 +118,27 @@ void mh_sender_clear_history(struct mh_sender *sender)
     }
 }
 
+static struct mh_parameter_counter *parameter_counter(
+    struct mh_parameter_counter *counters, unsigned int channel, int nrpn,
+    uint16_t number, int create)
+{
+    size_t i;
+    struct mh_parameter_counter *free_entry = NULL;
+    for (i = 0; i < MH_PARAMETER_STATES; ++i) {
+        if (counters[i].used && counters[i].channel == channel &&
+            counters[i].nrpn == nrpn && counters[i].number == number)
+            return &counters[i];
+        if (!counters[i].used && !free_entry) free_entry = &counters[i];
+    }
+    if (!create || !free_entry) return NULL;
+    memset(free_entry, 0, sizeof(*free_entry));
+    free_entry->used = 1;
+    free_entry->channel = (uint8_t)channel;
+    free_entry->nrpn = (uint8_t)nrpn;
+    free_entry->number = number;
+    return free_entry;
+}
+
 int mh_sender_supported(const uint8_t *message, size_t length)
 {
     uint8_t type;
@@ -186,6 +207,8 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
                    sizeof(sender->parameter_pending));
             memset(sender->parameter_valid, 0,
                    sizeof(sender->parameter_valid));
+            memset(sender->parameter_counts, 0,
+                   sizeof(sender->parameter_counts));
             sender->system_reset_count =
                 (uint8_t)((sender->system_reset_count + 1) & 0x7f);
             sender->tune_request_count = 0;
@@ -276,11 +299,22 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
             sender->parameter_valid[channel] =
                 sender->parameter_msb[channel] != 0x7f || message[2] != 0x7f;
             if (sender->parameter_valid[channel]) {
+                struct mh_parameter_counter *counter;
                 event->parameter = (uint16_t)(
                     ((uint16_t)sender->parameter_msb[channel] << 7) |
                     message[2]);
                 event->parameter_valid = 1;
                 event->parameter_nrpn = sender->parameter_nrpn[channel];
+                counter = parameter_counter(sender->parameter_counts,
+                                            channel,
+                                            event->parameter_nrpn,
+                                            event->parameter, 1);
+                if (counter) {
+                    counter->count = (uint8_t)((counter->count + 1) & 0x7f);
+                    event->parameter_initiated = 1;
+                    event->parameter_count_known = 1;
+                    event->parameter_count = counter->count;
+                }
             }
         } else if ((message[1] == 6 || message[1] == 38 ||
                     message[1] == 96 || message[1] == 97) &&
@@ -290,6 +324,15 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
                 sender->parameter_lsb[channel]);
             event->parameter_valid = 1;
             event->parameter_nrpn = sender->parameter_nrpn[channel];
+            {
+                struct mh_parameter_counter *counter = parameter_counter(
+                    sender->parameter_counts, channel,
+                    event->parameter_nrpn, event->parameter, 0);
+                if (counter) {
+                    event->parameter_count_known = 1;
+                    event->parameter_count = counter->count;
+                }
+            }
         }
         if (message[1] == 0) {
             sender->bank_msb[channel] = message[2];
@@ -436,6 +479,9 @@ struct parameter_build_log {
     int entry_msb;
     int entry_lsb;
     int adjust;
+    int count_event;
+    int count_known;
+    uint8_t count;
 };
 
 static int build_parameters(const struct mh_sender *sender,
@@ -473,6 +519,9 @@ static int build_parameters(const struct mh_sender *sender,
             logs[j].entry_msb = -1;
             logs[j].entry_lsb = -1;
             logs[j].adjust = 0;
+            logs[j].count_event = -1;
+            logs[j].count_known = 0;
+            logs[j].count = 0;
             ++log_count;
         }
         logs[j].last_event = (int)i;
@@ -481,6 +530,11 @@ static int build_parameters(const struct mh_sender *sender,
         if (controller == 6 || controller == 38) logs[j].adjust = 0;
         if (controller == 96 && logs[j].adjust < 16383) ++logs[j].adjust;
         if (controller == 97 && logs[j].adjust > -16383) --logs[j].adjust;
+        if (event->parameter_count_known) {
+            logs[j].count_known = 1;
+            logs[j].count = event->parameter_count;
+        }
+        if (event->parameter_initiated) logs[j].count_event = (int)i;
     }
     if (!activity) return 0;
     if (capacity - *length < 2) return -1;
@@ -501,7 +555,9 @@ static int build_parameters(const struct mh_sender *sender,
         uint8_t toc = (uint8_t)(0x02 |
                       (log->entry_msb >= 0 ? 0x80 : 0) |
                       (has_lsb ? 0x40 : 0) |
-                      (log->adjust ? 0x20 : 0));
+                      (log->adjust ? 0x20 : 0) |
+                      (log->count_event >= 0 ? 0x08 : 0) |
+                      (log->count_known ? 0x04 : 0));
         if (put(data, capacity, length,
                 (uint8_t)((is_recent ? 0 : 0x80) |
                           (log->number & 0x7f))) < 0 ||
@@ -527,6 +583,9 @@ static int build_parameters(const struct mh_sender *sender,
                 put(data, capacity, length, (uint8_t)magnitude) < 0)
                 return -1;
         }
+        if (log->count_event >= 0 &&
+            put(data, capacity, length, log->count) < 0)
+            return -1;
     }
     if (*length - start > 1023) return -1;
     data[start] = (uint8_t)((chapter_recent ? 0 : 0x80) |
