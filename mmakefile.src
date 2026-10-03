@@ -27,7 +27,8 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
     files="$(MIDIHUB_ROOT)/src/applemidi $(MIDIHUB_ROOT)/src/rtpmidi \
            $(MIDIHUB_ROOT)/src/session $(MIDIHUB_ROOT)/src/config \
            $(MIDIHUB_ROOT)/src/timing $(MIDIHUB_ROOT)/src/sender \
-           $(MIDIHUB_ROOT)/src/mdns $(MIDIHUB_ROOT)/src/ble_midi"
+           $(MIDIHUB_ROOT)/src/mdns $(MIDIHUB_ROOT)/src/ble_midi \
+           $(MIDIHUB_ROOT)/src/ble_peripheral"
 
 #MM- contrib-aros-midihub-package : \
 #MM      contrib-aros-midihub-package-startup \

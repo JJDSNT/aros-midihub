@@ -71,3 +71,18 @@ be implemented after native audio playback is verified.
 `AppleMIDI` names session negotiation over that transport; together they form
 one connection, not two CAMD ports. The network, BLE, and synth programs
 create their virtual CAMD ports directly when started.
+
+## Bluetooth MIDI ownership
+
+The peripheral implementation should be installed as `btmidi.class` in
+`SYS:Classes/Bluetooth`, following the existing HID, Serial, and PAN profile
+classes. Bluetooth Preferences already delegates a selected binding's
+configuration window to its class. Its generic UI should continue to manage
+the adapter, registered devices, pairing, trust, and class loading.
+
+The `btmidi.class` configuration window should provide the BLE MIDI switch,
+advertised name, CAMD port names, and live connection/activity status. A
+MIDIHub Preferences Bluetooth page can open or embed the same settings; it
+must not keep a second configuration copy. SoundFont selection, synth backend,
+preview keyboard, and MIDI routing remain MIDIHub settings because the same
+features apply to USB, RTP-MIDI, virtual MIDI, and other transports.

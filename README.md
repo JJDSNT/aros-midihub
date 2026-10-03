@@ -106,14 +106,16 @@ For example:
 
 Bluetooth Low Energy MIDI is widely used by modern wireless MIDI controllers and instruments.
 
-The optional [BLE MIDI central transport](docs/ble-midi.md) connects a
+The optional [BLE MIDI transport](docs/ble-midi.md) connects a
 registered BLE MIDI peripheral to CAMD through `bluetooth.library`. Its
 portable packet codec supports running status, timestamps and multi-packet
-SysEx. The [AROS GATT patch](patches/README.md) supplies 128-bit UUID
-discovery and Write Without Response. The AROS x64 program compiles and links;
-the full package build and physical BLE test remain. AROS cannot advertise
-itself as a BLE MIDI peripheral until its Bluetooth stack has GATT server
-support.
+SysEx. The first [AROS GATT patch](patches/README.md) supplies 128-bit UUID
+discovery and Write Without Response. A second patch now adds a portable GATT
+server, the ATT operations required by BLE MIDI, CCCD subscriptions,
+notifications, and legacy LE advertising command encoders. The MIDIHub
+library builds the BLE MIDI advertising payload. Integration of those server
+primitives with `bluetooth.library`, the `btmidi.class` binding, and physical
+BLE validation remain.
 
 ### MIDI 2.0 / UMP
 

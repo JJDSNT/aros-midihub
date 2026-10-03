@@ -19,9 +19,10 @@ test: build/protocol-test build/ble-midi-test
 	./build/protocol-test
 	./build/ble-midi-test
 
-build/ble-midi-test: tests/ble_midi.c src/ble_midi.c include/midihub/ble_midi.h
+build/ble-midi-test: tests/ble_midi.c src/ble_midi.c src/ble_peripheral.c \
+                     include/midihub/ble_midi.h include/midihub/ble_peripheral.h
 	mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/ble_midi.c src/ble_midi.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/ble_midi.c src/ble_midi.c src/ble_peripheral.c
 
 demo: build/MIDIHub
 

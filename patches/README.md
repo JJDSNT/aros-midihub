@@ -35,6 +35,34 @@ build and a real BLE MIDI device exchange still need to be performed after
 the patch is applied. This patch does not add GATT Server support or the
 MIDIHub BLE MIDI transport itself.
 
+## BLE peripheral foundation
+
+`aros-ble-midi-peripheral.patch` applies after
+`aros-ble-midi-gatt.patch`. It adds generic facilities to the portable AROS
+Bluetooth core:
+
+- a fixed-allocation GATT server and attribute database;
+- primary service and characteristic discovery with 16-bit or 128-bit UUIDs;
+- MTU exchange, reads, long reads, Write Request, and Write Command;
+- Client Characteristic Configuration handling and notifications;
+- HCI command encoders for legacy advertising parameters, advertising data,
+  scan response data, and advertising enable.
+
+```sh
+git -C ~/AROS apply --check "$PWD/patches/aros-ble-midi-gatt.patch"
+git -C ~/AROS apply "$PWD/patches/aros-ble-midi-gatt.patch"
+git -C ~/AROS apply --check "$PWD/patches/aros-ble-midi-peripheral.patch"
+git -C ~/AROS apply "$PWD/patches/aros-ble-midi-peripheral.patch"
+make -C ~/AROS/rom/bluetooth/stack -f Makefile.host test
+```
+
+With both patches applied, the sanitizer-enabled host suite passes
+`2163/2163` checks. The new tests simulate BLE MIDI service discovery, a MIDI
+Write Command, CCCD subscription, and a server notification. The next patch
+increment must connect these core facilities to `bluetooth.library` radio
+state and expose service registration to `btmidi.class`; the current patch by
+itself does not start advertising on AROS.
+
 ## USB MIDI CAMD fix
 
 `aros-usb-midi-camd.patch` applies to the same upstream AROS commit. It fixes

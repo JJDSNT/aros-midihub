@@ -1,0 +1,907 @@
+diff --git a/rom/bluetooth/stack/Makefile.host b/rom/bluetooth/stack/Makefile.host
+index cb03efb248..3b4642dccb 100644
+--- a/rom/bluetooth/stack/Makefile.host
++++ b/rom/bluetooth/stack/Makefile.host
+@@ -18,7 +18,7 @@ TEST_SRC := tests/main.c tests/support/test.c tests/endian/test_endian.c \
+             tests/discovery/test_discovery.c tests/l2cap/test_l2cap.c \
+             tests/l2cap/test_signaling.c tests/l2cap/test_channel.c \
+             tests/sdp/test_sdp.c tests/sdp/test_sdp_client.c tests/sdp/test_sdp_server.c tests/att/test_att.c \
+-            tests/gatt/test_gatt_client.c tests/smp/test_smp.c \
++            tests/gatt/test_gatt_client.c tests/gatt/test_gatt_server.c tests/smp/test_smp.c \
+             tests/security/test_bond_store.c tests/security/test_smp_crypto.c \
+             tests/security/test_smp_pairing.c tests/security/test_smp_manager.c \
+             tests/hid/test_hid_report.c tests/hid/test_hid_input.c \
+diff --git a/rom/bluetooth/stack/core.files b/rom/bluetooth/stack/core.files
+index 59bf982805..c31cb11221 100644
+--- a/rom/bluetooth/stack/core.files
++++ b/rom/bluetooth/stack/core.files
+@@ -26,6 +26,7 @@ BTCORE_FILES := \
+     protocols/sdp/sdp_server \
+     protocols/att/att \
+     protocols/gatt/gatt_client \
++    protocols/gatt/gatt_server \
+     protocols/smp/smp \
+     protocols/vendor_init/dummy/dummy_vendor_init \
+     profiles/hogp/hogp_client \
+diff --git a/rom/bluetooth/stack/include/btcore/gatt_server.h b/rom/bluetooth/stack/include/btcore/gatt_server.h
+new file mode 100644
+index 0000000000..96178187e0
+--- /dev/null
++++ b/rom/bluetooth/stack/include/btcore/gatt_server.h
+@@ -0,0 +1,86 @@
++#ifndef BTCORE_GATT_SERVER_H
++#define BTCORE_GATT_SERVER_H
++
++#include <btcore/att.h>
++#include <btcore/l2cap_channel.h>
++#include <btcore/status.h>
++#include <btcore/types.h>
++
++#ifndef BT_GATT_SERVER_MAX_ATTRIBUTES
++#define BT_GATT_SERVER_MAX_ATTRIBUTES 32
++#endif
++
++#ifndef BT_GATT_SERVER_MAX_VALUE_LEN
++#define BT_GATT_SERVER_MAX_VALUE_LEN 512
++#endif
++
++#ifndef BT_GATT_SERVER_MAX_STORED_VALUE_LEN
++#define BT_GATT_SERVER_MAX_STORED_VALUE_LEN 32
++#endif
++
++#define BT_GATT_PERM_READ  0x01u
++#define BT_GATT_PERM_WRITE 0x02u
++
++#define BT_GATT_CHAR_PROP_READ                   0x02u
++#define BT_GATT_CHAR_PROP_WRITE_WITHOUT_RESPONSE 0x04u
++#define BT_GATT_CHAR_PROP_WRITE                  0x08u
++#define BT_GATT_CHAR_PROP_NOTIFY                 0x10u
++#define BT_GATT_CHAR_PROP_INDICATE               0x20u
++
++typedef size_t (*bt_gatt_server_read_fn)(void *user_data, uint8_t *value, size_t capacity);
++typedef bool (*bt_gatt_server_write_fn)(void *user_data, const uint8_t *value, size_t value_len);
++
++struct bt_gatt_server_attribute
++{
++    uint16_t handle;
++    uint8_t uuid_len;
++    uint8_t uuid[16]; /* ATT little-endian byte order */
++    uint8_t permissions;
++    uint8_t value[BT_GATT_SERVER_MAX_STORED_VALUE_LEN];
++    size_t value_len;
++    bt_gatt_server_read_fn on_read;
++    bt_gatt_server_write_fn on_write;
++    void *user_data;
++};
++
++struct bt_gatt_server
++{
++    struct bt_l2cap_channel_manager *l2cap;
++    struct bt_gatt_server_attribute attributes[BT_GATT_SERVER_MAX_ATTRIBUTES];
++    size_t attribute_count;
++    uint16_t next_handle;
++    uint16_t mtu;
++    bool started;
++};
++
++void bt_gatt_server_init(struct bt_gatt_server *server,
++                         struct bt_l2cap_channel_manager *l2cap);
++
++/* Registration helpers allocate consecutive handles and copy UUID/value bytes,
++ * so callers may release their input buffers after the call. UUIDs use ATT
++ * wire order. Add the complete database before start(). */
++bt_status_t bt_gatt_server_add_service(struct bt_gatt_server *server,
++                                        const uint8_t *uuid, uint8_t uuid_len,
++                                        uint16_t *out_service_handle);
++bt_status_t bt_gatt_server_add_characteristic(struct bt_gatt_server *server,
++                                               const uint8_t *uuid, uint8_t uuid_len,
++                                               uint8_t properties, uint8_t permissions,
++                                               bt_gatt_server_read_fn on_read,
++                                               bt_gatt_server_write_fn on_write,
++                                               void *user_data,
++                                               uint16_t *out_value_handle);
++bt_status_t bt_gatt_server_add_cccd(struct bt_gatt_server *server,
++                                    uint16_t characteristic_value_handle,
++                                    uint16_t *out_cccd_handle);
++
++bt_status_t bt_gatt_server_set_value(struct bt_gatt_server *server, uint16_t handle,
++                                      const uint8_t *value, size_t value_len);
++bt_status_t bt_gatt_server_start(struct bt_gatt_server *server);
++void bt_gatt_server_stop(struct bt_gatt_server *server, uint64_t now_us);
++
++bool bt_gatt_server_is_subscribed(const struct bt_gatt_server *server,
++                                  uint16_t characteristic_value_handle);
++bt_status_t bt_gatt_server_notify(struct bt_gatt_server *server, uint16_t value_handle,
++                                   const uint8_t *value, size_t value_len, uint64_t now_us);
++
++#endif /* BTCORE_GATT_SERVER_H */
+diff --git a/rom/bluetooth/stack/include/btcore/hci.h b/rom/bluetooth/stack/include/btcore/hci.h
+index d072453da8..1b49f8db2f 100644
+--- a/rom/bluetooth/stack/include/btcore/hci.h
++++ b/rom/bluetooth/stack/include/btcore/hci.h
+@@ -26,6 +26,10 @@
+ #define BT_HCI_GIAC_LAP 0x9E8B33u /* General Inquiry Access Code */
+ 
+ #define BT_HCI_OGF_LE_CONTROLLER 0x08u
++#define BT_HCI_OCF_LE_SET_ADVERTISING_PARAMETERS 0x0006u
++#define BT_HCI_OCF_LE_SET_ADVERTISING_DATA 0x0008u
++#define BT_HCI_OCF_LE_SET_SCAN_RESPONSE_DATA 0x0009u
++#define BT_HCI_OCF_LE_SET_ADVERTISING_ENABLE 0x000Au
+ #define BT_HCI_OCF_LE_SET_SCAN_PARAMETERS 0x000Bu
+ #define BT_HCI_OCF_LE_SET_SCAN_ENABLE 0x000Cu
+ #define BT_HCI_OCF_LE_ENCRYPT 0x0017u
+@@ -37,6 +41,14 @@
+     BT_HCI_OPCODE(BT_HCI_OGF_LE_CONTROLLER, BT_HCI_OCF_LE_SET_SCAN_PARAMETERS)
+ #define BT_HCI_OPCODE_LE_SET_SCAN_ENABLE \
+     BT_HCI_OPCODE(BT_HCI_OGF_LE_CONTROLLER, BT_HCI_OCF_LE_SET_SCAN_ENABLE)
++#define BT_HCI_OPCODE_LE_SET_ADVERTISING_PARAMETERS \
++    BT_HCI_OPCODE(BT_HCI_OGF_LE_CONTROLLER, BT_HCI_OCF_LE_SET_ADVERTISING_PARAMETERS)
++#define BT_HCI_OPCODE_LE_SET_ADVERTISING_DATA \
++    BT_HCI_OPCODE(BT_HCI_OGF_LE_CONTROLLER, BT_HCI_OCF_LE_SET_ADVERTISING_DATA)
++#define BT_HCI_OPCODE_LE_SET_SCAN_RESPONSE_DATA \
++    BT_HCI_OPCODE(BT_HCI_OGF_LE_CONTROLLER, BT_HCI_OCF_LE_SET_SCAN_RESPONSE_DATA)
++#define BT_HCI_OPCODE_LE_SET_ADVERTISING_ENABLE \
++    BT_HCI_OPCODE(BT_HCI_OGF_LE_CONTROLLER, BT_HCI_OCF_LE_SET_ADVERTISING_ENABLE)
+ #define BT_HCI_OPCODE_LE_ENCRYPT BT_HCI_OPCODE(BT_HCI_OGF_LE_CONTROLLER, BT_HCI_OCF_LE_ENCRYPT)
+ #define BT_HCI_OPCODE_LE_RAND BT_HCI_OPCODE(BT_HCI_OGF_LE_CONTROLLER, BT_HCI_OCF_LE_RAND)
+ #define BT_HCI_OPCODE_LE_ENABLE_ENCRYPTION \
+@@ -221,6 +233,19 @@ bt_status_t bt_hci_encode_le_set_scan_parameters(struct bt_buf_writer *w, uint8_
+ bt_status_t bt_hci_encode_le_set_scan_enable(struct bt_buf_writer *w, uint8_t scan_enable,
+                                               uint8_t filter_duplicates);
+ 
++/* Legacy advertising commands are available on every LE controller and are
++ * sufficient for connectable BLE MIDI advertising. Intervals are in 0.625 ms
++ * units; peer_address may be NULL for undirected advertising. */
++bt_status_t bt_hci_encode_le_set_advertising_parameters(
++    struct bt_buf_writer *w, uint16_t interval_min, uint16_t interval_max,
++    uint8_t advertising_type, uint8_t own_address_type, uint8_t peer_address_type,
++    const uint8_t *peer_address, uint8_t channel_map, uint8_t filter_policy);
++bt_status_t bt_hci_encode_le_set_advertising_data(struct bt_buf_writer *w,
++                                                   const uint8_t *data, size_t data_len);
++bt_status_t bt_hci_encode_le_set_scan_response_data(struct bt_buf_writer *w,
++                                                     const uint8_t *data, size_t data_len);
++bt_status_t bt_hci_encode_le_set_advertising_enable(struct bt_buf_writer *w, bool enable);
++
+ /* Security controller services. Byte arrays use HCI wire order (least
+  * significant octet first), intentionally distinct from smp_crypto.h's
+  * FIPS/spec-display order. */
+diff --git a/rom/bluetooth/stack/protocols/gatt/gatt_server.c b/rom/bluetooth/stack/protocols/gatt/gatt_server.c
+new file mode 100644
+index 0000000000..a72bf1686d
+--- /dev/null
++++ b/rom/bluetooth/stack/protocols/gatt/gatt_server.c
+@@ -0,0 +1,397 @@
++#include <btcore/gatt_server.h>
++
++#include <string.h>
++
++#define UUID_PRIMARY_SERVICE 0x2800u
++#define UUID_CHARACTERISTIC  0x2803u
++#define UUID_CCCD            0x2902u
++
++static void uuid16(uint8_t out[2], uint16_t value)
++{
++    out[0] = (uint8_t)value;
++    out[1] = (uint8_t)(value >> 8);
++}
++
++static bool uuid_is16(const struct bt_gatt_server_attribute *attr, uint16_t value)
++{
++    return attr->uuid_len == 2 && attr->uuid[0] == (uint8_t)value &&
++           attr->uuid[1] == (uint8_t)(value >> 8);
++}
++
++static struct bt_gatt_server_attribute *find_attr(struct bt_gatt_server *server,
++                                                   uint16_t handle)
++{
++    size_t i;
++    for (i = 0; i < server->attribute_count; ++i)
++        if (server->attributes[i].handle == handle)
++            return &server->attributes[i];
++    return NULL;
++}
++
++static bt_status_t add_attr(struct bt_gatt_server *server, const uint8_t *uuid,
++                            uint8_t uuid_len, uint8_t permissions,
++                            const uint8_t *value, size_t value_len,
++                            bt_gatt_server_read_fn on_read,
++                            bt_gatt_server_write_fn on_write, void *user_data,
++                            uint16_t *out_handle)
++{
++    struct bt_gatt_server_attribute *attr;
++    if (server == NULL || uuid == NULL || (uuid_len != 2 && uuid_len != 16) ||
++        value_len > BT_GATT_SERVER_MAX_STORED_VALUE_LEN || server->started)
++        return BT_ERR_INVALID_ARGUMENT;
++    if (server->attribute_count == BT_GATT_SERVER_MAX_ATTRIBUTES || server->next_handle == 0)
++        return BT_ERR_NO_RESOURCES;
++    attr = &server->attributes[server->attribute_count++];
++    memset(attr, 0, sizeof(*attr));
++    attr->handle = server->next_handle++;
++    attr->uuid_len = uuid_len;
++    memcpy(attr->uuid, uuid, uuid_len);
++    attr->permissions = permissions;
++    if (value_len != 0)
++        memcpy(attr->value, value, value_len);
++    attr->value_len = value_len;
++    attr->on_read = on_read;
++    attr->on_write = on_write;
++    attr->user_data = user_data;
++    if (out_handle != NULL)
++        *out_handle = attr->handle;
++    return BT_OK;
++}
++
++void bt_gatt_server_init(struct bt_gatt_server *server,
++                         struct bt_l2cap_channel_manager *l2cap)
++{
++    memset(server, 0, sizeof(*server));
++    server->l2cap = l2cap;
++    server->next_handle = 1;
++    server->mtu = BT_ATT_DEFAULT_MTU;
++}
++
++bt_status_t bt_gatt_server_add_service(struct bt_gatt_server *server,
++                                        const uint8_t *uuid, uint8_t uuid_len,
++                                        uint16_t *out_service_handle)
++{
++    uint8_t type[2];
++    uuid16(type, UUID_PRIMARY_SERVICE);
++    return add_attr(server, type, 2, BT_GATT_PERM_READ, uuid, uuid_len,
++                    NULL, NULL, NULL, out_service_handle);
++}
++
++bt_status_t bt_gatt_server_add_characteristic(struct bt_gatt_server *server,
++                                               const uint8_t *uuid, uint8_t uuid_len,
++                                               uint8_t properties, uint8_t permissions,
++                                               bt_gatt_server_read_fn on_read,
++                                               bt_gatt_server_write_fn on_write,
++                                               void *user_data,
++                                               uint16_t *out_value_handle)
++{
++    uint8_t decl_type[2];
++    uint8_t declaration[19];
++    uint16_t value_handle;
++    bt_status_t st;
++    if (server == NULL || uuid == NULL || (uuid_len != 2 && uuid_len != 16) ||
++        server->next_handle == 0xffffu)
++        return BT_ERR_INVALID_ARGUMENT;
++    value_handle = (uint16_t)(server->next_handle + 1u);
++    declaration[0] = properties;
++    declaration[1] = (uint8_t)value_handle;
++    declaration[2] = (uint8_t)(value_handle >> 8);
++    memcpy(declaration + 3, uuid, uuid_len);
++    uuid16(decl_type, UUID_CHARACTERISTIC);
++    st = add_attr(server, decl_type, 2, BT_GATT_PERM_READ, declaration,
++                  (size_t)uuid_len + 3u, NULL, NULL, NULL, NULL);
++    if (st != BT_OK)
++        return st;
++    st = add_attr(server, uuid, uuid_len, permissions, NULL, 0,
++                  on_read, on_write, user_data, out_value_handle);
++    if (st != BT_OK) {
++        server->attribute_count--; /* roll back the declaration */
++        server->next_handle--;
++    }
++    return st;
++}
++
++bt_status_t bt_gatt_server_add_cccd(struct bt_gatt_server *server,
++                                    uint16_t characteristic_value_handle,
++                                    uint16_t *out_cccd_handle)
++{
++    uint8_t type[2];
++    uint8_t initial[2] = {0, 0};
++    struct bt_gatt_server_attribute *value = find_attr(server, characteristic_value_handle);
++    if (value == NULL)
++        return BT_ERR_NOT_FOUND;
++    uuid16(type, UUID_CCCD);
++    return add_attr(server, type, 2, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
++                    initial, sizeof(initial), NULL, NULL, NULL, out_cccd_handle);
++}
++
++bt_status_t bt_gatt_server_set_value(struct bt_gatt_server *server, uint16_t handle,
++                                      const uint8_t *value, size_t value_len)
++{
++    struct bt_gatt_server_attribute *attr = find_attr(server, handle);
++    if (attr == NULL)
++        return BT_ERR_NOT_FOUND;
++    if ((value == NULL && value_len != 0) || value_len > sizeof(attr->value))
++        return BT_ERR_INVALID_ARGUMENT;
++    if (value_len != 0)
++        memcpy(attr->value, value, value_len);
++    attr->value_len = value_len;
++    return BT_OK;
++}
++
++static bt_status_t send_pdu(struct bt_gatt_server *server, const uint8_t *pdu,
++                            size_t pdu_len, uint64_t now_us)
++{
++    return bt_l2cap_channel_manager_send(server->l2cap, BT_L2CAP_CID_ATT,
++                                          pdu, pdu_len, now_us);
++}
++
++static void send_error(struct bt_gatt_server *server, uint8_t opcode, uint16_t handle,
++                       uint8_t error, uint64_t now_us)
++{
++    uint8_t pdu[5] = {BT_ATT_OPCODE_ERROR_RESPONSE, opcode,
++                      (uint8_t)handle, (uint8_t)(handle >> 8), error};
++    (void)send_pdu(server, pdu, sizeof(pdu), now_us);
++}
++
++static size_t read_value(struct bt_gatt_server_attribute *attr, uint8_t *out, size_t cap)
++{
++    size_t len;
++    if (attr->on_read != NULL)
++    {
++        len = attr->on_read(attr->user_data, out, cap);
++        return len < cap ? len : cap;
++    }
++    len = attr->value_len < cap ? attr->value_len : cap;
++    if (len != 0)
++        memcpy(out, attr->value, len);
++    return len;
++}
++
++static uint16_t service_end_handle(const struct bt_gatt_server *server, size_t index)
++{
++    size_t i;
++    for (i = index + 1; i < server->attribute_count; ++i)
++        if (uuid_is16(&server->attributes[i], UUID_PRIMARY_SERVICE))
++            return (uint16_t)(server->attributes[i].handle - 1u);
++    return server->attribute_count == 0 ? 0 :
++           server->attributes[server->attribute_count - 1].handle;
++}
++
++static void handle_exchange_mtu(struct bt_gatt_server *server, const uint8_t *pdu,
++                                size_t len, uint64_t now_us)
++{
++    uint16_t peer_mtu;
++    uint8_t rsp[3];
++    if (len != 3) {
++        send_error(server, pdu[0], 0, 0x04, now_us);
++        return;
++    }
++    peer_mtu = (uint16_t)(pdu[1] | ((uint16_t)pdu[2] << 8));
++    if (peer_mtu < BT_ATT_DEFAULT_MTU)
++        peer_mtu = BT_ATT_DEFAULT_MTU;
++    server->mtu = peer_mtu < BT_GATT_SERVER_MAX_VALUE_LEN + 1u ?
++                  peer_mtu : BT_GATT_SERVER_MAX_VALUE_LEN + 1u;
++    rsp[0] = BT_ATT_OPCODE_EXCHANGE_MTU_RESPONSE;
++    rsp[1] = (uint8_t)(BT_GATT_SERVER_MAX_VALUE_LEN + 1u);
++    rsp[2] = (uint8_t)((BT_GATT_SERVER_MAX_VALUE_LEN + 1u) >> 8);
++    (void)send_pdu(server, rsp, sizeof(rsp), now_us);
++}
++
++static void handle_find_information(struct bt_gatt_server *server, const uint8_t *pdu,
++                                    size_t len, uint64_t now_us)
++{
++    uint16_t start, end;
++    uint8_t rsp[BT_GATT_SERVER_MAX_VALUE_LEN + 1];
++    size_t pos = 2, i;
++    uint8_t format = 0, uuid_len = 0;
++    if (len != 5) { send_error(server, pdu[0], 0, 0x04, now_us); return; }
++    start = (uint16_t)(pdu[1] | ((uint16_t)pdu[2] << 8));
++    end = (uint16_t)(pdu[3] | ((uint16_t)pdu[4] << 8));
++    for (i = 0; i < server->attribute_count; ++i) {
++        const struct bt_gatt_server_attribute *a = &server->attributes[i];
++        if (a->handle < start || a->handle > end) continue;
++        if (format == 0) { uuid_len = a->uuid_len; format = uuid_len == 2 ? 1 : 2; }
++        if (a->uuid_len != uuid_len || pos + 2u + uuid_len > server->mtu) break;
++        rsp[pos++] = (uint8_t)a->handle; rsp[pos++] = (uint8_t)(a->handle >> 8);
++        memcpy(rsp + pos, a->uuid, uuid_len); pos += uuid_len;
++    }
++    if (format == 0) { send_error(server, pdu[0], start, BT_ATT_ERROR_ATTRIBUTE_NOT_FOUND, now_us); return; }
++    rsp[0] = BT_ATT_OPCODE_FIND_INFORMATION_RESPONSE; rsp[1] = format;
++    (void)send_pdu(server, rsp, pos, now_us);
++}
++
++static void handle_read_by_group(struct bt_gatt_server *server, const uint8_t *pdu,
++                                 size_t len, uint64_t now_us)
++{
++    uint16_t start, end, type;
++    uint8_t rsp[BT_GATT_SERVER_MAX_VALUE_LEN + 1];
++    size_t pos = 2, i;
++    uint8_t entry_len = 0;
++    if (len != 7) { send_error(server, pdu[0], 0, 0x04, now_us); return; }
++    start = (uint16_t)(pdu[1] | ((uint16_t)pdu[2] << 8));
++    end = (uint16_t)(pdu[3] | ((uint16_t)pdu[4] << 8));
++    type = (uint16_t)(pdu[5] | ((uint16_t)pdu[6] << 8));
++    if (type != UUID_PRIMARY_SERVICE) { send_error(server, pdu[0], start, 0x10, now_us); return; }
++    for (i = 0; i < server->attribute_count; ++i) {
++        const struct bt_gatt_server_attribute *a = &server->attributes[i];
++        uint8_t this_len;
++        uint16_t last;
++        if (a->handle < start || a->handle > end || !uuid_is16(a, UUID_PRIMARY_SERVICE)) continue;
++        this_len = (uint8_t)(4u + a->value_len);
++        if (entry_len == 0) entry_len = this_len;
++        if (this_len != entry_len || pos + this_len > server->mtu) break;
++        last = service_end_handle(server, i);
++        rsp[pos++] = (uint8_t)a->handle; rsp[pos++] = (uint8_t)(a->handle >> 8);
++        rsp[pos++] = (uint8_t)last; rsp[pos++] = (uint8_t)(last >> 8);
++        memcpy(rsp + pos, a->value, a->value_len); pos += a->value_len;
++    }
++    if (entry_len == 0) { send_error(server, pdu[0], start, BT_ATT_ERROR_ATTRIBUTE_NOT_FOUND, now_us); return; }
++    rsp[0] = BT_ATT_OPCODE_READ_BY_GROUP_TYPE_RESPONSE; rsp[1] = entry_len;
++    (void)send_pdu(server, rsp, pos, now_us);
++}
++
++static void handle_read_by_type(struct bt_gatt_server *server, const uint8_t *pdu,
++                                size_t len, uint64_t now_us)
++{
++    uint16_t start, end, type;
++    uint8_t rsp[BT_GATT_SERVER_MAX_VALUE_LEN + 1];
++    size_t pos = 2, i;
++    uint8_t entry_len = 0;
++    if (len != 7) { send_error(server, pdu[0], 0, 0x04, now_us); return; }
++    start = (uint16_t)(pdu[1] | ((uint16_t)pdu[2] << 8));
++    end = (uint16_t)(pdu[3] | ((uint16_t)pdu[4] << 8));
++    type = (uint16_t)(pdu[5] | ((uint16_t)pdu[6] << 8));
++    for (i = 0; i < server->attribute_count; ++i) {
++        struct bt_gatt_server_attribute *a = &server->attributes[i];
++        uint8_t value[BT_GATT_SERVER_MAX_VALUE_LEN];
++        size_t value_len;
++        uint8_t this_len;
++        if (a->handle < start || a->handle > end || !uuid_is16(a, type) ||
++            !(a->permissions & BT_GATT_PERM_READ)) continue;
++        value_len = read_value(a, value, sizeof(value));
++        if (value_len > 253u) value_len = 253u;
++        this_len = (uint8_t)(2u + value_len);
++        if (entry_len == 0) entry_len = this_len;
++        if (this_len != entry_len || pos + this_len > server->mtu) break;
++        rsp[pos++] = (uint8_t)a->handle; rsp[pos++] = (uint8_t)(a->handle >> 8);
++        memcpy(rsp + pos, value, value_len); pos += value_len;
++    }
++    if (entry_len == 0) { send_error(server, pdu[0], start, BT_ATT_ERROR_ATTRIBUTE_NOT_FOUND, now_us); return; }
++    rsp[0] = BT_ATT_OPCODE_READ_BY_TYPE_RESPONSE; rsp[1] = entry_len;
++    (void)send_pdu(server, rsp, pos, now_us);
++}
++
++static void handle_read(struct bt_gatt_server *server, const uint8_t *pdu, size_t len,
++                        bool blob, uint64_t now_us)
++{
++    uint16_t handle, offset = 0;
++    struct bt_gatt_server_attribute *a;
++    uint8_t rsp[BT_GATT_SERVER_MAX_VALUE_LEN + 1];
++    size_t value_len, copy_len;
++    if (len != (blob ? 5u : 3u)) { send_error(server, pdu[0], 0, 0x04, now_us); return; }
++    handle = (uint16_t)(pdu[1] | ((uint16_t)pdu[2] << 8));
++    if (blob) offset = (uint16_t)(pdu[3] | ((uint16_t)pdu[4] << 8));
++    a = find_attr(server, handle);
++    if (a == NULL) { send_error(server, pdu[0], handle, 0x01, now_us); return; }
++    if (!(a->permissions & BT_GATT_PERM_READ)) { send_error(server, pdu[0], handle, 0x02, now_us); return; }
++    value_len = read_value(a, rsp + 1, sizeof(rsp) - 1);
++    if (offset > value_len) { send_error(server, pdu[0], handle, BT_ATT_ERROR_INVALID_OFFSET, now_us); return; }
++    copy_len = value_len - offset;
++    if (copy_len > server->mtu - 1u) copy_len = server->mtu - 1u;
++    if (offset != 0 && copy_len != 0) memmove(rsp + 1, rsp + 1 + offset, copy_len);
++    rsp[0] = blob ? BT_ATT_OPCODE_READ_BLOB_RESPONSE : BT_ATT_OPCODE_READ_RESPONSE;
++    (void)send_pdu(server, rsp, copy_len + 1u, now_us);
++}
++
++static void handle_write(struct bt_gatt_server *server, const uint8_t *pdu, size_t len,
++                         bool command, uint64_t now_us)
++{
++    uint16_t handle;
++    struct bt_gatt_server_attribute *a;
++    bool accepted = true;
++    if (len < 3) { if (!command) send_error(server, pdu[0], 0, 0x04, now_us); return; }
++    handle = (uint16_t)(pdu[1] | ((uint16_t)pdu[2] << 8));
++    a = find_attr(server, handle);
++    if (a == NULL || !(a->permissions & BT_GATT_PERM_WRITE)) {
++        if (!command) send_error(server, pdu[0], handle, a == NULL ? 0x01 : 0x03, now_us);
++        return;
++    }
++    if (a->on_write != NULL)
++        accepted = a->on_write(a->user_data, pdu + 3, len - 3);
++    else if (len - 3 <= sizeof(a->value)) {
++        memcpy(a->value, pdu + 3, len - 3); a->value_len = len - 3;
++    } else accepted = false;
++    if (!accepted) { if (!command) send_error(server, pdu[0], handle, 0x0d, now_us); return; }
++    if (!command) { uint8_t rsp = BT_ATT_OPCODE_WRITE_RESPONSE; (void)send_pdu(server, &rsp, 1, now_us); }
++}
++
++static void channel_event(struct bt_l2cap_channel_event_info *info, void *user_data)
++{
++    struct bt_gatt_server *server = (struct bt_gatt_server *)user_data;
++    const uint8_t *p = info->data;
++    size_t len = info->data_len;
++    if (info->event != BT_L2CAP_CHANNEL_EVENT_DATA || len == 0) return;
++    switch (p[0]) {
++    case BT_ATT_OPCODE_EXCHANGE_MTU_REQUEST: handle_exchange_mtu(server, p, len, info->now_us); break;
++    case BT_ATT_OPCODE_FIND_INFORMATION_REQUEST: handle_find_information(server, p, len, info->now_us); break;
++    case BT_ATT_OPCODE_READ_BY_GROUP_TYPE_REQUEST: handle_read_by_group(server, p, len, info->now_us); break;
++    case BT_ATT_OPCODE_READ_BY_TYPE_REQUEST: handle_read_by_type(server, p, len, info->now_us); break;
++    case BT_ATT_OPCODE_READ_REQUEST: handle_read(server, p, len, false, info->now_us); break;
++    case BT_ATT_OPCODE_READ_BLOB_REQUEST: handle_read(server, p, len, true, info->now_us); break;
++    case BT_ATT_OPCODE_WRITE_REQUEST: handle_write(server, p, len, false, info->now_us); break;
++    case BT_ATT_OPCODE_WRITE_COMMAND: handle_write(server, p, len, true, info->now_us); break;
++    case BT_ATT_OPCODE_HANDLE_VALUE_CONFIRMATION: break;
++    default: send_error(server, p[0], 0, 0x06, info->now_us); break;
++    }
++}
++
++bt_status_t bt_gatt_server_start(struct bt_gatt_server *server)
++{
++    bt_status_t st;
++    if (server == NULL || server->l2cap == NULL || server->started || server->attribute_count == 0)
++        return BT_ERR_INVALID_STATE;
++    st = bt_l2cap_channel_manager_open_fixed(server->l2cap, BT_L2CAP_CID_ATT,
++                                              channel_event, server);
++    if (st == BT_OK) server->started = true;
++    return st;
++}
++
++void bt_gatt_server_stop(struct bt_gatt_server *server, uint64_t now_us)
++{
++    if (server != NULL && server->started) {
++        bt_l2cap_channel_manager_close(server->l2cap, BT_L2CAP_CID_ATT, now_us);
++        server->started = false;
++        server->mtu = BT_ATT_DEFAULT_MTU;
++    }
++}
++
++bool bt_gatt_server_is_subscribed(const struct bt_gatt_server *server,
++                                  uint16_t characteristic_value_handle)
++{
++    size_t i;
++    bool found = false;
++    for (i = 0; i < server->attribute_count; ++i) {
++        const struct bt_gatt_server_attribute *a = &server->attributes[i];
++        if (a->handle == characteristic_value_handle) found = true;
++        else if (found && uuid_is16(a, UUID_CCCD))
++            return a->value_len == 2 && (a->value[0] & 0x01u) != 0;
++        else if (found && uuid_is16(a, UUID_CHARACTERISTIC)) break;
++    }
++    return false;
++}
++
++bt_status_t bt_gatt_server_notify(struct bt_gatt_server *server, uint16_t value_handle,
++                                   const uint8_t *value, size_t value_len, uint64_t now_us)
++{
++    uint8_t pdu[BT_GATT_SERVER_MAX_VALUE_LEN + 3];
++    if (server == NULL || !server->started || find_attr(server, value_handle) == NULL)
++        return BT_ERR_INVALID_STATE;
++    if (!bt_gatt_server_is_subscribed(server, value_handle)) return BT_ERR_INVALID_STATE;
++    if (value == NULL || value_len > server->mtu - 3u || value_len > BT_GATT_SERVER_MAX_VALUE_LEN)
++        return BT_ERR_INVALID_ARGUMENT;
++    pdu[0] = BT_ATT_OPCODE_HANDLE_VALUE_NOTIFICATION;
++    pdu[1] = (uint8_t)value_handle; pdu[2] = (uint8_t)(value_handle >> 8);
++    memcpy(pdu + 3, value, value_len);
++    return send_pdu(server, pdu, value_len + 3u, now_us);
++}
+diff --git a/rom/bluetooth/stack/protocols/hci/hci.c b/rom/bluetooth/stack/protocols/hci/hci.c
+index f47beca52b..0fa6b6e497 100644
+--- a/rom/bluetooth/stack/protocols/hci/hci.c
++++ b/rom/bluetooth/stack/protocols/hci/hci.c
+@@ -388,6 +388,65 @@ bt_status_t bt_hci_encode_le_set_scan_enable(struct bt_buf_writer *w, uint8_t sc
+     return bt_hci_encode_command(w, BT_HCI_OPCODE_LE_SET_SCAN_ENABLE, params, sizeof(params));
+ }
+ 
++bt_status_t bt_hci_encode_le_set_advertising_parameters(
++    struct bt_buf_writer *w, uint16_t interval_min, uint16_t interval_max,
++    uint8_t advertising_type, uint8_t own_address_type, uint8_t peer_address_type,
++    const uint8_t *peer_address, uint8_t channel_map, uint8_t filter_policy)
++{
++    uint8_t params[15] = {0};
++    struct bt_buf_writer pw;
++    if (interval_min < 0x0020u || interval_max < interval_min || interval_max > 0x4000u ||
++        advertising_type > 4u || own_address_type > 3u || peer_address_type > 1u ||
++        channel_map == 0 || (channel_map & ~0x07u) != 0 || filter_policy > 3u)
++        return BT_ERR_INVALID_ARGUMENT;
++    bt_buf_writer_init(&pw, params, sizeof(params));
++    bt_buf_writer_write_le16(&pw, interval_min);
++    bt_buf_writer_write_le16(&pw, interval_max);
++    bt_buf_writer_write_u8(&pw, advertising_type);
++    bt_buf_writer_write_u8(&pw, own_address_type);
++    bt_buf_writer_write_u8(&pw, peer_address_type);
++    if (peer_address != NULL)
++        bt_buf_writer_write_bytes(&pw, peer_address, 6);
++    else
++        bt_buf_writer_write_bytes(&pw, params + 7, 6);
++    bt_buf_writer_write_u8(&pw, channel_map);
++    bt_buf_writer_write_u8(&pw, filter_policy);
++    return bt_hci_encode_command(w, BT_HCI_OPCODE_LE_SET_ADVERTISING_PARAMETERS,
++                                  params, sizeof(params));
++}
++
++static bt_status_t encode_advertising_payload(struct bt_buf_writer *w, uint16_t opcode,
++                                               const uint8_t *data, size_t data_len)
++{
++    uint8_t params[32] = {0};
++    if (data_len > 31u || (data == NULL && data_len != 0))
++        return BT_ERR_INVALID_ARGUMENT;
++    params[0] = (uint8_t)data_len;
++    if (data_len != 0)
++        memcpy(params + 1, data, data_len);
++    return bt_hci_encode_command(w, opcode, params, sizeof(params));
++}
++
++bt_status_t bt_hci_encode_le_set_advertising_data(struct bt_buf_writer *w,
++                                                   const uint8_t *data, size_t data_len)
++{
++    return encode_advertising_payload(w, BT_HCI_OPCODE_LE_SET_ADVERTISING_DATA,
++                                      data, data_len);
++}
++
++bt_status_t bt_hci_encode_le_set_scan_response_data(struct bt_buf_writer *w,
++                                                     const uint8_t *data, size_t data_len)
++{
++    return encode_advertising_payload(w, BT_HCI_OPCODE_LE_SET_SCAN_RESPONSE_DATA,
++                                      data, data_len);
++}
++
++bt_status_t bt_hci_encode_le_set_advertising_enable(struct bt_buf_writer *w, bool enable)
++{
++    uint8_t value = enable ? 1u : 0u;
++    return bt_hci_encode_command(w, BT_HCI_OPCODE_LE_SET_ADVERTISING_ENABLE, &value, 1);
++}
++
+ bt_status_t bt_hci_encode_le_encrypt(struct bt_buf_writer *w, const uint8_t key[16],
+                                      const uint8_t plaintext[16])
+ {
+diff --git a/rom/bluetooth/stack/tests/gatt/test_gatt_server.c b/rom/bluetooth/stack/tests/gatt/test_gatt_server.c
+new file mode 100644
+index 0000000000..4f7e9f2d28
+--- /dev/null
++++ b/rom/bluetooth/stack/tests/gatt/test_gatt_server.c
+@@ -0,0 +1,178 @@
++#include "test_gatt_server.h"
++#include "../support/test.h"
++
++#include <btcore/gatt_server.h>
++
++#include <string.h>
++
++struct fake_transport
++{
++    struct bt_hci_transport base;
++    struct bt_l2cap_reassembler sent;
++    uint8_t pdu[600];
++    size_t pdu_len;
++    bool ready;
++};
++
++static int fake_open(struct bt_hci_transport *t) { (void)t; return 0; }
++static void fake_close(struct bt_hci_transport *t) { (void)t; }
++static int fake_unsupported(struct bt_hci_transport *t, const uint8_t *p, size_t n)
++{ (void)t; (void)p; (void)n; return -1; }
++static int fake_acl(struct bt_hci_transport *t, const uint8_t *data, size_t length)
++{
++    struct fake_transport *ft = (struct fake_transport *)t->impl;
++    struct bt_buf_reader r;
++    struct bt_hci_acl_header h;
++    enum bt_l2cap_reassembly_result rr;
++    const uint8_t *payload;
++    bt_buf_reader_init(&r, data, length);
++    if (bt_hci_parse_acl_header(&r, &h) != BT_OK) return -1;
++    payload = bt_buf_reader_peek(&r, h.data_len);
++    if (payload == NULL) return -1;
++    rr = bt_l2cap_reassembler_feed(&ft->sent, h.pb_flag, payload, h.data_len);
++    if (rr == BT_L2CAP_REASSEMBLY_COMPLETE) {
++        const uint8_t *p = bt_l2cap_reassembler_take(&ft->sent, &ft->pdu_len);
++        memcpy(ft->pdu, p, ft->pdu_len); ft->ready = true;
++    }
++    return 0;
++}
++static int fake_rx(struct bt_hci_transport *t, bt_hci_transport_recv_fn fn, void *u)
++{ (void)t; (void)fn; (void)u; return 0; }
++static void fake_stop(struct bt_hci_transport *t) { (void)t; }
++static const struct bt_hci_transport_ops fake_ops = {
++    fake_open, fake_close, fake_unsupported, fake_acl, fake_unsupported, fake_unsupported,
++    fake_rx, fake_stop
++};
++
++static void setup_transport(struct fake_transport *ft)
++{
++    memset(ft, 0, sizeof(*ft));
++    ft->base.ops = &fake_ops; ft->base.impl = ft;
++    bt_l2cap_reassembler_init(&ft->sent);
++}
++
++static bool take_att(struct fake_transport *ft, const uint8_t **data, size_t *len)
++{
++    struct bt_buf_reader r;
++    struct bt_l2cap_header h;
++    if (!ft->ready) return false;
++    ft->ready = false;
++    bt_buf_reader_init(&r, ft->pdu, ft->pdu_len);
++    if (bt_l2cap_parse_header(&r, &h) != BT_OK || h.cid != BT_L2CAP_CID_ATT) return false;
++    *data = bt_buf_reader_peek(&r, h.length); *len = h.length;
++    return *data != NULL;
++}
++
++static void feed_att(struct bt_l2cap_channel_manager *mgr, const uint8_t *att, size_t att_len)
++{
++    uint8_t l2[620], acl[624];
++    struct bt_buf_writer lw, aw;
++    struct bt_buf_reader r;
++    struct bt_hci_acl_header h;
++    bt_buf_writer_init(&lw, l2, sizeof(l2));
++    bt_l2cap_encode_header(&lw, (uint16_t)att_len, BT_L2CAP_CID_ATT);
++    bt_buf_writer_write_bytes(&lw, att, att_len);
++    bt_buf_writer_init(&aw, acl, sizeof(acl));
++    bt_hci_encode_acl_header(&aw, mgr->handle, 0, 0, (uint16_t)bt_buf_writer_len(&lw));
++    bt_buf_writer_write_bytes(&aw, l2, bt_buf_writer_len(&lw));
++    bt_buf_reader_init(&r, acl, bt_buf_writer_len(&aw));
++    bt_hci_parse_acl_header(&r, &h);
++    bt_l2cap_channel_manager_on_acl(mgr, h.pb_flag,
++        bt_buf_reader_peek(&r, h.data_len), h.data_len, 10);
++}
++
++struct write_log { int count; uint8_t data[16]; size_t len; };
++static bool on_write(void *user, const uint8_t *value, size_t value_len)
++{
++    struct write_log *log = (struct write_log *)user;
++    log->count++; log->len = value_len;
++    if (value_len <= sizeof(log->data)) memcpy(log->data, value, value_len);
++    return value_len <= sizeof(log->data);
++}
++
++static void build_server(struct bt_gatt_server *s, struct bt_l2cap_channel_manager *mgr,
++                         struct write_log *log, uint16_t *value_handle, uint16_t *cccd_handle)
++{
++    static const uint8_t service_uuid[16] = {
++        0x00,0xc7,0xc4,0x4e,0xc3,0x6c,0x51,0xa7,0x33,0x4b,0xe8,0xed,0x5a,0x0e,0xb8,0x03};
++    static const uint8_t io_uuid[16] = {
++        0xf3,0x6b,0x10,0x9d,0x66,0xf2,0xa9,0xa1,0x12,0x41,0x68,0x38,0xdb,0xe5,0x72,0x77};
++    bt_gatt_server_init(s, mgr);
++    BT_CHECK(bt_gatt_server_add_service(s, service_uuid, 16, NULL) == BT_OK);
++    BT_CHECK(bt_gatt_server_add_characteristic(s, io_uuid, 16,
++        BT_GATT_CHAR_PROP_READ | BT_GATT_CHAR_PROP_WRITE_WITHOUT_RESPONSE |
++        BT_GATT_CHAR_PROP_NOTIFY, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
++        NULL, on_write, log, value_handle) == BT_OK);
++    BT_CHECK(bt_gatt_server_add_cccd(s, *value_handle, cccd_handle) == BT_OK);
++    BT_CHECK(bt_gatt_server_start(s) == BT_OK);
++}
++
++static void test_discovery(void)
++{
++    struct fake_transport ft;
++    struct bt_l2cap_channel_manager mgr;
++    struct bt_gatt_server s;
++    struct write_log log = {0};
++    uint16_t value_handle, cccd_handle;
++    const uint8_t *rsp; size_t rsp_len;
++    static const uint8_t group_req[] = {0x10,1,0,0xff,0xff,0x00,0x28};
++    static const uint8_t type_req[] = {0x08,1,0,0xff,0xff,0x03,0x28};
++    static const uint8_t info_req[] = {0x04,1,0,0xff,0xff};
++    setup_transport(&ft);
++    bt_l2cap_channel_manager_init(&mgr, &ft.base, 0x41, BT_L2CAP_CID_SIGNALING_LE, 200);
++    build_server(&s, &mgr, &log, &value_handle, &cccd_handle);
++
++    feed_att(&mgr, group_req, sizeof(group_req));
++    BT_CHECK(take_att(&ft, &rsp, &rsp_len));
++    BT_CHECK(rsp_len == 22 && rsp[0] == BT_ATT_OPCODE_READ_BY_GROUP_TYPE_RESPONSE);
++    BT_CHECK(rsp[1] == 20 && rsp[2] == 1 && rsp[4] == cccd_handle);
++
++    feed_att(&mgr, type_req, sizeof(type_req));
++    BT_CHECK(take_att(&ft, &rsp, &rsp_len));
++    BT_CHECK(rsp[0] == BT_ATT_OPCODE_READ_BY_TYPE_RESPONSE && rsp[1] == 21);
++    BT_CHECK(rsp[5] == (uint8_t)value_handle);
++
++    feed_att(&mgr, info_req, sizeof(info_req));
++    BT_CHECK(take_att(&ft, &rsp, &rsp_len));
++    BT_CHECK(rsp[0] == BT_ATT_OPCODE_FIND_INFORMATION_RESPONSE && rsp[1] == 1);
++    BT_CHECK(rsp_len == 10); /* response stops before UUID format changes */
++}
++
++static void test_write_subscribe_and_notify(void)
++{
++    struct fake_transport ft;
++    struct bt_l2cap_channel_manager mgr;
++    struct bt_gatt_server s;
++    struct write_log log = {0};
++    uint16_t value_handle, cccd_handle;
++    uint8_t pdu[8];
++    const uint8_t *rsp; size_t rsp_len;
++    setup_transport(&ft);
++    bt_l2cap_channel_manager_init(&mgr, &ft.base, 0x41, BT_L2CAP_CID_SIGNALING_LE, 200);
++    build_server(&s, &mgr, &log, &value_handle, &cccd_handle);
++
++    pdu[0] = BT_ATT_OPCODE_WRITE_COMMAND; pdu[1] = (uint8_t)value_handle;
++    pdu[2] = (uint8_t)(value_handle >> 8); pdu[3] = 0x80; pdu[4] = 0x90; pdu[5] = 60; pdu[6] = 100;
++    feed_att(&mgr, pdu, 7);
++    BT_CHECK(log.count == 1 && log.len == 4 && log.data[1] == 0x90);
++    BT_CHECK(!ft.ready); /* Write Command has no response */
++    BT_CHECK(!bt_gatt_server_is_subscribed(&s, value_handle));
++
++    pdu[0] = BT_ATT_OPCODE_WRITE_REQUEST; pdu[1] = (uint8_t)cccd_handle;
++    pdu[2] = (uint8_t)(cccd_handle >> 8); pdu[3] = 1; pdu[4] = 0;
++    feed_att(&mgr, pdu, 5);
++    BT_CHECK(take_att(&ft, &rsp, &rsp_len));
++    BT_CHECK(rsp_len == 1 && rsp[0] == BT_ATT_OPCODE_WRITE_RESPONSE);
++    BT_CHECK(bt_gatt_server_is_subscribed(&s, value_handle));
++
++    BT_CHECK(bt_gatt_server_notify(&s, value_handle, pdu + 3, 2, 20) == BT_OK);
++    BT_CHECK(take_att(&ft, &rsp, &rsp_len));
++    BT_CHECK(rsp_len == 5 && rsp[0] == BT_ATT_OPCODE_HANDLE_VALUE_NOTIFICATION);
++    BT_CHECK(rsp[1] == (uint8_t)value_handle && rsp[3] == 1);
++}
++
++void run_gatt_server_tests(void)
++{
++    test_discovery();
++    test_write_subscribe_and_notify();
++}
+diff --git a/rom/bluetooth/stack/tests/gatt/test_gatt_server.h b/rom/bluetooth/stack/tests/gatt/test_gatt_server.h
+new file mode 100644
+index 0000000000..e984ab55e9
+--- /dev/null
++++ b/rom/bluetooth/stack/tests/gatt/test_gatt_server.h
+@@ -0,0 +1,6 @@
++#ifndef BT_TEST_GATT_SERVER_H
++#define BT_TEST_GATT_SERVER_H
++
++void run_gatt_server_tests(void);
++
++#endif
+diff --git a/rom/bluetooth/stack/tests/hci/test_hci.c b/rom/bluetooth/stack/tests/hci/test_hci.c
+index 94ae9b6c1a..8eb9cb74bc 100644
+--- a/rom/bluetooth/stack/tests/hci/test_hci.c
++++ b/rom/bluetooth/stack/tests/hci/test_hci.c
+@@ -349,6 +349,38 @@ static void test_le_security_commands(void)
+     BT_CHECK(bt_buf_writer_len(&w) == 67 && buf[0] == 0x26 && buf[1] == 0x20 && buf[2] == 64);
+ }
+ 
++static void test_encode_le_advertising(void)
++{
++    static const uint8_t midi_uuid_ad[] = {3, 3, 0, 0};
++    uint8_t buf[80];
++    struct bt_buf_writer w;
++
++    bt_buf_writer_init(&w, buf, sizeof(buf));
++    BT_CHECK(bt_hci_encode_le_set_advertising_parameters(&w, 0x00a0, 0x00f0,
++                                                          0, 0, 0, NULL, 7, 0) == BT_OK);
++    BT_CHECK(bt_buf_writer_len(&w) == 18);
++    BT_CHECK(buf[0] == 0x06 && buf[1] == 0x20 && buf[2] == 15);
++    BT_CHECK(buf[3] == 0xa0 && buf[4] == 0x00 && buf[16] == 7);
++
++    bt_buf_writer_init(&w, buf, sizeof(buf));
++    BT_CHECK(bt_hci_encode_le_set_advertising_data(&w, midi_uuid_ad,
++                                                    sizeof(midi_uuid_ad)) == BT_OK);
++    BT_CHECK(bt_buf_writer_len(&w) == 35 && buf[0] == 0x08 && buf[1] == 0x20);
++    BT_CHECK(buf[3] == sizeof(midi_uuid_ad) && buf[4] == 3 && buf[7] == 0);
++
++    bt_buf_writer_init(&w, buf, sizeof(buf));
++    BT_CHECK(bt_hci_encode_le_set_scan_response_data(&w, midi_uuid_ad,
++                                                      sizeof(midi_uuid_ad)) == BT_OK);
++    BT_CHECK(buf[0] == 0x09 && buf[1] == 0x20);
++
++    bt_buf_writer_init(&w, buf, sizeof(buf));
++    BT_CHECK(bt_hci_encode_le_set_advertising_enable(&w, true) == BT_OK);
++    BT_CHECK(bt_buf_writer_len(&w) == 4 && buf[0] == 0x0a && buf[1] == 0x20 && buf[3] == 1);
++
++    bt_buf_writer_init(&w, buf, sizeof(buf));
++    BT_CHECK(bt_hci_encode_le_set_advertising_data(&w, buf, 32) == BT_ERR_INVALID_ARGUMENT);
++}
++
+ static void test_le_security_returns_and_p256_events(void)
+ {
+     uint8_t encrypt_return[17] = {0};
+@@ -411,6 +443,7 @@ void run_hci_tests(void)
+     test_encode_le_scan();
+     test_le_adv_report_iter();
+     test_le_adv_report_iter_rejects_wrong_subevent();
++    test_encode_le_advertising();
+     test_le_security_commands();
+     test_le_security_returns_and_p256_events();
+ }
+diff --git a/rom/bluetooth/stack/tests/main.c b/rom/bluetooth/stack/tests/main.c
+index de69da3b2a..15bb7172c4 100644
+--- a/rom/bluetooth/stack/tests/main.c
++++ b/rom/bluetooth/stack/tests/main.c
+@@ -20,6 +20,7 @@
+ #include "sdp/test_sdp_server.h"
+ #include "att/test_att.h"
+ #include "gatt/test_gatt_client.h"
++#include "gatt/test_gatt_server.h"
+ #include "smp/test_smp.h"
+ #include "security/test_bond_store.h"
+ #include "security/test_smp_crypto.h"
+@@ -56,6 +57,7 @@ int main(void)
+     run_sdp_client_tests();
+     run_att_tests();
+     run_gatt_client_tests();
++    run_gatt_server_tests();
+     run_smp_tests();
+     run_bond_store_tests();
+     run_smp_crypto_tests();

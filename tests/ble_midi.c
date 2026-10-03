@@ -1,4 +1,5 @@
 #include <midihub/ble_midi.h>
+#include <midihub/ble_peripheral.h>
 
 #include <assert.h>
 #include <stdio.h>
@@ -33,6 +34,32 @@ static void check(struct mh_ble_midi_decoder *decoder,
     assert(memcmp(result.bytes, expected, expected_length) == 0);
     for (i = 0; i < result.count; i++)
         assert(result.times[i] == timestamp);
+}
+
+static void check_advertising(void)
+{
+    uint8_t advertising[MH_BLE_LEGACY_AD_MAX];
+    uint8_t scan_response[MH_BLE_LEGACY_AD_MAX];
+    size_t advertising_length = 0, scan_length = 0;
+
+    assert(mh_ble_peripheral_advertising("AROS MIDIHub", advertising,
+                                         sizeof(advertising), &advertising_length,
+                                         scan_response, sizeof(scan_response),
+                                         &scan_length) == 0);
+    assert(advertising_length == 21);
+    assert(advertising[0] == 2 && advertising[1] == 0x01 && advertising[2] == 0x06);
+    assert(advertising[3] == 17 && advertising[4] == 0x07);
+    assert(advertising[5] == 0x00 && advertising[20] == 0x03);
+    assert(scan_response[1] == 0x09);
+    assert(scan_length == strlen("AROS MIDIHub") + 2);
+    assert(memcmp(scan_response + 2, "AROS MIDIHub", strlen("AROS MIDIHub")) == 0);
+
+    assert(mh_ble_peripheral_advertising("AROS MIDIHub peripheral name is too long",
+                                         advertising, sizeof(advertising),
+                                         &advertising_length, scan_response,
+                                         sizeof(scan_response), &scan_length) == 0);
+    assert(scan_length == MH_BLE_LEGACY_AD_MAX);
+    assert(scan_response[1] == 0x08);
 }
 
 int main(void)
@@ -108,6 +135,7 @@ int main(void)
     assert(result.times[0] == 126 && result.times[3] == 129);
     check(&decoder, realtime_sysex, sizeof(realtime_sysex),
           realtime_sysex_expected, sizeof(realtime_sysex_expected), 1);
+    check_advertising();
     puts("BLE MIDI codec OK");
     return 0;
 }

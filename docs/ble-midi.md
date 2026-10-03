@@ -1,4 +1,4 @@
-# BLE MIDI central transport
+# BLE MIDI transport
 
 The optional `MIDIHubBLE` program connects to a registered BLE MIDI
 peripheral through AROS `bluetooth.library`. It finds the MIDI service
@@ -11,9 +11,36 @@ targets.
 
 This is a **central** implementation: AROS initiates a connection to a BLE MIDI
 peripheral. Making AROS itself appear as a BLE MIDI device to iOS requires a
-GATT server and BLE advertising support, which the current AROS Bluetooth
-stack does not provide. GarageBand on an iPhone cannot discover this program
+GATT server, BLE advertising, and a Bluetooth profile binding. The companion
+`aros-ble-midi-peripheral.patch` now supplies the portable GATT server and HCI
+advertising codecs, while the MIDIHub library supplies a tested advertising
+payload containing the BLE MIDI service UUID. The remaining AROS library and
+class integration means GarageBand still cannot discover the current program
 as a BLE MIDI peripheral.
+
+## Peripheral architecture
+
+BLE MIDI belongs to the Bluetooth subsystem as a profile class, rather than
+being hard-coded into the generic host stack:
+
+- `btcore` owns ATT/GATT server behavior, CCCD state, notifications, and the
+  HCI advertising commands.
+- `bluetooth.library` owns each radio's advertising state, accepts peripheral
+  connections, creates a GATT server for each LE connection, and exposes a
+  service registration API to profile classes.
+- `btmidi.class` registers the standard BLE MIDI service and I/O
+  characteristic, translates BLE MIDI packets, and bridges the byte stream to
+  CAMD.
+- Bluetooth Preferences controls radio state, pairing, trust, and the loaded
+  Bluetooth class. The class's configuration window controls whether the MIDI
+  service is advertised, its local name, and its CAMD port names.
+- MIDIHub Preferences may link to the same class configuration and show MIDI
+  activity. SoundFont and synthesizer settings stay in MIDIHub because they
+  are independent of Bluetooth.
+
+This follows the existing AROS model in which `bthid.class`, `btserial.class`,
+and `btpan.class` sit above `bluetooth.library`. It also lets any future GATT
+server profile reuse the same stack support.
 
 ## Build and run
 
