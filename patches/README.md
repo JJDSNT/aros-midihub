@@ -58,10 +58,47 @@ make -C ~/AROS/rom/bluetooth/stack -f Makefile.host test
 
 With both patches applied, the sanitizer-enabled host suite passes
 `2163/2163` checks. The new tests simulate BLE MIDI service discovery, a MIDI
-Write Command, CCCD subscription, and a server notification. The next patch
-increment must connect these core facilities to `bluetooth.library` radio
-state and expose service registration to `btmidi.class`; the current patch by
-itself does not start advertising on AROS.
+Write Command, CCCD subscription, and a server notification.
+
+## Local GATT service API
+
+`aros-ble-gatt-service-api.patch` applies after both BLE patches above. It
+connects the portable server to `bluetooth.library` and provides the generic
+peripheral facilities required by a Bluetooth profile class:
+
+- register a local 128-bit GATT service and its characteristics;
+- advertise the service through one selected LE radio;
+- accept incoming LE central connections and create one GATT server per link;
+- deliver characteristic writes to an Exec message port owned by the class;
+- send notifications to a subscribed central;
+- keep local services, characteristics, devices, and connections alive while
+  asynchronous messages refer to them.
+
+The advertising setup is a serialized HCI command sequence. The library only
+reports success after the controller accepts the final command, and propagates
+controller errors to the caller. While legacy connectable advertising owns the
+LE radio, LE discovery and outgoing LE connections are rejected; classic
+inquiry and BR/EDR connections remain available.
+
+```sh
+git -C ~/AROS apply --check "$PWD/patches/aros-ble-midi-gatt.patch"
+git -C ~/AROS apply "$PWD/patches/aros-ble-midi-gatt.patch"
+git -C ~/AROS apply --check "$PWD/patches/aros-ble-midi-peripheral.patch"
+git -C ~/AROS apply "$PWD/patches/aros-ble-midi-peripheral.patch"
+git -C ~/AROS apply --check "$PWD/patches/aros-ble-gatt-service-api.patch"
+git -C ~/AROS apply "$PWD/patches/aros-ble-gatt-service-api.patch"
+```
+
+A class receives `struct BtGATTWriteMsg` objects on the port supplied through
+`BGCRA_WritePort`. It must release every message with
+`btFreeGATTWriteMsg()` after consuming the inline payload. These messages are
+not Exec reply messages and must not be passed to `ReplyMsg()`.
+
+The first API intentionally uses legacy advertising and permits one local
+service per radio. Peripheral-role SMP pairing is not implemented yet, so a
+local characteristic must currently work without authenticated or encrypted
+permissions. These limitations are recorded for later Bluetooth stack work;
+they do not prevent the standard unencrypted BLE MIDI service.
 
 ## USB MIDI CAMD fix
 

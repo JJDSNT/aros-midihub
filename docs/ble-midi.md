@@ -9,14 +9,13 @@ packets, and exposes `MIDIHub BLE In` and
 `MIDIHub BLE Out` through CAMD. The codec is portable and shared by all AROS
 targets.
 
-This is a **central** implementation: AROS initiates a connection to a BLE MIDI
-peripheral. Making AROS itself appear as a BLE MIDI device to iOS requires a
-GATT server, BLE advertising, and a Bluetooth profile binding. The companion
-`aros-ble-midi-peripheral.patch` now supplies the portable GATT server and HCI
-advertising codecs, while the MIDIHub library supplies a tested advertising
-payload containing the BLE MIDI service UUID. The remaining AROS library and
-class integration means GarageBand still cannot discover the current program
-as a BLE MIDI peripheral.
+This program is the **central** implementation: AROS initiates a connection to
+a BLE MIDI peripheral. The companion `aros-ble-midi-peripheral.patch` supplies
+the portable GATT server and HCI advertising codecs, and
+`aros-ble-gatt-service-api.patch` connects those facilities to
+`bluetooth.library`. MIDIHub supplies a tested advertising payload containing
+the BLE MIDI service UUID. The remaining component for making AROS discoverable
+by GarageBand is `btmidi.class`, which will own the service and CAMD bridge.
 
 ## Peripheral architecture
 
@@ -41,6 +40,13 @@ being hard-coded into the generic host stack:
 This follows the existing AROS model in which `bthid.class`, `btserial.class`,
 and `btpan.class` sit above `bluetooth.library`. It also lets any future GATT
 server profile reuse the same stack support.
+
+The current local-service API uses legacy advertising and supports one local
+GATT service per radio. It serializes radio programming and delivers incoming
+writes to the profile's own Exec task, so MIDI parsing and CAMD calls never run
+inside the Bluetooth hardware task. Peripheral-role SMP is still absent; the
+BLE MIDI characteristic therefore remains unencrypted until responder pairing
+is added to the stack.
 
 ## Build and run
 
