@@ -35,32 +35,44 @@ The architecture should remain extensible so additional transports and MIDI stan
 
 ## Long-term architecture goal
 
-MIDIHub is intended to incubate and validate modern MIDI capabilities for AROS, not to become a permanent parallel MIDI subsystem.
+MIDIHub is intended primarily as an **incubation, integration, and validation project** for modern MIDI capabilities on AROS. Its purpose is not to establish a permanent parallel MIDI subsystem or to preserve MIDIHub itself as a required runtime, package, or application.
 
-The preferred long-term architecture is to upstream reusable MIDI infrastructure into AROS whenever it is mature and generally useful. Transport and operating-system integration should live in the appropriate native subsystem: CAMD for MIDI-facing integration, the USB stack for USB MIDI, the Bluetooth stack for BLE MIDI, and the network stack or appropriate AROS components for network MIDI. MIDI applications should continue to see standard AROS/CAMD interfaces rather than requiring a MIDIHub-specific runtime API.
+The preferred long-term direction is for every mature capability developed here to find its **most appropriate native home in AROS**. That decision should be made according to AROS architecture rather than according to the current MIDIHub repository layout. Examples may include CAMD for MIDI-facing facilities and virtual endpoints, Poseidon or the appropriate USB components for USB MIDI, the Bluetooth stack and profile classes for BLE MIDI, networking components for network transports, and the appropriate Preferences or system component for user configuration.
 
-In that target architecture, the ideal final form of this project is primarily **`MIDIHub.prefs`**: a unified Preferences application for discovering, configuring, enabling, monitoring, and connecting the MIDI facilities provided by AROS. Optional user-space components such as a SoundFont synthesizer may remain separate where they do not naturally belong in the operating-system transport layer.
+This principle also applies to the user interface. `MIDIHub.prefs` is a useful integration target while the facilities are being developed, but it does **not** need to remain an external MIDIHub application. If a unified MIDI Preferences interface belongs naturally in AROS, it should also be considered for upstream integration.
+
+Likewise, synthesis and SoundFont support should not be kept inside MIDIHub merely to preserve the project boundary. Their eventual location should be chosen according to the architecture that best fits AROS, whether that is CAMD-related infrastructure, an audio or synthesis component, a separate system service or package, or another appropriate native location.
 
 ```text
-                         MIDIHub.prefs
-                              |
-             configuration / status / discovery
-                              |
-          +-------------------+-------------------+
-          |                   |                   |
-         CAMD             Bluetooth            Network
-          |                   |                   |
-      USB MIDI          BLE MIDI /           AppleMIDI /
-      virtual ports     btmidi.class         RTP-MIDI / UMP
-          |                   |                   |
-          +-------------------+-------------------+
-                              |
-                       AROS applications
+                         MIDIHub
+              incubation / integration / tests
+                            |
+        +-------------------+-------------------+
+        |                   |                   |
+     transports          services              UI
+        |                   |                   |
+        +-------------------+-------------------+
+                            |
+                     mature capability
+                            |
+                            v
+                 determine native AROS home
+                            |
+       +--------------------+--------------------+
+       |          |          |         |         |
+      CAMD       USB      Bluetooth  Network   Preferences
+                  |          |                    |
+              USB MIDI   BLE MIDI             MIDI UI
+                         btmidi.class
 ```
 
-This is an architectural direction, not a requirement to move experimental code upstream prematurely. MIDIHub may implement missing capabilities locally while they are being developed and tested. Once a capability is stable and belongs generically to AROS, upstreaming it and removing the duplicate MIDIHub runtime code is considered progress toward the project goal.
+During development, MIDIHub may contain implementations, compatibility layers, test programs, patches, services, and Preferences UI that do not yet exist upstream. This is expected. Once a component is mature and has a clear native location, upstreaming it and removing the duplicate MIDIHub implementation is considered progress.
 
-Consequently, agents and contributors should avoid creating permanent MIDIHub-specific abstractions when an AROS-native interface can reasonably provide the same capability. A shrinking MIDIHub runtime due to successful upstream integration is an intended outcome, not a loss of project scope.
+Agents and contributors should therefore avoid designing permanent MIDIHub-specific abstractions solely to preserve MIDIHub as a product. Prefer standard AROS interfaces and architectural boundaries whenever practical, while allowing experimental code to remain local until its upstream destination is understood.
+
+**The architectural task is not to preserve MIDIHub as a subsystem, but to determine the correct AROS home for each capability.**
+
+If all functionality incubated by MIDIHub eventually has a natural upstream home, the standalone MIDIHub runtime, package, Preferences application, or even the repository itself may no longer be necessary. That outcome is fully consistent with the project's long-term goal.
 
 ## Network MIDI
 
