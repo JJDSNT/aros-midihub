@@ -1,11 +1,93 @@
-# Configuration and future Preferences application
+# MIDIHub Preferences
 
-On AROS, the network program reads `ENV:MidiHub/Network` and falls back to
-`ENVARC:MidiHub/Network` if the first file does not exist. This is a UTF-8 text
-file with one `name=value` option per line. Empty lines and lines beginning
-with `#` or `;` are ignored. `MIDIHub --config path` selects a specific file,
-which must exist. Positional arguments override the ports and address in the
-file. For example:
+## Purpose
+
+`MIDIHub.prefs` is the user-facing control surface for the MIDI environment exposed by AROS through CAMD. Its goal is deliberately modest: provide a clear overview of available MIDI endpoints, basic persistent routing between them, configuration of MIDIHub-managed network MIDI and software synthesis, and reusable profiles.
+
+It is not intended to become a DAW, a MIDI processor, or a sophisticated node-graph environment.
+
+The five primary areas are:
+
+1. **Overview / Devices**
+2. **Routing**
+3. **Network MIDI**
+4. **Synthesizer**
+5. **Profiles**
+
+A small MIDI monitor or test facility may be available as a diagnostic action, but diagnostics do not need to be a primary page.
+
+## Ownership boundaries
+
+MIDIHub presents MIDI information without taking ownership away from the AROS subsystem that provides an endpoint.
+
+| Concern | Owner |
+| --- | --- |
+| MIDI endpoint graph and message distribution | CAMD |
+| Basic persistent MIDI routes | MIDIHub |
+| USB device binding and USB hardware | Poseidon / Trident |
+| Bluetooth adapter, pairing, trust and security | Bluetooth Preferences |
+| IP, Ethernet and Wi-Fi configuration | Network Preferences |
+| Audio device and mode | AHI Preferences |
+| AppleMIDI session settings | MIDIHub |
+| SoundFont and MIDI synth settings | MIDIHub |
+| MIDI profiles | MIDIHub |
+
+Where useful, MIDIHub.prefs may show status and provide a button to open the owning Preferences application or class configuration. It must not maintain a second copy of those settings.
+
+## Overview / Devices
+
+The first page should answer a simple question: **what MIDI endpoints are available now?**
+
+It should enumerate CAMD-visible endpoints and present a compact view such as:
+
+```text
+Endpoint             Transport      Direction      Status
+Arturia MiniLab      USB            In / Out       Online
+iPhone               BLE MIDI       In / Out       Online
+MacBook              AppleMIDI      In / Out       Available
+MIDIHub Synth        Software       In             Running
+```
+
+Useful summary state includes CAMD availability, MIDIHub runtime state, active/waiting route counts, endpoint transport, direction, and connection state.
+
+The page is a system overview, not a replacement for transport-specific configuration.
+
+## Routing
+
+Routing is intentionally **basic**. MIDIHub.prefs should let the user see, create, remove, and persist connections between CAMD-visible endpoints.
+
+A conventional Zune list/table is sufficient and is the preferred initial UI:
+
+```text
+From                 To                  Status
+Arturia MiniLab      MIDIHub Synth       Active
+iPhone               MacBook             Active
+MacBook              USB MIDI Out        Waiting
+
+[ Add Route ] [ Remove Route ]
+```
+
+Adding a route only requires a source and destination. An optional **Reconnect automatically** setting may control whether MIDIHub restores the route when an endpoint reappears.
+
+The initial routing scope explicitly does **not** require:
+
+- note or velocity transformation
+- keyboard splits
+- transpose
+- channel remapping
+- event-processing graphs
+- scripting
+- arbitrary processing nodes
+
+CAMD already provides the MIDI graph primitives. MIDIHub's role is to remember the desired basic connections and keep them alive independently of the Preferences process.
+
+A graphical patchbay may be investigated later as an alternative view, but it is not an implementation requirement and the routing model must not depend on one.
+
+## Network MIDI
+
+This page owns MIDI-specific network-session configuration, not general network configuration.
+
+The current AppleMIDI/RTP-MIDI implementation reads `ENV:MidiHub/Network` and falls back to `ENVARC:MidiHub/Network`. The UTF-8 file uses one `name=value` option per line. Empty lines and lines beginning with `#` or `;` are ignored.
 
 ```text
 local_port=5004
@@ -14,75 +96,113 @@ peer_port=5004
 session_name=AROS MIDIHub
 ```
 
-`local_port` and `peer_port` are control ports from 1 through 65534; the next
-port carries data. Omit both `peer_ip` and `peer_port` to receive invitations
-without initiating a connection. Without a file, the program listens on port
-5004. The session name can be at most 63 bytes. An invalid file prevents
-startup and does not alter an already loaded configuration.
+`local_port` and `peer_port` are control ports from 1 through 65534; the next port carries data. Omitting both `peer_ip` and `peer_port` allows incoming invitations without initiating a connection. Without a file, the current program listens on port 5004. The session name can be at most 63 bytes.
 
-## Preferences
+The Preferences page should expose the relevant MIDI concepts: service enabled state, session name, local control port, discovery, known/discovered peers, connection state, and Connect/Disconnect actions where supported.
 
-A future `MIDIHubPrefs` application should edit these same settings with
-`Use` (write to `ENV:`), `Save` (write to both `ENV:` and `ENVARC:`), and
-`Cancel`. The CLI and GUI would share behavior, while the service would not
-depend on the GUI. The first page should show the session name, local port,
-remote peer, and connection status. A test button could attempt a session and
-show invitations, synchronization, and received messages. The service must
-expose that state before this button can be implemented.
+Future Network MIDI 2.0 / UMP support can live on this page without implying that it is the same protocol as AppleMIDI.
 
-The future SoundFont page should select an `.sf2` file
-with a file requester, check that the engine can open it, and allow gain,
-bank, and default program settings. Audio configuration must use the common
-AROS audio path without assuming a particular target or device. The engine
-should validate a new SoundFont before replacing the one in use, so a failed
-load does not interrupt currently playing notes.
+IP addresses may be used where a MIDI peer requires them, but interface, Wi-Fi, DNS, gateway, and general TCP/IP configuration remain in Network Preferences.
 
-The optional `MIDIHubSynth` service now reads a plain SoundFont path from
-`ENV:MidiHub/SoundFont`, falling back to `ENVARC:MidiHub/SoundFont`; an
-explicit command-line path overrides both. This is the initial storage
-contract for the future SoundFont page. The service loads the path at startup;
-live bank switching is not implemented yet.
+## Synthesizer
 
-The service also reads `ENV:MidiHub/Backend`, falling back to
-`ENVARC:MidiHub/Backend`. The value is `tiny` or `fluid`; the CLI
-`--backend` option overrides it. The default AROS package provides `tiny`.
-Preferences should show `fluid` only when an external FluidSynth-enabled
-build is installed, and should identify an unavailable backend before saving.
+The Synthesizer page configures the software MIDI instrument exposed through CAMD.
 
-AHI Preferences already has a **Music unit**. Its AHI documentation defines
-this as the default audio mode for applications using AHI's low-level API
-(`AHI_NO_UNIT`); it does not configure MIDI or CAMD ports, instruments, or
-SoundFonts. MIDIHub should use the existing AHI audio mode preferences for
-its synthesizer output and keep SoundFont selection and MIDI routing in its
-own configuration. `SoundFontPlay` and `MIDIHubSynth` use AHI's device API on
-unit 0. Selecting the Music unit instead would require a separate low-level
-AHI playback implementation and test. See the upstream AHI
-[user guide](https://github.com/aros-development-team/AROS/blob/13c7f81274825dd9bca047fc7caebfa21576a163/workbench/devs/AHI/Docs/ahiusr.texinfo)
-and [AHI Preferences implementation](https://github.com/aros-development-team/AROS/blob/13c7f81274825dd9bca047fc7caebfa21576a163/workbench/devs/AHI/AHI/support.c).
+It should provide:
 
-Preview should send Note On/Off through the same synthesizer and audio path
-used by CAMD clients. A small virtual key or `Test` button, with selectable
-note and velocity, is enough initially. This exercises the SoundFont, routing,
-and audio together. `MIDIHubCAMDProbe --synth` already sends a fixed note
-through this path. A GUI preview with selectable note and velocity remains to
-be implemented after native audio playback is verified.
+- enable/status
+- SoundFont `.sf2` selection
+- available backend
+- gain
+- default bank/program where supported
+- a simple Test Note / preview action
 
-`MIDIHub` names the package. `RTP-MIDI` names the transport, while
-`AppleMIDI` names session negotiation over that transport; together they form
-one connection, not two CAMD ports. The network, BLE, and synth programs
-create their virtual CAMD ports directly when started.
+The optional `MIDIHubSynth` currently reads a SoundFont path from `ENV:MidiHub/SoundFont`, falling back to `ENVARC:MidiHub/SoundFont`; an explicit command-line path overrides both. It loads the path at startup and does not yet implement live bank switching.
+
+The backend is read from `ENV:MidiHub/Backend`, then `ENVARC:MidiHub/Backend`. Valid values are `tiny` and `fluid`; `--backend` overrides them. The normal AROS package provides TinySoundFont. Preferences should only offer FluidSynth when an external FluidSynth-enabled build is available.
+
+A new SoundFont should be validated before replacing the active one so a failed load does not interrupt current playback.
+
+Preview should send Note On/Off through the same CAMD/synth/audio path used by applications. A selectable note/velocity or a small test control is sufficient.
+
+### AHI boundary
+
+AHI owns audio device and audio-mode configuration. MIDIHub.prefs should not duplicate it.
+
+`SoundFontPlay` and `MIDIHubSynth` currently use AHI's device API on unit 0. AHI Preferences already has a Music unit for applications using AHI's low-level API; moving the synth to that path would require a separate implementation and test.
+
+## Profiles
+
+Profiles preserve a useful MIDI environment without turning MIDIHub into a processing workstation.
+
+A profile may contain MIDIHub-owned choices such as:
+
+- the set of persistent routes
+- route reconnect state
+- Network MIDI settings
+- synth/SoundFont settings
+
+For example:
+
+```text
+Home Studio
+
+Arturia MiniLab  -> MIDIHub Synth
+iPhone BLE       -> MIDIHub Synth
+MacBook          -> USB MIDI Out
+
+AppleMIDI session: AROS MIDIHub
+Synth SoundFont: GeneralUser GS
+```
+
+Profiles must not copy configuration owned by other subsystems. Bluetooth pairings, USB bindings, network-interface configuration, and AHI modes remain external.
+
+Useful actions are `New`, `Duplicate`, `Rename`, `Delete`, and `Activate`, plus selection of the profile loaded at startup.
+
+## Runtime separation
+
+The Preferences application is not the router.
+
+CAMD links are associated with their owning `MidiNode`; deleting that node removes its links. Therefore routes that must survive after the GUI closes need a resident owner.
+
+```text
+MIDIHub.prefs
+      |
+      | desired configuration
+      v
+   MIDIHub
+      |
+      | persistent route ownership
+      v
+     CAMD
+```
+
+MIDIHub should restore configured routes at startup, mark routes as waiting when an endpoint is absent, and reconnect them when the relevant CAMD cluster appears.
+
+The detailed runtime rationale is documented in [midihub-architecture.md](midihub-architecture.md).
 
 ## Bluetooth MIDI ownership
 
-The peripheral implementation should be installed as `btmidi.class` in
-`SYS:Classes/Bluetooth`, following the existing HID, Serial, and PAN profile
-classes. Bluetooth Preferences already delegates a selected binding's
-configuration window to its class. Its generic UI should continue to manage
-the adapter, registered devices, pairing, trust, and class loading.
+The BLE MIDI implementation belongs with the AROS Bluetooth architecture. The peripheral implementation is intended as `btmidi.class` under `SYS:Classes/Bluetooth`, following existing Bluetooth profile classes.
 
-The `btmidi.class` configuration window should provide the BLE MIDI switch,
-advertised name, CAMD port names, and live connection/activity status. A
-MIDIHub Preferences Bluetooth page can open or embed the same settings; it
-must not keep a second configuration copy. SoundFont selection, synth backend,
-preview keyboard, and MIDI routing remain MIDIHub settings because the same
-features apply to USB, RTP-MIDI, virtual MIDI, and other transports.
+Bluetooth Preferences should continue to manage adapters, devices, pairing, trust, security, and class loading. A Bluetooth MIDI class may expose its own profile-specific settings/status.
+
+MIDIHub.prefs should show the resulting BLE MIDI endpoint as part of the MIDI environment. It may link to Bluetooth configuration, but must not duplicate pairing or security controls.
+
+## AROS Preferences semantics
+
+The GUI should follow normal AROS Preferences behavior. `Use` applies the selected MIDIHub configuration for the current environment, `Save` persists it, and `Cancel` discards unapplied changes.
+
+The runtime service must not depend on the GUI being open.
+
+## Design summary
+
+```text
+Overview / Devices  -> What MIDI endpoints exist?
+Routing             -> What is connected to what?
+Network MIDI        -> How are MIDI network sessions configured?
+Synthesizer         -> How is the software MIDI instrument configured?
+Profiles            -> Which saved MIDI environment should be active?
+```
+
+The guiding principle is **overview and basic control**. Advanced MIDI transformation and processing belong in specialized CAMD applications, not in MIDIHub.prefs.
