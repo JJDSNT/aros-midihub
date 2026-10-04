@@ -47,10 +47,9 @@ Its responsibilities may include:
 - waiting for configured endpoints that are temporarily absent
 - reconnecting routes when CAMD clusters appear again
 - forwarding between CAMD clusters when a route requires an active node
-- applying route-level channel, event, SysEx, and other CAMD-supported filters
 - maintaining named routing profiles or studio configurations
 - exposing route and activity state to `MIDIHub.prefs`
-- providing diagnostics for the resulting MIDI topology
+- exposing enough status for a clear overview of the resulting MIDI topology
 
 MIDIHub should not absorb functionality merely because it is MIDI-related. Bluetooth pairing belongs to Bluetooth, USB binding to Poseidon, IP configuration to the network subsystem, and audio-mode selection to AHI.
 
@@ -124,9 +123,7 @@ BLE Keyboard -> MIDIHub
                     +--> AppleMIDI
 ```
 
-Routes may use CAMD link capabilities where appropriate. A future route definition can therefore include source/destination, channel mask, event mask, SysEx filtering, priority, enabled state, and reconnect policy.
-
-The initial implementation does not need every option, but its configuration format should not prevent CAMD-native capabilities from being represented later.
+The MIDIHub routing model is deliberately basic: source, destination, enabled state, and optional automatic reconnection. MIDI transformation, channel remapping, keyboard splits, scripting, and processing graphs are outside the intended scope; specialized CAMD applications can provide those functions.
 
 MIDIHub should avoid forwarding traffic through itself when CAMD already provides an equivalent direct mechanism that satisfies the required lifecycle. It exists to supply persistent routing policy and active bridging where necessary, not to add an unnecessary hop to every MIDI path.
 
@@ -142,7 +139,7 @@ Transport-specific hardware configuration remains in the owning AROS Preferences
 
 ### Routing
 
-Display and edit persistent routes managed by MIDIHub. Source, destination, state, and optional filtering should be clear without requiring the user to understand CAMD internals.
+Display and edit persistent routes managed by MIDIHub. Source, destination, and state should be clear without requiring the user to understand CAMD internals. A conventional Zune list/table is sufficient; a graphical patchbay is optional future UI, not an architectural requirement.
 
 ### Network MIDI
 
@@ -151,12 +148,6 @@ Expose MIDI-specific session and peer configuration for AppleMIDI/RTP-MIDI and f
 ### Synth
 
 Expose MIDI synthesis choices such as SoundFont, supported backend, default bank/program, gain, and MIDI preview. AHI device and audio-mode configuration remain owned by AHI.
-
-### Diagnostics
-
-Use CAMD and MIDIHub runtime state to present endpoint state, active/waiting routes, transport status, MIDI activity, Note On/Off activity, SysEx activity, and test-note generation.
-
-Diagnostics should observe normal MIDI paths rather than create a second transport architecture.
 
 ## Profiles
 
@@ -226,7 +217,7 @@ Some older wording in those documents reflects the earlier stage where network, 
 CAMD              = MIDI infrastructure and runtime graph
 Native subsystems = transport, hardware, network, and audio implementation
 MIDIHub           = persistent cross-endpoint routing and MIDI policy
-MIDIHub.prefs     = user-facing configuration, monitoring, and diagnostics
+MIDIHub.prefs     = overview, basic routing, service configuration, and profiles
 ```
 
 > **MIDIHub should manage relationships between MIDI endpoints without taking ownership away from the AROS subsystems that implement those endpoints.**
