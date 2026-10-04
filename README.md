@@ -9,8 +9,10 @@ The core and the AROS package are intended to work across all AROS targets. Netw
 An initial investigation of the local AROS MIDI facilities, AppleMIDI protocol,
 and the planned `contrib/extras` package layout is recorded in
 [docs/initial-investigation.md](docs/initial-investigation.md).
-The network configuration format and the planned Preferences and SoundFont
-preview are described in [docs/preferences.md](docs/preferences.md).
+The runtime ownership model is described in
+[docs/midihub-architecture.md](docs/midihub-architecture.md). The planned
+`MIDIHub.prefs` overview, basic routing, Network MIDI, Synthesizer, and Profiles
+are described in [docs/preferences.md](docs/preferences.md).
 The SoundFont candidates and distribution decision are recorded in
 [docs/soundfonts.md](docs/soundfonts.md).
 
@@ -18,7 +20,7 @@ The project aims to provide a common foundation for MIDI applications on AROS, a
 
 ## Goals
 
-AROS MIDIHub aims to provide a modular MIDI infrastructure supporting both traditional and modern MIDI environments.
+AROS MIDIHub aims to expand the AROS MIDI environment while preserving CAMD as the standard application-facing infrastructure. During incubation it hosts new capabilities; its coherent long-term role is a small persistent service for overview and basic routing between CAMD-visible endpoints, configured through `MIDIHub.prefs`.
 
 Initial areas of development include:
 
@@ -30,12 +32,14 @@ Initial areas of development include:
 - Virtual MIDI ports
 - Software synthesis using SoundFonts
 - Interoperability with existing AROS MIDI software
+- Basic persistent routing between CAMD endpoints
+- Reusable MIDI profiles
 
 The architecture should remain extensible so additional transports and MIDI standards can be incorporated over time.
 
 ## Long-term architecture goal
 
-MIDIHub is intended primarily as an **incubation, integration, and validation project** for modern MIDI capabilities on AROS. Its purpose is not to establish a permanent parallel MIDI subsystem or to preserve MIDIHub itself as a required runtime, package, or application.
+MIDIHub is intended primarily as an **incubation, integration, and validation project** for modern MIDI capabilities on AROS. Its purpose is not to establish a permanent parallel MIDI subsystem. Transport-specific capabilities should still move to their natural AROS homes. A small MIDIHub runtime may remain where it provides a coherent cross-transport function: persistent basic routing and MIDI-environment state above CAMD.
 
 The preferred long-term direction is for every mature capability developed here to find its **most appropriate native home in AROS**. That decision should be made according to AROS architecture rather than according to the current MIDIHub repository layout. Examples may include CAMD for MIDI-facing facilities and virtual endpoints, Poseidon or the appropriate USB components for USB MIDI, the Bluetooth stack and profile classes for BLE MIDI, networking components for network transports, and the appropriate Preferences or system component for user configuration.
 
@@ -72,7 +76,7 @@ Agents and contributors should therefore avoid designing permanent MIDIHub-speci
 
 **The architectural task is not to preserve MIDIHub as a subsystem, but to determine the correct AROS home for each capability.**
 
-If all functionality incubated by MIDIHub eventually has a natural upstream home, the standalone MIDIHub runtime, package, Preferences application, or even the repository itself may no longer be necessary. That outcome is fully consistent with the project's long-term goal.
+If AROS later provides another native facility that fully absorbs MIDIHub's routing and management role, MIDIHub may shrink further or disappear. Preserving the project boundary remains less important than placing each capability in the correct AROS architecture.
 
 ## Network MIDI
 
@@ -259,11 +263,13 @@ AROS MIDI applications <-> camd.library / CAMD clusters
 ```
 
 Poseidon writes a driver to `DEVS:Midi` for USB devices; CAMD loads it and
-creates its ports. MIDIHub's network, BLE, and synth programs create virtual
-CAMD ports directly. Both mechanisms give applications the same CAMD interface.
-The [rescan patch](patches/aros-camd-rescan.patch) helps drivers installed
-after CAMD opens, but the current virtual ports do not depend on it. See
-[the CAMD integration design](docs/camd-integration.md).
+creates its ports. During incubation, MIDIHub's network, BLE, and synth
+components create CAMD-visible endpoints directly; mature transport components
+should move to their natural AROS subsystems. MIDIHub can then enumerate those
+endpoints and preserve simple source-to-destination routes between them. The
+[rescan patch](patches/aros-camd-rescan.patch) helps drivers installed after
+CAMD opens. See [the CAMD integration design](docs/camd-integration.md) and
+[MIDIHub runtime architecture](docs/midihub-architecture.md).
 
 ## Initial Implementation Sources
 
@@ -292,6 +298,10 @@ playback can be claimed across targets.
 
 ## Next milestones
 
+- Implement the `MIDIHub.prefs` overview of CAMD-visible endpoints and the
+  resident service contract for basic persistent routing.
+- Add route persistence/reconnection and reusable Profiles without adding
+  MIDI transformation or node-processing features.
 - Run `MIDIHubSynth` with a native CAMD client and audible AHI output, then
   add SoundFont and preview controls to Preferences.
 - Test the Poseidon USB MIDI fixes with a physical device, including SysEx
