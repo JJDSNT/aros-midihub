@@ -355,7 +355,7 @@ index 2f42c283f0..e4b1b4b7bb 100644
  }
  /* \\\ */
 diff --git a/rom/bluetooth/bluetooth/hwconn.c b/rom/bluetooth/bluetooth/hwconn.c
-index ba2a88a72b..77257cce6d 100644
+index ba2a88a72b..daf00a5a0a 100644
 --- a/rom/bluetooth/bluetooth/hwconn.c
 +++ b/rom/bluetooth/bluetooth/hwconn.c
 @@ -2058,6 +2058,7 @@ static void bGATTEnumCB(struct bt_gatt_client_completion *completion, void *user
@@ -375,7 +375,148 @@ index ba2a88a72b..77257cce6d 100644
                      /* the characteristic's descriptors live between its value
                         handle and the next declaration (or the service end) */
                      bep->bep_EndHandle = endh;
-@@ -3716,6 +3717,13 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
+@@ -2604,6 +2605,11 @@ static bt_status_t bSMPStartEncryption(void *context, const uint8_t stk[16], uin
+     /* the manager keeps keys most-significant octet first; HCI wants them LSB first */
+     bReverseBytes(cn->cn_SMPLTK, stk, 16);
+     cn->cn_SMPKeySize = key_size;
++    if(cn->cn_Role == BDR_PERIPHERAL) {
++        /* The central starts link encryption. Keep the STK for the ensuing
++           LE Long Term Key Request event from the controller. */
++        return(BT_OK);
++    }
+     return(bLEStartEncryption(cn, cn->cn_SMPLTK, zero8, 0) ? BT_OK : BT_ERR_NO_RESOURCES);
+ }
+ 
+@@ -2652,15 +2658,16 @@ static void bSMPKeysComplete(void *context, const struct bt_smp_distributed_keys
+     struct BtHWConn *cn = context;
+     struct BtBase *BluetoothBase = cn->cn_Core->hc_Base;
+     struct BtDevice *bd = cn->cn_Device;
+-    (void) local;
++    const struct bt_smp_distributed_keys *bond =
++        (cn->cn_Role == BDR_PERIPHERAL) ? local : peer;
+     cn->cn_Core->hc_Hardware->bth_LEListsDirty = TRUE;   /* a new bond for the controller's lists */
+     btLockWriteDevice(bd);
+-    if(peer->key_mask & BT_SMP_KEYDIST_ENC_KEY) {
++    if(bond->key_mask & BT_SMP_KEYDIST_ENC_KEY) {
+         /* distributed as on the wire = HCI byte order */
+-        CopyMem((APTR) peer->ltk, bd->bd_Keys.bkc_LTK, 16);
+-        CopyMem((APTR) peer->rand, bd->bd_Keys.bkc_Rand, 8);
+-        bd->bd_Keys.bkc_EDIV[0] = peer->ediv & 0xff;
+-        bd->bd_Keys.bkc_EDIV[1] = peer->ediv >> 8;
++        CopyMem((APTR) bond->ltk, bd->bd_Keys.bkc_LTK, 16);
++        CopyMem((APTR) bond->rand, bd->bd_Keys.bkc_Rand, 8);
++        bd->bd_Keys.bkc_EDIV[0] = bond->ediv & 0xff;
++        bd->bd_Keys.bkc_EDIV[1] = bond->ediv >> 8;
+         bd->bd_Keys.bkc_Flags |= BKCF_LTK;
+         bd->bd_Keys.bkc_Flags &= ~BKCF_SC;
+     }
+@@ -2824,11 +2831,22 @@ static void bSMPChannelEvent(struct bt_l2cap_channel_event_info *info, void *use
+                 bStartPairing(cn);
+             }
+         } else if(info->data[0] == BT_SMP_PAIRING_REQUEST) {
+-            /* the peer wants to pair us as the peripheral: not supported */
+-            UBYTE pdu[2];
+-            pdu[0] = BT_SMP_PAIRING_FAILED;
+-            pdu[1] = 0x05;
+-            bSMPSend(cn, pdu, 2);
++            /* A central connecting to one of our GATT services starts SMP. */
++            if(cn->cn_Role != BDR_PERIPHERAL || !bSMPSetup(cn) ||
++               bt_smp_manager_accept(&cn->cn_SMP, info->data, info->data_len,
++                                     info->now_us) != BT_OK) {
++                UBYTE pdu[2] = { BT_SMP_PAIRING_FAILED, 0x05 };
++                cn->cn_SMPActive = FALSE;
++                bSMPSend(cn, pdu, 2);
++            } else {
++                cn->cn_PairState = PAIR_SMP;
++                btLockWriteDevice(bd);
++                bd->bd_PairingState = BDPS_INPROGRESS;
++                btUnlockDevice(bd);
++                btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
++                               "%s: LE pairing accepted as peripheral (legacy Just Works).",
++                               bd->bd_Name);
++            }
+         }
+         break;
+     }
+@@ -2847,24 +2865,33 @@ static BOOL bSMPSetup(struct BtHWConn *cn)
+     struct bt_smp_aes_cmac cmac;
+ 
+     memset(&cfg, 0, sizeof(cfg));
+-    cfg.features.io_capability = SMP_IO_DISPLAYYESNO;  /* a keyboard peer -> we display the passkey */
++    cfg.features.io_capability = (cn->cn_Role == BDR_PERIPHERAL) ? 0x03 : SMP_IO_DISPLAYYESNO;
+     cfg.features.oob_data_flag = 0;
+     /* LE Secure Connections is offered only with the "btlesc" boot argument:
+        legacy pairing is what every device so far has been bonded with, and
+        the SC Passkey Entry exchange stalls against the G915 keyboard on the
+        rtl8761bu (whose LE Read Local P-256 Public Key also returns the same
+        key on every boot) - see the SMP trace in the log with btdebug. */
+-    cfg.features.auth_req = BT_SMP_AUTHREQ_BONDING | BT_SMP_AUTHREQ_MITM |
++    cfg.features.auth_req = BT_SMP_AUTHREQ_BONDING |
++                            ((cn->cn_Role == BDR_PERIPHERAL) ? 0 : BT_SMP_AUTHREQ_MITM) |
+                             (((bth->bth_LECaps & BTLC_SECURECONN) && (BluetoothBase->bt_Flags & BTF_LESC) &&
+                               !cn->cn_SMPLegacy) ? BT_SMP_AUTHREQ_SC : 0);
+     cfg.features.max_encryption_key_size = 16;
+-    cfg.features.initiator_key_distribution = 0;
++    cfg.features.initiator_key_distribution = (cn->cn_Role == BDR_PERIPHERAL) ?
++                                               BT_SMP_KEYDIST_ID_KEY : 0;
+     cfg.features.responder_key_distribution = BT_SMP_KEYDIST_ENC_KEY | BT_SMP_KEYDIST_ID_KEY;
+     /* the manager wants addresses most-significant octet first */
+-    cfg.initiator_address_type = 0;
+-    bReverseBytes(cfg.initiator_address, bth->bth_Address.bd_Addr, 6);
+-    cfg.responder_address_type = bd->bd_AddrType & 1;
+-    bReverseBytes(cfg.responder_address, bd->bd_Address.bd_Addr, 6);
++    if(cn->cn_Role == BDR_PERIPHERAL) {
++        cfg.initiator_address_type = bd->bd_AddrType & 1;
++        bReverseBytes(cfg.initiator_address, bd->bd_Address.bd_Addr, 6);
++        cfg.responder_address_type = 0;
++        bReverseBytes(cfg.responder_address, bth->bth_Address.bd_Addr, 6);
++    } else {
++        cfg.initiator_address_type = 0;
++        bReverseBytes(cfg.initiator_address, bth->bth_Address.bd_Addr, 6);
++        cfg.responder_address_type = bd->bd_AddrType & 1;
++        bReverseBytes(cfg.responder_address, bd->bd_Address.bd_Addr, 6);
++    }
+ 
+     aes.encrypt = bSMPAES;
+     aes.context = hc;
+@@ -3437,14 +3464,32 @@ BOOL bConnHandleEvent(struct BtHWCore *hc, UBYTE code, const UBYTE *params, ULON
+             return(TRUE);
+         }
+         if(sub == HC_LE_SUB_LTK_REQUEST) {
+-            /* we do not act as LE peripheral yet: negative reply */
+-            UBYTE p[2];
+-            if(len < 3) {
++            UBYTE p[18];
++            UWORD handle;
++            BOOL have = FALSE;
++            if(len < 13) {
+                 return(TRUE);
+             }
++            handle = (params[1] | (params[2] << 8)) & 0x0fff;
+             p[0] = params[1];
+             p[1] = params[2];
+-            bSubmitCmd(hc, HC_OP_LE_LTK_REQ_NEG_REPLY, p, 2, bIgnoreCompletion, hc);
++            cn = bFindConnByHandle(hc, handle);
++            if(cn && cn->cn_SMPActive && (cn->cn_Role == BDR_PERIPHERAL) &&
++               (cn->cn_SMP.state == BT_SMP_STATE_WAIT_ENCRYPTION)) {
++                static const UBYTE zero[10] = { 0 };
++                if(!memcmp(&params[3], zero, sizeof(zero))) {
++                    CopyMem(cn->cn_SMPLTK, &p[2], 16);
++                    have = TRUE;
++                }
++            } else if(cn && (cn->cn_Device->bd_Keys.bkc_Flags & BKCF_LTK) &&
++                      !memcmp(&params[3], cn->cn_Device->bd_Keys.bkc_Rand, 8) &&
++                      params[11] == cn->cn_Device->bd_Keys.bkc_EDIV[0] &&
++                      params[12] == cn->cn_Device->bd_Keys.bkc_EDIV[1]) {
++                CopyMem(cn->cn_Device->bd_Keys.bkc_LTK, &p[2], 16);
++                have = TRUE;
++            }
++            bSubmitCmd(hc, have ? HC_OP_LE_LTK_REQ_REPLY : HC_OP_LE_LTK_REQ_NEG_REPLY,
++                       p, have ? 18 : 2, bIgnoreCompletion, hc);
+             return(TRUE);
+         }
+         return(FALSE);
+@@ -3716,6 +3761,13 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
                      cn->cn_CtrlReq = NULL;
                      bReplyChannel(BluetoothBase, bch, BTIOERR_HOSTERROR, 0);
                  }
@@ -389,7 +530,7 @@ index ba2a88a72b..77257cce6d 100644
              } else {
                  if(bt_gatt_client_write(&cn->cn_GATT, bch->bch_Value, bch->bch_Data, bch->bch_Length,
                                          bGATTOpComplete, cn, now) != BT_OK) {
-@@ -3896,8 +3904,15 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
+@@ -3896,8 +3948,15 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
                      return(TRUE);
                  }
                  cn->cn_CtrlReq = bch;
@@ -519,6 +660,219 @@ index 72f3821ec3..d357970a26 100644
      return((LONG) len);
      AROS_LIBFUNC_EXIT
  }
+diff --git a/rom/bluetooth/stack/core/security/smp_manager.c b/rom/bluetooth/stack/core/security/smp_manager.c
+index d50c98ed44..ad9a049a6d 100644
+--- a/rom/bluetooth/stack/core/security/smp_manager.c
++++ b/rom/bluetooth/stack/core/security/smp_manager.c
+@@ -293,6 +293,87 @@ static void handle_confirm(struct bt_smp_manager *m, const struct bt_smp_command
+     }
+ }
+ 
++static void handle_responder_confirm(struct bt_smp_manager *m,
++                                     const struct bt_smp_command *command,
++                                     uint64_t now_us)
++{
++    const uint8_t *wire;
++    uint8_t confirm[16], wire_confirm[16], pdu[17];
++    struct bt_buf_writer w;
++
++    if (m->state != BT_SMP_STATE_WAIT_PAIRING_CONFIRM ||
++        bt_smp_parse_value128(command, &wire) != BT_OK)
++        goto invalid;
++    reverse_copy(m->peer_confirm, wire, 16);
++    if (m->ops->random(m->context, m->local_random, 16) != BT_OK ||
++        bt_smp_crypto_c1(&m->aes, m->tk, m->local_random, m->preq, m->pres,
++                         m->config.initiator_address_type,
++                         m->config.responder_address_type,
++                         m->config.initiator_address,
++                         m->config.responder_address, confirm) != BT_OK)
++        goto crypto;
++    reverse_copy(wire_confirm, confirm, 16);
++    bt_buf_writer_init(&w, pdu, sizeof(pdu));
++    m->state = BT_SMP_STATE_WAIT_PAIRING_RANDOM;
++    if (bt_smp_encode_value128(&w, BT_SMP_PAIRING_CONFIRM, wire_confirm) != BT_OK ||
++        send_pdu(m, pdu, bt_buf_writer_len(&w), now_us) != BT_OK)
++        finish(m, BT_SMP_MANAGER_ERROR_PROTOCOL);
++    return;
++crypto:
++    send_failed(m, 0x08, now_us, BT_SMP_MANAGER_ERROR_CRYPTO);
++    return;
++invalid:
++    send_failed(m, 0x0A, now_us, BT_SMP_MANAGER_ERROR_PROTOCOL);
++}
++
++static void handle_responder_random(struct bt_smp_manager *m,
++                                    const struct bt_smp_command *command,
++                                    uint64_t now_us)
++{
++    const uint8_t *wire;
++    uint8_t peer_random[16], expected[16], wire_random[16], pdu[17];
++    struct bt_buf_writer w;
++    size_t clear;
++
++    if (m->state != BT_SMP_STATE_WAIT_PAIRING_RANDOM ||
++        bt_smp_parse_value128(command, &wire) != BT_OK)
++        goto invalid;
++    reverse_copy(peer_random, wire, 16);
++    if (bt_smp_crypto_c1(&m->aes, m->tk, peer_random, m->preq, m->pres,
++                         m->config.initiator_address_type,
++                         m->config.responder_address_type,
++                         m->config.initiator_address,
++                         m->config.responder_address, expected) != BT_OK)
++        goto crypto;
++    if (memcmp(expected, m->peer_confirm, 16) != 0) {
++        send_failed(m, 0x04, now_us, BT_SMP_MANAGER_ERROR_CONFIRM);
++        return;
++    }
++    if (bt_smp_crypto_s1(&m->aes, m->tk, m->local_random, peer_random,
++                         m->stk) != BT_OK)
++        goto crypto;
++    clear = 16u - m->negotiation.encryption_key_size;
++    memset(m->stk, 0, clear);
++    reverse_copy(wire_random, m->local_random, 16);
++    bt_buf_writer_init(&w, pdu, sizeof(pdu));
++    if (bt_smp_encode_value128(&w, BT_SMP_PAIRING_RANDOM, wire_random) != BT_OK ||
++        send_pdu(m, pdu, bt_buf_writer_len(&w), now_us) != BT_OK) {
++        finish(m, BT_SMP_MANAGER_ERROR_PROTOCOL);
++        return;
++    }
++    m->state = BT_SMP_STATE_WAIT_ENCRYPTION;
++    m->deadline_us = timeout_deadline(now_us);
++    if (m->ops->start_encryption(m->context, m->stk,
++                                  m->negotiation.encryption_key_size) != BT_OK)
++        finish(m, BT_SMP_MANAGER_ERROR_ENCRYPTION);
++    return;
++crypto:
++    send_failed(m, 0x08, now_us, BT_SMP_MANAGER_ERROR_CRYPTO);
++    return;
++invalid:
++    send_failed(m, 0x0A, now_us, BT_SMP_MANAGER_ERROR_PROTOCOL);
++}
++
+ static void handle_random(struct bt_smp_manager *m, const struct bt_smp_command *command,
+                           uint64_t now_us)
+ {
+@@ -483,7 +564,8 @@ static bool send_key_distribution(struct bt_smp_manager *m, uint64_t now_us)
+ {
+     uint8_t pdu[17];
+     struct bt_buf_writer w;
+-    uint8_t mask = m->negotiation.initiator_key_distribution;
++    uint8_t mask = m->responder ? m->negotiation.responder_key_distribution
++                                : m->negotiation.initiator_key_distribution;
+ 
+     memset(&m->local_keys, 0, sizeof(m->local_keys));
+     if (mask != 0 &&
+@@ -526,7 +608,7 @@ static bool send_key_distribution(struct bt_smp_manager *m, uint64_t now_us)
+ 
+ static void finish_key_distribution(struct bt_smp_manager *m, uint64_t now_us)
+ {
+-    if (!send_key_distribution(m, now_us))
++    if (!m->responder && !send_key_distribution(m, now_us))
+     {
+         finish(m, BT_SMP_MANAGER_ERROR_CRYPTO);
+         return;
+@@ -543,7 +625,8 @@ static void handle_distributed_key(struct bt_smp_manager *m,
+     const uint8_t *value;
+     struct bt_smp_central_identification central;
+     struct bt_smp_identity_address identity;
+-    uint8_t expected = m->negotiation.responder_key_distribution;
++    uint8_t expected = m->responder ? m->negotiation.initiator_key_distribution
++                                    : m->negotiation.responder_key_distribution;
+ 
+     if (m->state != BT_SMP_STATE_WAIT_KEY_DISTRIBUTION)
+         goto invalid;
+@@ -674,6 +757,49 @@ bt_status_t bt_smp_manager_start(struct bt_smp_manager *m, uint64_t now_us)
+     return BT_OK;
+ }
+ 
++bt_status_t bt_smp_manager_accept(struct bt_smp_manager *m,
++                                   const uint8_t *request, size_t request_len,
++                                   uint64_t now_us)
++{
++    struct bt_smp_command command;
++    struct bt_smp_pairing_features peer, response;
++    struct bt_buf_writer w;
++    uint8_t pdu[7];
++
++    if (m == NULL || request == NULL || m->ops == NULL || m->ops->send == NULL ||
++        m->ops->random == NULL || m->ops->start_encryption == NULL ||
++        m->aes.encrypt == NULL || m->state != BT_SMP_STATE_IDLE ||
++        bt_smp_parse_command(request, request_len, &command) != BT_OK ||
++        command.code != BT_SMP_PAIRING_REQUEST ||
++        bt_smp_parse_pairing_features(&command, &peer) != BT_OK)
++        return BT_ERR_INVALID_ARGUMENT;
++
++    response = m->config.features;
++    response.auth_req &= (uint8_t)~(BT_SMP_AUTHREQ_SC | BT_SMP_AUTHREQ_MITM);
++    response.io_capability = 0x03u; /* NoInputNoOutput: legacy Just Works */
++    response.initiator_key_distribution &= peer.initiator_key_distribution;
++    response.responder_key_distribution &= peer.responder_key_distribution;
++    if (bt_smp_negotiate_pairing(&peer, &response, &m->negotiation) != BT_OK ||
++        m->negotiation.secure_connections ||
++        m->negotiation.association != BT_SMP_ASSOC_JUST_WORKS)
++        return BT_ERR_INVALID_ARGUMENT;
++
++    reverse_copy(m->preq, request, 7);
++    bt_buf_writer_init(&w, pdu, sizeof(pdu));
++    if (bt_smp_encode_pairing_features(&w, BT_SMP_PAIRING_RESPONSE, &response) != BT_OK)
++        return BT_ERR_INVALID_ARGUMENT;
++    reverse_copy(m->pres, pdu, 7);
++    memset(m->tk, 0, sizeof(m->tk));
++    m->responder = true;
++    m->state = BT_SMP_STATE_WAIT_PAIRING_CONFIRM;
++    if (send_pdu(m, pdu, sizeof(pdu), now_us) != BT_OK) {
++        m->state = BT_SMP_STATE_IDLE;
++        m->responder = false;
++        return BT_ERR_NO_RESOURCES;
++    }
++    return BT_OK;
++}
++
+ void bt_smp_manager_on_pdu(struct bt_smp_manager *m, const uint8_t *pdu,
+                             size_t pdu_len, uint64_t now_us)
+ {
+@@ -697,13 +823,17 @@ void bt_smp_manager_on_pdu(struct bt_smp_manager *m, const uint8_t *pdu,
+         handle_sc_public_key(m, &command, now_us);
+         break;
+     case BT_SMP_PAIRING_CONFIRM:
+-        if (m->state == BT_SMP_STATE_WAIT_SC_CONFIRM)
++        if (m->responder)
++            handle_responder_confirm(m, &command, now_us);
++        else if (m->state == BT_SMP_STATE_WAIT_SC_CONFIRM)
+             handle_sc_confirm(m, &command, now_us);
+         else
+             handle_confirm(m, &command, now_us);
+         break;
+     case BT_SMP_PAIRING_RANDOM:
+-        if (m->state == BT_SMP_STATE_WAIT_SC_RANDOM)
++        if (m->responder)
++            handle_responder_random(m, &command, now_us);
++        else if (m->state == BT_SMP_STATE_WAIT_SC_RANDOM)
+             handle_sc_random(m, &command, now_us);
+         else
+             handle_random(m, &command, now_us);
+@@ -862,6 +992,21 @@ void bt_smp_manager_on_encryption_changed(struct bt_smp_manager *m, bool enabled
+     m->peer_keys_complete_mask = 0;
+     m->peer_ltk_received = false;
+     m->peer_irk_received = false;
++    if (m->responder) {
++        if (!send_key_distribution(m, now_us)) {
++            finish(m, BT_SMP_MANAGER_ERROR_CRYPTO);
++            return;
++        }
++        if (m->negotiation.initiator_key_distribution == 0) {
++            if (m->ops->keys_complete != NULL)
++                m->ops->keys_complete(m->context, &m->peer_keys, &m->local_keys);
++            finish(m, BT_SMP_MANAGER_OK);
++            return;
++        }
++        m->state = BT_SMP_STATE_WAIT_KEY_DISTRIBUTION;
++        m->deadline_us = timeout_deadline(now_us);
++        return;
++    }
+     if (m->negotiation.responder_key_distribution == 0)
+     {
+         finish_key_distribution(m, now_us);
 diff --git a/rom/bluetooth/stack/include/btcore/att.h b/rom/bluetooth/stack/include/btcore/att.h
 index 779176e37b..a762c7f21d 100644
 --- a/rom/bluetooth/stack/include/btcore/att.h
@@ -557,6 +911,33 @@ index 415ddc5412..b469536342 100644
  /* Must be called by the owning event loop as time advances. Times out the
   * current ATT transaction; late responses are ignored. */
  void bt_gatt_client_tick(struct bt_gatt_client *client, uint64_t now_us);
+diff --git a/rom/bluetooth/stack/include/btcore/smp_manager.h b/rom/bluetooth/stack/include/btcore/smp_manager.h
+index a0e844808e..e5b573517d 100644
+--- a/rom/bluetooth/stack/include/btcore/smp_manager.h
++++ b/rom/bluetooth/stack/include/btcore/smp_manager.h
+@@ -121,6 +121,7 @@ struct bt_smp_manager
+     uint8_t peer_dhkey_check[16];
+     uint32_t numeric_value;
+     uint8_t sc_round;              /* Passkey Entry: commitment round 0..19 */
++    bool responder;
+ };
+ 
+ void bt_smp_manager_init(struct bt_smp_manager *manager,
+@@ -133,6 +134,14 @@ void bt_smp_manager_set_cmac(struct bt_smp_manager *manager,
+ /* Central/initiator role. Sends Pairing Request immediately. */
+ bt_status_t bt_smp_manager_start(struct bt_smp_manager *manager, uint64_t now_us);
+ 
++/* Peripheral/responder role. Accepts a Pairing Request and sends the Pairing
++ * Response. The initial implementation deliberately negotiates legacy Just
++ * Works; Secure Connections and authenticated responder associations may be
++ * added without changing this entry point. */
++bt_status_t bt_smp_manager_accept(struct bt_smp_manager *manager,
++                                   const uint8_t *request, size_t request_len,
++                                   uint64_t now_us);
++
+ /* Feed one complete PDU received on BT_L2CAP_CID_SMP. */
+ void bt_smp_manager_on_pdu(struct bt_smp_manager *manager, const uint8_t *pdu,
+                             size_t pdu_len, uint64_t now_us);
 diff --git a/rom/bluetooth/stack/protocols/att/att.c b/rom/bluetooth/stack/protocols/att/att.c
 index defd88d618..215563b49a 100644
 --- a/rom/bluetooth/stack/protocols/att/att.c
@@ -700,3 +1081,72 @@ index 5e773cc416..50e94a85d9 100644
      test_discover_descriptors();
      test_read_att_error();
      test_long_read_uses_read_blob();
+diff --git a/rom/bluetooth/stack/tests/security/test_smp_manager.c b/rom/bluetooth/stack/tests/security/test_smp_manager.c
+index cabfed487f..516f178339 100644
+--- a/rom/bluetooth/stack/tests/security/test_smp_manager.c
++++ b/rom/bluetooth/stack/tests/security/test_smp_manager.c
+@@ -309,6 +309,56 @@ static void test_legacy_just_works_success(void)
+     BT_CHECK(port.complete_calls == 1 && port.result == BT_SMP_MANAGER_OK);
+ }
+ 
++static void test_legacy_responder_just_works(void)
++{
++    struct bt_smp_manager manager;
++    struct fake_manager_port port;
++    struct bt_smp_pairing_features request = {
++        0x03, 0, BT_SMP_AUTHREQ_BONDING | BT_SMP_AUTHREQ_SC, 16,
++        BT_SMP_KEYDIST_ID_KEY, BT_SMP_KEYDIST_ID_KEY};
++    struct bt_buf_writer w;
++    uint8_t request_pdu[7], peer_random[16], peer_confirm[16];
++    uint8_t irk[16], identity[6] = {1, 3, 5, 7, 9, 11};
++    size_t i;
++
++    init_manager(&manager, &port, BT_SMP_AUTHREQ_BONDING | BT_SMP_AUTHREQ_SC);
++    bt_buf_writer_init(&w, request_pdu, sizeof(request_pdu));
++    BT_CHECK(bt_smp_encode_pairing_features(&w, BT_SMP_PAIRING_REQUEST,
++                                             &request) == BT_OK);
++    BT_CHECK(bt_smp_manager_accept(&manager, request_pdu, sizeof(request_pdu),
++                                    10) == BT_OK);
++    BT_CHECK(manager.responder && !manager.negotiation.secure_connections);
++    BT_CHECK(manager.state == BT_SMP_STATE_WAIT_PAIRING_CONFIRM);
++    BT_CHECK(port.sent[0] == BT_SMP_PAIRING_RESPONSE);
++
++    for (i = 0; i < sizeof(peer_random); ++i)
++        peer_random[i] = (uint8_t)(0x90u + i);
++    BT_CHECK(bt_smp_crypto_c1(&manager.aes, manager.tk, peer_random,
++                              manager.preq, manager.pres,
++                              manager.config.initiator_address_type,
++                              manager.config.responder_address_type,
++                              manager.config.initiator_address,
++                              manager.config.responder_address,
++                              peer_confirm) == BT_OK);
++    feed_value(&manager, BT_SMP_PAIRING_CONFIRM, peer_confirm, 20);
++    BT_CHECK(manager.state == BT_SMP_STATE_WAIT_PAIRING_RANDOM);
++    BT_CHECK(port.sent[0] == BT_SMP_PAIRING_CONFIRM);
++    feed_value(&manager, BT_SMP_PAIRING_RANDOM, peer_random, 30);
++    BT_CHECK(manager.state == BT_SMP_STATE_WAIT_ENCRYPTION);
++    BT_CHECK(port.sent[0] == BT_SMP_PAIRING_RANDOM);
++    BT_CHECK(port.encryption_calls == 1);
++
++    bt_smp_manager_on_encryption_changed(&manager, true, 40);
++    BT_CHECK(manager.state == BT_SMP_STATE_WAIT_KEY_DISTRIBUTION);
++    BT_CHECK(port.sent[0] == BT_SMP_IDENTITY_ADDRESS_INFORMATION);
++    memset(irk, 0x5a, sizeof(irk));
++    feed_value(&manager, BT_SMP_IDENTITY_INFORMATION, irk, 50);
++    feed_identity_address(&manager, 0, identity, 60);
++    BT_CHECK(manager.state == BT_SMP_STATE_COMPLETE);
++    BT_CHECK(port.keys_complete_calls == 1);
++    BT_CHECK(port.complete_calls == 1 && port.result == BT_SMP_MANAGER_OK);
++}
++
+ static void test_confirm_failure_and_timeout(void)
+ {
+     struct bt_smp_manager manager;
+@@ -642,6 +692,7 @@ static void test_full_key_distribution_and_order_validation(void)
+ void run_smp_manager_tests(void)
+ {
+     test_legacy_just_works_success();
++    test_legacy_responder_just_works();
+     test_confirm_failure_and_timeout();
+     test_passkey_input();
+     test_secure_connections_just_works();

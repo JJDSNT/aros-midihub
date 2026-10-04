@@ -18,7 +18,9 @@ remain:
   ATT packet cannot overwrite MIDI data before the class consumes the event;
 - queue outgoing notification snapshots until each active radio consumes
   them, instead of coalescing a MIDI burst into the latest value. The queue is
-  bounded at 256 snapshots; on sustained producer overrun it drops the oldest.
+  bounded at 256 snapshots; on sustained producer overrun it drops the oldest;
+- accept peripheral-role SMP Legacy Just Works pairing, answer controller LTK
+  requests, distribute bonding keys, and reuse the stored key on reconnection.
 
 The modified AROS files and their diff context are covered by the AROS Public
 License 1.1; see [AROS-LICENSE](AROS-LICENSE). MIDIHub's own source remains
@@ -34,9 +36,9 @@ make -C ~/AROS/rom/bluetooth/stack -f Makefile.host test
 ```
 
 The patch applies cleanly to the stated commit. The sanitizer-enabled host
-suite passes `2137/2137` checks, including new ATT and GATT tests for Write
-Without Response. The changed `bluetooth.library` sources and `btmidi.class`
-also pass an m68k AROS syntax build.
+suite passes `2157/2157` checks, including new ATT, GATT, and SMP responder
+tests. The changed `bluetooth.library` sources and `btmidi.class` also pass an
+m68k AROS syntax build.
 
 `btmidi.class` uses the upstream service-record API. It registers the BLE MIDI
 service with `btAddServiceRecord()`, receives incoming values through
@@ -44,9 +46,10 @@ service with `btAddServiceRecord()`, receives incoming values through
 `btSetServiceValue()`. `btgatt.class` owns radio advertising and the list of
 enabled services in Bluetooth Preferences.
 
-Peripheral-role SMP pairing remains an upstream Bluetooth limitation. BLE
-MIDI currently uses an unencrypted characteristic, so this does not block the
-basic service but remains work for protected peripheral services.
+Peripheral-role pairing currently selects Legacy Just Works. Authenticated
+Passkey/Numeric Comparison and Secure Connections in the responder role remain
+future generic Bluetooth work; they do not require changes to the class or
+CAMD bridge.
 
 ## USB MIDI CAMD fix
 
