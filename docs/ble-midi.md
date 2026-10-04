@@ -10,12 +10,10 @@ packets, and exposes `MIDIHub BLE In` and
 targets.
 
 This program is the **central** implementation: AROS initiates a connection to
-a BLE MIDI peripheral. The companion `aros-ble-midi-peripheral.patch` supplies
-the portable GATT server and HCI advertising codecs, and
-`aros-ble-gatt-service-api.patch` connects those facilities to
-`bluetooth.library`. MIDIHub supplies a tested advertising payload containing
-the BLE MIDI service UUID. The remaining component for making AROS discoverable
-by GarageBand is `btmidi.class`, which will own the service and CAMD bridge.
+a BLE MIDI peripheral. Upstream AROS now supplies the portable GATT server,
+local service-record API, notifications, LE advertising, and the
+`btgatt.class` Preferences UI. MIDIHub supplies `btmidi.class`, which registers
+the standard service and bridges it to CAMD.
 
 ## Peripheral architecture
 
@@ -25,14 +23,14 @@ being hard-coded into the generic host stack:
 - `btcore` owns ATT/GATT server behavior, CCCD state, notifications, and the
   HCI advertising commands.
 - `bluetooth.library` owns each radio's advertising state, accepts peripheral
-  connections, creates a GATT server for each LE connection, and exposes a
-  service registration API to profile classes.
+  connections, serves registered GATT records, and broadcasts service writes.
 - `btmidi.class` registers the standard BLE MIDI service and I/O
   characteristic, translates BLE MIDI packets, and bridges the byte stream to
   CAMD.
-- Bluetooth Preferences controls radio state, pairing, trust, and the loaded
-  Bluetooth class. The class's configuration window controls whether the MIDI
-  service is advertised, its local name, and its CAMD port names.
+- Bluetooth Preferences controls radio state, pairing, trust, loaded classes,
+  advertising, and whether the BLE MIDI service is enabled through the
+  upstream `btgatt.class` window. A later MIDI-specific window may customize
+  the CAMD port names and expose activity.
 - MIDIHub Preferences may link to the same class configuration and show MIDI
   activity. SoundFont and synthesizer settings stay in MIDIHub because they
   are independent of Bluetooth.
@@ -41,17 +39,23 @@ This follows the existing AROS model in which `bthid.class`, `btserial.class`,
 and `btpan.class` sit above `bluetooth.library`. It also lets any future GATT
 server profile reuse the same stack support.
 
-The current local-service API uses legacy advertising and supports one local
-GATT service per radio. It serializes radio programming and delivers incoming
-writes to the profile's own Exec task, so MIDI parsing and CAMD calls never run
-inside the Bluetooth hardware task. Peripheral-role SMP is still absent; the
-BLE MIDI characteristic therefore remains unencrypted until responder pairing
-is added to the stack.
+The service-record API keeps values in `bluetooth.library`; incoming writes
+arrive as `BEHMB_SERVICEWRITE` events with immutable packet snapshots on the
+class's Exec task, so MIDI parsing and CAMD calls never run inside the Bluetooth
+hardware task. Peripheral-role SMP is still absent; the BLE MIDI characteristic
+therefore remains unencrypted until responder pairing is added to the stack.
+Outgoing values are likewise queued as immutable notifications. The class uses
+20-byte packets so it also works before a central negotiates an ATT MTU larger
+than the mandatory default. The generic queue retains up to 256 pending
+snapshots and drops the oldest if producers sustain a higher rate than every
+active radio can consume.
 
 ## Build and run
 
-1. Apply [the GATT prerequisite patch](../patches/aros-ble-midi-gatt.patch) to
-   the matching AROS checkout and build `bluetooth.library` and the optional
+### AROS as the central
+
+1. Apply [the remaining BLE patch](../patches/aros-ble-midi-upstream-gaps.patch)
+   to the matching AROS checkout and build `bluetooth.library` and the optional
    MetaMake target `contrib-aros-midihub-ble`.
 2. In Bluetooth Preferences, scan, register, and connect to a BLE MIDI
    peripheral. Run `BTDevLister SERVICES` to find its address and verify
@@ -62,12 +66,28 @@ is added to the stack.
    `MIDIHub BLE In`. Send Note On/Off, Program Change and SysEx in both
    directions. The program prints received and sent message counts on exit.
 
-The GATT patch passed AROS apply checks and portable stack tests. The BLE MIDI
+### AROS as the peripheral
+
+1. Apply the remaining BLE patch in [the patch guide](../patches/README.md),
+   then build the normal `contrib-aros-midihub` target. Its dependency set
+   installs `btmidi.class` in `SYS:Classes/Bluetooth`.
+2. Open Bluetooth Preferences and verify that `btmidi.class` appears on the
+   Classes page. Open the `btgatt.class` settings, enable advertising, and
+   leave the `BLE MIDI` service enabled. The advertised name is the local name
+   configured for the Bluetooth radio.
+3. In an iOS BLE MIDI connection panel or MIDI Wrench, scan for the configured
+   AROS Bluetooth name and connect.
+4. Connect an AROS CAMD application to `MIDIHub BLE In` or
+   `MIDIHub BLE Out`. Incoming BLE packets, including SysEx, are decoded into
+   CAMD; CAMD output is encoded into notifications for every subscribed iOS
+   central.
+
+The patch passes the AROS apply check and portable stack tests. The BLE MIDI
 codec passes local packet tests covering channel messages, running status,
 timestamp wrap, and multi-packet SysEx. The `MIDIHubBLE` source compiled and
-linked with the existing AROS x64 GCC and headers generated from the current
-Bluetooth API. The full MetaMake target and patched `bluetooth.library` have
-not been built. The program has not been run with a BLE radio.
+linked with existing AROS headers, and the new class source passes an m68k AROS
+syntax build. MetaMake expands the class target successfully. A full class link
+and a physical radio exchange remain to be performed.
 
 The first runtime sends complete MIDI messages without transmit running
 status. The CAMD bridge accepts channel messages, System Common, System

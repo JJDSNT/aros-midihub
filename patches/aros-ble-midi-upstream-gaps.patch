@@ -1,0 +1,702 @@
+diff --git a/rom/bluetooth/bluetooth/bluetooth.conf b/rom/bluetooth/bluetooth/bluetooth.conf
+index 0279e73b2b..20721d09da 100644
+--- a/rom/bluetooth/bluetooth/bluetooth.conf
++++ b/rom/bluetooth/bluetooth/bluetooth.conf
+@@ -1,5 +1,5 @@
+ ##begin config
+-version 45.17
++version 45.18
+ libbase BluetoothBase
+ libbasetype struct BtBase
+ libbasetypeextern struct Library
+diff --git a/rom/bluetooth/bluetooth/bluetooth.library.c b/rom/bluetooth/bluetooth/bluetooth.library.c
+index b2355e4cb5..0f5e0bb7f5 100644
+--- a/rom/bluetooth/bluetooth/bluetooth.library.c
++++ b/rom/bluetooth/bluetooth/bluetooth.library.c
+@@ -88,6 +88,7 @@ static int GM_UNIQUENAME(libInit)(LIBBASETYPEPTR BluetoothBase)
+ 
+         NewList(&BluetoothBase->bt_DeadlockDebug);
+         NewList(&BluetoothBase->bt_ServiceRecords);
++        NewList(&BluetoothBase->bt_GattNotifications);
+         BluetoothBase->bt_NextRecordHandle = 0x00010000;
+         BluetoothBase->bt_NextGattHandle = 0x0001;
+ 
+@@ -1410,6 +1411,8 @@ static const ULONG BtEventNotePT[] = {
+     PACK_ENTRY(BENA_Dummy, BENA_EventID, BtEventNote, ben_Event, PKCTRL_UWORD|PKCTRL_UNPACKONLY),
+     PACK_ENTRY(BENA_Dummy, BENA_Param1, BtEventNote, ben_Param1, PKCTRL_IPTR|PKCTRL_UNPACKONLY),
+     PACK_ENTRY(BENA_Dummy, BENA_Param2, BtEventNote, ben_Param2, PKCTRL_IPTR|PKCTRL_UNPACKONLY),
++    PACK_ENTRY(BENA_Dummy, BENA_Data, BtEventNote, ben_Data, PKCTRL_IPTR|PKCTRL_UNPACKONLY),
++    PACK_ENTRY(BENA_Dummy, BENA_DataLength, BtEventNote, ben_DataLength, PKCTRL_ULONG|PKCTRL_UNPACKONLY),
+     PACK_ENDTABLE
+ };
+ 
+diff --git a/rom/bluetooth/bluetooth/bluetooth.library.h b/rom/bluetooth/bluetooth/bluetooth.library.h
+index 2d2fe16627..2ec74b5e6e 100644
+--- a/rom/bluetooth/bluetooth/bluetooth.library.h
++++ b/rom/bluetooth/bluetooth/bluetooth.library.h
+@@ -66,6 +66,8 @@ BOOL bOpenDOS(struct BtBase *BluetoothBase);
+ BOOL bHaveDOS(struct BtBase *BluetoothBase);
+ 
+ void bGarbageCollectEvents(struct BtBase *BluetoothBase);
++void bSendServiceWriteEvent(struct BtBase *BluetoothBase, APTR record, ULONG index,
++                            const UBYTE *data, ULONG length);
+ BOOL bStartEventHandler(struct BtBase *BluetoothBase);
+ 
+ /* PoPo-style pairing popup handled inside the library */
+diff --git a/rom/bluetooth/bluetooth/bluetooth_intern.h b/rom/bluetooth/bluetooth/bluetooth_intern.h
+index c0a6abd7c6..71f457e357 100644
+--- a/rom/bluetooth/bluetooth/bluetooth_intern.h
++++ b/rom/bluetooth/bluetooth/bluetooth_intern.h
+@@ -190,6 +190,8 @@ struct BtBase
+     BOOL                bt_LEAdvertising; /* advertise on the LE radios */
+     ULONG               bt_LEAdvSeq;      /* bumped when what is advertised changed */
+     ULONG               bt_GattSeq;       /* bumped with every value set */
++    struct List         bt_GattNotifications; /* queued value snapshots for subscribers */
++    ULONG               bt_GattNotificationCount;
+     /* SDP server */
+     BOOL                bt_EIRServices;   /* name and classic services in the extended inquiry response */
+     ULONG               bt_EIRSeq;        /* bumped when what it would say changed */
+@@ -238,6 +240,16 @@ struct BtGattChar
+     ULONG               bgc_Seq;          /* bt_GattSeq of the last btSetServiceValue() */
+ };
+ 
++struct BtGattNotification
++{
++    struct Node             bgn_Node;
++    struct BtServiceRecord *bgn_Record;
++    ULONG                   bgn_Seq;
++    UWORD                   bgn_Index;
++    UWORD                   bgn_Length;
++    UBYTE                   bgn_Data[1];
++};
++
+ struct BtEventHook
+ {
+     struct Node         beh_Node;         /* Node linkage */
+@@ -251,6 +263,8 @@ struct BtEventNote
+     UWORD               ben_Event;        /* Event number as specified above */
+     APTR                ben_Param1;       /* Parameter 1 for event */
+     APTR                ben_Param2;       /* Parameter 2 */
++    APTR                ben_Data;         /* Event-owned data, if any */
++    ULONG               ben_DataLength;
+ };
+ 
+ struct BtEventNoteInternal
+diff --git a/rom/bluetooth/bluetooth/classes.c b/rom/bluetooth/bluetooth/classes.c
+index b1b251a2ec..e656869af4 100644
+--- a/rom/bluetooth/bluetooth/classes.c
++++ b/rom/bluetooth/bluetooth/classes.c
+@@ -734,6 +734,8 @@ AROS_LH3(void, btSendEvent,
+                 ben->ben_Event = behmt;
+                 ben->ben_Param1 = param1;
+                 ben->ben_Param2 = param2;
++                ben->ben_Data = NULL;
++                ben->ben_DataLength = 0;
+                 PutMsg(beh->beh_MsgPort, &ben->ben_Msg);
+             }
+         }
+@@ -744,6 +746,40 @@ AROS_LH3(void, btSendEvent,
+ }
+ /* \\\ */
+ 
++/* /// "bSendServiceWriteEvent()" */
++/* Send every listener its own stable copy. The service value itself may be
++ * overwritten by the next ATT Write Command before the owner task runs. */
++void bSendServiceWriteEvent(struct BtBase *BluetoothBase, APTR record, ULONG index,
++                            const UBYTE *data, ULONG length)
++{
++    struct BtEventNote *ben;
++    struct BtEventHook *beh;
++
++    bGarbageCollectEvents(BluetoothBase);
++    ObtainSemaphore(&BluetoothBase->bt_ReentrantLock);
++    beh = (struct BtEventHook *) BluetoothBase->bt_EventHooks.lh_Head;
++    while(beh->beh_Node.ln_Succ) {
++        if(beh->beh_MsgMask & BEHMF_SERVICEWRITE) {
++            if((ben = btAllocVec(sizeof(struct BtEventNote) + length))) {
++                ben->ben_Msg.mn_ReplyPort = &BluetoothBase->bt_EventReplyPort;
++                ben->ben_Msg.mn_Length = sizeof(struct BtEventNote) + length;
++                ben->ben_Event = BEHMB_SERVICEWRITE;
++                ben->ben_Param1 = record;
++                ben->ben_Param2 = (APTR) (IPTR) index;
++                ben->ben_Data = length ? (APTR) (ben + 1) : NULL;
++                ben->ben_DataLength = length;
++                if(length) {
++                    CopyMem((APTR) data, ben->ben_Data, length);
++                }
++                PutMsg(beh->beh_MsgPort, &ben->ben_Msg);
++            }
++        }
++        beh = (struct BtEventHook *) beh->beh_Node.ln_Succ;
++    }
++    ReleaseSemaphore(&BluetoothBase->bt_ReentrantLock);
++}
++/* \\\ */
++
+ /* /// "bGarbageCollectEvents()" */
+ void bGarbageCollectEvents(LIBBASETYPEPTR BluetoothBase)
+ {
+diff --git a/rom/bluetooth/bluetooth/gattsrv.c b/rom/bluetooth/bluetooth/gattsrv.c
+index 2f42c283f0..e4b1b4b7bb 100644
+--- a/rom/bluetooth/bluetooth/gattsrv.c
++++ b/rom/bluetooth/bluetooth/gattsrv.c
+@@ -208,6 +208,8 @@ static uint8_t bGattWrite(void *context, const struct bt_gatt_server_attr *a, co
+     /* the owner hears about it once the base is unlocked again */
+     cn->cn_GATTWrRec = bsr;
+     cn->cn_GATTWrIdx = a->ref_index;
++    cn->cn_GATTWrData = data;
++    cn->cn_GATTWrLen = len;
+     return(0);
+ }
+ /* \\\ */
+@@ -227,6 +229,8 @@ static void bGattRequest(const uint8_t *pdu, size_t len, uint64_t now_us, void *
+                        cn->cn_Device->bd_Name);
+     }
+     cn->cn_GATTWrRec = NULL;
++    cn->cn_GATTWrData = NULL;
++    cn->cn_GATTWrLen = 0;
+     btLockReadBase();
+     n = bt_gatt_server_handle_pdu(&cn->cn_GATTServer, pdu, len, rsp, sizeof(rsp));
+     btUnlockBase();
+@@ -234,8 +238,11 @@ static void bGattRequest(const uint8_t *pdu, size_t len, uint64_t now_us, void *
+         bt_l2cap_channel_manager_send(&cn->cn_L2CAP, BT_L2CAP_CID_ATT, rsp, n, now_us);
+     }
+     if(cn->cn_GATTWrRec) {
+-        btSendEvent(BEHMB_SERVICEWRITE, cn->cn_GATTWrRec, (APTR) (IPTR) cn->cn_GATTWrIdx);
++        bSendServiceWriteEvent(BluetoothBase, cn->cn_GATTWrRec, cn->cn_GATTWrIdx,
++                               cn->cn_GATTWrData, cn->cn_GATTWrLen);
+         cn->cn_GATTWrRec = NULL;
++        cn->cn_GATTWrData = NULL;
++        cn->cn_GATTWrLen = 0;
+     }
+ }
+ /* \\\ */
+@@ -248,6 +255,8 @@ void bGattSrvInit(struct BtHWConn *cn)
+     memset(cn->cn_GATTSubs, 0, sizeof(cn->cn_GATTSubs));
+     cn->cn_GATTSeen = FALSE;
+     cn->cn_GATTWrRec = NULL;
++    cn->cn_GATTWrData = NULL;
++    cn->cn_GATTWrLen = 0;
+     bt_gatt_server_init(&cn->cn_GATTServer, bGattNext, bGattWrite, cn);
+     bt_gatt_client_set_request_handler(&cn->cn_GATT, bGattRequest, cn);
+     if(cn->cn_LinkType == BDLT_LE) {
+@@ -261,42 +270,77 @@ void bGattSrvInit(struct BtHWConn *cn)
+ static void bGattNotifyChanged(struct BtHWCore *hc, ULONG oldseq, ULONG newseq)
+ {
+     struct BtBase *BluetoothBase = hc->hc_Base;
+-    struct BtServiceRecord *bsr;
++    struct BtGattNotification *bgn;
+     struct MinNode *mn;
+     UBYTE pdu[BT_GATT_SERVER_RX_MTU];
+ 
+     btLockReadBase();
+-    for(bsr = (struct BtServiceRecord *) BluetoothBase->bt_ServiceRecords.lh_Head; bsr->bsr_Node.ln_Succ;
+-        bsr = (struct BtServiceRecord *) bsr->bsr_Node.ln_Succ) {
+-        ULONG k;
+-
+-        if((bsr->bsr_Protocol != BSVP_ATT) || !bsr->bsr_Enabled) {
++    for(bgn = (struct BtGattNotification *) BluetoothBase->bt_GattNotifications.lh_Head;
++        bgn->bgn_Node.ln_Succ;
++        bgn = (struct BtGattNotification *) bgn->bgn_Node.ln_Succ) {
++        struct BtServiceRecord *bsr = bgn->bgn_Record;
++        struct BtGattChar *bgc;
++        UWORD vh;
++
++        if(((LONG) (bgn->bgn_Seq - oldseq) <= 0) ||
++           ((LONG) (bgn->bgn_Seq - newseq) > 0) ||
++           !bsr->bsr_Enabled || (bgn->bgn_Index >= bsr->bsr_NumChars)) {
+             continue;
+         }
+-        for(k = 0; k < bsr->bsr_NumChars; k++) {
+-            struct BtGattChar *bgc = &bsr->bsr_Chars[k];
+-            UWORD vh = bsr->bsr_FirstHandle + 2 + 3 * k;
++        bgc = &bsr->bsr_Chars[bgn->bgn_Index];
++        vh = bsr->bsr_FirstHandle + 2 + 3 * bgn->bgn_Index;
+ 
+-            if(!(bgc->bgc_Properties & (BGDP_NOTIFY|BGDP_INDICATE)) ||
+-               ((LONG) (bgc->bgc_Seq - oldseq) <= 0) || ((LONG) (bgc->bgc_Seq - newseq) > 0)) {
++        for(mn = hc->hc_Conns.mlh_Head; mn->mln_Succ; mn = mn->mln_Succ) {
++            struct BtHWConn *cn = (struct BtHWConn *) mn;
++            UWORD *sub;
++            size_t n;
++
++            if((cn->cn_State != HCNS_CONNECTED) || (cn->cn_LinkType != BDLT_LE) ||
++               !(sub = bGattSub(cn, vh + 1, FALSE)) || !(*sub & 3)) {
+                 continue;
+             }
+-            for(mn = hc->hc_Conns.mlh_Head; mn->mln_Succ; mn = mn->mln_Succ) {
+-                struct BtHWConn *cn = (struct BtHWConn *) mn;
+-                UWORD *sub;
+-                size_t n;
++            n = bt_gatt_server_encode_handle_value(&cn->cn_GATTServer, vh,
++                                                    bgn->bgn_Data, bgn->bgn_Length,
++                                                    (*sub & 1) ? false : true,
++                                                    pdu, sizeof(pdu));
++            if(n) {
++                bt_l2cap_channel_manager_send(&cn->cn_L2CAP, BT_L2CAP_CID_ATT,
++                                              pdu, n, bNowUS(hc));
++            }
++        }
++    }
++    btUnlockBase();
++}
++/* \\\ */
+ 
+-                if((cn->cn_State != HCNS_CONNECTED) || (cn->cn_LinkType != BDLT_LE) ||
+-                   !(sub = bGattSub(cn, vh + 1, FALSE)) || !(*sub & 3)) {
+-                    continue;
+-                }
+-                n = bt_gatt_server_encode_handle_value(&cn->cn_GATTServer, vh, cn->cn_GATTVal, bGattValue(cn, bgc),
+-                                                        (*sub & 1) ? false : true, pdu, sizeof(pdu));
+-                if(n) {
+-                    bt_l2cap_channel_manager_send(&cn->cn_L2CAP, BT_L2CAP_CID_ATT, pdu, n, bNowUS(hc));
+-                }
++/* /// "bGattNotificationGC()" */
++/* A snapshot may be freed after every running radio has passed its sequence. */
++static void bGattNotificationGC(struct BtBase *BluetoothBase)
++{
++    struct BtGattNotification *bgn, *next;
++    struct BtHardware *bth;
++
++    btLockWriteBase();
++    bgn = (struct BtGattNotification *) BluetoothBase->bt_GattNotifications.lh_Head;
++    while(bgn->bgn_Node.ln_Succ) {
++        BOOL consumed = TRUE;
++
++        for(bth = (struct BtHardware *) BluetoothBase->bt_Hardware.lh_Head;
++            bth->bth_Node.ln_Succ; bth = (struct BtHardware *) bth->bth_Node.ln_Succ) {
++            struct BtHWCore *other = bth->bth_Core;
++            if(other && ((LONG) (other->hc_GattSeq - bgn->bgn_Seq) < 0)) {
++                consumed = FALSE;
++                break;
+             }
+         }
++        if(!consumed) {
++            break;
++        }
++        next = (struct BtGattNotification *) bgn->bgn_Node.ln_Succ;
++        Remove(&bgn->bgn_Node);
++        BluetoothBase->bt_GattNotificationCount--;
++        btFreeVec(bgn);
++        bgn = next;
+     }
+     btUnlockBase();
+ }
+@@ -347,7 +391,8 @@ static void bLEAdvUpdate(struct BtHWCore *hc)
+     struct BtServiceRecord *bsr;
+     STRPTR name = bth->bth_LocalName ? bth->bth_LocalName : (STRPTR) "AROS";
+     UBYTE p[32];
+-    ULONG pos, lenpos, nlen;
++    ULONG pos, lenpos, lenpos128, nlen;
++    BOOL incomplete16 = FALSE, incomplete128 = FALSE;
+ 
+     if(!(bth->bth_Flags & BTHF_LE) || !hc->hc_BringupDone || hc->hc_Shutdown) {
+         return;
+@@ -385,22 +430,50 @@ static void bLEAdvUpdate(struct BtHWCore *hc)
+     p[pos++] = (bth->bth_Flags & BTHF_CLASSIC) ? 0x1a : 0x06;
+     p[pos++] = 3; p[pos++] = 0x19;  /* appearance: computer */
+     p[pos++] = 0x80; p[pos++] = 0x00;
+-    lenpos = pos;
++    /* A BLE MIDI client discovers the service from its 128-bit UUID. Put one
++       or more vendor UUIDs first, then use the remaining bytes for adopted
++       16-bit services. UUIDs in advertising use ATT little-endian order. */
++    lenpos128 = pos;
+     pos += 2;
+     btLockReadBase();
++    for(bsr = (struct BtServiceRecord *) BluetoothBase->bt_ServiceRecords.lh_Head; bsr->bsr_Node.ln_Succ;
++        bsr = (struct BtServiceRecord *) bsr->bsr_Node.ln_Succ) {
++        if((bsr->bsr_Protocol != BSVP_ATT) || !bsr->bsr_Enabled || (bsr->bsr_UUIDLen != 16)) {
++            continue;
++        }
++        if(pos + 16 > 32) {
++            incomplete128 = TRUE;
++            continue;
++        }
++        CopyMem(bsr->bsr_UUID, &p[pos], 16);
++        pos += 16;
++    }
++    if(pos > lenpos128 + 2) {
++        p[lenpos128] = pos - lenpos128 - 1;
++        p[lenpos128 + 1] = incomplete128 ? 0x06 : 0x07;
++    } else {
++        pos = lenpos128;
++        p[pos] = p[pos + 1] = 0;
++    }
++    lenpos = pos;
++    pos += 2;
+     for(bsr = (struct BtServiceRecord *) BluetoothBase->bt_ServiceRecords.lh_Head; bsr->bsr_Node.ln_Succ;
+         bsr = (struct BtServiceRecord *) bsr->bsr_Node.ln_Succ) {
+         if((bsr->bsr_Protocol != BSVP_ATT) || !bsr->bsr_Enabled || (bsr->bsr_UUIDLen != 2) ||
+-           (bsr->bsr_UUID16 == 0x1800) || (bsr->bsr_UUID16 == 0x1801) || (pos + 2 > 32)) {
++           (bsr->bsr_UUID16 == 0x1800) || (bsr->bsr_UUID16 == 0x1801)) {
+             continue; /* the two every device has are not worth the room */
+         }
++        if(pos + 2 > 32) {
++            incomplete16 = TRUE;
++            continue;
++        }
+         p[pos++] = bsr->bsr_UUID[0];
+         p[pos++] = bsr->bsr_UUID[1];
+     }
+     btUnlockBase();
+     if(pos > lenpos + 2) {
+         p[lenpos] = pos - lenpos - 1;
+-        p[lenpos + 1] = 0x03;       /* 16-bit service UUIDs */
++        p[lenpos + 1] = incomplete16 ? 0x02 : 0x03;
+     } else {
+         pos = lenpos;
+         p[pos] = p[pos + 1] = 0;
+@@ -450,6 +523,7 @@ void bGattSrvPoll(struct BtHWCore *hc)
+     if(hc->hc_GattSeq != seq) {
+         bGattNotifyChanged(hc, hc->hc_GattSeq, seq);
+         hc->hc_GattSeq = seq;
++        bGattNotificationGC(BluetoothBase);
+     }
+ }
+ /* \\\ */
+diff --git a/rom/bluetooth/bluetooth/hwconn.c b/rom/bluetooth/bluetooth/hwconn.c
+index ba2a88a72b..77257cce6d 100644
+--- a/rom/bluetooth/bluetooth/hwconn.c
++++ b/rom/bluetooth/bluetooth/hwconn.c
+@@ -2058,6 +2058,7 @@ static void bGATTEnumCB(struct bt_gatt_client_completion *completion, void *user
+                     bep->bep_Properties = props;
+                     bep->bep_CanRead = (props & 0x30) ? TRUE : FALSE;
+                     bep->bep_CanWrite = (props & 0x0c) ? TRUE : FALSE;
++                    bep->bep_MaxPktSize = (cn->cn_GATT.mtu > 3) ? (cn->cn_GATT.mtu - 3) : 20;
+                     bep->bep_EndHandle = endh;
+                     bep->bep_EnumMark = 1;
+                     continue;
+@@ -2072,7 +2073,7 @@ static void bGATTEnumCB(struct bt_gatt_client_completion *completion, void *user
+                     bep->bep_Properties = props;
+                     bep->bep_CanRead = (props & 0x30) ? TRUE : FALSE;  /* notify | indicate */
+                     bep->bep_CanWrite = (props & 0x0c) ? TRUE : FALSE; /* write | write without response */
+-                    bep->bep_MaxPktSize = 20;
++                    bep->bep_MaxPktSize = (cn->cn_GATT.mtu > 3) ? (cn->cn_GATT.mtu - 3) : 20;
+                     /* the characteristic's descriptors live between its value
+                        handle and the next declaration (or the service end) */
+                     bep->bep_EndHandle = endh;
+@@ -3716,6 +3717,13 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
+                     cn->cn_CtrlReq = NULL;
+                     bReplyChannel(BluetoothBase, bch, BTIOERR_HOSTERROR, 0);
+                 }
++            } else if(bch->bch_Request == BTPR_GATTWRITENORSP) {
++                bt_status_t st = bt_gatt_client_write_without_response(&cn->cn_GATT,
++                                            bch->bch_Value, bch->bch_Data, bch->bch_Length);
++                cn->cn_CtrlReq = NULL;
++                bReplyChannel(BluetoothBase, bch, st == BT_OK ? 0 : BTIOERR_HOSTERROR,
++                              st == BT_OK ? bch->bch_Length : 0);
++                bDispatchWaiting(cn);
+             } else {
+                 if(bt_gatt_client_write(&cn->cn_GATT, bch->bch_Value, bch->bch_Data, bch->bch_Length,
+                                         bGATTOpComplete, cn, now) != BT_OK) {
+@@ -3896,8 +3904,15 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
+                     return(TRUE);
+                 }
+                 cn->cn_CtrlReq = bch;
+-                if(bt_gatt_client_write(&cn->cn_GATT, bep->bep_Handle, bch->bch_Data, bch->bch_Length,
+-                                        bGATTOpComplete, cn, now) != BT_OK) {
++                if((bep->bep_Properties & 0x04) && !(bep->bep_Properties & 0x08)) {
++                    bt_status_t st = bt_gatt_client_write_without_response(&cn->cn_GATT,
++                                             bep->bep_Handle, bch->bch_Data, bch->bch_Length);
++                    cn->cn_CtrlReq = NULL;
++                    bReplyChannel(BluetoothBase, bch, st == BT_OK ? 0 : BTIOERR_HOSTERROR,
++                                  st == BT_OK ? bch->bch_Length : 0);
++                    bDispatchWaiting(cn);
++                } else if(bt_gatt_client_write(&cn->cn_GATT, bep->bep_Handle, bch->bch_Data,
++                                               bch->bch_Length, bGATTOpComplete, cn, now) != BT_OK) {
+                     cn->cn_CtrlReq = NULL;
+                     bReplyChannel(BluetoothBase, bch, BTIOERR_HOSTERROR, 0);
+                 }
+diff --git a/rom/bluetooth/bluetooth/hwtask.h b/rom/bluetooth/bluetooth/hwtask.h
+index 7ec0e799d3..87564a3bb5 100644
+--- a/rom/bluetooth/bluetooth/hwtask.h
++++ b/rom/bluetooth/bluetooth/hwtask.h
+@@ -244,6 +244,8 @@ struct BtHWConn
+     }                   cn_GATTSubs[HC_GATT_MAXSUBS];
+     struct BtServiceRecord *cn_GATTWrRec; /* a value the device wrote during this request */
+     UWORD               cn_GATTWrIdx;
++    const UBYTE        *cn_GATTWrData;     /* valid for the duration of bGattRequest() */
++    UWORD               cn_GATTWrLen;
+     BOOL                cn_GATTSeen;   /* the device has asked for something */
+     UBYTE               cn_GATTVal[BGATT_MAXVALUE]; /* the value being read */
+     struct MinList      cn_Endpoints;  /* BtHWEndpoint */
+diff --git a/rom/bluetooth/bluetooth/include/libraries/bluetooth.h b/rom/bluetooth/bluetooth/include/libraries/bluetooth.h
+index 6a3de0b4a1..9420781b32 100644
+--- a/rom/bluetooth/bluetooth/include/libraries/bluetooth.h
++++ b/rom/bluetooth/bluetooth/include/libraries/bluetooth.h
+@@ -320,6 +320,8 @@
+ #define BENA_EventID         (BENA_Dummy + 0x01) /* ULONG BEHMB_xxx */
+ #define BENA_Param1          (BENA_Dummy + 0x02) /* APTR */
+ #define BENA_Param2          (BENA_Dummy + 0x03) /* APTR */
++#define BENA_Data            (BENA_Dummy + 0x04) /* APTR event-owned data, valid until ReplyMsg() */
++#define BENA_DataLength      (BENA_Dummy + 0x05) /* ULONG bytes at BENA_Data */
+ 
+ /* Tags for btGetAttrs(BGA_STACKCFG,...) */
+ #define BGCA_Dummy           (BT_TAGBASE + 0xa00)
+@@ -481,7 +483,7 @@ struct BtGattCharDef
+ #define BEHMB_SERVICEGONE     0x18 /* Param1 = bsv (an incoming service whose connection closed; released and freed by the stack) */
+ #define BEHMB_ADDSERVICEREC   0x19 /* Param1 = service record */
+ #define BEHMB_REMSERVICEREC   0x1a /* Param1 = service record (already gone: only good for comparing) */
+-#define BEHMB_SERVICEWRITE    0x1b /* Param1 = service record, Param2 = (IPTR) index of the characteristic a device wrote */
++#define BEHMB_SERVICEWRITE    0x1b /* Param1 = service record, Param2 = characteristic index, Data = value written */
+ 
+ #define BEHMF_ADDHARDWARE     (1L<<BEHMB_ADDHARDWARE)
+ #define BEHMF_REMHARDWARE     (1L<<BEHMB_REMHARDWARE)
+diff --git a/rom/bluetooth/bluetooth/objects.c b/rom/bluetooth/bluetooth/objects.c
+index 72f3821ec3..d357970a26 100644
+--- a/rom/bluetooth/bluetooth/objects.c
++++ b/rom/bluetooth/bluetooth/objects.c
+@@ -1828,12 +1828,23 @@ AROS_LH1(void, btRemServiceRecord,
+ {
+     AROS_LIBFUNC_INIT
+     struct BtServiceRecord *bsr = record;
++    struct BtGattNotification *bgn, *next;
+     if(!bsr) {
+         return;
+     }
+     /* the radio tasks only look at the records with the base locked */
+     btLockWriteBase();
+     Remove(&bsr->bsr_Node);
++    bgn = (struct BtGattNotification *) BluetoothBase->bt_GattNotifications.lh_Head;
++    while(bgn->bgn_Node.ln_Succ) {
++        next = (struct BtGattNotification *) bgn->bgn_Node.ln_Succ;
++        if(bgn->bgn_Record == bsr) {
++            Remove(&bgn->bgn_Node);
++            BluetoothBase->bt_GattNotificationCount--;
++            btFreeVec(bgn);
++        }
++        bgn = next;
++    }
+     btUnlockBase();
+     BluetoothBase->bt_LEAdvSeq++;
+     BluetoothBase->bt_EIRSeq++;
+@@ -1859,6 +1870,8 @@ AROS_LH4(LONG, btSetServiceValue,
+     AROS_LIBFUNC_INIT
+     struct BtServiceRecord *bsr = record;
+     struct BtGattChar *bgc;
++    struct BtGattNotification *bgn = NULL, *old;
++    ULONG seq;
+ 
+     if(!bsr || (bsr->bsr_Protocol != BSVP_ATT) || (index >= bsr->bsr_NumChars) || (len && !data)) {
+         return(-1);
+@@ -1867,13 +1880,36 @@ AROS_LH4(LONG, btSetServiceValue,
+     if(len > bgc->bgc_MaxLen) {
+         return(-1);
+     }
+-    Forbid();
++    if(bgc->bgc_Properties & (BGDP_NOTIFY|BGDP_INDICATE)) {
++        if(!(bgn = btAllocVec(sizeof(struct BtGattNotification) + len))) {
++            return(-1);
++        }
++        bgn->bgn_Record = bsr;
++        bgn->bgn_Index = index;
++        bgn->bgn_Length = len;
++        if(len) {
++            CopyMem(data, bgn->bgn_Data, len);
++        }
++    }
++    btLockWriteBase();
+     if(len) {
+         CopyMem(data, bgc->bgc_Value, len);
+     }
+     bgc->bgc_Len = len;
+-    bgc->bgc_Seq = ++BluetoothBase->bt_GattSeq;
+-    Permit();
++    seq = ++BluetoothBase->bt_GattSeq;
++    bgc->bgc_Seq = seq;
++    if(bgn) {
++        bgn->bgn_Seq = seq;
++        AddTail(&BluetoothBase->bt_GattNotifications, &bgn->bgn_Node);
++        BluetoothBase->bt_GattNotificationCount++;
++        /* Bound memory if producers outrun every radio for a long time. */
++        while(BluetoothBase->bt_GattNotificationCount > 256) {
++            old = (struct BtGattNotification *) RemHead(&BluetoothBase->bt_GattNotifications);
++            BluetoothBase->bt_GattNotificationCount--;
++            btFreeVec(old);
++        }
++    }
++    btUnlockBase();
+     return((LONG) len);
+     AROS_LIBFUNC_EXIT
+ }
+diff --git a/rom/bluetooth/stack/include/btcore/att.h b/rom/bluetooth/stack/include/btcore/att.h
+index 779176e37b..a762c7f21d 100644
+--- a/rom/bluetooth/stack/include/btcore/att.h
++++ b/rom/bluetooth/stack/include/btcore/att.h
+@@ -39,6 +39,7 @@
+ #define BT_ATT_OPCODE_READ_BY_GROUP_TYPE_RESPONSE 0x11u
+ #define BT_ATT_OPCODE_WRITE_REQUEST 0x12u
+ #define BT_ATT_OPCODE_WRITE_RESPONSE 0x13u
++#define BT_ATT_OPCODE_WRITE_COMMAND 0x52u
+ #define BT_ATT_OPCODE_HANDLE_VALUE_NOTIFICATION 0x1Bu
+ #define BT_ATT_OPCODE_HANDLE_VALUE_INDICATION 0x1Du
+ #define BT_ATT_OPCODE_HANDLE_VALUE_CONFIRMATION 0x1Eu
+@@ -147,6 +148,8 @@ bt_status_t bt_att_encode_read_blob_request(struct bt_buf_writer *w, uint16_t ha
+ 
+ bt_status_t bt_att_encode_write_request(struct bt_buf_writer *w, uint16_t handle,
+                                          const uint8_t *value, size_t value_len);
++bt_status_t bt_att_encode_write_command(struct bt_buf_writer *w, uint16_t handle,
++                                         const uint8_t *value, size_t value_len);
+ /* Write Response has no parameters at all -- confirming the opcode is enough. */
+ 
+ struct bt_att_handle_value
+diff --git a/rom/bluetooth/stack/include/btcore/gatt_client.h b/rom/bluetooth/stack/include/btcore/gatt_client.h
+index 415ddc5412..b469536342 100644
+--- a/rom/bluetooth/stack/include/btcore/gatt_client.h
++++ b/rom/bluetooth/stack/include/btcore/gatt_client.h
+@@ -206,6 +206,12 @@ bt_status_t bt_gatt_client_write(struct bt_gatt_client *client, uint16_t handle,
+                                   bt_gatt_client_complete_fn on_complete, void *user_data,
+                                   uint64_t now_us);
+ 
++/* Sends an ATT Write Command without waiting for a response. BLE MIDI uses
++ * this operation. It may run alongside another GATT transaction. */
++bt_status_t bt_gatt_client_write_without_response(struct bt_gatt_client *client,
++                                                   uint16_t handle, const uint8_t *value,
++                                                   size_t value_len);
++
+ /* Must be called by the owning event loop as time advances. Times out the
+  * current ATT transaction; late responses are ignored. */
+ void bt_gatt_client_tick(struct bt_gatt_client *client, uint64_t now_us);
+diff --git a/rom/bluetooth/stack/protocols/att/att.c b/rom/bluetooth/stack/protocols/att/att.c
+index defd88d618..215563b49a 100644
+--- a/rom/bluetooth/stack/protocols/att/att.c
++++ b/rom/bluetooth/stack/protocols/att/att.c
+@@ -239,12 +239,12 @@ bt_status_t bt_att_encode_read_blob_request(struct bt_buf_writer *w, uint16_t ha
+     return st == BT_OK ? bt_buf_writer_write_le16(w, value_offset) : st;
+ }
+ 
+-bt_status_t bt_att_encode_write_request(struct bt_buf_writer *w, uint16_t handle,
+-                                         const uint8_t *value, size_t value_len)
++static bt_status_t encode_write(struct bt_buf_writer *w, uint8_t opcode,
++                                uint16_t handle, const uint8_t *value, size_t value_len)
+ {
+     bt_status_t st;
+ 
+-    st = bt_buf_writer_write_u8(w, BT_ATT_OPCODE_WRITE_REQUEST);
++    st = bt_buf_writer_write_u8(w, opcode);
+     if (st != BT_OK)
+         return st;
+     st = bt_buf_writer_write_le16(w, handle);
+@@ -254,6 +254,18 @@ bt_status_t bt_att_encode_write_request(struct bt_buf_writer *w, uint16_t handle
+     return bt_buf_writer_write_bytes(w, value, value_len);
+ }
+ 
++bt_status_t bt_att_encode_write_request(struct bt_buf_writer *w, uint16_t handle,
++                                         const uint8_t *value, size_t value_len)
++{
++    return encode_write(w, BT_ATT_OPCODE_WRITE_REQUEST, handle, value, value_len);
++}
++
++bt_status_t bt_att_encode_write_command(struct bt_buf_writer *w, uint16_t handle,
++                                         const uint8_t *value, size_t value_len)
++{
++    return encode_write(w, BT_ATT_OPCODE_WRITE_COMMAND, handle, value, value_len);
++}
++
+ bt_status_t bt_att_parse_handle_value(const uint8_t *params, size_t params_len,
+                                        struct bt_att_handle_value *out)
+ {
+diff --git a/rom/bluetooth/stack/protocols/gatt/gatt_client.c b/rom/bluetooth/stack/protocols/gatt/gatt_client.c
+index 011f9225ae..bdafc1ee65 100644
+--- a/rom/bluetooth/stack/protocols/gatt/gatt_client.c
++++ b/rom/bluetooth/stack/protocols/gatt/gatt_client.c
+@@ -682,6 +682,26 @@ bt_status_t bt_gatt_client_write(struct bt_gatt_client *client, uint16_t handle,
+     return BT_OK;
+ }
+ 
++bt_status_t bt_gatt_client_write_without_response(struct bt_gatt_client *client,
++                                                   uint16_t handle, const uint8_t *value,
++                                                   size_t value_len)
++{
++    uint8_t buf[3 + BT_GATT_CLIENT_MAX_VALUE_LEN];
++    struct bt_buf_writer w;
++
++    if (!client->channel_ready || handle == 0 || (value_len > 0 && value == NULL) ||
++        client->mtu < 3 || value_len > (size_t)(client->mtu - 3) ||
++        value_len > BT_GATT_CLIENT_MAX_VALUE_LEN)
++        return BT_ERR_INVALID_ARGUMENT;
++
++    bt_buf_writer_init(&w, buf, sizeof(buf));
++    if (bt_att_encode_write_command(&w, handle, value, value_len) != BT_OK)
++        return BT_ERR_INVALID_ARGUMENT;
++
++    return bt_l2cap_channel_manager_send(client->l2cap, BT_L2CAP_CID_ATT, buf,
++                                          bt_buf_writer_len(&w), 0);
++}
++
+ void bt_gatt_client_tick(struct bt_gatt_client *client, uint64_t now_us)
+ {
+     if (!client->busy || client->request_deadline_us == 0 || now_us < client->request_deadline_us)
+diff --git a/rom/bluetooth/stack/tests/att/test_att.c b/rom/bluetooth/stack/tests/att/test_att.c
+index 2171c06c90..ef34448726 100644
+--- a/rom/bluetooth/stack/tests/att/test_att.c
++++ b/rom/bluetooth/stack/tests/att/test_att.c
+@@ -147,6 +147,12 @@ static void test_read_and_write_requests(void)
+     BT_CHECK(bt_buf_writer_len(&w) == 3 + sizeof(value));
+     BT_CHECK(buf[0] == BT_ATT_OPCODE_WRITE_REQUEST);
+     BT_CHECK(memcmp(buf + 3, value, sizeof(value)) == 0);
++
++    bt_buf_writer_init(&w, buf, sizeof(buf));
++    BT_CHECK(bt_att_encode_write_command(&w, 0x0003, value, sizeof(value)) == BT_OK);
++    BT_CHECK(bt_buf_writer_len(&w) == 3 + sizeof(value));
++    BT_CHECK(buf[0] == BT_ATT_OPCODE_WRITE_COMMAND);
++    BT_CHECK(memcmp(buf + 3, value, sizeof(value)) == 0);
+ }
+ 
+ static void test_handle_value_notification(void)
+diff --git a/rom/bluetooth/stack/tests/gatt/test_gatt_client.c b/rom/bluetooth/stack/tests/gatt/test_gatt_client.c
+index 5e773cc416..50e94a85d9 100644
+--- a/rom/bluetooth/stack/tests/gatt/test_gatt_client.c
++++ b/rom/bluetooth/stack/tests/gatt/test_gatt_client.c
+@@ -437,6 +437,43 @@ static void test_read_and_write(void)
+     BT_CHECK(wlog.result == BT_GATT_CLIENT_OK);
+ }
+ 
++static void test_write_without_response(void)
++{
++    struct fake_transport ft;
++    struct bt_l2cap_channel_manager mgr;
++    struct bt_gatt_client client;
++    struct complete_log read_log = {0};
++    const uint8_t *payload;
++    size_t payload_len;
++    static const uint8_t midi_packet[] = {0x80, 0x80, 0x90, 0x3c, 0x64};
++    static const uint8_t read_response[] = {BT_ATT_OPCODE_READ_RESPONSE, 0x41};
++    uint8_t oversized[98] = {0};
++
++    fake_transport_init(&ft);
++    bt_l2cap_channel_manager_init(&mgr, &ft.base, 0x0041, BT_L2CAP_CID_SIGNALING_LE, 200);
++    bt_gatt_client_init(&client, &mgr);
++    connect_client(&mgr, &ft, &client); /* negotiated MTU = 100 */
++
++    BT_CHECK(bt_gatt_client_write_without_response(&client, 3, midi_packet,
++                                                    sizeof(midi_packet)) == BT_OK);
++    BT_CHECK(take_last_att_pdu(&ft, &payload, &payload_len));
++    BT_CHECK(payload_len == sizeof(midi_packet) + 3);
++    BT_CHECK(payload[0] == BT_ATT_OPCODE_WRITE_COMMAND);
++    BT_CHECK(payload[1] == 3 && payload[2] == 0);
++    BT_CHECK(memcmp(payload + 3, midi_packet, sizeof(midi_packet)) == 0);
++    BT_CHECK(!client.busy);
++    BT_CHECK(bt_gatt_client_write_without_response(&client, 3, oversized,
++                                                    sizeof(oversized)) == BT_ERR_INVALID_ARGUMENT);
++    BT_CHECK(bt_gatt_client_write_without_response(&client, 0, midi_packet,
++                                                    sizeof(midi_packet)) == BT_ERR_INVALID_ARGUMENT);
++    BT_CHECK(bt_gatt_client_read(&client, 4, on_complete, &read_log, 10) == BT_OK);
++    BT_CHECK(bt_gatt_client_write_without_response(&client, 3, midi_packet,
++                                                    sizeof(midi_packet)) == BT_OK);
++    BT_CHECK(client.busy);
++    feed_att_pdu(&mgr, read_response, sizeof(read_response), 20);
++    BT_CHECK(read_log.count == 1 && read_log.result == BT_GATT_CLIENT_OK);
++}
++
+ static void test_discover_descriptors(void)
+ {
+     struct fake_transport ft;
+@@ -711,6 +748,7 @@ void run_gatt_client_tests(void)
+     test_discover_services_multi_round_terminated_by_error();
+     test_discover_characteristics();
+     test_read_and_write();
++    test_write_without_response();
+     test_discover_descriptors();
+     test_read_att_error();
+     test_long_read_uses_read_blob();

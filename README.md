@@ -150,13 +150,12 @@ Bluetooth Low Energy MIDI is widely used by modern wireless MIDI controllers and
 The optional [BLE MIDI transport](docs/ble-midi.md) connects a
 registered BLE MIDI peripheral to CAMD through `bluetooth.library`. Its
 portable packet codec supports running status, timestamps and multi-packet
-SysEx. The first [AROS GATT patch](patches/README.md) supplies 128-bit UUID
-discovery and Write Without Response. A second patch now adds a portable GATT
-server, the ATT operations required by BLE MIDI, CCCD subscriptions,
-notifications, and legacy LE advertising command encoders. The MIDIHub
-library builds the BLE MIDI advertising payload. Integration of those server
-primitives with `bluetooth.library`, the `btmidi.class` binding, and physical
-BLE validation remain.
+SysEx. Upstream AROS now supplies its GATT server, service-record API,
+notifications, advertising, and `btgatt.class` Preferences UI. The remaining
+[AROS patch](patches/README.md) adds Write Without Response and 128-bit service
+UUID advertising, plus service-write snapshots and queued notifications.
+`btmidi.class` registers the standard service and bridges it to CAMD. Physical
+BLE validation remains.
 
 ### MIDI 2.0 / UMP
 
@@ -297,8 +296,8 @@ playback can be claimed across targets.
   add SoundFont and preview controls to Preferences.
 - Test the Poseidon USB MIDI fixes with a physical device, including SysEx
   and reconnect behavior.
-- Test BLE MIDI against a physical peripheral and the patched AROS GATT
-  client. AROS advertising as a BLE MIDI peripheral needs GATT server work.
+- Test both BLE MIDI roles with physical radios and iOS. Add the
+  `btmidi.class` configuration window and peripheral-role SMP pairing.
 - Verify AppleMIDI interoperability and discovery with iOS/macOS on a network
   where AROS multicast traffic is reachable.
 - Implement and verify SoundFont modulators and big-endian SF2 loading before
