@@ -69,6 +69,33 @@ MacBook              USB MIDI Out        Waiting
 
 Adding a route only requires a source and destination. An optional **Reconnect automatically** setting may control whether MIDIHub restores the route when an endpoint reappears.
 
+The initial resident `MIDIHubRouter` reads `ENV:MidiHub/Routes`, falling back
+to `ENVARC:MidiHub/Routes`. Each UTF-8 line is tab separated:
+
+```text
+route<TAB>enabled<TAB>reconnect<TAB>source cluster<TAB>destination cluster
+```
+
+For example:
+
+```text
+route	1	1	Arturia MiniLab	MIDIHub Synth
+route	1	0	iPhone BLE	MIDIHub Out
+```
+
+Blank lines and lines beginning with `#` or `;` are ignored. Endpoint names
+must match CAMD cluster names and cannot contain tabs or newlines. Direct and
+multi-route cycles are rejected to prevent feedback loops. Preferences should
+write this same contract; `Use` targets `ENV:` and `Save` targets both `ENV:`
+and `ENVARC:`.
+
+Run `MIDIHUB:C/MIDIHubRouter` to load the file. The service owns the CAMD
+links until it receives Ctrl-C, forwards channel/system messages and SysEx,
+and reports each route as `active` or `waiting`. A reconnecting route keeps its
+links attached to the named clusters, so a transport that re-creates its CAMD
+endpoint automatically rejoins the route. A route with reconnect disabled is
+removed after its first active-to-disconnected transition.
+
 The initial routing scope explicitly does **not** require:
 
 - note or velocity transformation

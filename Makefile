@@ -6,18 +6,23 @@ M68K_CFLAGS ?= -O2 -Wall -Wextra -Werror -Wno-volatile-register-var -std=gnu99
 FLUIDSYNTH_CFLAGS ?= $(shell pkg-config --cflags fluidsynth 2>/dev/null)
 FLUIDSYNTH_LIBS ?= $(shell pkg-config --libs fluidsynth 2>/dev/null)
 
-SOURCES = src/applemidi.c src/rtpmidi.c src/session.c src/config.c src/timing.c src/sender.c src/mdns.c
+SOURCES = src/applemidi.c src/rtpmidi.c src/session.c src/config.c src/timing.c src/sender.c src/mdns.c src/routes.c
 PROGRAM_SOURCES = ports/aros/midihub/main.c ports/aros/midihub/camd_bridge.c
 HEADERS = include/midihub/applemidi.h include/midihub/rtpmidi.h \
           include/midihub/session.h include/midihub/config.h include/midihub/timing.h \
-          include/midihub/sender.h include/midihub/mdns.h \
+          include/midihub/sender.h include/midihub/mdns.h include/midihub/routes.h \
           ports/aros/midihub/camd_bridge.h
 
 .PHONY: test test-network test-synth test-synth-fluid demo m68k synth-m68k clean
 
-test: build/protocol-test build/ble-midi-test
+test: build/protocol-test build/ble-midi-test build/routes-test
 	./build/protocol-test
 	./build/ble-midi-test
+	./build/routes-test
+
+build/routes-test: tests/routes.c src/routes.c include/midihub/routes.h
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/routes.c src/routes.c
 
 build/ble-midi-test: tests/ble_midi.c src/ble_midi.c src/ble_peripheral.c \
                      include/midihub/ble_midi.h include/midihub/ble_peripheral.h
