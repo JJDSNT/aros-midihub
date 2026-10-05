@@ -122,4 +122,34 @@ The program creates virtual CAMD ports through the client API. This gives
 applications the same CAMD interface as USB MIDI without installing a
 `DEVS:Midi` driver. See [the CAMD integration design](camd-integration.md).
 
+## Open work
+
+Besides a full build and tests with physical radios and iOS, these gaps remain.
+They are listed by impact, and each one is removed from this list once it is
+fixed.
+
+1. **Several centrals at once.** `BEHMB_SERVICEWRITE` does not say which
+   connection wrote, and the class decodes every write with one parser. Two
+   centrals sending at the same time corrupt each other's running status and
+   SysEx. The event must identify the connection, and the class must keep a
+   decoder per connection.
+2. **Connection interval.** The stack never sends an L2CAP LE Connection
+   Parameter Update Request. The BLE MIDI specification recommends that the
+   peripheral ask for an interval of 15 ms or less; iOS otherwise tends to
+   stay at about 30 ms, which adds latency and jitter.
+3. **Read returns MIDI data.** The specification requires a read of the
+   BLE MIDI I/O characteristic to return no payload. The GATT server returns
+   the last written or notified value.
+4. **Packet size.** The class sends 20-byte notifications even when the
+   negotiated ATT MTU is larger, which slows SysEx. Notifications go to every
+   subscriber, so the size must fit the smallest MTU among them.
+5. **Incoming timestamps.** They are parsed but not used; messages reach CAMD
+   when they arrive, without jitter correction.
+6. **Central role as a class binding.** As a central, AROS uses the
+   `MIDIHubBLE` program, one instance per peripheral, started by hand. The
+   native design is a `btmidi.class` binding (`BCM_AttemptServiceBinding`)
+   made when a BLE MIDI peripheral connects, as `bthid.class` does for HID.
+7. **MIDIHub.prefs integration.** Show the BLE MIDI endpoint in the overview
+   and link to the class settings window.
+
 Protocol reference: [MIDI Association BLE MIDI 1.0 specification](https://midi.org/midi-over-bluetooth-low-energy-ble-midi).
