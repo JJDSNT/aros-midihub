@@ -24,6 +24,18 @@ remain:
   controller LTK requests, distribute bonding keys, and reuse stored keys on
   reconnection.
 
+It also fixes two generic SMP issues that affect the central role as well:
+
+- the IO capability table selected Just Works instead of Passkey Entry when a
+  KeyboardDisplay device met a DisplayOnly or DisplayYesNo device;
+- an initiator rejected a responder's Secure Connections commitment that
+  arrived before its own controller reported the DHKey. It now holds the
+  commitment until the DHKey is ready.
+
+Phase 3 key distribution follows the Core specification in both roles: the
+responder sends its keys first, and the initiator answers once it has
+received them.
+
 The modified AROS files and their diff context are covered by the AROS Public
 License 1.1; see [AROS-LICENSE](AROS-LICENSE). MIDIHub's own source remains
 under its existing license. The patch advances `bluetooth.library` to 45.18
@@ -38,8 +50,9 @@ make -C ~/AROS/rom/bluetooth/stack -f Makefile.host test
 ```
 
 The patch applies cleanly to the stated commit. The sanitizer-enabled host
-suite passes `2444/2444` checks, including new ATT, GATT, and SMP responder
-tests. The changed `bluetooth.library` sources and `btmidi.class` also pass an
+suite passes `2499/2499` checks, including new ATT, GATT, and SMP responder
+tests. The SMP tests also run an initiator against a responder, check the
+full IO capability table, and check the Phase 3 order. The changed `bluetooth.library` sources and `btmidi.class` also pass an
 m68k AROS syntax build.
 
 `btmidi.class` uses the upstream service-record API. It registers the BLE MIDI
