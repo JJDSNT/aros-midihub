@@ -1,0 +1,230 @@
+diff --git a/arch/aarch64-native/kernel/kernel_startup.c b/arch/aarch64-native/kernel/kernel_startup.c
+index d9d4630642..7adb909df3 100644
+--- a/arch/aarch64-native/kernel/kernel_startup.c
++++ b/arch/aarch64-native/kernel/kernel_startup.c
+@@ -128,15 +128,33 @@ static void __attribute__((used)) __clear_bss(struct TagItem *msg)
+    it printed through itself in KRN_DebugUartBase; the platform id only serves
+    as a fallback for a bootstrap that predates that tag. Either way it is
+    settled before the first character goes out. */
+-static uintptr_t dbg_uart = 0x3f201000;
++uintptr_t krn_dbg_uart = 0x3f201000;
+ 
+-static inline void uart_putc(char c)
++/* On a Pi 3 with its Bluetooth radio on the PL011 the bootstrap prints
++   through the AUX mini-UART instead (see serialdebug.c), at 0x...215040:
++   data at +0x00, line status at +0x14, bit 5 = transmitter empty. The wait
++   is bounded in case the firmware left the mini-UART disabled. */
++#define DBG_UART_IS_MINI(base)  (((base) & 0xfff) == 0x040)
++
++static inline void uart_rawputc(volatile uint32_t *uart, char c)
+ {
+-    volatile uint32_t *uart = (volatile uint32_t *)dbg_uart;
+-    while (uart[0x18/4] & (1 << 5)) ; /* wait for TXFF clear */
+-    if (c == '\n') { uart[0] = '\r'; while (uart[0x18/4] & (1 << 5)) ; }
++    if (DBG_UART_IS_MINI(krn_dbg_uart))
++    {
++        unsigned int timeout = 100000;
++        while (timeout-- && !(uart[0x14/4] & (1 << 5))) ;
++    }
++    else
++        while (uart[0x18/4] & (1 << 5)) ; /* wait for TXFF clear */
+     uart[0] = c;
+ }
++
++static inline void uart_putc(char c)
++{
++    volatile uint32_t *uart = (volatile uint32_t *)krn_dbg_uart;
++    if (c == '\n')
++        uart_rawputc(uart, '\r');
++    uart_rawputc(uart, c);
++}
+ static void uart_puts(const char *s) { while (*s) uart_putc(*s++); }
+ 
+ void __attribute__((used)) kernel_cstart(struct TagItem *msg)
+@@ -166,11 +184,11 @@ void __attribute__((used)) kernel_cstart(struct TagItem *msg)
+         }
+ 
+         if (uartbase)
+-            dbg_uart = uartbase;
++            krn_dbg_uart = uartbase;
+         else if (plat == 0xc44)
+-            dbg_uart = 0xfe201000;      /* BCM2711 PL011 */
++            krn_dbg_uart = 0xfe201000;      /* BCM2711 PL011 */
+         else if (plat == 0x2712)
+-            dbg_uart = 0x1c00030000;    /* BCM2712: RP1 UART0 */
++            krn_dbg_uart = 0x1c00030000;    /* BCM2712: RP1 UART0 */
+     }
+ 
+     uart_puts("[Kernel] kernel_cstart entered\n");
+diff --git a/arch/aarch64-native/kernel/platform_bcm27xx.c b/arch/aarch64-native/kernel/platform_bcm27xx.c
+index 45bb996f7f..308da6a507 100644
+--- a/arch/aarch64-native/kernel/platform_bcm27xx.c
++++ b/arch/aarch64-native/kernel/platform_bcm27xx.c
+@@ -613,28 +613,54 @@ void bcm27xx_toggle_led(int LED, int state)
+     wr32le((lit ? GPSET0 : GPCLR0) + 4 * (pin / 32), 1 << (pin % 32));
+ }
+ 
++/* The debug UART the bootstrap printed through (KRN_DebugUartBase). On a
++   Pi 3 whose PL011 belongs to the Bluetooth radio that is the AUX mini-UART:
++   data at +0x00, line status at +0x14 (bit 0 data ready, bit 5 transmitter
++   empty). Everything else keeps using the PL011. */
++extern uintptr_t krn_dbg_uart;
++#define SER_MINI        ((krn_dbg_uart & 0xfff) == 0x040)
++#define MINI_IO         (krn_dbg_uart + 0x00)
++#define MINI_LSR        (krn_dbg_uart + 0x14)
++
+ static inline void bcm27xx_ser_waitout()
+ {
++    if (SER_MINI)
++    {
++        unsigned int timeout = 100000;
++        while (timeout-- && !(rd32le(MINI_LSR) & (1 << 5)))
++            ;
++        return;
++    }
+     while (1)
+     {
+         if ((rd32le(PL011_0_BASE + PL011_FR) & PL011_FR_TXFF) == 0) break;
+     }
+ }
+ 
++static inline void bcm27xx_ser_write(uint8_t chr)
++{
++    if (SER_MINI)
++        wr32le(MINI_IO, chr);
++    else
++        wr32le(PL011_0_BASE + PL011_DR, chr);
++}
++
+ void bcm27xx_ser_putc(uint8_t chr)
+ {
+     bcm27xx_ser_waitout();
+ 
+     if (chr == '\n')
+     {
+-        wr32le(PL011_0_BASE + PL011_DR, '\r');
++        bcm27xx_ser_write('\r');
+         bcm27xx_ser_waitout();
+     }
+-    wr32le(PL011_0_BASE + PL011_DR, chr);
++    bcm27xx_ser_write(chr);
+ }
+ 
+ int bcm27xx_ser_getc(void)
+ {
++    if (SER_MINI)
++        return (rd32le(MINI_LSR) & 1) ? (int)(rd32le(MINI_IO) & 0xff) : -1;
+     if ((rd32le(PL011_0_BASE + PL011_FR) & PL011_FR_RXFE) == 0)
+         return (int)rd32le(PL011_0_BASE + PL011_DR);
+ 
+diff --git a/arch/aarch64-raspi/boot/serialdebug.c b/arch/aarch64-raspi/boot/serialdebug.c
+index c20144969b..a1c447e55d 100644
+--- a/arch/aarch64-raspi/boot/serialdebug.c
++++ b/arch/aarch64-raspi/boot/serialdebug.c
+@@ -18,6 +18,7 @@
+ #include "bootconsole.h"
+ #include "vc_mb.h"
+ #include "io.h"
++#include "devicetree.h"
+ 
+ #undef ARM_PERIIOBASE
+ #define ARM_PERIIOBASE (__arm_periiobase)
+@@ -34,6 +35,38 @@ uintptr_t __uart_base = 0;
+ 
+ #define UART_BASE (__arm_socid == 0x2712 ? RP1_UART0_BASE : PL011_0_BASE)
+ 
++/*
++ * The BCM283x AUX mini-UART. On a Raspberry Pi 3, 3B+ and Zero 2 W the
++ * firmware gives the PL011 to the on-board Bluetooth radio and puts the
++ * mini-UART on the GPIO header instead; serial0 in the device tree's
++ * aliases says which. Only the data and line-status registers are used:
++ * with enable_uart=1 the firmware has set it up (115200, GPIO 14/15).
++ */
++#define MINIUART_BASE   (ARM_PERIIOBASE + 0x215040)
++#define MINIUART_IO     0x00
++#define MINIUART_LSR    0x14
++#define MINIUART_LSR_TXEMPTY    (1 << 5)
++#define MINIUART_WAIT   100000  /* never hang if the firmware left it off */
++
++static int uart_mini;
++
++/* serial0 -> "/soc/serial@7e215040" when the header carries the mini-UART */
++static int firmware_console_is_mini(void)
++{
++    of_node_t *aliases = dt_find_node("/aliases");
++    of_property_t *serial0 = aliases ? dt_find_property(aliases, "serial0") : NULL;
++    const char *path = serial0 ? (const char *)serial0->op_value : NULL;
++    const char *p;
++
++    if (!path)
++        return 0;
++    for (p = path; *p; p++)
++        if (p[0] == '2' && p[1] == '1' && p[2] == '5' && p[3] == '0' &&
++            p[4] == '4' && p[5] == '0' && p[6] == 0)
++            return 1;
++    return 0;
++}
++
+ #define PL011_ICR_FLAGS (PL011_ICR_RXIC|PL011_ICR_TXIC|PL011_ICR_RTIC|PL011_ICR_FEIC|PL011_ICR_PEIC|PL011_ICR_BEIC|PL011_ICR_OEIC|PL011_ICR_RIMIC|PL011_ICR_CTSMIC|PL011_ICR_DSRMIC|PL011_ICR_DCDMIC)
+ 
+ #define DEF_BAUD 115200
+@@ -49,22 +82,38 @@ unsigned int uartbaud;
+ 
+ inline void waitSerOUT()
+ {
++    if (uart_mini)
++    {
++        unsigned int timeout = MINIUART_WAIT;
++
++        while (timeout-- && !(rd32le(__uart_base + MINIUART_LSR) & MINIUART_LSR_TXEMPTY))
++            ;
++        return;
++    }
+     while(1)
+     {
+        if ((rd32le(UART_BASE + PL011_FR) & PL011_FR_TXFF) == 0) break;
+     }
+ }
+ 
++static inline void writeSer(uint8_t chr)
++{
++    if (uart_mini)
++        wr32le(__uart_base + MINIUART_IO, chr);
++    else
++        wr32le(UART_BASE + PL011_DR, chr);
++}
++
+ inline void putByte(uint8_t chr)
+ {
+     waitSerOUT();
+ 
+     if (chr == '\n')
+     {
+-        wr32le(UART_BASE + PL011_DR, '\r');
++        writeSer('\r');
+         waitSerOUT();
+     }
+-    wr32le(UART_BASE + PL011_DR, chr);
++    writeSer(chr);
+ }
+ 
+ void serInit(void)
+@@ -99,6 +148,18 @@ void serInit(void)
+         return;
+     }
+ 
++    /* Leave the PL011 to the Bluetooth radio, and its pins alone: printing
++       through it, or muxing GPIO 14/15 to it as well, would talk over the
++       radio and share its receive line. */
++    if (firmware_console_is_mini())
++    {
++        uart_mini = 1;
++        __uart_base = MINIUART_BASE;
++        uartbaud = 115200;
++
++        return;
++    }
++
+     uart_msg[0] = AROS_LONG2LE(8 * 4);
+     uart_msg[1] = AROS_LONG2LE(VCTAG_REQ);
+     uart_msg[2] = AROS_LONG2LE(VCTAG_GETCLKRATE);

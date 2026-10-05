@@ -109,6 +109,31 @@ none is added.
 git -C ~/AROS apply "$PWD/patches/aros-raspi-bt-firmware.patch"
 ```
 
+### Debug console on the mini-UART
+
+`aros-raspi-console-miniuart.patch` is needed for the on-board radio to work
+on `raspi-aarch64`. The bootstrap (`serialdebug.c`) and the kernel
+(`kernel_startup.c`, `bcm27xx_ser_putc`) printed their serial log through
+the PL011 and muxed GPIO 14/15 to it. On a Pi 3, 3B+ and Zero 2 W that
+PL011 belongs to the Bluetooth radio, which `pl011bt.resource` puts on GPIO
+30-33. Two pins then fed the PL011's receive line, and every kernel `bug()`
+was sent to the radio. On the first test the radio never answered
+`HCI_Reset` (`init step 0 -> timeout`).
+
+The patch follows the firmware's routing, as Linux does. When the device
+tree's `serial0` alias names the mini-UART (`/soc/serial@7e215040`), the
+bootstrap prints through the AUX mini-UART the firmware has set up
+(`enable_uart=1`, 115200, GPIO 14/15). It leaves the PL011 and its pins
+alone, and passes the mini-UART's address in `KRN_DebugUartBase`, which the
+kernel recognises for its early and later output. The serial cable stays on
+the same pins at the same speed. Waits on the mini-UART are bounded, so a
+disabled one cannot hang the boot. A Pi 2, or a Pi 3 with
+`dtoverlay=disable-bt`, keeps the PL011 console.
+
+```sh
+git -C ~/AROS apply "$PWD/patches/aros-raspi-console-miniuart.patch"
+```
+
 ## llvmpipe link order
 
 `aros-llvmpipe-link.patch` is a build fix found while building
