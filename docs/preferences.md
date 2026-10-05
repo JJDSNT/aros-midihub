@@ -96,6 +96,19 @@ links attached to the named clusters, so a transport that re-creates its CAMD
 endpoint automatically rejoins the route. A route with reconnect disabled is
 removed after its first active-to-disconnected transition.
 
+The command line is also the initial Preferences control contract:
+
+```text
+MIDIHUB:C/MIDIHubRouter STATUS
+MIDIHUB:C/MIDIHubRouter RELOAD
+MIDIHUB:C/MIDIHubRouter STOP
+```
+
+`STATUS` reports configured, active, and waiting route counts. `RELOAD`
+reparses the current `ENV:`/`ENVARC:` file and replaces the live links. These
+commands use the public `MIDIHub.Router` Exec message port; a native Preferences
+client can use the same message structure without launching a shell command.
+
 The initial routing scope explicitly does **not** require:
 
 - note or velocity transformation

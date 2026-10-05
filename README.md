@@ -298,9 +298,9 @@ playback can be claimed across targets.
 
 ## Next milestones
 
-- Implement the `MIDIHub.prefs` overview of CAMD-visible endpoints and the
-  control channel for the initial resident `MIDIHubRouter` service. The route
-  file contract and CAMD forwarding process are now implemented.
+- Implement the `MIDIHub.prefs` overview of CAMD-visible endpoints and its UI
+  for the resident `MIDIHubRouter` control channel. The route file, forwarding,
+  status, reload, and stop contracts are now implemented.
 - Add route persistence/reconnection and reusable Profiles without adding
   MIDI transformation or node-processing features.
 - Run `MIDIHubSynth` with a native CAMD client and audible AHI output, then

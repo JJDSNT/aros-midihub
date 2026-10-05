@@ -1,4 +1,5 @@
 #include <midihub/routes.h>
+#include "router_control.h"
 
 #ifdef __AROS__
 #include <dos/dos.h>
@@ -27,6 +28,7 @@ struct route_runtime {
 struct router_runtime {
     struct MidiNode *node;
     struct ClusterNotifyNode notify;
+    struct MsgPort *control;
     struct mh_route_table table;
     struct route_runtime routes[MH_ROUTE_MAX];
     UBYTE *sysex;
@@ -155,6 +157,97 @@ static void update_route_states(struct router_runtime *rt)
     }
 }
 
+static int reload_routes(struct router_runtime *rt)
+{
+    struct mh_route_table replacement;
+    MidiMsg pending;
+    size_t i;
+
+    if (load_routes(&replacement) != 0)
+        return -1;
+    /* Do not deliver messages received under the old PortID mapping through
+       a different route after the table is replaced. */
+    while (GetMidi(rt->node, &pending))
+        if (pending.mm_Status == 0xf0)
+            SkipSysEx(rt->node);
+    for (i = 0; i < rt->table.count; ++i)
+        remove_route(&rt->routes[i]);
+    rt->table = replacement;
+    for (i = 0; i < rt->table.count; ++i)
+        if (add_route(rt, i) != 0)
+            return -1;
+    update_route_states(rt);
+    return 0;
+}
+
+static void route_counts(struct router_runtime *rt, ULONG *active, ULONG *waiting)
+{
+    size_t i;
+
+    *active = *waiting = 0;
+    for (i = 0; i < rt->table.count; ++i) {
+        if (!rt->table.routes[i].enabled)
+            continue;
+        if (route_connected(&rt->routes[i]))
+            ++*active;
+        else if (rt->routes[i].input)
+            ++*waiting;
+    }
+}
+
+static int handle_control(struct router_runtime *rt)
+{
+    struct mh_router_message *message;
+    int stop = 0;
+
+    while ((message = (struct mh_router_message *)GetMsg(rt->control)) != NULL) {
+        message->result = 0;
+        if (message->command == MH_ROUTER_RELOAD)
+            message->result = reload_routes(rt);
+        else if (message->command == MH_ROUTER_STOP)
+            stop = 1;
+        else if (message->command != MH_ROUTER_STATUS)
+            message->result = -1;
+        message->configured = (ULONG)rt->table.count;
+        route_counts(rt, &message->active, &message->waiting);
+        ReplyMsg(&message->message);
+    }
+    return stop;
+}
+
+static int send_control(ULONG command)
+{
+    struct MsgPort *reply;
+    struct MsgPort *control;
+    struct mh_router_message message;
+    int result = 20;
+
+    reply = CreateMsgPort();
+    if (!reply)
+        return result;
+    memset(&message, 0, sizeof(message));
+    message.message.mn_ReplyPort = reply;
+    message.message.mn_Length = sizeof(message);
+    message.command = command;
+    Forbid();
+    control = FindPort((CONST_STRPTR)MIDIHUB_ROUTER_PORT);
+    if (control)
+        PutMsg(control, &message.message);
+    Permit();
+    if (control) {
+        WaitPort(reply);
+        (void)GetMsg(reply);
+        printf("MIDIHubRouter: configured=%lu active=%lu waiting=%lu\n",
+               (unsigned long)message.configured, (unsigned long)message.active,
+               (unsigned long)message.waiting);
+        result = message.result == 0 ? 0 : 20;
+    } else {
+        fputs("MIDIHubRouter: service is not running\n", stderr);
+    }
+    DeleteMsgPort(reply);
+    return result;
+}
+
 static void forward_messages(struct router_runtime *rt)
 {
     MidiMsg message;
@@ -183,6 +276,10 @@ static void close_router(struct router_runtime *rt)
 
     if (rt->notifying)
         EndClusterNotify(&rt->notify);
+    if (rt->control) {
+        RemPort(rt->control);
+        DeleteMsgPort(rt->control);
+    }
     for (i = 0; i < rt->table.count; ++i)
         remove_route(&rt->routes[i]);
     if (rt->node)
@@ -196,7 +293,7 @@ static void close_router(struct router_runtime *rt)
         CloseLibrary(CamdBase);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     struct router_runtime rt;
     struct TagItem node_tags[] = {
@@ -213,6 +310,20 @@ int main(void)
 
     memset(&rt, 0, sizeof(rt));
     rt.midi_signal = rt.notify_signal = -1;
+    if (argc == 2) {
+        if (strcmp(argv[1], "STATUS") == 0)
+            return send_control(MH_ROUTER_STATUS);
+        if (strcmp(argv[1], "RELOAD") == 0)
+            return send_control(MH_ROUTER_RELOAD);
+        if (strcmp(argv[1], "STOP") == 0)
+            return send_control(MH_ROUTER_STOP);
+        fputs("Usage: MIDIHubRouter [STATUS|RELOAD|STOP]\n", stderr);
+        return 20;
+    }
+    if (argc != 1) {
+        fputs("Usage: MIDIHubRouter [STATUS|RELOAD|STOP]\n", stderr);
+        return 20;
+    }
     if (load_routes(&rt.table) != 0)
         return 20;
     CamdBase = OpenLibrary((CONST_STRPTR)"camd.library", 40);
@@ -227,6 +338,18 @@ int main(void)
     rt.node = CreateMidiA(node_tags);
     if (!rt.node)
         goto done;
+    rt.control = CreateMsgPort();
+    if (!rt.control)
+        goto done;
+    rt.control->mp_Node.ln_Name = (char *)MIDIHUB_ROUTER_PORT;
+    Forbid();
+    if (FindPort((CONST_STRPTR)MIDIHUB_ROUTER_PORT)) {
+        Permit();
+        fputs("MIDIHubRouter: service is already running\n", stderr);
+        goto done;
+    }
+    AddPort(rt.control);
+    Permit();
     for (i = 0; i < rt.table.count; ++i)
         if (add_route(&rt, i) != 0)
             goto done;
@@ -237,7 +360,7 @@ int main(void)
     puts("MIDIHubRouter: running");
     update_route_states(&rt);
     signal_mask = SIGBREAKF_CTRL_C | (1UL << rt.midi_signal) |
-                  (1UL << rt.notify_signal);
+                  (1UL << rt.notify_signal) | (1UL << rt.control->mp_SigBit);
     for (;;) {
         /* Cluster notification covers creation/removal. Participant changes
            inside an existing cluster are not notified by CAMD, so poll the
@@ -245,6 +368,10 @@ int main(void)
         Delay(25);
         signals = SetSignal(0, signal_mask) & signal_mask;
         if (signals & SIGBREAKF_CTRL_C) {
+            result = 0;
+            break;
+        }
+        if ((signals & (1UL << rt.control->mp_SigBit)) && handle_control(&rt)) {
             result = 0;
             break;
         }
