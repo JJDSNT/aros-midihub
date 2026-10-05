@@ -17,6 +17,9 @@ struct Library *BluetoothBase;
 
 struct btmidi_runtime {
     struct BTMidiBase *base;
+    char node_name[BTMIDI_NAME_SIZE];
+    char in_name[BTMIDI_NAME_SIZE];
+    char out_name[BTMIDI_NAME_SIZE];
     struct MsgPort *event_port;
     APTR event_handler;
     APTR record;
@@ -37,12 +40,26 @@ static UWORD now_milliseconds(void)
                     (unsigned long long)now.tv_usec / 1000ULL) & 0x1fff);
 }
 
+static void deliver(struct btmidi_runtime *runtime, const UBYTE *message,
+                    ULONG length)
+{
+    mh_camd_bridge_deliver(&runtime->camd, message, length);
+    runtime->base->stats.ms_RxMessages++;
+}
+
+static void deliver_sysex(struct btmidi_runtime *runtime, const UBYTE *message,
+                          ULONG length)
+{
+    mh_camd_bridge_deliver_sysex(&runtime->camd, message, length);
+    runtime->base->stats.ms_RxMessages++;
+}
+
 static int received_byte(void *context, uint16_t timestamp, uint8_t byte)
 {
     struct btmidi_runtime *runtime = context;
     (void)timestamp;
     if (byte >= 0xf8) {
-        mh_camd_bridge_deliver(&runtime->camd, &byte, 1);
+        deliver(runtime, &byte, 1);
         return 0;
     }
     if (runtime->sysex_length) {
@@ -52,8 +69,7 @@ static int received_byte(void *context, uint16_t timestamp, uint8_t byte)
         }
         runtime->sysex[runtime->sysex_length++] = byte;
         if (byte == 0xf7) {
-            mh_camd_bridge_deliver_sysex(&runtime->camd, runtime->sysex,
-                                         runtime->sysex_length);
+            deliver_sysex(runtime, runtime->sysex, runtime->sysex_length);
             runtime->sysex_length = 0;
         }
         return 0;
@@ -66,7 +82,7 @@ static int received_byte(void *context, uint16_t timestamp, uint8_t byte)
     }
     if (byte & 0x80) {
         if (byte == 0xf6) {
-            mh_camd_bridge_deliver(&runtime->camd, &byte, 1);
+            deliver(runtime, &byte, 1);
             runtime->message_length = runtime->message_needed = 0;
             return 0;
         }
@@ -85,8 +101,7 @@ static int received_byte(void *context, uint16_t timestamp, uint8_t byte)
         return -1;
     runtime->message[runtime->message_length++] = byte;
     if (!--runtime->message_needed) {
-        mh_camd_bridge_deliver(&runtime->camd, runtime->message,
-                               runtime->message_length);
+        deliver(runtime, runtime->message, runtime->message_length);
         runtime->message_length = 0;
     }
     return 0;
@@ -95,8 +110,12 @@ static int received_byte(void *context, uint16_t timestamp, uint8_t byte)
 static int set_packet(struct btmidi_runtime *runtime,
                       const UBYTE *packet, ULONG length)
 {
-    return btSetServiceValue(runtime->record, 0, (APTR)packet, length) ==
-           (LONG)length ? 0 : -1;
+    if (btSetServiceValue(runtime->record, 0, (APTR)packet, length) != (LONG)length) {
+        runtime->base->stats.ms_Errors++;
+        return -1;
+    }
+    runtime->base->stats.ms_TxPackets++;
+    return 0;
 }
 
 static int send_to_ble(void *context, const uint8_t *message, size_t length)
@@ -105,6 +124,8 @@ static int send_to_ble(void *context, const uint8_t *message, size_t length)
     UBYTE packet[BTMIDI_TX_PACKET_SIZE];
     size_t written;
     UWORD timestamp = now_milliseconds();
+
+    runtime->base->stats.ms_TxMessages++;
 
     if (length >= 2 && message[0] == 0xf0 && message[length - 1] == 0xf7) {
         size_t offset = 0;
@@ -154,14 +175,58 @@ static void handle_service_write(struct btmidi_runtime *runtime,
                BENA_Data, &value, BENA_DataLength, &length, TAG_END);
     if (event == BEHMB_SERVICEWRITE && record == runtime->record && index == 0 &&
         value && length > 0 && length <= BTMIDI_VALUE_SIZE) {
+        runtime->base->stats.ms_RxPackets++;
         if (mh_ble_midi_decode(&runtime->decoder, value, (size_t)length,
                                received_byte, runtime)) {
+            runtime->base->stats.ms_Errors++;
             mh_ble_midi_decoder_init(&runtime->decoder);
             runtime->sysex_length = 0;
             runtime->message_length = runtime->message_needed = 0;
         }
     }
     ReplyMsg(message);
+}
+
+static void reset_parser(struct btmidi_runtime *runtime)
+{
+    mh_ble_midi_decoder_init(&runtime->decoder);
+    runtime->sysex_length = 0;
+    runtime->message_length = runtime->message_needed = 0;
+}
+
+/* Opens the CAMD node under the configured names. Should CAMD refuse them,
+   the defaults keep the service usable. */
+static void open_camd(struct btmidi_runtime *runtime)
+{
+    struct BTMidiBase *base = runtime->base;
+    enum btmidi_camd_state state = BTMIDI_CAMD_OPEN;
+
+    Forbid();
+    CopyMem(base->cfg.mc_NodeName, runtime->node_name, BTMIDI_NAME_SIZE);
+    CopyMem(base->cfg.mc_InName, runtime->in_name, BTMIDI_NAME_SIZE);
+    CopyMem(base->cfg.mc_OutName, runtime->out_name, BTMIDI_NAME_SIZE);
+    Permit();
+    if (mh_camd_bridge_open_named(&runtime->camd, runtime->node_name,
+                                  runtime->in_name, runtime->out_name)) {
+        strcpy(runtime->node_name, BTMIDI_DEFAULT_NODE);
+        strcpy(runtime->in_name, BTMIDI_DEFAULT_IN);
+        strcpy(runtime->out_name, BTMIDI_DEFAULT_OUT);
+        state = mh_camd_bridge_open_named(&runtime->camd, runtime->node_name,
+                                          runtime->in_name, runtime->out_name)
+                    ? BTMIDI_CAMD_CLOSED : BTMIDI_CAMD_DEFAULTS;
+    }
+    base->camd_state = state;
+}
+
+/* At most one wake-up per refresh of the settings window. */
+static void notify_gui(struct BTMidiBase *base)
+{
+    Forbid();
+    if (base->gui_task && !base->activity_pending) {
+        base->activity_pending = TRUE;
+        Signal(base->gui_task, SIGBREAKF_CTRL_F);
+    }
+    Permit();
 }
 
 AROS_UFH0(void, btmidi_task)
@@ -183,13 +248,15 @@ AROS_UFH0(void, btmidi_task)
         BluetoothBase = NULL;
     }
     if (BluetoothBase && (runtime.event_port = CreateMsgPort()) &&
-        !mh_camd_bridge_open_named(&runtime.camd, "MIDIHub BLE",
-                                   "MIDIHub BLE In", "MIDIHub BLE Out") &&
         (runtime.record = add_service())) {
+        /* without CAMD the service still runs; the window tells */
+        open_camd(&runtime);
         runtime.event_handler = btAddEventHandler(runtime.event_port,
                                                    BEHMF_SERVICEWRITE);
-        if (runtime.event_handler)
+        if (runtime.event_handler) {
+            runtime.base->record = runtime.record;
             runtime.base->task = task;
+        }
     }
     Forbid();
     if (runtime.base->ready_task)
@@ -197,15 +264,28 @@ AROS_UFH0(void, btmidi_task)
     Permit();
     if (runtime.base->task) {
         do {
-            signals = Wait((1UL << runtime.event_port->mp_SigBit) |
-                           (1UL << runtime.camd.signal_bit) |
-                           SIGBREAKF_CTRL_C);
+            ULONG mask = (1UL << runtime.event_port->mp_SigBit) |
+                         SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_E;
+
+            if (runtime.camd.signal_bit >= 0)
+                mask |= 1UL << runtime.camd.signal_bit;
+            signals = Wait(mask);
             while ((message = GetMsg(runtime.event_port)))
                 handle_service_write(&runtime, message);
-            if (signals & (1UL << runtime.camd.signal_bit))
+            if ((runtime.camd.signal_bit >= 0) &&
+                (signals & (1UL << runtime.camd.signal_bit)))
                 mh_camd_bridge_poll(&runtime.camd, send_to_ble, &runtime);
+            if (signals & SIGBREAKF_CTRL_E) {
+                /* new port names: CAMD clients reconnect by name */
+                mh_camd_bridge_close(&runtime.camd);
+                reset_parser(&runtime);
+                open_camd(&runtime);
+            }
+            notify_gui(runtime.base);
         } while (!(signals & SIGBREAKF_CTRL_C));
     }
+    runtime.base->record = NULL;
+    runtime.base->camd_state = BTMIDI_CAMD_CLOSED;
     if (runtime.event_handler)
         btRemEventHandler(runtime.event_handler);
     while (runtime.event_port && (message = GetMsg(runtime.event_port)))
@@ -225,6 +305,92 @@ AROS_UFH0(void, btmidi_task)
     AROS_USERFUNC_EXIT
 }
 
+/* The configuration lives with the other Bluetooth class settings. The
+   functions below take the caller's bluetooth.library base: the global one
+   belongs to the service task. */
+#define BluetoothBase bluetooth
+
+static void terminate_name(char *name, const char *fallback)
+{
+    name[BTMIDI_NAME_SIZE - 1] = 0;
+    if (!name[0])
+        strcpy(name, fallback);
+}
+
+void btmidi_default_cfg(struct BTMidiCfg *cfg)
+{
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->mc_ChunkID = AROS_LONG2BE(MAKE_ID('B','M','I','D'));
+    cfg->mc_Length = AROS_LONG2BE(sizeof(*cfg) - 8);
+    strcpy(cfg->mc_NodeName, BTMIDI_DEFAULT_NODE);
+    strcpy(cfg->mc_InName, BTMIDI_DEFAULT_IN);
+    strcpy(cfg->mc_OutName, BTMIDI_DEFAULT_OUT);
+}
+
+void btmidi_load_cfg(struct BTMidiBase *base, struct Library *bluetooth)
+{
+    struct BTMidiCfg *cfg = &base->cfg;
+    struct BTMidiCfg *chunk;
+    APTR pic;
+
+    Forbid();
+    btmidi_default_cfg(cfg);
+    base->using_default_cfg = TRUE;
+    if ((pic = btGetClsCfg((STRPTR)MOD_NAME_STRING)) &&
+        (chunk = btGetCfgChunk(pic, AROS_LONG2BE(cfg->mc_ChunkID)))) {
+        ULONG len = AROS_LONG2BE(chunk->mc_Length);
+
+        if (len > sizeof(*cfg) - 8)
+            len = sizeof(*cfg) - 8;
+        CopyMem(((UBYTE *)chunk) + 8, ((UBYTE *)cfg) + 8, len);
+        btFreeVec(chunk);
+        terminate_name(cfg->mc_NodeName, BTMIDI_DEFAULT_NODE);
+        terminate_name(cfg->mc_InName, BTMIDI_DEFAULT_IN);
+        terminate_name(cfg->mc_OutName, BTMIDI_DEFAULT_OUT);
+        base->using_default_cfg = FALSE;
+    }
+    Permit();
+}
+
+void btmidi_store_cfg(struct BTMidiBase *base, struct Library *bluetooth,
+                      BOOL to_disk)
+{
+    APTR pic;
+
+    if (!(pic = btGetClsCfg((STRPTR)MOD_NAME_STRING))) {
+        btSetClsCfg((STRPTR)MOD_NAME_STRING, NULL);
+        pic = btGetClsCfg((STRPTR)MOD_NAME_STRING);
+    }
+    if (pic && btAddCfgEntry(pic, &base->cfg)) {
+        base->using_default_cfg = FALSE;
+        if (to_disk)
+            btSaveCfgToDisk(NULL, FALSE);
+    }
+}
+
+BOOL btmidi_open_cfg_window(struct BTMidiBase *base, struct Library *bluetooth)
+{
+    BOOL ok = FALSE;
+
+    Forbid();
+    if (base->gui_task)
+        ok = TRUE;
+    else if (base->task &&
+             (base->gui_task = btSpawnSubTask((STRPTR)"btmidi.class GUI",
+                                              (APTR)btmidi_gui_task, base)))
+        ok = TRUE;
+    Permit();
+    return ok;
+}
+
+void btmidi_reconfigure(struct BTMidiBase *base)
+{
+    Forbid();
+    if (base->task)
+        Signal(base->task, SIGBREAKF_CTRL_E);
+    Permit();
+}
+
 static int GM_UNIQUENAME(libInit)(LIBBASETYPEPTR base)
 {
     struct Library *bluetooth;
@@ -239,6 +405,7 @@ static int GM_UNIQUENAME(libInit)(LIBBASETYPEPTR base)
         CloseLibrary(base->utility_base);
         return FALSE;
     }
+    btmidi_load_cfg(base, bluetooth);
     base->ready_signal = SIGB_SINGLE;
     base->ready_task = FindTask(NULL);
     SetSignal(0, SIGF_SINGLE);
@@ -256,6 +423,8 @@ static int GM_UNIQUENAME(libInit)(LIBBASETYPEPTR base)
 
 static int GM_UNIQUENAME(libExpunge)(LIBBASETYPEPTR base)
 {
+    if (base->gui_task)
+        return FALSE;
     if (base->task) {
         base->ready_signal = SIGB_SINGLE;
         base->ready_task = FindTask(NULL);
@@ -270,6 +439,7 @@ static int GM_UNIQUENAME(libExpunge)(LIBBASETYPEPTR base)
 
 ADD2INITLIB(GM_UNIQUENAME(libInit), 0)
 ADD2EXPUNGELIB(GM_UNIQUENAME(libExpunge), 0)
+#undef BluetoothBase
 
 #define UtilityBase base->utility_base
 AROS_LH3(LONG, btcGetAttrsA,
@@ -289,7 +459,7 @@ AROS_LH3(LONG, btcGetAttrsA,
             *((STRPTR *)tag->ti_Data) = (STRPTR)"BLE MIDI GATT service and CAMD bridge"; count++;
         }
         if ((tag = FindTagItem(BCCA_HasClassCfgGUI, tags))) {
-            *((IPTR *)tag->ti_Data) = FALSE; count++;
+            *((IPTR *)tag->ti_Data) = TRUE; count++;
         }
         if ((tag = FindTagItem(BCCA_HasBindingCfgGUI, tags))) {
             *((IPTR *)tag->ti_Data) = FALSE; count++;
@@ -298,7 +468,7 @@ AROS_LH3(LONG, btcGetAttrsA,
             *((IPTR *)tag->ti_Data) = TRUE; count++;
         }
         if ((tag = FindTagItem(BCCA_UsingDefaultCfg, tags))) {
-            *((IPTR *)tag->ti_Data) = TRUE; count++;
+            *((IPTR *)tag->ti_Data) = base->using_default_cfg; count++;
         }
     }
     return count;
@@ -322,7 +492,26 @@ AROS_LH2(SIPTR, btcDoMethodA,
          LIBBASETYPEPTR, base, 7, btmidi)
 {
     AROS_LIBFUNC_INIT
-    (void)method; (void)data;
-    return 0;
+    struct Library *bluetooth;
+    SIPTR result = 0;
+
+    (void)data;
+    switch (method) {
+    case BCM_OpenCfgWindow:
+    case BCM_ConfigChangedEvent:
+        if (!(bluetooth = OpenLibrary((CONST_STRPTR)"bluetooth.library", 45)))
+            break;
+        if (method == BCM_OpenCfgWindow) {
+            result = btmidi_open_cfg_window(base, bluetooth);
+        } else if (!base->gui_task) {
+            /* not while the window edits it; its Use and Save apply it */
+            btmidi_load_cfg(base, bluetooth);
+            btmidi_reconfigure(base);
+            result = TRUE;
+        }
+        CloseLibrary(bluetooth);
+        break;
+    }
+    return result;
     AROS_LIBFUNC_EXIT
 }

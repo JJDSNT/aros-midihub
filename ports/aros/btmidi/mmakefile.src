@@ -5,6 +5,7 @@ MIDIHUB_ROOT := $(SRCDIR)/$(patsubst %/ports/aros/btmidi,%,$(CURDIR))
 USER_INCLUDES := -I$(MIDIHUB_ROOT)/include -I$(MIDIHUB_ROOT)/ports/aros
 USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
 USER_LDFLAGS := -static
+USER_CPPFLAGS := -DMUIMASTER_YES_INLINE_STDARG
 
 #MM- contrib-aros-midihub-btmidi : \
 #MM      linklibs-arosmidihub \
@@ -13,7 +14,7 @@ USER_LDFLAGS := -static
 
 %build_module_library mmake=contrib-aros-midihub-btmidi \
     modname=btmidi modtype=btclass modsuffix="class" \
-    files="btmidi $(MIDIHUB_ROOT)/ports/aros/midihub/camd_bridge" \
+    files="btmidi btmidi_gui $(MIDIHUB_ROOT)/ports/aros/midihub/camd_bridge" \
     uselibs=arosmidihub
 
 %common

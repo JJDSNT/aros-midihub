@@ -29,8 +29,10 @@ being hard-coded into the generic host stack:
   CAMD.
 - Bluetooth Preferences controls radio state, pairing, trust, loaded classes,
   advertising, and whether the BLE MIDI service is enabled through the
-  upstream `btgatt.class` window. A later MIDI-specific window may customize
-  the CAMD port names and expose activity.
+  upstream `btgatt.class` window. The `btmidi.class` settings window names
+  the CAMD device and its two clusters and shows activity: whether the
+  service is offered, the CAMD state, and packet, message, and error counts
+  in each direction.
 - MIDIHub Preferences may link to the same class configuration and show MIDI
   activity. SoundFont and synthesizer settings stay in MIDIHub because they
   are independent of Bluetooth.
@@ -83,12 +85,31 @@ active radio can consume.
    `MIDIHub BLE Out`. Incoming BLE packets, including SysEx, are decoded into
    CAMD; CAMD output is encoded into notifications for every subscribed iOS
    central.
+5. Open the `btmidi.class` settings from the Bluetooth Preferences Classes
+   page. The Received and Sent counters should rise while MIDI flows; the
+   Errors counter should stay at zero.
+
+#### Class settings
+
+The settings window edits the names of the CAMD device (`MIDIHub BLE`), the
+cluster that carries MIDI received from Bluetooth (`MIDIHub BLE In`), and the
+cluster whose MIDI is sent over Bluetooth (`MIDIHub BLE Out`). `Use` applies
+them at once: the class reopens its CAMD node, and CAMD clients and MIDIHub
+routes find the clusters again by their new names. `Save` also writes them to
+the Bluetooth configuration on disk. If CAMD cannot open the configured names,
+the class falls back to the defaults and the window says so. As everywhere in
+CAMD, a cluster name another program also uses joins that program's cluster,
+so pick distinct names unless sharing is intended.
+
+Advertising, pairing, and whether the service is offered stay in Bluetooth
+Preferences and the `btgatt.class` window.
 
 The patch passes the AROS apply check and portable stack tests. The BLE MIDI
 codec passes local packet tests covering channel messages, running status,
 timestamp wrap, and multi-packet SysEx. The `MIDIHubBLE` source compiled and
-linked with existing AROS headers, and the new class source passes an m68k AROS
-syntax build. MetaMake expands the class target successfully. A full class link
+linked with existing AROS headers. The class and its settings window pass an
+m68k AROS syntax build with `-Wall -Wextra -Werror` against headers generated
+from the patched `bluetooth.conf`. MetaMake expands the class target successfully. A full class link
 and a physical radio exchange remain to be performed.
 
 The first runtime sends complete MIDI messages without transmit running

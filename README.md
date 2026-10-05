@@ -307,9 +307,9 @@ playback can be claimed across targets.
   add SoundFont and preview controls to Preferences.
 - Test the Poseidon USB MIDI fixes with a physical device, including SysEx
   and reconnect behavior.
-- Test both BLE MIDI roles and peripheral pairing with physical radios and iOS,
-  including Legacy Just Works and Secure Connections. Add the `btmidi.class`
-  configuration window.
+- Test both BLE MIDI roles, peripheral pairing, and the `btmidi.class`
+  settings window with physical radios and iOS, including Legacy Just Works
+  and Secure Connections.
 - Verify AppleMIDI interoperability and discovery with iOS/macOS on a network
   where AROS multicast traffic is reachable.
 - Implement and verify SoundFont modulators and big-endian SF2 loading before
