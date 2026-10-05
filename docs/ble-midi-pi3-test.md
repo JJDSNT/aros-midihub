@@ -19,9 +19,9 @@ empty reads.
 ## Prepare the SD card
 
 1. Build the image as in [the patch guide](../patches/README.md): AROS
-   `raspi-aarch64` with `aros-ble-midi-upstream-gaps.patch`,
-   `aros-raspi-bt-firmware.patch` and `aros-raspi-bt-startup.patch` applied,
-   plus the `contrib-aros-midihub` target.
+   `raspi-aarch64` with `aros-ble-midi-upstream-gaps.patch` and
+   `aros-raspi-bt-firmware.patch` applied, plus the `contrib-aros-midihub`
+   target.
 2. Check that the card has the Bluetooth patchram in `DEVS:Firmware/brcm/`
    (`BCM43430A1.hcd` for a Pi 3 or Zero W, `BCM4345C0.hcd` for a Pi 3B+).
    The firmware patch downloads both with the boot image.
@@ -29,11 +29,11 @@ empty reads.
 ## Bring Bluetooth up
 
 1. Boot. `S:Startup-Sequence` runs `BTStackLoader`, which binds the firmware
-   loader (`brcmbt.fwl`), and then registers the on-board radio
-   (`AddBTHardware DEVS:Bluetooth/h4bthci.device`); nothing has to be done by
-   hand.
-2. In Bluetooth Preferences the radio is listed with a real address. If it
-   shows `AA:AA:AA:AA:AA:AA`, the patchram was not found.
+   loader (`brcmbt.fwl`) and brings up the radios saved in `bluetooth.prefs`.
+2. The first time, register the on-board radio: in Bluetooth Preferences, on
+   the hardware page, enter `DEVS:Bluetooth/h4bthci.device` with unit 0, Add,
+   then Save. The radio is listed with a real address; if it shows
+   `AA:AA:AA:AA:AA:AA`, the patchram was not found.
 3. On the Classes page check that `btgatt.class` and `btmidi.class` are
    loaded. Open the `btgatt.class` settings: tick "Let Bluetooth LE devices
    find and connect to this machine" and keep `BLE MIDI` offered. Use or
@@ -97,32 +97,14 @@ below read it.
    without reconnecting the iPhone.
 3. Set the names back with Defaults.
 
-## Test 6: is the Startup-Sequence line needed?
+## Test 6: the radio comes back after a reboot
 
-`aros-raspi-bt-startup.patch` assumes nothing else registers the on-board
-radio. The firmware loaders do not (`btAddFirmwareLoader()` only patches
-radios already present). `BTStackLoader` brings up the radios saved in
-`bluetooth.prefs`, though, so after the radio has been saved once the line
-only matters on a fresh installation. Both cases:
-
-1. Comment out the `AddBTHardware DEVS:Bluetooth/h4bthci.device` block in
-   `S:Startup-Sequence`. Delete `ENVARC:Sys/bluetooth.prefs` and
-   `ENV:Sys/bluetooth.prefs` (keep a copy if you have pairings to keep), and
-   reboot.
-2. Expected: Bluetooth Preferences lists no radio.
-3. Run `AddBTHardware DEVS:Bluetooth/h4bthci.device` in a Shell. Expected: the
-   radio appears with its real address, because the firmware loaders are
-   already bound. Save in Bluetooth Preferences and reboot.
-4. Expected: the radio now comes up from the saved configuration, still
-   without the line.
-5. Restore the line and reboot. Expected: the radio comes up once. The line
-   gives the full path, and the stack matches it against the saved name
-   whether or not that one has a path; the log may say the hardware is
-   already online.
-
-If the radio appears in step 2, something else registers it and the startup
-patch should not go upstream; note what the Bluetooth log says about where
-it came from.
+1. Reboot without touching anything.
+2. Expected: the radio is up with the same address, from the saved
+   `bluetooth.prefs`, and the firmware was applied during its bring-up: the
+   Bluetooth log shows the patchram loaded once, with no controller restart
+   afterwards.
+3. Repeat test 1 to confirm that BLE MIDI still works.
 
 ## What to report
 
