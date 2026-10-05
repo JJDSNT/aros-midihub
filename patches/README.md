@@ -109,6 +109,24 @@ none is added.
 git -C ~/AROS apply "$PWD/patches/aros-raspi-bt-firmware.patch"
 ```
 
+## llvmpipe link order
+
+`aros-llvmpipe-link.patch` is a build fix found while building
+`raspi-aarch64` with `--with-toolchain=llvm`. It is unrelated to MIDI and
+meant for upstream.
+
+`workbench/hidds/llvmpipe` links the target-side LLVM archives as `-lLLVM…`
+names. `TARGET_CXX_LDFLAGS` puts `-L$(CROSSTOOLSDIR)/lib` first, and when
+the AROS toolchain itself was built with LLVM that directory also holds the
+host's `libLLVM*.a`. The linker then picks those, and the link fails with
+"is incompatible with aarch64elf". The patch passes the archives from
+`$(AROS_DEVELOPER)/lib` by path, which the `mmakefile` already globs, so no
+search order is involved. With it, `llvmpipe.hidd` links.
+
+```sh
+git -C ~/AROS apply "$PWD/patches/aros-llvmpipe-link.patch"
+```
+
 ## USB MIDI CAMD fix
 
 `aros-usb-midi-camd.patch` still applies cleanly to upstream commit
