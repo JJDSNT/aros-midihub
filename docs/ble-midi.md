@@ -42,9 +42,10 @@ server profile reuse the same stack support.
 The service-record API keeps values in `bluetooth.library`; incoming writes
 arrive as `BEHMB_SERVICEWRITE` events with immutable packet snapshots on the
 class's Exec task, so MIDI parsing and CAMD calls never run inside the Bluetooth
-hardware task. The remaining AROS patch adds peripheral-role SMP Legacy Just
-Works, including bonding and encryption on reconnection. Authenticated responder
-pairing and Secure Connections remain future stack work.
+hardware task. The remaining AROS patch adds peripheral-role SMP, bonding, and
+encryption on reconnection. Legacy Just Works is the default; the existing
+`btlesc` boot argument enables Secure Connections with Just Works, Numeric
+Comparison, or Passkey Entry. OOB pairing remains unsupported.
 Outgoing values are likewise queued as immutable notifications. The class uses
 20-byte packets so it also works before a central negotiates an ATT MTU larger
 than the mandatory default. The generic queue retains up to 256 pending

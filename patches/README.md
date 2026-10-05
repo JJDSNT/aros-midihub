@@ -19,8 +19,10 @@ remain:
 - queue outgoing notification snapshots until each active radio consumes
   them, instead of coalescing a MIDI burst into the latest value. The queue is
   bounded at 256 snapshots; on sustained producer overrun it drops the oldest;
-- accept peripheral-role SMP Legacy Just Works pairing, answer controller LTK
-  requests, distribute bonding keys, and reuse the stored key on reconnection.
+- accept peripheral-role SMP pairing, including Legacy Just Works and Secure
+  Connections Just Works, Numeric Comparison, and Passkey Entry; answer
+  controller LTK requests, distribute bonding keys, and reuse stored keys on
+  reconnection.
 
 The modified AROS files and their diff context are covered by the AROS Public
 License 1.1; see [AROS-LICENSE](AROS-LICENSE). MIDIHub's own source remains
@@ -36,7 +38,7 @@ make -C ~/AROS/rom/bluetooth/stack -f Makefile.host test
 ```
 
 The patch applies cleanly to the stated commit. The sanitizer-enabled host
-suite passes `2157/2157` checks, including new ATT, GATT, and SMP responder
+suite passes `2444/2444` checks, including new ATT, GATT, and SMP responder
 tests. The changed `bluetooth.library` sources and `btmidi.class` also pass an
 m68k AROS syntax build.
 
@@ -46,10 +48,10 @@ service with `btAddServiceRecord()`, receives incoming values through
 `btSetServiceValue()`. `btgatt.class` owns radio advertising and the list of
 enabled services in Bluetooth Preferences.
 
-Peripheral-role pairing currently selects Legacy Just Works. Authenticated
-Passkey/Numeric Comparison and Secure Connections in the responder role remain
-future generic Bluetooth work; they do not require changes to the class or
-CAMD bridge.
+Peripheral-role pairing falls back to Legacy Just Works by default. With the
+existing `btlesc` boot argument, capable controllers and peers negotiate Secure
+Connections, including Numeric Comparison through the standard Bluetooth
+pairing popup and Passkey Entry. OOB pairing remains unsupported.
 
 ## USB MIDI CAMD fix
 
