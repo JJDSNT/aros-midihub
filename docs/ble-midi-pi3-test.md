@@ -97,6 +97,23 @@ below read it.
    without reconnecting the iPhone.
 3. Set the names back with Defaults.
 
+## Test 6: is the Startup-Sequence line needed?
+
+`aros-raspi-bt-startup.patch` assumes nothing else registers the on-board
+radio. To confirm it before sending the patch upstream:
+
+1. Comment out the `AddBTHardware DEVS:Bluetooth/h4bthci.device` block in
+   `S:Startup-Sequence` and reboot.
+2. Expected: Bluetooth Preferences lists no radio.
+3. Run `AddBTHardware DEVS:Bluetooth/h4bthci.device` in a Shell. Expected: the
+   radio appears with its real address (the firmware loaders are already
+   bound), and the BLE MIDI tests work as before.
+4. Restore the line.
+
+If the radio appears in step 2 anyway, something else registers it and the
+startup patch should not go upstream; note what Bluetooth Preferences' log
+says about where it came from.
+
 ## What to report
 
 For each test: passed or failed, the relevant Bluetooth Preferences log
