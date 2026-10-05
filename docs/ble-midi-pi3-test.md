@@ -100,19 +100,29 @@ below read it.
 ## Test 6: is the Startup-Sequence line needed?
 
 `aros-raspi-bt-startup.patch` assumes nothing else registers the on-board
-radio. To confirm it before sending the patch upstream:
+radio. The firmware loaders do not (`btAddFirmwareLoader()` only patches
+radios already present). `BTStackLoader` brings up the radios saved in
+`bluetooth.prefs`, though, so after the radio has been saved once the line
+only matters on a fresh installation. Both cases:
 
 1. Comment out the `AddBTHardware DEVS:Bluetooth/h4bthci.device` block in
-   `S:Startup-Sequence` and reboot.
+   `S:Startup-Sequence`. Delete `ENVARC:Sys/bluetooth.prefs` and
+   `ENV:Sys/bluetooth.prefs` (keep a copy if you have pairings to keep), and
+   reboot.
 2. Expected: Bluetooth Preferences lists no radio.
 3. Run `AddBTHardware DEVS:Bluetooth/h4bthci.device` in a Shell. Expected: the
-   radio appears with its real address (the firmware loaders are already
-   bound), and the BLE MIDI tests work as before.
-4. Restore the line.
+   radio appears with its real address, because the firmware loaders are
+   already bound. Save in Bluetooth Preferences and reboot.
+4. Expected: the radio now comes up from the saved configuration, still
+   without the line.
+5. Restore the line and reboot. Expected: the radio comes up once. The line
+   gives the full path, and the stack matches it against the saved name
+   whether or not that one has a path; the log may say the hardware is
+   already online.
 
-If the radio appears in step 2 anyway, something else registers it and the
-startup patch should not go upstream; note what Bluetooth Preferences' log
-says about where it came from.
+If the radio appears in step 2, something else registers it and the startup
+patch should not go upstream; note what the Bluetooth log says about where
+it came from.
 
 ## What to report
 
