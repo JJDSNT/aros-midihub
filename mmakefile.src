@@ -77,16 +77,18 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
     uselibs=arosmidihub \
     targetdir=$(MIDIHUB_PACKAGE)/C
 
+# Inside the package for now: whether a MIDI Preferences belongs in
+# SYS:Prefs is for upstream to decide.
 %build_prog mmake=contrib-aros-midihub-prefs \
     progname=MIDIHubPrefs \
     files="$(MIDIHUB_ROOT)/ports/aros/prefs \
            $(MIDIHUB_ROOT)/ports/aros/MIDIHubPrefsClass" \
     uselibs="arosmidihub mui" \
-    targetdir=$(AROS_PREFS)
+    targetdir=$(MIDIHUB_PACKAGE)/Prefs
 
 %copy_files_q mmake=contrib-aros-midihub-prefs-icon \
     src="$(MIDIHUB_ROOT)/ports/aros" files="MIDIHubPrefs.info" \
-    dst="$(AROS_PREFS)"
+    dst="$(MIDIHUB_PACKAGE)/Prefs"
 
 # Optional: requires the AROS bluetooth.library and the GATT prerequisite patch.
 %build_prog mmake=contrib-aros-midihub-ble \

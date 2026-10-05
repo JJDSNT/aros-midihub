@@ -8,7 +8,10 @@ It is not intended to become a DAW, a MIDI processor, or a sophisticated node-gr
 
 ## Current implementation
 
-The native `MIDIHubPrefs` program follows the same application structure as
+The native `MIDIHubPrefs` program is installed inside the MIDIHub package,
+as `MIDIHUB:Prefs/MIDIHubPrefs` (`SYS:Extras/aros-midihub/Prefs`), rather
+than in `SYS:Prefs`: whether a MIDI Preferences belongs there is for AROS to
+decide. It follows the same application structure as
 AROS Bluetooth Preferences and Poseidon Trident. The executable is a small
 shell around a custom `Group.mui` class that owns navigation, pages, state,
 actions, and live CAMD notifications.
