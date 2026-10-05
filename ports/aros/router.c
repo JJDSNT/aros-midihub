@@ -29,6 +29,7 @@ struct router_runtime {
     struct MidiNode *node;
     struct ClusterNotifyNode notify;
     struct MsgPort *control;
+    int control_public;
     struct mh_route_table table;
     struct route_runtime routes[MH_ROUTE_MAX];
     UBYTE *sysex;
@@ -277,7 +278,15 @@ static void close_router(struct router_runtime *rt)
     if (rt->notifying)
         EndClusterNotify(&rt->notify);
     if (rt->control) {
-        RemPort(rt->control);
+        struct mh_router_message *message;
+        Forbid();
+        if (rt->control_public)
+            RemPort(rt->control);
+        while ((message = (struct mh_router_message *)GetMsg(rt->control)) != NULL) {
+            message->result = -1;
+            ReplyMsg(&message->message);
+        }
+        Permit();
         DeleteMsgPort(rt->control);
     }
     for (i = 0; i < rt->table.count; ++i)
@@ -349,6 +358,7 @@ int main(int argc, char **argv)
         goto done;
     }
     AddPort(rt.control);
+    rt.control_public = 1;
     Permit();
     for (i = 0; i < rt.table.count; ++i)
         if (add_route(&rt, i) != 0)
