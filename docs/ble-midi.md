@@ -72,6 +72,9 @@ active radio can consume.
 
 ## Build and run
 
+A step-by-step hardware test with a Raspberry Pi 3 and an iPhone (MIDI
+Wrench, GarageBand) is in [the Pi 3 test](ble-midi-pi3-test.md).
+
 ### AROS as the central
 
 1. Apply [the remaining BLE patch](../patches/aros-ble-midi-upstream-gaps.patch)
