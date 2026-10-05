@@ -10,7 +10,7 @@ index 0279e73b2b..20721d09da 100644
  libbasetype struct BtBase
  libbasetypeextern struct Library
 diff --git a/rom/bluetooth/bluetooth/bluetooth.library.c b/rom/bluetooth/bluetooth/bluetooth.library.c
-index b2355e4cb5..0f5e0bb7f5 100644
+index b2355e4cb5..62986374a3 100644
 --- a/rom/bluetooth/bluetooth/bluetooth.library.c
 +++ b/rom/bluetooth/bluetooth/bluetooth.library.c
 @@ -88,6 +88,7 @@ static int GM_UNIQUENAME(libInit)(LIBBASETYPEPTR BluetoothBase)
@@ -21,17 +21,39 @@ index b2355e4cb5..0f5e0bb7f5 100644
          BluetoothBase->bt_NextRecordHandle = 0x00010000;
          BluetoothBase->bt_NextGattHandle = 0x0001;
  
-@@ -1410,6 +1411,8 @@ static const ULONG BtEventNotePT[] = {
+@@ -1228,6 +1229,7 @@ static const ULONG BtBasePT[] = {
+     PACK_ENTRY(BSA_Dummy, BSA_OSVersion, BtBase, bt_OSVersion, PKCTRL_ULONG|PKCTRL_UNPACKONLY),
+     PACK_ENTRY(BSA_Dummy, BSA_LEAdvertising, BtBase, bt_LEAdvertising, PKCTRL_UWORD|PKCTRL_UNPACKONLY),
+     PACK_ENTRY(BSA_Dummy, BSA_EIRServices, BtBase, bt_EIRServices, PKCTRL_UWORD|PKCTRL_UNPACKONLY),
++    PACK_ENTRY(BSA_Dummy, BSA_LEConnInterval, BtBase, bt_LEConnInterval, PKCTRL_ULONG|PKCTRL_UNPACKONLY),
+     PACK_ENDTABLE
+ };
+ 
+@@ -1410,6 +1412,9 @@ static const ULONG BtEventNotePT[] = {
      PACK_ENTRY(BENA_Dummy, BENA_EventID, BtEventNote, ben_Event, PKCTRL_UWORD|PKCTRL_UNPACKONLY),
      PACK_ENTRY(BENA_Dummy, BENA_Param1, BtEventNote, ben_Param1, PKCTRL_IPTR|PKCTRL_UNPACKONLY),
      PACK_ENTRY(BENA_Dummy, BENA_Param2, BtEventNote, ben_Param2, PKCTRL_IPTR|PKCTRL_UNPACKONLY),
 +    PACK_ENTRY(BENA_Dummy, BENA_Data, BtEventNote, ben_Data, PKCTRL_IPTR|PKCTRL_UNPACKONLY),
 +    PACK_ENTRY(BENA_Dummy, BENA_DataLength, BtEventNote, ben_DataLength, PKCTRL_ULONG|PKCTRL_UNPACKONLY),
++    PACK_ENTRY(BENA_Dummy, BENA_Device, BtEventNote, ben_Device, PKCTRL_IPTR|PKCTRL_UNPACKONLY),
      PACK_ENDTABLE
  };
  
+@@ -1736,6 +1741,12 @@ AROS_LH3(LONG, btSetAttrsA,
+             BluetoothBase->bt_LEAdvSeq++;
+             count++;
+         }
++        if((ti = FindTagItem(BSA_LEConnInterval, tags))) {
++            /* peripheral links ask for it with their next tick */
++            BluetoothBase->bt_LEConnInterval = (ti->ti_Data > 3200) ? 3200 : (ULONG) ti->ti_Data;
++            BluetoothBase->bt_LEConnSeq++;
++            count++;
++        }
+         if((ti = FindTagItem(BSA_EIRServices, tags))) {
+             BluetoothBase->bt_EIRServices = ti->ti_Data ? TRUE : FALSE;
+             BluetoothBase->bt_EIRSeq++;
 diff --git a/rom/bluetooth/bluetooth/bluetooth.library.h b/rom/bluetooth/bluetooth/bluetooth.library.h
-index 2d2fe16627..2ec74b5e6e 100644
+index 2d2fe16627..0d880c4d3c 100644
 --- a/rom/bluetooth/bluetooth/bluetooth.library.h
 +++ b/rom/bluetooth/bluetooth/bluetooth.library.h
 @@ -66,6 +66,8 @@ BOOL bOpenDOS(struct BtBase *BluetoothBase);
@@ -39,15 +61,15 @@ index 2d2fe16627..2ec74b5e6e 100644
  
  void bGarbageCollectEvents(struct BtBase *BluetoothBase);
 +void bSendServiceWriteEvent(struct BtBase *BluetoothBase, APTR record, ULONG index,
-+                            const UBYTE *data, ULONG length);
++                            const UBYTE *data, ULONG length, APTR device);
  BOOL bStartEventHandler(struct BtBase *BluetoothBase);
  
  /* PoPo-style pairing popup handled inside the library */
 diff --git a/rom/bluetooth/bluetooth/bluetooth_intern.h b/rom/bluetooth/bluetooth/bluetooth_intern.h
-index c0a6abd7c6..71f457e357 100644
+index c0a6abd7c6..498f6ab356 100644
 --- a/rom/bluetooth/bluetooth/bluetooth_intern.h
 +++ b/rom/bluetooth/bluetooth/bluetooth_intern.h
-@@ -190,6 +190,8 @@ struct BtBase
+@@ -190,9 +190,13 @@ struct BtBase
      BOOL                bt_LEAdvertising; /* advertise on the LE radios */
      ULONG               bt_LEAdvSeq;      /* bumped when what is advertised changed */
      ULONG               bt_GattSeq;       /* bumped with every value set */
@@ -56,7 +78,12 @@ index c0a6abd7c6..71f457e357 100644
      /* SDP server */
      BOOL                bt_EIRServices;   /* name and classic services in the extended inquiry response */
      ULONG               bt_EIRSeq;        /* bumped when what it would say changed */
-@@ -238,6 +240,16 @@ struct BtGattChar
++    ULONG               bt_LEConnInterval; /* BSA_LEConnInterval */
++    ULONG               bt_LEConnSeq;     /* bumped when it changed */
+ };
+ 
+ /* bt_Flags */
+@@ -238,6 +242,16 @@ struct BtGattChar
      ULONG               bgc_Seq;          /* bt_GattSeq of the last btSetServiceValue() */
  };
  
@@ -73,29 +100,31 @@ index c0a6abd7c6..71f457e357 100644
  struct BtEventHook
  {
      struct Node         beh_Node;         /* Node linkage */
-@@ -251,6 +263,8 @@ struct BtEventNote
+@@ -251,6 +265,9 @@ struct BtEventNote
      UWORD               ben_Event;        /* Event number as specified above */
      APTR                ben_Param1;       /* Parameter 1 for event */
      APTR                ben_Param2;       /* Parameter 2 */
 +    APTR                ben_Data;         /* Event-owned data, if any */
 +    ULONG               ben_DataLength;
++    APTR                ben_Device;       /* the device behind the event, if any */
  };
  
  struct BtEventNoteInternal
 diff --git a/rom/bluetooth/bluetooth/classes.c b/rom/bluetooth/bluetooth/classes.c
-index b1b251a2ec..e656869af4 100644
+index b1b251a2ec..89ce7c0c56 100644
 --- a/rom/bluetooth/bluetooth/classes.c
 +++ b/rom/bluetooth/bluetooth/classes.c
-@@ -734,6 +734,8 @@ AROS_LH3(void, btSendEvent,
+@@ -734,6 +734,9 @@ AROS_LH3(void, btSendEvent,
                  ben->ben_Event = behmt;
                  ben->ben_Param1 = param1;
                  ben->ben_Param2 = param2;
 +                ben->ben_Data = NULL;
 +                ben->ben_DataLength = 0;
++                ben->ben_Device = NULL;
                  PutMsg(beh->beh_MsgPort, &ben->ben_Msg);
              }
          }
-@@ -744,6 +746,40 @@ AROS_LH3(void, btSendEvent,
+@@ -744,6 +747,41 @@ AROS_LH3(void, btSendEvent,
  }
  /* \\\ */
  
@@ -103,7 +132,7 @@ index b1b251a2ec..e656869af4 100644
 +/* Send every listener its own stable copy. The service value itself may be
 + * overwritten by the next ATT Write Command before the owner task runs. */
 +void bSendServiceWriteEvent(struct BtBase *BluetoothBase, APTR record, ULONG index,
-+                            const UBYTE *data, ULONG length)
++                            const UBYTE *data, ULONG length, APTR device)
 +{
 +    struct BtEventNote *ben;
 +    struct BtEventHook *beh;
@@ -121,6 +150,7 @@ index b1b251a2ec..e656869af4 100644
 +                ben->ben_Param2 = (APTR) (IPTR) index;
 +                ben->ben_Data = length ? (APTR) (ben + 1) : NULL;
 +                ben->ben_DataLength = length;
++                ben->ben_Device = device;
 +                if(length) {
 +                    CopyMem((APTR) data, ben->ben_Data, length);
 +                }
@@ -137,7 +167,7 @@ index b1b251a2ec..e656869af4 100644
  void bGarbageCollectEvents(LIBBASETYPEPTR BluetoothBase)
  {
 diff --git a/rom/bluetooth/bluetooth/gattsrv.c b/rom/bluetooth/bluetooth/gattsrv.c
-index 2f42c283f0..e4b1b4b7bb 100644
+index 2f42c283f0..928938f566 100644
 --- a/rom/bluetooth/bluetooth/gattsrv.c
 +++ b/rom/bluetooth/bluetooth/gattsrv.c
 @@ -208,6 +208,8 @@ static uint8_t bGattWrite(void *context, const struct bt_gatt_server_attr *a, co
@@ -164,7 +194,7 @@ index 2f42c283f0..e4b1b4b7bb 100644
      if(cn->cn_GATTWrRec) {
 -        btSendEvent(BEHMB_SERVICEWRITE, cn->cn_GATTWrRec, (APTR) (IPTR) cn->cn_GATTWrIdx);
 +        bSendServiceWriteEvent(BluetoothBase, cn->cn_GATTWrRec, cn->cn_GATTWrIdx,
-+                               cn->cn_GATTWrData, cn->cn_GATTWrLen);
++                               cn->cn_GATTWrData, cn->cn_GATTWrLen, cn->cn_Device);
          cn->cn_GATTWrRec = NULL;
 +        cn->cn_GATTWrData = NULL;
 +        cn->cn_GATTWrLen = 0;
@@ -180,7 +210,7 @@ index 2f42c283f0..e4b1b4b7bb 100644
      bt_gatt_server_init(&cn->cn_GATTServer, bGattNext, bGattWrite, cn);
      bt_gatt_client_set_request_handler(&cn->cn_GATT, bGattRequest, cn);
      if(cn->cn_LinkType == BDLT_LE) {
-@@ -261,42 +270,77 @@ void bGattSrvInit(struct BtHWConn *cn)
+@@ -261,42 +270,75 @@ void bGattSrvInit(struct BtHWConn *cn)
  static void bGattNotifyChanged(struct BtHWCore *hc, ULONG oldseq, ULONG newseq)
  {
      struct BtBase *BluetoothBase = hc->hc_Base;
@@ -199,7 +229,6 @@ index 2f42c283f0..e4b1b4b7bb 100644
 +        bgn->bgn_Node.ln_Succ;
 +        bgn = (struct BtGattNotification *) bgn->bgn_Node.ln_Succ) {
 +        struct BtServiceRecord *bsr = bgn->bgn_Record;
-+        struct BtGattChar *bgc;
 +        UWORD vh;
 +
 +        if(((LONG) (bgn->bgn_Seq - oldseq) <= 0) ||
@@ -210,7 +239,6 @@ index 2f42c283f0..e4b1b4b7bb 100644
 -        for(k = 0; k < bsr->bsr_NumChars; k++) {
 -            struct BtGattChar *bgc = &bsr->bsr_Chars[k];
 -            UWORD vh = bsr->bsr_FirstHandle + 2 + 3 * k;
-+        bgc = &bsr->bsr_Chars[bgn->bgn_Index];
 +        vh = bsr->bsr_FirstHandle + 2 + 3 * bgn->bgn_Index;
  
 -            if(!(bgc->bgc_Properties & (BGDP_NOTIFY|BGDP_INDICATE)) ||
@@ -282,7 +310,7 @@ index 2f42c283f0..e4b1b4b7bb 100644
      }
      btUnlockBase();
  }
-@@ -347,7 +391,8 @@ static void bLEAdvUpdate(struct BtHWCore *hc)
+@@ -347,7 +389,8 @@ static void bLEAdvUpdate(struct BtHWCore *hc)
      struct BtServiceRecord *bsr;
      STRPTR name = bth->bth_LocalName ? bth->bth_LocalName : (STRPTR) "AROS";
      UBYTE p[32];
@@ -292,7 +320,7 @@ index 2f42c283f0..e4b1b4b7bb 100644
  
      if(!(bth->bth_Flags & BTHF_LE) || !hc->hc_BringupDone || hc->hc_Shutdown) {
          return;
-@@ -385,22 +430,50 @@ static void bLEAdvUpdate(struct BtHWCore *hc)
+@@ -385,22 +428,50 @@ static void bLEAdvUpdate(struct BtHWCore *hc)
      p[pos++] = (bth->bth_Flags & BTHF_CLASSIC) ? 0x1a : 0x06;
      p[pos++] = 3; p[pos++] = 0x19;  /* appearance: computer */
      p[pos++] = 0x80; p[pos++] = 0x00;
@@ -346,7 +374,7 @@ index 2f42c283f0..e4b1b4b7bb 100644
      } else {
          pos = lenpos;
          p[pos] = p[pos + 1] = 0;
-@@ -450,6 +523,7 @@ void bGattSrvPoll(struct BtHWCore *hc)
+@@ -450,6 +521,7 @@ void bGattSrvPoll(struct BtHWCore *hc)
      if(hc->hc_GattSeq != seq) {
          bGattNotifyChanged(hc, hc->hc_GattSeq, seq);
          hc->hc_GattSeq = seq;
@@ -355,10 +383,113 @@ index 2f42c283f0..e4b1b4b7bb 100644
  }
  /* \\\ */
 diff --git a/rom/bluetooth/bluetooth/hwconn.c b/rom/bluetooth/bluetooth/hwconn.c
-index ba2a88a72b..fc71db4239 100644
+index ba2a88a72b..b1cf2a2a20 100644
 --- a/rom/bluetooth/bluetooth/hwconn.c
 +++ b/rom/bluetooth/bluetooth/hwconn.c
-@@ -2058,6 +2058,7 @@ static void bGATTEnumCB(struct bt_gatt_client_completion *completion, void *user
+@@ -891,6 +891,87 @@ static struct BtHWConn * bAllocConn(struct BtHWCore *hc, struct BtDevice *bd, UB
+ }
+ /* \\\ */
+ 
++/* /// "LE connection parameters" */
++/* As the central we take a peripheral's wish for other connection
++   parameters (a MIDI keyboard asks for a short interval) and hand it to the
++   controller. As the peripheral we ask for BSA_LEConnInterval. */
++static bool bConnParamRequest(void *user_data, const struct bt_l2cap_conn_params *p)
++{
++    struct BtHWConn *cn = user_data;
++    struct BtHWCore *hc = cn->cn_Core;
++    struct BtBase *BluetoothBase = hc->hc_Base;
++    UBYTE params[14];
++
++    if(cn->cn_Role != BDR_CENTRAL) {
++        return(FALSE);
++    }
++    params[0] = cn->cn_Handle & 0xff;
++    params[1] = cn->cn_Handle >> 8;
++    params[2] = p->interval_min & 0xff;
++    params[3] = p->interval_min >> 8;
++    params[4] = p->interval_max & 0xff;
++    params[5] = p->interval_max >> 8;
++    params[6] = p->latency & 0xff;
++    params[7] = p->latency >> 8;
++    params[8] = p->timeout & 0xff;
++    params[9] = p->timeout >> 8;
++    memset(&params[10], 0, 4);          /* connection event length: any */
++    if(!bSubmitCmd(hc, HC_OP_LE_CONN_UPDATE, params, 14, bIgnoreCompletion, hc)) {
++        return(FALSE);
++    }
++    btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
++                   "%s asked for a %ld.%02ld-%ld.%02ld ms connection interval - granted.",
++                   cn->cn_Device->bd_Name,
++                   (ULONG) (p->interval_min * 125 / 100), (ULONG) (p->interval_min * 125 % 100),
++                   (ULONG) (p->interval_max * 125 / 100), (ULONG) (p->interval_max * 125 % 100));
++    return(TRUE);
++}
++
++static void bConnParamResponse(void *user_data, bool accepted)
++{
++    struct BtHWConn *cn = user_data;
++    struct BtBase *BluetoothBase = cn->cn_Core->hc_Base;
++
++    btAddErrorMsg(accepted ? RETURN_OK : RETURN_WARN, (STRPTR) GM_UNIQUENAME(libname),
++                   "%s %s the shorter connection interval.", cn->cn_Device->bd_Name,
++                   accepted ? "accepted" : "declined");
++}
++
++/* Ask the central for BSA_LEConnInterval, within what iOS accepts (Apple
++   Accessory Design Guidelines): a minimum of at least 15 ms, and a maximum
++   at least 15 ms above it unless both are 15 ms. */
++static void bConnAskParams(struct BtHWConn *cn)
++{
++    struct BtHWCore *hc = cn->cn_Core;
++    struct BtBase *BluetoothBase = hc->hc_Base;
++    struct bt_l2cap_conn_params p;
++    ULONG want = BluetoothBase->bt_LEConnInterval;
++
++    if((cn->cn_LinkType != BDLT_LE) || (cn->cn_Role != BDR_PERIPHERAL) ||
++       (cn->cn_ConnParamSeq == BluetoothBase->bt_LEConnSeq) ||
++       ((LONG) (hc->hc_Tick - cn->cn_ConnParamAt) < 0)) {
++        return;
++    }
++    if(!want) {
++        cn->cn_ConnParamSeq = BluetoothBase->bt_LEConnSeq;  /* nothing to ask for */
++        return;
++    }
++    p.interval_min = 12;
++    p.interval_max = (want <= 12) ? 12 : ((want < 24) ? 24 : (UWORD) want);
++    p.latency = 0;
++    p.timeout = 300;                    /* 3 s */
++    switch(bt_l2cap_channel_manager_request_conn_params(&cn->cn_L2CAP, &p)) {
++    case BT_OK:
++    case BT_ERR_INVALID_ARGUMENT:       /* no use asking again */
++        cn->cn_ConnParamSeq = BluetoothBase->bt_LEConnSeq;
++        break;
++    default:                            /* the last request is unanswered */
++        cn->cn_ConnParamAt = hc->hc_Tick + 1000;
++        break;
++    }
++}
++/* \\\ */
++
+ /* /// "bConnUp()" */
+ static void bConnUp(struct BtHWConn *cn, UWORD handle, UBYTE role)
+ {
+@@ -918,6 +999,14 @@ static void bConnUp(struct BtHWConn *cn, UWORD handle, UBYTE role)
+     bt_l2cap_channel_manager_init(&cn->cn_L2CAP, &hc->hc_Transport, handle,
+                                   (cn->cn_LinkType == BDLT_LE) ? BT_L2CAP_CID_SIGNALING_LE : BT_L2CAP_CID_SIGNALING_CLASSIC,
+                                   fraglen);
++    if(cn->cn_LinkType == BDLT_LE) {
++        bt_l2cap_channel_manager_set_conn_param_handlers(&cn->cn_L2CAP,
++                                                         (role == BDR_CENTRAL) ? bConnParamRequest : NULL,
++                                                         bConnParamResponse, cn);
++        /* let the central discover our services first */
++        cn->cn_ConnParamSeq = BluetoothBase->bt_LEConnSeq - 1;
++        cn->cn_ConnParamAt = hc->hc_Tick + 1000;
++    }
+     bt_sdp_client_init(&cn->cn_SDP, &cn->cn_L2CAP);
+     bt_gatt_client_init(&cn->cn_GATT, &cn->cn_L2CAP);
+     bt_gatt_client_set_notify_handler(&cn->cn_GATT, bGATTNotify, cn);
+@@ -2058,6 +2147,7 @@ static void bGATTEnumCB(struct bt_gatt_client_completion *completion, void *user
                      bep->bep_Properties = props;
                      bep->bep_CanRead = (props & 0x30) ? TRUE : FALSE;
                      bep->bep_CanWrite = (props & 0x0c) ? TRUE : FALSE;
@@ -366,7 +497,7 @@ index ba2a88a72b..fc71db4239 100644
                      bep->bep_EndHandle = endh;
                      bep->bep_EnumMark = 1;
                      continue;
-@@ -2072,7 +2073,7 @@ static void bGATTEnumCB(struct bt_gatt_client_completion *completion, void *user
+@@ -2072,7 +2162,7 @@ static void bGATTEnumCB(struct bt_gatt_client_completion *completion, void *user
                      bep->bep_Properties = props;
                      bep->bep_CanRead = (props & 0x30) ? TRUE : FALSE;  /* notify | indicate */
                      bep->bep_CanWrite = (props & 0x0c) ? TRUE : FALSE; /* write | write without response */
@@ -375,7 +506,7 @@ index ba2a88a72b..fc71db4239 100644
                      /* the characteristic's descriptors live between its value
                         handle and the next declaration (or the service end) */
                      bep->bep_EndHandle = endh;
-@@ -2472,11 +2473,14 @@ static LONG bPairingReply(struct BtHWConn *cn, struct BtPairParams *bpp)
+@@ -2472,11 +2562,14 @@ static LONG bPairingReply(struct BtHWConn *cn, struct BtPairParams *bpp)
  /* The btcore SMP manager runs the pairing state machine; this glue supplies
     what it needs from the port: AES-128, random numbers, the L2CAP fixed
     channel (CID 6), the controller's crypto commands (LE Start Encryption,
@@ -392,7 +523,7 @@ index ba2a88a72b..fc71db4239 100644
  
  static void bReverseBytes(UBYTE *dst, const UBYTE *src, ULONG len)
  {
-@@ -2604,6 +2608,11 @@ static bt_status_t bSMPStartEncryption(void *context, const uint8_t stk[16], uin
+@@ -2604,6 +2697,11 @@ static bt_status_t bSMPStartEncryption(void *context, const uint8_t stk[16], uin
      /* the manager keeps keys most-significant octet first; HCI wants them LSB first */
      bReverseBytes(cn->cn_SMPLTK, stk, 16);
      cn->cn_SMPKeySize = key_size;
@@ -404,7 +535,7 @@ index ba2a88a72b..fc71db4239 100644
      return(bLEStartEncryption(cn, cn->cn_SMPLTK, zero8, 0) ? BT_OK : BT_ERR_NO_RESOURCES);
  }
  
-@@ -2652,15 +2661,16 @@ static void bSMPKeysComplete(void *context, const struct bt_smp_distributed_keys
+@@ -2652,15 +2750,16 @@ static void bSMPKeysComplete(void *context, const struct bt_smp_distributed_keys
      struct BtHWConn *cn = context;
      struct BtBase *BluetoothBase = cn->cn_Core->hc_Base;
      struct BtDevice *bd = cn->cn_Device;
@@ -427,7 +558,7 @@ index ba2a88a72b..fc71db4239 100644
          bd->bd_Keys.bkc_Flags |= BKCF_LTK;
          bd->bd_Keys.bkc_Flags &= ~BKCF_SC;
      }
-@@ -2746,11 +2756,11 @@ static void bSMPComplete(void *context, enum bt_smp_manager_result result,
+@@ -2746,11 +2845,11 @@ static void bSMPComplete(void *context, enum bt_smp_manager_result result,
                         (bd->bd_Keys.bkc_Flags & BKCF_LTK) ? (STRPTR) ", key stored" : (STRPTR) "");
          bPairingDone(cn, 0, 0);
      } else if((result == BT_SMP_MANAGER_ERROR_UNSUPPORTED) && neg && neg->secure_connections &&
@@ -444,7 +575,7 @@ index ba2a88a72b..fc71db4239 100644
          btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
                         "%s: %s is not available with LE Secure Connections - pairing the legacy way.",
                         bd->bd_Name, assocname[neg->association]);
-@@ -2824,11 +2834,23 @@ static void bSMPChannelEvent(struct bt_l2cap_channel_event_info *info, void *use
+@@ -2824,11 +2923,23 @@ static void bSMPChannelEvent(struct bt_l2cap_channel_event_info *info, void *use
                  bStartPairing(cn);
              }
          } else if(info->data[0] == BT_SMP_PAIRING_REQUEST) {
@@ -473,7 +604,7 @@ index ba2a88a72b..fc71db4239 100644
          }
          break;
      }
-@@ -2845,26 +2867,46 @@ static BOOL bSMPSetup(struct BtHWConn *cn)
+@@ -2845,26 +2956,46 @@ static BOOL bSMPSetup(struct BtHWConn *cn)
      struct bt_smp_manager_config cfg;
      struct bt_smp_aes128 aes;
      struct bt_smp_aes_cmac cmac;
@@ -529,7 +660,7 @@ index ba2a88a72b..fc71db4239 100644
  
      aes.encrypt = bSMPAES;
      aes.context = hc;
-@@ -3437,14 +3479,32 @@ BOOL bConnHandleEvent(struct BtHWCore *hc, UBYTE code, const UBYTE *params, ULON
+@@ -3437,14 +3568,32 @@ BOOL bConnHandleEvent(struct BtHWCore *hc, UBYTE code, const UBYTE *params, ULON
              return(TRUE);
          }
          if(sub == HC_LE_SUB_LTK_REQUEST) {
@@ -566,7 +697,7 @@ index ba2a88a72b..fc71db4239 100644
              return(TRUE);
          }
          return(FALSE);
-@@ -3716,6 +3776,13 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
+@@ -3716,6 +3865,13 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
                      cn->cn_CtrlReq = NULL;
                      bReplyChannel(BluetoothBase, bch, BTIOERR_HOSTERROR, 0);
                  }
@@ -580,7 +711,7 @@ index ba2a88a72b..fc71db4239 100644
              } else {
                  if(bt_gatt_client_write(&cn->cn_GATT, bch->bch_Value, bch->bch_Data, bch->bch_Length,
                                          bGATTOpComplete, cn, now) != BT_OK) {
-@@ -3896,8 +3963,15 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
+@@ -3896,8 +4052,15 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
                      return(TRUE);
                  }
                  cn->cn_CtrlReq = bch;
@@ -598,11 +729,27 @@ index ba2a88a72b..fc71db4239 100644
                      cn->cn_CtrlReq = NULL;
                      bReplyChannel(BluetoothBase, bch, BTIOERR_HOSTERROR, 0);
                  }
+@@ -4060,6 +4223,7 @@ void bConnTick(struct BtHWCore *hc)
+             cn->cn_PairRetry = FALSE;
+             bStartPairing(cn);
+         }
++        bConnAskParams(cn);
+         if(cn->cn_EncryptPending && ((LONG) (hc->hc_Tick - cn->cn_EncryptSince) > 10000)) {
+             /* no Authentication Complete / Encryption Change came back:
+                do not hold the enumeration hostage to it */
 diff --git a/rom/bluetooth/bluetooth/hwtask.h b/rom/bluetooth/bluetooth/hwtask.h
-index 7ec0e799d3..87564a3bb5 100644
+index 7ec0e799d3..fb719e852c 100644
 --- a/rom/bluetooth/bluetooth/hwtask.h
 +++ b/rom/bluetooth/bluetooth/hwtask.h
-@@ -244,6 +244,8 @@ struct BtHWConn
+@@ -106,6 +106,7 @@
+ #define HC_OP_LE_CREATE_CONNECTION    HC_OP(0x08, 0x000d)
+ #define HC_OP_LE_CREATE_CONN_CANCEL   HC_OP(0x08, 0x000e)
+ #define HC_OP_LE_START_ENCRYPTION     HC_OP(0x08, 0x0019)
++#define HC_OP_LE_CONN_UPDATE          HC_OP(0x08, 0x0013)
+ #define HC_OP_LE_LTK_REQ_REPLY        HC_OP(0x08, 0x001a)
+ #define HC_OP_LE_LTK_REQ_NEG_REPLY    HC_OP(0x08, 0x001b)
+ #define HC_GIAC_LAP                   0x9E8B33
+@@ -244,6 +245,8 @@ struct BtHWConn
      }                   cn_GATTSubs[HC_GATT_MAXSUBS];
      struct BtServiceRecord *cn_GATTWrRec; /* a value the device wrote during this request */
      UWORD               cn_GATTWrIdx;
@@ -611,25 +758,46 @@ index 7ec0e799d3..87564a3bb5 100644
      BOOL                cn_GATTSeen;   /* the device has asked for something */
      UBYTE               cn_GATTVal[BGATT_MAXVALUE]; /* the value being read */
      struct MinList      cn_Endpoints;  /* BtHWEndpoint */
+@@ -285,6 +288,8 @@ struct BtHWConn
+        (a keyboard), the pairing is run again without offering SC */
+     BOOL                cn_SMPLegacy;     /* do not offer SC this time */
+     BOOL                cn_PairRetry;     /* restart the pairing from bConnTick() (outside the SMP callback) */
++    ULONG               cn_ConnParamSeq;  /* bt_LEConnSeq last asked for as the LE peripheral */
++    ULONG               cn_ConnParamAt;   /* hc_Tick before which we do not ask */
+     UBYTE               cn_SMPKeySize;
+     UBYTE               cn_SMPLTK[16];    /* key handed to LE Start Encryption (HCI byte order) */
+     ULONG               cn_LastActivity;
 diff --git a/rom/bluetooth/bluetooth/include/libraries/bluetooth.h b/rom/bluetooth/bluetooth/include/libraries/bluetooth.h
-index 6a3de0b4a1..9420781b32 100644
+index 6a3de0b4a1..c3b45a5332 100644
 --- a/rom/bluetooth/bluetooth/include/libraries/bluetooth.h
 +++ b/rom/bluetooth/bluetooth/include/libraries/bluetooth.h
-@@ -320,6 +320,8 @@
+@@ -65,6 +65,10 @@
+ #define BSA_LEAdvertising    (BSA_Dummy + 0x70) /* BOOL (settable): advertise on the LE radios, so that LE
+                                                    devices can find this machine, connect to it and use
+                                                    the enabled GATT services */
++#define BSA_LEConnInterval   (BSA_Dummy + 0x72) /* ULONG (settable): when this machine is the LE peripheral,
++                                                   the connection interval to ask the central for, in
++                                                   1.25 ms units (12 = 15 ms, what BLE MIDI wants);
++                                                   0 leaves it to the central */
+ 
+ /* Tags for btGetAttrs(BGA_BTCLASS,...) */
+ #define BCA_Dummy            (BT_TAGBASE + 0x100)
+@@ -320,6 +324,9 @@
  #define BENA_EventID         (BENA_Dummy + 0x01) /* ULONG BEHMB_xxx */
  #define BENA_Param1          (BENA_Dummy + 0x02) /* APTR */
  #define BENA_Param2          (BENA_Dummy + 0x03) /* APTR */
 +#define BENA_Data            (BENA_Dummy + 0x04) /* APTR event-owned data, valid until ReplyMsg() */
 +#define BENA_DataLength      (BENA_Dummy + 0x05) /* ULONG bytes at BENA_Data */
++#define BENA_Device          (BENA_Dummy + 0x06) /* APTR bd behind the event, or NULL */
  
  /* Tags for btGetAttrs(BGA_STACKCFG,...) */
  #define BGCA_Dummy           (BT_TAGBASE + 0xa00)
-@@ -481,7 +483,7 @@ struct BtGattCharDef
+@@ -481,7 +488,7 @@ struct BtGattCharDef
  #define BEHMB_SERVICEGONE     0x18 /* Param1 = bsv (an incoming service whose connection closed; released and freed by the stack) */
  #define BEHMB_ADDSERVICEREC   0x19 /* Param1 = service record */
  #define BEHMB_REMSERVICEREC   0x1a /* Param1 = service record (already gone: only good for comparing) */
 -#define BEHMB_SERVICEWRITE    0x1b /* Param1 = service record, Param2 = (IPTR) index of the characteristic a device wrote */
-+#define BEHMB_SERVICEWRITE    0x1b /* Param1 = service record, Param2 = characteristic index, Data = value written */
++#define BEHMB_SERVICEWRITE    0x1b /* Param1 = service record, Param2 = characteristic index, Data = value written, Device = writer */
  
  #define BEHMF_ADDHARDWARE     (1L<<BEHMB_ADDHARDWARE)
  #define BEHMF_REMHARDWARE     (1L<<BEHMB_REMHARDWARE)
@@ -1454,6 +1622,81 @@ index 415ddc5412..b469536342 100644
  /* Must be called by the owning event loop as time advances. Times out the
   * current ATT transaction; late responses are ignored. */
  void bt_gatt_client_tick(struct bt_gatt_client *client, uint64_t now_us);
+diff --git a/rom/bluetooth/stack/include/btcore/l2cap.h b/rom/bluetooth/stack/include/btcore/l2cap.h
+index ea576b23be..6df8a3fb97 100644
+--- a/rom/bluetooth/stack/include/btcore/l2cap.h
++++ b/rom/bluetooth/stack/include/btcore/l2cap.h
+@@ -119,6 +119,22 @@ bt_status_t bt_l2cap_fragmenter_next(struct bt_l2cap_fragmenter *fr, struct bt_b
+ #define BT_L2CAP_SIG_ECHO_RESPONSE 0x09u
+ #define BT_L2CAP_SIG_INFORMATION_REQUEST 0x0au
+ #define BT_L2CAP_SIG_INFORMATION_RESPONSE 0x0bu
++#define BT_L2CAP_SIG_CONN_PARAM_UPDATE_REQUEST 0x12u  /* LE only */
++#define BT_L2CAP_SIG_CONN_PARAM_UPDATE_RESPONSE 0x13u /* LE only */
++
++/* LE connection parameters, in the units of the Core specification:
++ * intervals in 1.25 ms, latency in connection events, timeout in 10 ms. */
++struct bt_l2cap_conn_params
++{
++    uint16_t interval_min;
++    uint16_t interval_max;
++    uint16_t latency;
++    uint16_t timeout;
++};
++
++/* Within the ranges of the Core specification, with a supervision timeout
++ * longer than twice the effective connection interval. */
++bool bt_l2cap_conn_params_valid(const struct bt_l2cap_conn_params *params);
+ 
+ #define BT_L2CAP_CONFIG_OPTION_MTU 0x01u
+ 
+diff --git a/rom/bluetooth/stack/include/btcore/l2cap_channel.h b/rom/bluetooth/stack/include/btcore/l2cap_channel.h
+index 1b29f6e7cf..ba4496e553 100644
+--- a/rom/bluetooth/stack/include/btcore/l2cap_channel.h
++++ b/rom/bluetooth/stack/include/btcore/l2cap_channel.h
+@@ -120,6 +120,13 @@ struct bt_l2cap_listener
+     void *user_data;
+ };
+ 
++/* LE Connection Parameter Update. The central decides: return true to accept
++ * a peripheral's request (and then apply it with HCI LE Connection Update).
++ * The response handler reports whether the central accepted our request. */
++typedef bool (*bt_l2cap_conn_param_request_fn)(void *user_data,
++                                               const struct bt_l2cap_conn_params *params);
++typedef void (*bt_l2cap_conn_param_response_fn)(void *user_data, bool accepted);
++
+ struct bt_l2cap_channel_manager
+ {
+     struct bt_hci_transport *transport;
+@@ -132,6 +139,10 @@ struct bt_l2cap_channel_manager
+     struct bt_l2cap_listener listeners[BT_L2CAP_CHANNEL_MANAGER_MAX_LISTENERS];
+     uint16_t next_local_cid;
+     uint8_t next_identifier;
++    bt_l2cap_conn_param_request_fn conn_param_request;
++    bt_l2cap_conn_param_response_fn conn_param_response;
++    void *conn_param_user_data;
++    uint8_t conn_param_identifier; /* nonzero while our request is outstanding */
+ };
+ 
+ /* signaling_cid is BT_L2CAP_CID_SIGNALING_CLASSIC or BT_L2CAP_CID_SIGNALING_LE
+@@ -155,6 +166,18 @@ bt_status_t bt_l2cap_channel_manager_open(struct bt_l2cap_channel_manager *mgr,
+  * CLOSED on on_event/user_data. Fails when the listener table is full. A
+  * Connection Request for a PSM nobody listens on is refused
+  * (BT_L2CAP_CONN_RESULT_REFUSED_PSM). */
++/* Central role: without a request handler, a peripheral's request is
++ * answered with Command Reject, as a peripheral must do. */
++void bt_l2cap_channel_manager_set_conn_param_handlers(struct bt_l2cap_channel_manager *mgr,
++                                                      bt_l2cap_conn_param_request_fn on_request,
++                                                      bt_l2cap_conn_param_response_fn on_response,
++                                                      void *user_data);
++
++/* Peripheral role, LE links only: asks the central for new connection
++ * parameters. Fails while an earlier request is unanswered. */
++bt_status_t bt_l2cap_channel_manager_request_conn_params(struct bt_l2cap_channel_manager *mgr,
++                                                         const struct bt_l2cap_conn_params *params);
++
+ bt_status_t bt_l2cap_channel_manager_listen(struct bt_l2cap_channel_manager *mgr, uint16_t psm,
+                                              uint16_t local_mtu, bt_l2cap_channel_event_fn on_event,
+                                              void *user_data);
 diff --git a/rom/bluetooth/stack/include/btcore/smp_manager.h b/rom/bluetooth/stack/include/btcore/smp_manager.h
 index a0e844808e..27ae13866f 100644
 --- a/rom/bluetooth/stack/include/btcore/smp_manager.h
@@ -1559,6 +1802,135 @@ index 011f9225ae..bdafc1ee65 100644
  void bt_gatt_client_tick(struct bt_gatt_client *client, uint64_t now_us)
  {
      if (!client->busy || client->request_deadline_us == 0 || now_us < client->request_deadline_us)
+diff --git a/rom/bluetooth/stack/protocols/l2cap/channel_manager.c b/rom/bluetooth/stack/protocols/l2cap/channel_manager.c
+index e92a51cf8e..c78aedd06d 100644
+--- a/rom/bluetooth/stack/protocols/l2cap/channel_manager.c
++++ b/rom/bluetooth/stack/protocols/l2cap/channel_manager.c
+@@ -475,6 +475,46 @@ static void handle_information_request(struct bt_l2cap_channel_manager *mgr, uin
+     send_l2cap_pdu(mgr, mgr->signaling_cid, buf, bt_buf_writer_len(&w));
+ }
+ 
++static void send_command_reject(struct bt_l2cap_channel_manager *mgr, uint8_t identifier);
++
++static void handle_conn_param_request(struct bt_l2cap_channel_manager *mgr, uint8_t identifier,
++                                      const uint8_t *cmd_data, size_t cmd_data_len)
++{
++    uint8_t buf[BT_L2CAP_SIG_HEADER_LEN + 2];
++    struct bt_buf_writer w;
++    struct bt_l2cap_conn_params params;
++    bool accepted;
++
++    /* Only a central answers; a peripheral (or a BR/EDR link) rejects it. */
++    if (mgr->signaling_cid != BT_L2CAP_CID_SIGNALING_LE || mgr->conn_param_request == NULL ||
++        cmd_data_len != 8)
++    {
++        send_command_reject(mgr, identifier);
++        return;
++    }
++    params.interval_min = (uint16_t)(cmd_data[0] | (cmd_data[1] << 8));
++    params.interval_max = (uint16_t)(cmd_data[2] | (cmd_data[3] << 8));
++    params.latency = (uint16_t)(cmd_data[4] | (cmd_data[5] << 8));
++    params.timeout = (uint16_t)(cmd_data[6] | (cmd_data[7] << 8));
++    accepted = bt_l2cap_conn_params_valid(&params) &&
++               mgr->conn_param_request(mgr->conn_param_user_data, &params);
++
++    bt_buf_writer_init(&w, buf, sizeof(buf));
++    bt_l2cap_sig_encode_header(&w, BT_L2CAP_SIG_CONN_PARAM_UPDATE_RESPONSE, identifier, 2);
++    bt_buf_writer_write_le16(&w, accepted ? 0x0000u : 0x0001u);
++    send_l2cap_pdu(mgr, mgr->signaling_cid, buf, bt_buf_writer_len(&w));
++}
++
++static void finish_conn_param_request(struct bt_l2cap_channel_manager *mgr, uint8_t identifier,
++                                      bool accepted)
++{
++    if (mgr->conn_param_identifier == 0 || identifier != mgr->conn_param_identifier)
++        return;
++    mgr->conn_param_identifier = 0;
++    if (mgr->conn_param_response != NULL)
++        mgr->conn_param_response(mgr->conn_param_user_data, accepted);
++}
++
+ static void send_command_reject(struct bt_l2cap_channel_manager *mgr, uint8_t identifier)
+ {
+     uint8_t buf[BT_L2CAP_SIG_HEADER_LEN + 2];
+@@ -522,8 +562,16 @@ static void process_signaling_pdu(struct bt_l2cap_channel_manager *mgr, const ui
+         handle_disconnection_response(mgr, hdr.identifier, cmd_data, hdr.length, now_us);
+         break;
+     case BT_L2CAP_SIG_COMMAND_REJECT:
++        finish_conn_param_request(mgr, hdr.identifier, false);
+         handle_command_reject(mgr, hdr.identifier, cmd_data, hdr.length, now_us);
+         break;
++    case BT_L2CAP_SIG_CONN_PARAM_UPDATE_REQUEST:
++        handle_conn_param_request(mgr, hdr.identifier, cmd_data, hdr.length);
++        break;
++    case BT_L2CAP_SIG_CONN_PARAM_UPDATE_RESPONSE:
++        finish_conn_param_request(mgr, hdr.identifier,
++                                  hdr.length >= 2 && (cmd_data[0] | (cmd_data[1] << 8)) == 0);
++        break;
+     case BT_L2CAP_SIG_ECHO_REQUEST:
+         handle_echo_request(mgr, hdr.identifier, cmd_data, hdr.length);
+         break;
+@@ -557,6 +605,10 @@ void bt_l2cap_channel_manager_init(struct bt_l2cap_channel_manager *mgr,
+     bt_l2cap_reassembler_init(&mgr->reassembler);
+     mgr->next_local_cid = BT_L2CAP_CID_DYNAMIC_START;
+     mgr->next_identifier = 1;
++    mgr->conn_param_request = NULL;
++    mgr->conn_param_response = NULL;
++    mgr->conn_param_user_data = NULL;
++    mgr->conn_param_identifier = 0;
+ 
+     for (i = 0; i < BT_L2CAP_CHANNEL_MANAGER_MAX_CHANNELS; i++)
+     {
+@@ -571,6 +623,49 @@ void bt_l2cap_channel_manager_init(struct bt_l2cap_channel_manager *mgr,
+         mgr->listeners[i].psm = 0;
+ }
+ 
++bool bt_l2cap_conn_params_valid(const struct bt_l2cap_conn_params *p)
++{
++    return p != NULL && p->interval_min >= 6 && p->interval_max <= 3200 &&
++           p->interval_min <= p->interval_max && p->latency <= 499 &&
++           p->timeout >= 10 && p->timeout <= 3200 &&
++           /* timeout * 10 ms > 2 * (1 + latency) * interval_max * 1.25 ms */
++           (uint32_t)p->timeout * 4u > (uint32_t)(1u + p->latency) * p->interval_max;
++}
++
++void bt_l2cap_channel_manager_set_conn_param_handlers(struct bt_l2cap_channel_manager *mgr,
++                                                      bt_l2cap_conn_param_request_fn on_request,
++                                                      bt_l2cap_conn_param_response_fn on_response,
++                                                      void *user_data)
++{
++    mgr->conn_param_request = on_request;
++    mgr->conn_param_response = on_response;
++    mgr->conn_param_user_data = user_data;
++}
++
++bt_status_t bt_l2cap_channel_manager_request_conn_params(struct bt_l2cap_channel_manager *mgr,
++                                                         const struct bt_l2cap_conn_params *params)
++{
++    uint8_t buf[BT_L2CAP_SIG_HEADER_LEN + 8];
++    struct bt_buf_writer w;
++    uint8_t identifier;
++
++    if (mgr->signaling_cid != BT_L2CAP_CID_SIGNALING_LE || !bt_l2cap_conn_params_valid(params))
++        return BT_ERR_INVALID_ARGUMENT;
++    if (mgr->conn_param_identifier != 0)
++        return BT_ERR_BUSY;
++    identifier = alloc_identifier(mgr);
++    bt_buf_writer_init(&w, buf, sizeof(buf));
++    bt_l2cap_sig_encode_header(&w, BT_L2CAP_SIG_CONN_PARAM_UPDATE_REQUEST, identifier, 8);
++    bt_buf_writer_write_le16(&w, params->interval_min);
++    bt_buf_writer_write_le16(&w, params->interval_max);
++    bt_buf_writer_write_le16(&w, params->latency);
++    bt_buf_writer_write_le16(&w, params->timeout);
++    if (send_l2cap_pdu(mgr, mgr->signaling_cid, buf, bt_buf_writer_len(&w)) != BT_OK)
++        return BT_ERR_NO_RESOURCES;
++    mgr->conn_param_identifier = identifier;
++    return BT_OK;
++}
++
+ bt_status_t bt_l2cap_channel_manager_listen(struct bt_l2cap_channel_manager *mgr, uint16_t psm,
+                                              uint16_t local_mtu, bt_l2cap_channel_event_fn on_event,
+                                              void *user_data)
 diff --git a/rom/bluetooth/stack/tests/att/test_att.c b/rom/bluetooth/stack/tests/att/test_att.c
 index 2171c06c90..ef34448726 100644
 --- a/rom/bluetooth/stack/tests/att/test_att.c
@@ -1632,6 +2004,160 @@ index 5e773cc416..50e94a85d9 100644
      test_discover_descriptors();
      test_read_att_error();
      test_long_read_uses_read_blob();
+diff --git a/rom/bluetooth/stack/tests/l2cap/test_channel.c b/rom/bluetooth/stack/tests/l2cap/test_channel.c
+index af7a571696..3f2be33ffd 100644
+--- a/rom/bluetooth/stack/tests/l2cap/test_channel.c
++++ b/rom/bluetooth/stack/tests/l2cap/test_channel.c
+@@ -824,10 +824,149 @@ static void test_information_echo_and_reject(void)
+     BT_CHECK(!take_last_sig_command(&ft, &hdr, &cmd_data));
+ }
+ 
++struct conn_param_log
++{
++    bool accept;
++    int requests;
++    struct bt_l2cap_conn_params last;
++    int responses;
++    bool last_accepted;
++};
++
++static bool log_conn_param_request(void *user_data, const struct bt_l2cap_conn_params *params)
++{
++    struct conn_param_log *log = user_data;
++
++    log->requests++;
++    log->last = *params;
++    return log->accept;
++}
++
++static void log_conn_param_response(void *user_data, bool accepted)
++{
++    struct conn_param_log *log = user_data;
++
++    log->responses++;
++    log->last_accepted = accepted;
++}
++
++static void feed_conn_param_request(struct bt_l2cap_channel_manager *mgr, uint8_t identifier,
++                                    uint16_t min, uint16_t max, uint16_t latency,
++                                    uint16_t timeout, uint64_t now_us)
++{
++    uint8_t buf[16];
++    struct bt_buf_writer w;
++
++    bt_buf_writer_init(&w, buf, sizeof(buf));
++    bt_l2cap_sig_encode_header(&w, BT_L2CAP_SIG_CONN_PARAM_UPDATE_REQUEST, identifier, 8);
++    bt_buf_writer_write_le16(&w, min);
++    bt_buf_writer_write_le16(&w, max);
++    bt_buf_writer_write_le16(&w, latency);
++    bt_buf_writer_write_le16(&w, timeout);
++    feed_signaling_command(mgr, buf, bt_buf_writer_len(&w), now_us);
++}
++
++static void test_conn_param_update(void)
++{
++    struct fake_transport ft;
++    struct bt_l2cap_channel_manager mgr;
++    struct bt_l2cap_sig_header hdr;
++    const uint8_t *cmd_data;
++    struct conn_param_log log;
++    struct bt_l2cap_conn_params midi = {12, 12, 0, 300}; /* 15 ms, 3 s */
++    struct bt_l2cap_conn_params bad = {12, 12, 0, 5};
++    uint8_t buf[16];
++    struct bt_buf_writer w;
++    uint8_t id;
++
++    BT_CHECK(bt_l2cap_conn_params_valid(&midi));
++    BT_CHECK(!bt_l2cap_conn_params_valid(&bad));
++    bad.timeout = 6;
++    bad.interval_min = bad.interval_max = 3200;
++    BT_CHECK(!bt_l2cap_conn_params_valid(&bad)); /* timeout too short */
++    bad.interval_min = 5;
++    bad.interval_max = 12;
++    bad.timeout = 300;
++    BT_CHECK(!bt_l2cap_conn_params_valid(&bad));
++
++    memset(&log, 0, sizeof(log));
++
++    /* peripheral: our request goes out on the LE signaling channel */
++    fake_transport_init(&ft);
++    bt_l2cap_channel_manager_init(&mgr, &ft.base, 0x0042, BT_L2CAP_CID_SIGNALING_LE, 27);
++    bt_l2cap_channel_manager_set_conn_param_handlers(&mgr, NULL, log_conn_param_response, &log);
++    BT_CHECK(bt_l2cap_channel_manager_request_conn_params(&mgr, &midi) == BT_OK);
++    BT_CHECK(take_last_sig_command(&ft, &hdr, &cmd_data));
++    BT_CHECK(hdr.code == BT_L2CAP_SIG_CONN_PARAM_UPDATE_REQUEST && hdr.length == 8);
++    BT_CHECK(cmd_data[0] == 12 && cmd_data[2] == 12 && cmd_data[4] == 0);
++    BT_CHECK((cmd_data[6] | (cmd_data[7] << 8)) == 300);
++    id = hdr.identifier;
++    BT_CHECK(bt_l2cap_channel_manager_request_conn_params(&mgr, &midi) == BT_ERR_BUSY);
++
++    /* a response to another identifier is ignored */
++    bt_buf_writer_init(&w, buf, sizeof(buf));
++    bt_l2cap_sig_encode_header(&w, BT_L2CAP_SIG_CONN_PARAM_UPDATE_RESPONSE, (uint8_t)(id + 1), 2);
++    bt_buf_writer_write_le16(&w, 0);
++    feed_signaling_command(&mgr, buf, bt_buf_writer_len(&w), 1);
++    BT_CHECK(log.responses == 0);
++
++    bt_buf_writer_init(&w, buf, sizeof(buf));
++    bt_l2cap_sig_encode_header(&w, BT_L2CAP_SIG_CONN_PARAM_UPDATE_RESPONSE, id, 2);
++    bt_buf_writer_write_le16(&w, 0);
++    feed_signaling_command(&mgr, buf, bt_buf_writer_len(&w), 2);
++    BT_CHECK(log.responses == 1 && log.last_accepted);
++    BT_CHECK(!take_last_sig_command(&ft, &hdr, &cmd_data)); /* no reply to a response */
++
++    /* a central that does not know the command rejects it */
++    BT_CHECK(bt_l2cap_channel_manager_request_conn_params(&mgr, &midi) == BT_OK);
++    BT_CHECK(take_last_sig_command(&ft, &hdr, &cmd_data));
++    id = hdr.identifier;
++    bt_buf_writer_init(&w, buf, sizeof(buf));
++    bt_l2cap_sig_encode_header(&w, BT_L2CAP_SIG_COMMAND_REJECT, id, 2);
++    bt_buf_writer_write_le16(&w, 0);
++    feed_signaling_command(&mgr, buf, bt_buf_writer_len(&w), 3);
++    BT_CHECK(log.responses == 2 && !log.last_accepted);
++
++    /* as a peripheral (no request handler) a request is rejected */
++    feed_conn_param_request(&mgr, 0x31, 6, 12, 0, 300, 4);
++    BT_CHECK(take_last_sig_command(&ft, &hdr, &cmd_data));
++    BT_CHECK(hdr.code == BT_L2CAP_SIG_COMMAND_REJECT && hdr.identifier == 0x31);
++
++    /* central: valid requests reach the handler, which decides */
++    bt_l2cap_channel_manager_set_conn_param_handlers(&mgr, log_conn_param_request, NULL, &log);
++    log.accept = true;
++    feed_conn_param_request(&mgr, 0x32, 6, 12, 0, 300, 5);
++    BT_CHECK(log.requests == 1 && log.last.interval_min == 6 && log.last.interval_max == 12);
++    BT_CHECK(take_last_sig_command(&ft, &hdr, &cmd_data));
++    BT_CHECK(hdr.code == BT_L2CAP_SIG_CONN_PARAM_UPDATE_RESPONSE && hdr.identifier == 0x32);
++    BT_CHECK(hdr.length == 2 && cmd_data[0] == 0 && cmd_data[1] == 0);
++    log.accept = false;
++    feed_conn_param_request(&mgr, 0x33, 6, 12, 0, 300, 6);
++    BT_CHECK(take_last_sig_command(&ft, &hdr, &cmd_data));
++    BT_CHECK(hdr.code == BT_L2CAP_SIG_CONN_PARAM_UPDATE_RESPONSE && cmd_data[0] == 1);
++    /* invalid parameters are refused without asking */
++    log.accept = true;
++    feed_conn_param_request(&mgr, 0x34, 12, 6, 0, 300, 7);
++    BT_CHECK(log.requests == 2);
++    BT_CHECK(take_last_sig_command(&ft, &hdr, &cmd_data));
++    BT_CHECK(hdr.code == BT_L2CAP_SIG_CONN_PARAM_UPDATE_RESPONSE && cmd_data[0] == 1);
++
++    /* not on BR/EDR */
++    fake_transport_init(&ft);
++    bt_l2cap_channel_manager_init(&mgr, &ft.base, 0x0042, BT_L2CAP_CID_SIGNALING_CLASSIC, 200);
++    bt_l2cap_channel_manager_set_conn_param_handlers(&mgr, log_conn_param_request, NULL, &log);
++    BT_CHECK(bt_l2cap_channel_manager_request_conn_params(&mgr, &midi) == BT_ERR_INVALID_ARGUMENT);
++    feed_conn_param_request(&mgr, 0x35, 6, 12, 0, 300, 8);
++    BT_CHECK(take_last_sig_command(&ft, &hdr, &cmd_data));
++    BT_CHECK(hdr.code == BT_L2CAP_SIG_COMMAND_REJECT);
++    BT_CHECK(log.requests == 2);
++}
++
+ void run_l2cap_channel_tests(void)
+ {
+     test_incoming_connection_accepted();
+     test_information_echo_and_reject();
++    test_conn_param_update();
+     test_open_full_handshake();
+     test_connection_refused();
+     test_data_round_trip();
 diff --git a/rom/bluetooth/stack/tests/security/test_smp_manager.c b/rom/bluetooth/stack/tests/security/test_smp_manager.c
 index cabfed487f..e3a4b787ea 100644
 --- a/rom/bluetooth/stack/tests/security/test_smp_manager.c

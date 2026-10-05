@@ -15,14 +15,21 @@ remain:
 - include enabled 128-bit GATT service UUIDs in legacy advertising, which is
   required for iOS to discover the BLE MIDI service;
 - attach an immutable value snapshot to every service-write event, so a later
-  ATT packet cannot overwrite MIDI data before the class consumes the event;
+  ATT packet cannot overwrite MIDI data before the class consumes the event,
+  and name the device that wrote it (`BENA_Device`), so a class can keep
+  per-connection state;
 - queue outgoing notification snapshots until each active radio consumes
   them, instead of coalescing a MIDI burst into the latest value. The queue is
   bounded at 256 snapshots; on sustained producer overrun it drops the oldest;
 - accept peripheral-role SMP pairing, including Legacy Just Works and Secure
   Connections Just Works, Numeric Comparison, and Passkey Entry; answer
   controller LTK requests, distribute bonding keys, and reuse stored keys on
-  reconnection.
+  reconnection;
+- add the L2CAP LE Connection Parameter Update procedure. As the central the
+  stack grants a peripheral's request through HCI LE Connection Update; as
+  the peripheral it asks for the interval set with the new
+  `BSA_LEConnInterval` stack attribute, within the limits iOS accepts.
+  `btmidi.class` sets 15 ms, as the BLE MIDI specification asks.
 
 It also fixes two generic SMP issues that affect the central role as well:
 
@@ -50,7 +57,7 @@ make -C ~/AROS/rom/bluetooth/stack -f Makefile.host test
 ```
 
 The patch applies cleanly to the stated commit. The sanitizer-enabled host
-suite passes `2499/2499` checks, including new ATT, GATT, and SMP responder
+suite passes `2530/2530` checks, including new ATT, GATT, and SMP responder
 tests. The SMP tests also run an initiator against a responder, check the
 full IO capability table, and check the Phase 3 order. The changed `bluetooth.library` sources and `btmidi.class` also pass an
 m68k AROS syntax build.

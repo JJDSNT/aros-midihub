@@ -4,6 +4,7 @@
 #include <midihub/ble_midi.h>
 #include <midihub/rtpmidi.h>
 #include "midihub/camd_bridge.h"
+#include <exec/memory.h>
 #include <proto/bluetooth.h>
 #include <proto/exec.h>
 #include <proto/utility.h>
@@ -12,8 +13,27 @@
 
 #define BTMIDI_VALUE_SIZE 512
 #define BTMIDI_TX_PACKET_SIZE 20
+#define BTMIDI_MAX_PEERS 4
+#define BTMIDI_CONN_INTERVAL 12   /* 15 ms, as the BLE MIDI specification asks */
 
 struct Library *BluetoothBase;
+
+struct btmidi_runtime;
+
+/* What a central has sent so far. Each connected central has its own: their
+   packets interleave, and running status and SysEx span packets. */
+struct btmidi_peer {
+    struct btmidi_runtime *runtime;
+    BOOL in_use;
+    APTR device;              /* the writer, or NULL from an older stack */
+    ULONG last_use;
+    struct mh_ble_midi_decoder decoder;
+    UBYTE message[3];
+    UBYTE message_length;
+    UBYTE message_needed;
+    ULONG sysex_length;
+    UBYTE sysex[MH_SYSEX_MAX];
+};
 
 struct btmidi_runtime {
     struct BTMidiBase *base;
@@ -24,12 +44,8 @@ struct btmidi_runtime {
     APTR event_handler;
     APTR record;
     struct mh_camd_bridge camd;
-    struct mh_ble_midi_decoder decoder;
-    UBYTE message[3];
-    UBYTE message_length;
-    UBYTE message_needed;
-    UBYTE sysex[MH_SYSEX_MAX];
-    ULONG sysex_length;
+    struct btmidi_peer *peers[BTMIDI_MAX_PEERS];
+    ULONG use_counter;
 };
 
 static UWORD now_milliseconds(void)
@@ -56,53 +72,54 @@ static void deliver_sysex(struct btmidi_runtime *runtime, const UBYTE *message,
 
 static int received_byte(void *context, uint16_t timestamp, uint8_t byte)
 {
-    struct btmidi_runtime *runtime = context;
+    struct btmidi_peer *peer = context;
+    struct btmidi_runtime *runtime = peer->runtime;
     (void)timestamp;
     if (byte >= 0xf8) {
         deliver(runtime, &byte, 1);
         return 0;
     }
-    if (runtime->sysex_length) {
-        if (runtime->sysex_length == MH_SYSEX_MAX) {
-            runtime->sysex_length = 0;
+    if (peer->sysex_length) {
+        if (peer->sysex_length == MH_SYSEX_MAX) {
+            peer->sysex_length = 0;
             return -1;
         }
-        runtime->sysex[runtime->sysex_length++] = byte;
+        peer->sysex[peer->sysex_length++] = byte;
         if (byte == 0xf7) {
-            deliver_sysex(runtime, runtime->sysex, runtime->sysex_length);
-            runtime->sysex_length = 0;
+            deliver_sysex(runtime, peer->sysex, peer->sysex_length);
+            peer->sysex_length = 0;
         }
         return 0;
     }
     if (byte == 0xf0) {
-        runtime->sysex[0] = byte;
-        runtime->sysex_length = 1;
-        runtime->message_length = runtime->message_needed = 0;
+        peer->sysex[0] = byte;
+        peer->sysex_length = 1;
+        peer->message_length = peer->message_needed = 0;
         return 0;
     }
     if (byte & 0x80) {
         if (byte == 0xf6) {
             deliver(runtime, &byte, 1);
-            runtime->message_length = runtime->message_needed = 0;
+            peer->message_length = peer->message_needed = 0;
             return 0;
         }
         if (byte > 0xef && byte != 0xf1 && byte != 0xf2 && byte != 0xf3) {
-            runtime->message_length = runtime->message_needed = 0;
+            peer->message_length = peer->message_needed = 0;
             return 0;
         }
-        runtime->message[0] = byte;
-        runtime->message_length = 1;
-        runtime->message_needed = ((byte & 0xf0) == 0xc0 ||
+        peer->message[0] = byte;
+        peer->message_length = 1;
+        peer->message_needed = ((byte & 0xf0) == 0xc0 ||
                                    (byte & 0xf0) == 0xd0 ||
                                    byte == 0xf1 || byte == 0xf3) ? 1 : 2;
         return 0;
     }
-    if (!runtime->message_needed)
+    if (!peer->message_needed)
         return -1;
-    runtime->message[runtime->message_length++] = byte;
-    if (!--runtime->message_needed) {
-        deliver(runtime, runtime->message, runtime->message_length);
-        runtime->message_length = 0;
+    peer->message[peer->message_length++] = byte;
+    if (!--peer->message_needed) {
+        deliver(runtime, peer->message, peer->message_length);
+        peer->message_length = 0;
     }
     return 0;
 }
@@ -163,35 +180,95 @@ static APTR add_service(void)
                               BSRA_NumCharacteristics, 1, TAG_END);
 }
 
-static void handle_service_write(struct btmidi_runtime *runtime,
-                                 struct Message *message)
+static void reset_peer(struct btmidi_peer *peer)
+{
+    mh_ble_midi_decoder_init(&peer->decoder);
+    peer->sysex_length = 0;
+    peer->message_length = peer->message_needed = 0;
+}
+
+/* The state of the central that wrote. A new central takes a free slot, or
+   the one unused for longest when more centrals write than there are slots. */
+static struct btmidi_peer *find_peer(struct btmidi_runtime *runtime, APTR device)
+{
+    struct btmidi_peer *peer, *oldest = NULL;
+    ULONG n;
+
+    for (n = 0; n < BTMIDI_MAX_PEERS; n++) {
+        peer = runtime->peers[n];
+        if (peer && peer->in_use && peer->device == device)
+            goto found;
+    }
+    for (n = 0; n < BTMIDI_MAX_PEERS; n++) {
+        peer = runtime->peers[n];
+        if (!peer) {
+            peer = runtime->peers[n] = AllocVec(sizeof(*peer), MEMF_ANY);
+            if (!peer)
+                continue;
+            peer->in_use = FALSE;
+        }
+        if (!peer->in_use) {
+            oldest = peer;
+            break;
+        }
+        if (!oldest || (LONG)(peer->last_use - oldest->last_use) < 0)
+            oldest = peer;
+    }
+    if (!(peer = oldest))
+        return NULL;
+    peer->runtime = runtime;
+    peer->in_use = TRUE;
+    peer->device = device;
+    reset_peer(peer);
+found:
+    peer->last_use = ++runtime->use_counter;
+    return peer;
+}
+
+static void forget_peer(struct btmidi_runtime *runtime, APTR device)
+{
+    ULONG n;
+
+    for (n = 0; n < BTMIDI_MAX_PEERS; n++)
+        if (runtime->peers[n] && runtime->peers[n]->in_use &&
+            runtime->peers[n]->device == device)
+            runtime->peers[n]->in_use = FALSE;
+}
+
+static void reset_peers(struct btmidi_runtime *runtime)
+{
+    ULONG n;
+
+    for (n = 0; n < BTMIDI_MAX_PEERS; n++)
+        if (runtime->peers[n])
+            runtime->peers[n]->in_use = FALSE;
+}
+
+static void handle_event(struct btmidi_runtime *runtime, struct Message *message)
 {
     IPTR event = 0, index = -1, length = 0;
-    APTR record = NULL;
+    APTR record = NULL, device = NULL;
     UBYTE *value = NULL;
+    struct btmidi_peer *peer;
 
     btGetAttrs(BGA_EVENTNOTE, message, BENA_EventID, &event,
                BENA_Param1, &record, BENA_Param2, &index,
-               BENA_Data, &value, BENA_DataLength, &length, TAG_END);
-    if (event == BEHMB_SERVICEWRITE && record == runtime->record && index == 0 &&
-        value && length > 0 && length <= BTMIDI_VALUE_SIZE) {
+               BENA_Data, &value, BENA_DataLength, &length,
+               BENA_Device, &device, TAG_END);
+    if (event == BEHMB_DEVICEDISCONNECTED) {
+        forget_peer(runtime, record);   /* Param1 is the device */
+    } else if (event == BEHMB_SERVICEWRITE && record == runtime->record &&
+               index == 0 && value && length > 0 && length <= BTMIDI_VALUE_SIZE) {
         runtime->base->stats.ms_RxPackets++;
-        if (mh_ble_midi_decode(&runtime->decoder, value, (size_t)length,
-                               received_byte, runtime)) {
+        if (!(peer = find_peer(runtime, device)) ||
+            mh_ble_midi_decode(&peer->decoder, value, (size_t)length,
+                               received_byte, peer)) {
             runtime->base->stats.ms_Errors++;
-            mh_ble_midi_decoder_init(&runtime->decoder);
-            runtime->sysex_length = 0;
-            runtime->message_length = runtime->message_needed = 0;
+            if (peer)
+                reset_peer(peer);
         }
     }
     ReplyMsg(message);
-}
-
-static void reset_parser(struct btmidi_runtime *runtime)
-{
-    mh_ble_midi_decoder_init(&runtime->decoder);
-    runtime->sysex_length = 0;
-    runtime->message_length = runtime->message_needed = 0;
 }
 
 /* Opens the CAMD node under the configured names. Should CAMD refuse them,
@@ -235,12 +312,11 @@ AROS_UFH0(void, btmidi_task)
     struct Task *task = FindTask(NULL);
     struct btmidi_runtime runtime;
     struct Message *message;
-    ULONG signals;
+    ULONG signals, index;
 
     memset(&runtime, 0, sizeof(runtime));
     runtime.base = task->tc_UserData;
     runtime.camd.signal_bit = -1;
-    mh_ble_midi_decoder_init(&runtime.decoder);
     BluetoothBase = OpenLibrary((CONST_STRPTR)"bluetooth.library", 45);
     if (BluetoothBase && (BluetoothBase->lib_Version == 45) &&
         (BluetoothBase->lib_Revision < 18)) {
@@ -252,10 +328,14 @@ AROS_UFH0(void, btmidi_task)
         /* without CAMD the service still runs; the window tells */
         open_camd(&runtime);
         runtime.event_handler = btAddEventHandler(runtime.event_port,
-                                                   BEHMF_SERVICEWRITE);
+                                                   BEHMF_SERVICEWRITE |
+                                                   BEHMF_DEVICEDISCONNECTED);
         if (runtime.event_handler) {
             runtime.base->record = runtime.record;
             runtime.base->task = task;
+            /* centrals otherwise tend to keep a 30 ms interval or longer */
+            btSetAttrs(BGA_STACK, NULL, BSA_LEConnInterval, BTMIDI_CONN_INTERVAL,
+                       TAG_END);
         }
     }
     Forbid();
@@ -271,19 +351,21 @@ AROS_UFH0(void, btmidi_task)
                 mask |= 1UL << runtime.camd.signal_bit;
             signals = Wait(mask);
             while ((message = GetMsg(runtime.event_port)))
-                handle_service_write(&runtime, message);
+                handle_event(&runtime, message);
             if ((runtime.camd.signal_bit >= 0) &&
                 (signals & (1UL << runtime.camd.signal_bit)))
                 mh_camd_bridge_poll(&runtime.camd, send_to_ble, &runtime);
             if (signals & SIGBREAKF_CTRL_E) {
                 /* new port names: CAMD clients reconnect by name */
                 mh_camd_bridge_close(&runtime.camd);
-                reset_parser(&runtime);
+                reset_peers(&runtime);
                 open_camd(&runtime);
             }
             notify_gui(runtime.base);
         } while (!(signals & SIGBREAKF_CTRL_C));
     }
+    if (runtime.base->task)
+        btSetAttrs(BGA_STACK, NULL, BSA_LEConnInterval, 0, TAG_END);
     runtime.base->record = NULL;
     runtime.base->camd_state = BTMIDI_CAMD_CLOSED;
     if (runtime.event_handler)
@@ -293,6 +375,8 @@ AROS_UFH0(void, btmidi_task)
     if (runtime.record)
         btRemServiceRecord(runtime.record);
     mh_camd_bridge_close(&runtime.camd);
+    for (index = 0; index < BTMIDI_MAX_PEERS; index++)
+        FreeVec(runtime.peers[index]);
     if (runtime.event_port)
         DeleteMsgPort(runtime.event_port);
     if (BluetoothBase)
