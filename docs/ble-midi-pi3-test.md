@@ -38,8 +38,8 @@ empty reads.
    loaded. Open the `btgatt.class` settings: tick "Let Bluetooth LE devices
    find and connect to this machine" and keep `BLE MIDI` offered. Use or
    Save.
-4. Open MIDIHub.prefs. The Overview should list `MIDIHub BLE In` and
-   `MIDIHub BLE Out` as `BLE MIDI`, `Offered`.
+4. Open MIDIHub.prefs. The Overview should list `BLE MIDI In` and
+   `BLE MIDI Out` as `BLE MIDI`, `Offered`.
 
 Keep the Bluetooth Preferences log window open during the tests; most checks
 below read it.
@@ -61,7 +61,7 @@ log), switch it off, reconnect, and compare.
 
 ## Test 1: MIDI Wrench connects, iPhone to AROS
 
-1. On AROS, in a Shell: `MIDIHUB:C/MIDIHubCAMDProbe --monitor "MIDIHub BLE In" 300`.
+1. On AROS, in a Shell: `MIDIHUB:C/MIDIHubCAMDProbe --monitor "BLE MIDI In" 300`.
 2. In MIDI Wrench, open its Bluetooth MIDI devices panel, find the name of
    the AROS radio and connect.
 3. In the log, expect in this order:
@@ -79,7 +79,7 @@ log), switch it off, reconnect, and compare.
 ## Test 2: AROS to MIDI Wrench
 
 1. With MIDI Wrench still connected and showing its incoming MIDI, run
-   `MIDIHUB:C/MIDIHubCAMDProbe --send "MIDIHub BLE Out"`.
+   `MIDIHUB:C/MIDIHubCAMDProbe --send "BLE MIDI Out"`.
 2. MIDI Wrench shows eight Note On/Off pairs (C4 to C5) and a 6-byte SysEx
    `F0 7E 7F 06 01 F7`. A whole SysEx in one piece shows that a larger
    packet or correct multi-packet reassembly went through.
@@ -90,7 +90,7 @@ log), switch it off, reconnect, and compare.
 1. Disconnect MIDI Wrench. In GarageBand open an instrument (for example the
    keyboard), then connect the AROS radio from GarageBand's Bluetooth MIDI
    devices setting (Settings, Advanced).
-2. Run `MIDIHUB:C/MIDIHubCAMDProbe --send "MIDIHub BLE Out"` again. GarageBand
+2. Run `MIDIHUB:C/MIDIHubCAMDProbe --send "BLE MIDI Out"` again. GarageBand
    plays the scale. Timing should sound even; an uneven scale suggests the
    connection interval stayed long (see the log from test 1).
 
@@ -102,7 +102,7 @@ log), switch it off, reconnect, and compare.
    the log shows the stored key being used.
 3. Some iOS versions read the BLE MIDI characteristic on connection. A read
    now returns no data, as the specification requires; nothing should be
-   received on `MIDIHub BLE In` at connection time.
+   received on `BLE MIDI In` at connection time.
 
 ## Test 5: port names
 

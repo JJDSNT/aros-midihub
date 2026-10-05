@@ -4,10 +4,10 @@
    MIDIHubCAMDProbe --synth             a note to MIDIHub Synth
    MIDIHubCAMDProbe --send CLUSTER      a C major scale and a SysEx Identity
                                         Request to any cluster, e.g.
-                                        "MIDIHub BLE Out"
+                                        "BLE MIDI Out"
    MIDIHubCAMDProbe --monitor CLUSTER [SECONDS]
                                         print what arrives on a cluster, e.g.
-                                        "MIDIHub BLE In" (default 60 s,
+                                        "BLE MIDI In" (default 60 s,
                                         Ctrl-C stops) */
 #include <dos/dos.h>
 #include <exec/libraries.h>

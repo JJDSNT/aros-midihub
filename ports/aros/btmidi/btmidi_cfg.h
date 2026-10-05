@@ -9,9 +9,9 @@
 
 #define BTMIDI_NAME_SIZE 32
 
-#define BTMIDI_DEFAULT_NODE "MIDIHub BLE"
-#define BTMIDI_DEFAULT_IN   "MIDIHub BLE In"
-#define BTMIDI_DEFAULT_OUT  "MIDIHub BLE Out"
+#define BTMIDI_DEFAULT_NODE "BLE MIDI"
+#define BTMIDI_DEFAULT_IN   "BLE MIDI In"
+#define BTMIDI_DEFAULT_OUT  "BLE MIDI Out"
 
 /* The class configuration, stored as an IFF chunk by bluetooth.library.
    The names are those of the CAMD node and of its two clusters. */

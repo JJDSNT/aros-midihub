@@ -67,8 +67,10 @@ static int contains_ci(CONST_STRPTR text, CONST_STRPTR needle)
 static CONST_STRPTR endpoint_transport(CONST_STRPTR name)
 {
     if (contains_ci(name, "synth")) return "Software";
-    /* MIDIHubBLE's ports; btmidi.class's are known from bluetooth.library */
+    /* btmidi.class's own ports are known from bluetooth.library; these
+       catch its defaults without it, and MIDIHubBLE's diagnostic ports */
     if (!strncmp(name, BTMIDI_DEFAULT_NODE " ", sizeof(BTMIDI_DEFAULT_NODE)) ||
+        !strncmp(name, "MIDIHub BLE ", 12) ||
         contains_ci(name, "bluetooth")) return "BLE MIDI";
     if (contains_ci(name, "usb")) return "USB";
     if (contains_ci(name, "rtp") || contains_ci(name, "apple") ||

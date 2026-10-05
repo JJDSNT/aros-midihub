@@ -11,7 +11,7 @@
   written to it.
 - **AROS as the peripheral.** The class registers the BLE MIDI service with
   the stack's GATT server, so a phone or computer can connect to AROS and
-  play through `MIDIHub BLE In` and `MIDIHub BLE Out`.
+  play through `BLE MIDI In` and `BLE MIDI Out`.
 
 The packet codec and the reassembly of MIDI messages are portable, shared by
 both roles and tested on the host. Upstream AROS supplies the GATT client and
@@ -101,8 +101,8 @@ to `<name> Out` while the device is away are dropped.
 
 To use `MIDIHubBLE` instead for diagnosis, build `contrib-aros-midihub-ble`
 and run `MIDIHUB:C/MIDIHubBLE <address>` with the address `BTDevLister`
-shows. Its ports are `MIDIHub BLE In` and `MIDIHub BLE Out`, which are also
-the defaults of the peripheral role, so do not use both at once.
+shows. Its ports are `MIDIHub BLE In` and `MIDIHub BLE Out`; do not run it
+for a device the class is already bound to.
 
 ### AROS as the peripheral
 
@@ -115,8 +115,8 @@ the defaults of the peripheral role, so do not use both at once.
    configured for the Bluetooth radio.
 3. In an iOS BLE MIDI connection panel or MIDI Wrench, scan for the configured
    AROS Bluetooth name and connect.
-4. Connect an AROS CAMD application to `MIDIHub BLE In` or
-   `MIDIHub BLE Out`. Incoming BLE packets, including SysEx, are decoded into
+4. Connect an AROS CAMD application to `BLE MIDI In` or
+   `BLE MIDI Out`. Incoming BLE packets, including SysEx, are decoded into
    CAMD; CAMD output is encoded into notifications for every subscribed iOS
    central.
 5. Open the `btmidi.class` settings from the Bluetooth Preferences Classes
@@ -125,9 +125,9 @@ the defaults of the peripheral role, so do not use both at once.
 
 #### Class settings
 
-The settings window edits the names of the CAMD device (`MIDIHub BLE`), the
-cluster that carries MIDI received from Bluetooth (`MIDIHub BLE In`), and the
-cluster whose MIDI is sent over Bluetooth (`MIDIHub BLE Out`). `Use` applies
+The settings window edits the names of the CAMD device (`BLE MIDI`), the
+cluster that carries MIDI received from Bluetooth (`BLE MIDI In`), and the
+cluster whose MIDI is sent over Bluetooth (`BLE MIDI Out`). `Use` applies
 them at once: the class reopens its CAMD node, and CAMD clients and MIDIHub
 routes find the clusters again by their new names. `Save` also writes them to
 the Bluetooth configuration on disk. If CAMD cannot open the configured names,
