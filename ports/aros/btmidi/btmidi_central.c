@@ -21,18 +21,9 @@
 #include <proto/exec.h>
 
 #include <string.h>
-#include <sys/time.h>
 
 #define BTMIDI_SETTLE_MS 1000   /* a new link is left alone this long */
 #define BTMIDI_RETRY_MS  2000   /* and a failed request is retried after this */
-
-static UWORD now_milliseconds(void)
-{
-    struct timeval now;
-    gettimeofday(&now, NULL);
-    return (UWORD)(((unsigned long long)now.tv_sec * 1000ULL +
-                    (unsigned long long)now.tv_usec / 1000ULL) & 0x1fff);
-}
 
 /* ---- in the caller's task (the stack's class handling) ---- */
 
@@ -171,7 +162,8 @@ static int send_to_device(void *context, const uint8_t *message, size_t length)
     struct btmidi_binding *binding = context;
     UBYTE packet[sizeof(binding->notify_buf)];
     size_t written;
-    UWORD timestamp = now_milliseconds();
+    UWORD timestamp = btmidi_now_ms(binding->timer_open ?
+                                    binding->timer_req->tr_node.io_Device : NULL);
 
     if (!binding->primed)
         return -1;               /* not connected: the message is dropped */

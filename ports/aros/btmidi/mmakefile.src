@@ -3,7 +3,11 @@ include $(SRCDIR)/config/aros.cfg
 MIDIHUB_ROOT := $(SRCDIR)/$(patsubst %/ports/aros/btmidi,%,$(CURDIR))
 
 USER_INCLUDES := -I$(MIDIHUB_ROOT)/include -I$(MIDIHUB_ROOT)/ports/aros
-USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
+# genmodule's btmidi_start.c leaves library-entry parameters unused and
+# struct fields uninitialised, and it
+# is compiled with the same flags as the class itself.
+USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var \
+               -Wno-unused-parameter -Wno-missing-field-initializers
 USER_LDFLAGS := -static
 USER_CPPFLAGS := -DMUIMASTER_YES_INLINE_STDARG
 

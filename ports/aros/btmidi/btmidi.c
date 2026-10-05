@@ -9,7 +9,7 @@
 #include <proto/exec.h>
 #include <proto/utility.h>
 #include <string.h>
-#include <sys/time.h>
+#include <proto/timer.h>
 
 #define BTMIDI_VALUE_SIZE 512
 #define BTMIDI_TX_PACKET_MIN 20    /* fits the default ATT MTU */
@@ -43,12 +43,21 @@ struct btmidi_runtime {
     struct btmidi_peer *peers[BTMIDI_MAX_PEERS];
     ULONG use_counter;
     ULONG tx_payload;         /* what every connected central receives whole */
+    struct timerequest timer_io;  /* only opened, for its base: the clock */
+    struct Device *timer;
 };
 
-static UWORD now_milliseconds(void)
+/* The BLE MIDI timestamp: milliseconds, 13 bits. timer is an opened
+   timer.device's base; without one every packet says 0. */
+UWORD btmidi_now_ms(struct Device *timer)
 {
+#define TimerBase timer
     struct timeval now;
-    gettimeofday(&now, NULL);
+
+    if (!timer)
+        return 0;
+    GetSysTime(&now);
+#undef TimerBase
     return (UWORD)(((unsigned long long)now.tv_sec * 1000ULL +
                     (unsigned long long)now.tv_usec / 1000ULL) & 0x1fff);
 }
@@ -81,7 +90,7 @@ static int send_to_ble(void *context, const uint8_t *message, size_t length)
     struct btmidi_runtime *runtime = context;
     UBYTE packet[BTMIDI_TX_PACKET_MAX];
     size_t written;
-    UWORD timestamp = now_milliseconds();
+    UWORD timestamp = btmidi_now_ms(runtime->timer);
 
     runtime->base->stats.ms_TxMessages++;
 
@@ -248,6 +257,9 @@ AROS_UFH0(void, btmidi_task)
     memset(&runtime, 0, sizeof(runtime));
     runtime.base = task->tc_UserData;
     runtime.camd.signal_bit = -1;
+    if (!OpenDevice((CONST_STRPTR)"timer.device", UNIT_VBLANK,
+                    (struct IORequest *)&runtime.timer_io, 0))
+        runtime.timer = runtime.timer_io.tr_node.io_Device;
     BluetoothBase = OpenLibrary((CONST_STRPTR)"bluetooth.library", 45);
     if (BluetoothBase && (BluetoothBase->lib_Version == 45) &&
         (BluetoothBase->lib_Revision < 18)) {
@@ -322,6 +334,8 @@ AROS_UFH0(void, btmidi_task)
         DeleteMsgPort(runtime.event_port);
     if (BluetoothBase)
         CloseLibrary(BluetoothBase);
+    if (runtime.timer)
+        CloseDevice((struct IORequest *)&runtime.timer_io);
     runtime.base->task = NULL;
     Forbid();
     if (runtime.base->ready_task)

@@ -101,6 +101,7 @@ void btmidi_store_cfg(struct BTMidiBase *base, struct Library *bluetooth,
 void btmidi_reconfigure(struct BTMidiBase *base);
 BOOL btmidi_open_cfg_window(struct BTMidiBase *base, struct Library *bluetooth);
 
+UWORD btmidi_now_ms(struct Device *timer);
 AROS_UFP0(void, btmidi_gui_task);
 AROS_UFP0(void, btmidi_binding_task);
 
