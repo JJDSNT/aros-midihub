@@ -28,12 +28,7 @@ struct btmidi_peer {
     BOOL in_use;
     APTR device;              /* the writer, or NULL from an older stack */
     ULONG last_use;
-    struct mh_ble_midi_decoder decoder;
-    UBYTE message[3];
-    UBYTE message_length;
-    UBYTE message_needed;
-    ULONG sysex_length;
-    UBYTE sysex[MH_SYSEX_MAX];
+    struct mh_ble_midi_stream stream;
 };
 
 struct btmidi_runtime {
@@ -58,72 +53,16 @@ static UWORD now_milliseconds(void)
                     (unsigned long long)now.tv_usec / 1000ULL) & 0x1fff);
 }
 
-static void deliver(struct btmidi_runtime *runtime, const UBYTE *message,
-                    ULONG length)
-{
-    mh_camd_bridge_deliver(&runtime->camd, message, length);
-    runtime->base->stats.ms_RxMessages++;
-}
-
-static void deliver_sysex(struct btmidi_runtime *runtime, const UBYTE *message,
-                          ULONG length)
-{
-    mh_camd_bridge_deliver_sysex(&runtime->camd, message, length);
-    runtime->base->stats.ms_RxMessages++;
-}
-
-static int received_byte(void *context, uint16_t timestamp, uint8_t byte)
+static void deliver(void *context, const uint8_t *message, size_t length)
 {
     struct btmidi_peer *peer = context;
     struct btmidi_runtime *runtime = peer->runtime;
-    (void)timestamp;
-    if (byte >= 0xf8) {
-        deliver(runtime, &byte, 1);
-        return 0;
-    }
-    if (peer->sysex_length) {
-        if (peer->sysex_length == MH_SYSEX_MAX) {
-            peer->sysex_length = 0;
-            return -1;
-        }
-        peer->sysex[peer->sysex_length++] = byte;
-        if (byte == 0xf7) {
-            deliver_sysex(runtime, peer->sysex, peer->sysex_length);
-            peer->sysex_length = 0;
-        }
-        return 0;
-    }
-    if (byte == 0xf0) {
-        peer->sysex[0] = byte;
-        peer->sysex_length = 1;
-        peer->message_length = peer->message_needed = 0;
-        return 0;
-    }
-    if (byte & 0x80) {
-        if (byte == 0xf6) {
-            deliver(runtime, &byte, 1);
-            peer->message_length = peer->message_needed = 0;
-            return 0;
-        }
-        if (byte > 0xef && byte != 0xf1 && byte != 0xf2 && byte != 0xf3) {
-            peer->message_length = peer->message_needed = 0;
-            return 0;
-        }
-        peer->message[0] = byte;
-        peer->message_length = 1;
-        peer->message_needed = ((byte & 0xf0) == 0xc0 ||
-                                   (byte & 0xf0) == 0xd0 ||
-                                   byte == 0xf1 || byte == 0xf3) ? 1 : 2;
-        return 0;
-    }
-    if (!peer->message_needed)
-        return -1;
-    peer->message[peer->message_length++] = byte;
-    if (!--peer->message_needed) {
-        deliver(runtime, peer->message, peer->message_length);
-        peer->message_length = 0;
-    }
-    return 0;
+
+    if (message[0] == 0xf0)
+        mh_camd_bridge_deliver_sysex(&runtime->camd, message, length);
+    else
+        mh_camd_bridge_deliver(&runtime->camd, message, length);
+    runtime->base->stats.ms_RxMessages++;
 }
 
 static int set_packet(struct btmidi_runtime *runtime,
@@ -183,13 +122,6 @@ static APTR add_service(void)
                               BSRA_NumCharacteristics, 1, TAG_END);
 }
 
-static void reset_peer(struct btmidi_peer *peer)
-{
-    mh_ble_midi_decoder_init(&peer->decoder);
-    peer->sysex_length = 0;
-    peer->message_length = peer->message_needed = 0;
-}
-
 /* The state of the central that wrote. A new central takes a free slot, or
    the one unused for longest when more centrals write than there are slots. */
 static struct btmidi_peer *find_peer(struct btmidi_runtime *runtime, APTR device)
@@ -222,7 +154,7 @@ static struct btmidi_peer *find_peer(struct btmidi_runtime *runtime, APTR device
     peer->runtime = runtime;
     peer->in_use = TRUE;
     peer->device = device;
-    reset_peer(peer);
+    mh_ble_midi_stream_init(&peer->stream, deliver, peer);
 found:
     peer->last_use = ++runtime->use_counter;
     return peer;
@@ -264,12 +196,8 @@ static void handle_event(struct btmidi_runtime *runtime, struct Message *message
                index == 0 && value && length > 0 && length <= BTMIDI_VALUE_SIZE) {
         runtime->base->stats.ms_RxPackets++;
         if (!(peer = find_peer(runtime, device)) ||
-            mh_ble_midi_decode(&peer->decoder, value, (size_t)length,
-                               received_byte, peer)) {
+            mh_ble_midi_stream_feed(&peer->stream, value, (size_t)length))
             runtime->base->stats.ms_Errors++;
-            if (peer)
-                reset_peer(peer);
-        }
     }
     ReplyMsg(message);
 }
@@ -547,13 +475,12 @@ AROS_LH3(LONG, btcGetAttrsA,
     AROS_LIBFUNC_INIT
     struct TagItem *tag;
     LONG count = 0;
-    (void)object;
     if (type == BCGA_CLASS) {
         if ((tag = FindTagItem(BCCA_Priority, tags))) {
             *((SIPTR *)tag->ti_Data) = 0; count++;
         }
         if ((tag = FindTagItem(BCCA_Description, tags))) {
-            *((STRPTR *)tag->ti_Data) = (STRPTR)"BLE MIDI GATT service and CAMD bridge"; count++;
+            *((STRPTR *)tag->ti_Data) = (STRPTR)"BLE MIDI: devices and phones as CAMD ports"; count++;
         }
         if ((tag = FindTagItem(BCCA_HasClassCfgGUI, tags))) {
             *((IPTR *)tag->ti_Data) = TRUE; count++;
@@ -566,6 +493,20 @@ AROS_LH3(LONG, btcGetAttrsA,
         }
         if ((tag = FindTagItem(BCCA_UsingDefaultCfg, tags))) {
             *((IPTR *)tag->ti_Data) = base->using_default_cfg; count++;
+        }
+    } else if (type == BCGA_BINDING) {
+        struct btmidi_binding *binding = object;
+        if ((tag = FindTagItem(BCBA_UsingDefaultCfg, tags))) {
+            *((IPTR *)tag->ti_Data) = TRUE; count++;
+        }
+        if ((tag = FindTagItem(BCBA_Device, tags))) {
+            *((struct BtDevice **)tag->ti_Data) = binding->device; count++;
+        }
+        if ((tag = FindTagItem(BCBA_Service, tags))) {
+            *((struct BtService **)tag->ti_Data) = binding->service; count++;
+        }
+        if ((tag = FindTagItem(BCBA_Task, tags))) {
+            *((struct Task **)tag->ti_Data) = binding->task; count++;
         }
     }
     return count;
@@ -592,8 +533,14 @@ AROS_LH2(SIPTR, btcDoMethodA,
     struct Library *bluetooth;
     SIPTR result = 0;
 
-    (void)data;
     switch (method) {
+    case BCM_AttemptServiceBinding:
+        return (SIPTR)btmidi_attempt_binding(base, (struct BtService *)data[0]);
+    case BCM_ForceServiceBinding:
+        return (SIPTR)btmidi_force_binding(base, (struct BtService *)data[0]);
+    case BCM_ReleaseServiceBinding:
+        btmidi_release_binding(base, (struct btmidi_binding *)data[0]);
+        return TRUE;
     case BCM_OpenCfgWindow:
     case BCM_ConfigChangedEvent:
         if (!(bluetooth = OpenLibrary((CONST_STRPTR)"bluetooth.library", 45)))

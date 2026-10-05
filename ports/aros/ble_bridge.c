@@ -17,13 +17,8 @@ struct Library *BluetoothBase;
 
 struct ble_runtime {
     struct mh_camd_bridge camd;
-    struct mh_ble_midi_decoder decoder;
+    struct mh_ble_midi_stream stream;
     APTR write_channel;
-    uint8_t message[3];
-    uint8_t message_length;
-    uint8_t message_needed;
-    uint8_t sysex[MH_SYSEX_MAX];
-    size_t sysex_length;
     unsigned long received;
     unsigned long sent;
     size_t packet_limit;
@@ -37,64 +32,14 @@ static uint16_t now_milliseconds(void)
                        (uint64_t)now.tv_usec / 1000) & 0x1fff);
 }
 
-static int received_byte(void *context, uint16_t timestamp, uint8_t byte)
+static void deliver(void *context, const uint8_t *message, size_t length)
 {
     struct ble_runtime *runtime = context;
-    (void)timestamp;
-    if (byte >= 0xf8) {
-        mh_camd_bridge_deliver(&runtime->camd, &byte, 1);
-        runtime->received++;
-        return 0;
-    }
-    if (runtime->sysex_length) {
-        if (runtime->sysex_length == MH_SYSEX_MAX) {
-            runtime->sysex_length = 0;
-            return -1;
-        }
-        runtime->sysex[runtime->sysex_length++] = byte;
-        if (byte == 0xf7) {
-            mh_camd_bridge_deliver_sysex(&runtime->camd, runtime->sysex,
-                                         runtime->sysex_length);
-            runtime->sysex_length = 0;
-            runtime->received++;
-        }
-        return 0;
-    }
-    if (byte == 0xf0) {
-        runtime->sysex[0] = byte;
-        runtime->sysex_length = 1;
-        runtime->message_length = runtime->message_needed = 0;
-        return 0;
-    }
-    if (byte & 0x80) {
-        if (byte == 0xf6) {
-            mh_camd_bridge_deliver(&runtime->camd, &byte, 1);
-            runtime->received++;
-            runtime->message_length = runtime->message_needed = 0;
-            return 0;
-        }
-        if (byte > 0xef && byte != 0xf1 && byte != 0xf2 &&
-            byte != 0xf3) {
-            runtime->message_length = runtime->message_needed = 0;
-            return 0;
-        }
-        runtime->message[0] = byte;
-        runtime->message_length = 1;
-        runtime->message_needed = (byte & 0xf0) == 0xc0 ||
-                                  (byte & 0xf0) == 0xd0 ||
-                                  byte == 0xf1 || byte == 0xf3 ? 1 : 2;
-        return 0;
-    }
-    if (!runtime->message_needed)
-        return -1;
-    runtime->message[runtime->message_length++] = byte;
-    if (!--runtime->message_needed) {
-        mh_camd_bridge_deliver(&runtime->camd, runtime->message,
-                                runtime->message_length);
-        runtime->received++;
-        runtime->message_length = 0;
-    }
-    return 0;
+    if (message[0] == 0xf0)
+        mh_camd_bridge_deliver_sysex(&runtime->camd, message, length);
+    else
+        mh_camd_bridge_deliver(&runtime->camd, message, length);
+    runtime->received++;
 }
 
 static int send_to_ble(void *context, const uint8_t *message, size_t length)
@@ -150,7 +95,7 @@ int main(int argc, char **argv)
     }
     memset(&runtime, 0, sizeof(runtime));
     runtime.camd.signal_bit = -1;
-    mh_ble_midi_decoder_init(&runtime.decoder);
+    mh_ble_midi_stream_init(&runtime.stream, deliver, &runtime);
     BluetoothBase = OpenLibrary((CONST_STRPTR)"bluetooth.library", 1);
     if (!BluetoothBase) {
         printf("bluetooth.library is unavailable\n");
@@ -235,15 +180,9 @@ int main(int argc, char **argv)
                     LONG error = btGetChannelError(channel);
                     if (!error) {
                         ULONG actual = btGetChannelActual(channel);
-                        if (mh_ble_midi_decode(&runtime.decoder, read_buffer,
-                                                actual, received_byte,
-                                                &runtime)) {
+                        if (mh_ble_midi_stream_feed(&runtime.stream,
+                                                    read_buffer, actual))
                             printf("Malformed BLE MIDI notification\n");
-                            mh_ble_midi_decoder_init(&runtime.decoder);
-                            runtime.sysex_length = 0;
-                            runtime.message_length = 0;
-                            runtime.message_needed = 0;
-                        }
                     } else {
                         printf("BLE MIDI read error %ld\n", (long)error);
                         btDelayMS(250);

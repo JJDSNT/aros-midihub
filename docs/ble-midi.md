@@ -1,19 +1,26 @@
 # BLE MIDI transport
 
-The optional `MIDIHubBLE` program connects to a registered BLE MIDI
-peripheral through AROS `bluetooth.library`. It finds the MIDI service
-`03B80E5A-EDE8-4B33-A751-6CE34EC4C700` and I/O characteristic
-`7772E5DB-3868-4112-A1A9-F2669D106BF3` by their 128-bit UUIDs, receives
-notifications, performs the initial GATT characteristic read, writes MIDI
-packets, and exposes `MIDIHub BLE In` and
-`MIDIHub BLE Out` through CAMD. The codec is portable and shared by all AROS
-targets.
+`btmidi.class` carries BLE MIDI in both Bluetooth LE roles:
 
-This program is the **central** implementation: AROS initiates a connection to
-a BLE MIDI peripheral. Upstream AROS now supplies the portable GATT server,
-local service-record API, notifications, LE advertising, and the
-`btgatt.class` Preferences UI. MIDIHub supplies `btmidi.class`, which registers
-the standard service and bridges it to CAMD.
+- **AROS as the central.** bluetooth.library offers the services of every
+  registered device to the classes, and `btmidi.class` binds to each BLE MIDI
+  service (`03B80E5A-EDE8-4B33-A751-6CE34EC4C700`, I/O characteristic
+  `7772E5DB-3868-4112-A1A9-F2669D106BF3`). Each bound device, such as a
+  keyboard or a controller, gets a CAMD node named after it: what it plays
+  arrives on `<name> In`, and what CAMD clients send to `<name> Out` is
+  written to it.
+- **AROS as the peripheral.** The class registers the BLE MIDI service with
+  the stack's GATT server, so a phone or computer can connect to AROS and
+  play through `MIDIHub BLE In` and `MIDIHub BLE Out`.
+
+The packet codec and the reassembly of MIDI messages are portable, shared by
+both roles and tested on the host. Upstream AROS supplies the GATT client and
+server, the local service-record API, notifications, LE advertising, and the
+`btgatt.class` Preferences UI.
+
+The older `MIDIHubBLE` program does the central role by hand for one device
+given by address. It remains as a diagnostic; it should not run alongside
+the class for the same device.
 
 ## Peripheral architecture
 
@@ -68,16 +75,31 @@ active radio can consume.
 ### AROS as the central
 
 1. Apply [the remaining BLE patch](../patches/aros-ble-midi-upstream-gaps.patch)
-   to the matching AROS checkout and build `bluetooth.library` and the optional
-   MetaMake target `contrib-aros-midihub-ble`.
+   to the matching AROS checkout and build `bluetooth.library` and the normal
+   `contrib-aros-midihub` target, which installs `btmidi.class`.
 2. In Bluetooth Preferences, scan, register, and connect to a BLE MIDI
-   peripheral. Run `BTDevLister SERVICES` to find its address and verify
-   that GATT services have been enumerated.
-3. Run `MIDIHUB:C/MIDIHubBLE <address>`, using the Bluetooth address shown by
-   `BTDevLister`. Press Ctrl-C to stop.
-4. Connect a CAMD sender to `MIDIHub BLE Out` and a CAMD receiver to
-   `MIDIHub BLE In`. Send Note On/Off, Program Change and SysEx in both
-   directions. The program prints received and sent message counts on exit.
+   peripheral. Once its services have been enumerated, `btmidi.class` binds
+   to it; the device's window lists the BLE MIDI service with `btmidi.class`
+   under "Services and their bindings".
+3. Connect a CAMD receiver to `<device name> In` and a CAMD sender to
+   `<device name> Out`. Send Note On/Off, Program Change and SysEx in both
+   directions.
+4. Switch the device off and on again. When the stack reconnects it, the
+   class reads the characteristic, subscribes again, and MIDI resumes on the
+   same CAMD ports.
+
+The binding never connects the device itself; it follows the stack's connect
+and disconnect events, as `btbattery.class` does. After a link comes up it
+waits a second, because a link serves one GATT request at a time and other
+classes look at the device too. It then reads the characteristic once, as
+the specification asks of a central, and subscribes to notifications.
+Packets are sized to the characteristic's negotiated payload. Messages sent
+to `<name> Out` while the device is away are dropped.
+
+To use `MIDIHubBLE` instead for diagnosis, build `contrib-aros-midihub-ble`
+and run `MIDIHUB:C/MIDIHubBLE <address>` with the address `BTDevLister`
+shows. Its ports are `MIDIHub BLE In` and `MIDIHub BLE Out`, which are also
+the defaults of the peripheral role, so do not use both at once.
 
 ### AROS as the peripheral
 
@@ -124,10 +146,11 @@ and a physical radio exchange remain to be performed.
 The first runtime sends complete MIDI messages without transmit running
 status. The CAMD bridge accepts channel messages, System Common, System
 Real-Time, and SysEx. Incoming timestamps are parsed but CAMD receives messages
-immediately; clock correlation and scheduling are future work. One program
-instance handles one BLE peripheral.
+immediately; clock correlation and scheduling are future work.
 
-The program creates virtual CAMD ports through the client API. This gives
+The class creates virtual CAMD ports through the client API. Each CAMD node
+holds its own `camd.library` base, so the peripheral role and every bound
+device can open and close their ports independently. This gives
 applications the same CAMD interface as USB MIDI without installing a
 `DEVS:Midi` driver. See [the CAMD integration design](camd-integration.md).
 
@@ -139,10 +162,8 @@ fixed.
 
 1. **Incoming timestamps.** They are parsed but not used; messages reach CAMD
    when they arrive, without jitter correction.
-2. **Central role as a class binding.** As a central, AROS uses the
-   `MIDIHubBLE` program, one instance per peripheral, started by hand. The
-   native design is a `btmidi.class` binding (`BCM_AttemptServiceBinding`)
-   made when a BLE MIDI peripheral connects, as `bthid.class` does for HID.
+2. **Bound devices in the settings window.** The window shows the peripheral
+   role only; it could list the bound devices and their CAMD names.
 3. **MIDIHub.prefs integration.** Show the BLE MIDI endpoint in the overview
    and link to the class settings window.
 

@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 struct mh_camd_bridge {
+    void *camd_base;        /* each bridge holds camd.library open itself */
     void *node;
     void *to_clients;
     void *from_clients;

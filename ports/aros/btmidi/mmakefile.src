@@ -14,7 +14,7 @@ USER_CPPFLAGS := -DMUIMASTER_YES_INLINE_STDARG
 
 %build_module_library mmake=contrib-aros-midihub-btmidi \
     modname=btmidi modtype=btclass modsuffix="class" \
-    files="btmidi btmidi_gui $(MIDIHUB_ROOT)/ports/aros/midihub/camd_bridge" \
+    files="btmidi btmidi_gui btmidi_central $(MIDIHUB_ROOT)/ports/aros/midihub/camd_bridge" \
     uselibs=arosmidihub
 
 %common

@@ -10,8 +10,12 @@
 #include <exec/tasks.h>
 #include <utility/tagitem.h>
 
+#include <devices/timer.h>
 #include <libraries/bluetooth.h>
 #include <libraries/btclass.h>
+
+#include <midihub/ble_midi.h>
+#include "midihub/camd_bridge.h"
 
 #define BTMIDI_NAME_SIZE 32
 
@@ -46,6 +50,46 @@ enum btmidi_camd_state {
 
 struct btmidi_gui;
 
+/* A BLE MIDI peripheral (a keyboard, a controller) this machine connects
+   to as the central: bound to its BLE MIDI service, with a CAMD node of its
+   own named after the device. */
+struct btmidi_binding {
+    struct BTMidiBase *base;
+    struct Library *bt_base;        /* bluetooth.library (binding task) */
+    struct BtDevice *device;
+    struct BtService *service;
+    struct BtEndpoint *endpoint;    /* the BLE MIDI I/O characteristic */
+    ULONG handle;                   /* its value handle */
+
+    struct Task *ready_task;
+    LONG ready_signal;
+    struct Task *task;
+    struct MsgPort *channel_port;
+    struct MsgPort *event_port;
+    APTR event_handler;
+    struct MsgPort *timer_port;
+    struct timerequest *timer_req;
+    BOOL timer_open;
+    BOOL timer_pending;
+
+    APTR notify_ch;                 /* notifications from the device */
+    APTR read_ch;                   /* the read a central makes first */
+    APTR write_ch;                  /* writes without response to it */
+    BOOL notify_posted;
+    BOOL read_busy;
+    BOOL connected;
+    BOOL primed;                    /* read done; notifications follow */
+    ULONG packet_limit;
+
+    struct mh_camd_bridge camd;
+    char node_name[BTMIDI_NAME_SIZE];
+    char in_name[BTMIDI_NAME_SIZE];
+    char out_name[BTMIDI_NAME_SIZE];
+    UBYTE notify_buf[512];
+    UBYTE read_buf[512];
+    struct mh_ble_midi_stream stream;
+};
+
 struct BTMidiBase {
     struct Library library;
     struct Library *utility_base;
@@ -72,5 +116,13 @@ void btmidi_reconfigure(struct BTMidiBase *base);
 BOOL btmidi_open_cfg_window(struct BTMidiBase *base, struct Library *bluetooth);
 
 AROS_UFP0(void, btmidi_gui_task);
+AROS_UFP0(void, btmidi_binding_task);
+
+struct btmidi_binding *btmidi_attempt_binding(struct BTMidiBase *base,
+                                              struct BtService *service);
+struct btmidi_binding *btmidi_force_binding(struct BTMidiBase *base,
+                                            struct BtService *service);
+void btmidi_release_binding(struct BTMidiBase *base,
+                            struct btmidi_binding *binding);
 
 #endif

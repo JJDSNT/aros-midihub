@@ -208,3 +208,85 @@ int mh_ble_midi_encode_message(const uint8_t *message, size_t length,
     *written = length + 2;
     return 0;
 }
+
+void mh_ble_midi_stream_init(struct mh_ble_midi_stream *stream,
+                             mh_ble_midi_message_callback callback,
+                             void *context)
+{
+    stream->callback = callback;
+    stream->context = context;
+    mh_ble_midi_stream_reset(stream);
+}
+
+void mh_ble_midi_stream_reset(struct mh_ble_midi_stream *stream)
+{
+    mh_ble_midi_decoder_init(&stream->decoder);
+    stream->message_length = stream->message_needed = 0;
+    stream->sysex_length = 0;
+}
+
+static int stream_byte(void *context, uint16_t timestamp, uint8_t byte)
+{
+    struct mh_ble_midi_stream *stream = context;
+
+    (void)timestamp;
+    if (byte >= 0xf8) {
+        /* Real-Time may appear anywhere, even inside SysEx */
+        stream->callback(stream->context, &byte, 1);
+        return 0;
+    }
+    if (stream->sysex_length) {
+        if (stream->sysex_length == MH_BLE_MIDI_SYSEX_MAX) {
+            stream->sysex_length = 0;
+            return -1;
+        }
+        stream->sysex[stream->sysex_length++] = byte;
+        if (byte == 0xf7) {
+            stream->callback(stream->context, stream->sysex,
+                             stream->sysex_length);
+            stream->sysex_length = 0;
+        }
+        return 0;
+    }
+    if (byte == 0xf0) {
+        stream->sysex[0] = byte;
+        stream->sysex_length = 1;
+        stream->message_length = stream->message_needed = 0;
+        return 0;
+    }
+    if (byte & 0x80) {
+        unsigned size = message_size(byte);
+
+        stream->message_length = stream->message_needed = 0;
+        if (size == 1) {        /* Tune Request */
+            stream->callback(stream->context, &byte, 1);
+            return 0;
+        }
+        if (!size)              /* a stray F7 or an undefined status */
+            return 0;
+        stream->message[0] = byte;
+        stream->message_length = 1;
+        stream->message_needed = (uint8_t)(size - 1);
+        return 0;
+    }
+    if (!stream->message_needed)
+        return -1;
+    stream->message[stream->message_length++] = byte;
+    if (!--stream->message_needed) {
+        stream->callback(stream->context, stream->message,
+                         stream->message_length);
+        stream->message_length = 0;
+    }
+    return 0;
+}
+
+int mh_ble_midi_stream_feed(struct mh_ble_midi_stream *stream,
+                            const uint8_t *packet, size_t length)
+{
+    if (mh_ble_midi_decode(&stream->decoder, packet, length, stream_byte,
+                           stream)) {
+        mh_ble_midi_stream_reset(stream);
+        return -1;
+    }
+    return 0;
+}

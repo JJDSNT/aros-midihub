@@ -117,6 +117,66 @@ static void check_packet_sizes(void)
     assert(large * 10 < small);
 }
 
+struct message_log {
+    uint8_t bytes[256];
+    size_t length;
+    size_t messages;
+};
+
+static void log_message(void *context, const uint8_t *message, size_t length)
+{
+    struct message_log *log = context;
+    assert(log->length + length + 1 <= sizeof(log->bytes));
+    memcpy(log->bytes + log->length, message, length);
+    log->length += length;
+    log->bytes[log->length++] = 0xff;   /* message boundary */
+    log->messages++;
+}
+
+/* Two senders whose packets interleave: running status and a SysEx that
+   spans packets must each stay with their own stream. */
+static void check_streams(void)
+{
+    static struct mh_ble_midi_stream a, b;
+    struct message_log log_a, log_b;
+    /* A: a Note On, then two more using running status */
+    const uint8_t a1[] = {0x80, 0x81, 0x90, 60, 100};
+    const uint8_t a2[] = {0x80, 0x82, 0x90, 61, 101, 62, 102};
+    /* B: SysEx split over two packets, with a Real-Time byte inside */
+    const uint8_t b1[] = {0x80, 0x81, 0xf0, 0x7e, 0x01};
+    const uint8_t b2[] = {0x80, 0x02, 0x81, 0xf8, 0x03, 0x82, 0xf7};
+    const uint8_t a_expected[] = {0x90, 60, 100, 0xff, 0x90, 61, 101, 0xff,
+                                  0x90, 62, 102, 0xff};
+    const uint8_t b_expected[] = {0xf8, 0xff,
+                                  0xf0, 0x7e, 0x01, 0x02, 0x03, 0xf7, 0xff};
+    uint8_t big[1 + MH_BLE_MIDI_SYSEX_MAX + 2];
+    size_t i;
+
+    memset(&log_a, 0, sizeof(log_a));
+    memset(&log_b, 0, sizeof(log_b));
+    mh_ble_midi_stream_init(&a, log_message, &log_a);
+    mh_ble_midi_stream_init(&b, log_message, &log_b);
+    assert(mh_ble_midi_stream_feed(&a, a1, sizeof(a1)) == 0);
+    assert(mh_ble_midi_stream_feed(&b, b1, sizeof(b1)) == 0);
+    assert(mh_ble_midi_stream_feed(&a, a2, sizeof(a2)) == 0);
+    assert(mh_ble_midi_stream_feed(&b, b2, sizeof(b2)) == 0);
+    assert(log_a.messages == 3 && log_a.length == sizeof(a_expected));
+    assert(memcmp(log_a.bytes, a_expected, sizeof(a_expected)) == 0);
+    assert(log_b.messages == 2 && log_b.length == sizeof(b_expected));
+    assert(memcmp(log_b.bytes, b_expected, sizeof(b_expected)) == 0);
+
+    /* a SysEx longer than the buffer is an error; the stream recovers */
+    memset(&log_a, 0, sizeof(log_a));
+    big[0] = 0x80;
+    big[1] = 0x81;
+    big[2] = 0xf0;
+    for (i = 3; i < sizeof(big); i++)
+        big[i] = 0x11;
+    assert(mh_ble_midi_stream_feed(&a, big, sizeof(big)) == -1);
+    assert(mh_ble_midi_stream_feed(&a, a1, sizeof(a1)) == 0);
+    assert(log_a.messages == 1 && log_a.bytes[0] == 0x90);
+}
+
 int main(void)
 {
     struct mh_ble_midi_decoder decoder;
@@ -192,6 +252,7 @@ int main(void)
           realtime_sysex_expected, sizeof(realtime_sysex_expected), 1);
     check_advertising();
     check_packet_sizes();
+    check_streams();
     puts("BLE MIDI codec OK");
     return 0;
 }

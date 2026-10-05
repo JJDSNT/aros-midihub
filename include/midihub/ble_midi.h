@@ -29,4 +29,35 @@ int mh_ble_midi_encode_sysex_chunk(const uint8_t *message, size_t length,
                                     uint8_t *packet, size_t capacity,
                                     size_t *written);
 
+/* Reassembles complete MIDI messages from the BLE MIDI packets of one
+   sender: running status and SysEx span packets, so every connection needs
+   its own stream. The callback receives each channel, System Common or
+   Real-Time message, and each SysEx from F0 to F7. */
+#define MH_BLE_MIDI_SYSEX_MAX 4096
+
+typedef void (*mh_ble_midi_message_callback)(void *context,
+                                             const uint8_t *message,
+                                             size_t length);
+
+struct mh_ble_midi_stream {
+    struct mh_ble_midi_decoder decoder;
+    mh_ble_midi_message_callback callback;
+    void *context;
+    uint8_t message[3];
+    uint8_t message_length;
+    uint8_t message_needed;
+    size_t sysex_length;
+    uint8_t sysex[MH_BLE_MIDI_SYSEX_MAX];
+};
+
+void mh_ble_midi_stream_init(struct mh_ble_midi_stream *stream,
+                             mh_ble_midi_message_callback callback,
+                             void *context);
+/* Forgets a partial message, e.g. after the link was lost. */
+void mh_ble_midi_stream_reset(struct mh_ble_midi_stream *stream);
+/* Returns -1 for a malformed packet or an oversized SysEx; the stream is
+   then reset and the next packet starts afresh. */
+int mh_ble_midi_stream_feed(struct mh_ble_midi_stream *stream,
+                            const uint8_t *packet, size_t length);
+
 #endif

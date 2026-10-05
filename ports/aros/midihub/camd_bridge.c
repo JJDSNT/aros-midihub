@@ -6,11 +6,15 @@
 
 #ifdef __AROS__
 #include <exec/libraries.h>
+#include <exec/memory.h>
 #include <midi/camd.h>
 #include <proto/camd.h>
 #include <proto/exec.h>
 
-struct Library *CamdBase;
+/* Several bridges may live in one program, each in its own task (the
+   btmidi.class service and one per bound device): none may close the
+   library under another, so the base is per bridge. */
+#define CamdBase ((struct Library *)bridge->camd_base)
 
 int mh_camd_bridge_open_named(struct mh_camd_bridge *bridge,
                               char *node_name, char *incoming_name,
@@ -36,10 +40,10 @@ int mh_camd_bridge_open_named(struct mh_camd_bridge *bridge,
 
     memset(bridge, 0, sizeof(*bridge));
     bridge->signal_bit = -1;
-    CamdBase = OpenLibrary((CONST_STRPTR)"camd.library", 0);
-    if (!CamdBase)
+    bridge->camd_base = OpenLibrary((CONST_STRPTR)"camd.library", 0);
+    if (!bridge->camd_base)
         return -1;
-    bridge->sysex_buffer = malloc(MH_SYSEX_MAX);
+    bridge->sysex_buffer = AllocVec(MH_SYSEX_MAX, MEMF_ANY);
     if (!bridge->sysex_buffer)
         goto fail;
     bridge->signal_bit = AllocSignal(-1);
@@ -83,13 +87,11 @@ void mh_camd_bridge_close(struct mh_camd_bridge *bridge)
         DeleteMidi(bridge->node);
     if (bridge->signal_bit >= 0)
         FreeSignal(bridge->signal_bit);
-    free(bridge->sysex_buffer);
+    FreeVec(bridge->sysex_buffer);
+    if (bridge->camd_base)
+        CloseLibrary(bridge->camd_base);
     memset(bridge, 0, sizeof(*bridge));
     bridge->signal_bit = -1;
-    if (CamdBase) {
-        CloseLibrary(CamdBase);
-        CamdBase = NULL;
-    }
 }
 
 void mh_camd_bridge_deliver(struct mh_camd_bridge *bridge,
