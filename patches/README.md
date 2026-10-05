@@ -78,6 +78,35 @@ existing `btlesc` boot argument, capable controllers and peers negotiate Secure
 Connections, including Numeric Comparison through the standard Bluetooth
 pairing popup and Passkey Entry. OOB pairing remains unsupported.
 
+## Raspberry Pi on-board Bluetooth
+
+Upstream AROS has the Raspberry Pi 3's on-board Bluetooth transport
+(`pl011bt.resource`, `h4bthci.device`, `brcmbt.fwl`), but two pieces did not
+come with it. Without them the radio neither comes up at boot nor gets a
+real address. Both are independent of BLE MIDI and meant for upstream; each
+applies on its own to upstream commit `37313d8aa0`.
+
+`aros-raspi-bt-firmware.patch` adds `distfiles-raspi-aarch64-bt-fw` to
+`arch/aarch64-raspi/boot/mmakefile.src`, beside the WiFi firmware download,
+and makes `distfiles-raspi-aarch64le` depend on it. It fetches the patchram
+`brcmbt.fwl` loads from `DEVS:Firmware/brcm/`: `BCM43430A1.hcd` (Pi 3, Zero W)
+and `BCM4345C0.hcd` (Pi 3B+), from the Raspberry Pi `bluez-firmware`
+repository. Without it a BCM43430A1 runs from ROM and reports the
+placeholder address `AA:AA:AA:AA:AA:AA`.
+
+`aros-raspi-bt-startup.patch` registers that radio in `S:Startup-Sequence`
+with `AddBTHardware DEVS:Bluetooth/h4bthci.device` when the driver is
+installed. A USB dongle announces itself, a radio on a UART does not. It runs
+after `BTStackLoader`, which binds the firmware loaders, so the patchram is
+applied during the radio's own bring-up. In the other order a Pi 3 uploads it
+to a controller that is already up and fails to restart it. Bellatrix
+carries the same change for its m68k port.
+
+```sh
+git -C ~/AROS apply "$PWD/patches/aros-raspi-bt-firmware.patch"
+git -C ~/AROS apply "$PWD/patches/aros-raspi-bt-startup.patch"
+```
+
 ## USB MIDI CAMD fix
 
 `aros-usb-midi-camd.patch` still applies cleanly to upstream commit

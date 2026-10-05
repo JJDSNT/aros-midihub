@@ -19,22 +19,21 @@ empty reads.
 ## Prepare the SD card
 
 1. Build the image as in [the patch guide](../patches/README.md): AROS
-   `raspi-aarch64` with `aros-ble-midi-upstream-gaps.patch` applied, plus the
-   `contrib-aros-midihub` target.
-2. Copy the Bluetooth patchram to `DEVS:Firmware/brcm/` on the card:
-   `BCM43430A1.hcd` for a Pi 3 or Pi Zero W, `BCM4345C0.hcd` for a Pi 3B+.
-   Both come from the Raspberry Pi `bluez-firmware` package
-   (`RPi-Distro/bluez-firmware`, `debian/firmware/broadcom/`). Without it the
-   radio runs from ROM and reports the address `AA:AA:AA:AA:AA:AA`.
+   `raspi-aarch64` with `aros-ble-midi-upstream-gaps.patch`,
+   `aros-raspi-bt-firmware.patch` and `aros-raspi-bt-startup.patch` applied,
+   plus the `contrib-aros-midihub` target.
+2. Check that the card has the Bluetooth patchram in `DEVS:Firmware/brcm/`
+   (`BCM43430A1.hcd` for a Pi 3 or Zero W, `BCM4345C0.hcd` for a Pi 3B+).
+   The firmware patch downloads both with the boot image.
 
 ## Bring Bluetooth up
 
-1. Boot. `S:Startup-Sequence` runs `BTStackLoader`, which loads the firmware
-   loaders (`brcmbt.fwl`) before any radio is added.
-2. Add the on-board radio from a Shell with `AddBTHardware h4bthci.device`
-   (Bluetooth Preferences can also add it and save it, so later boots bring
-   it up by themselves). In Bluetooth Preferences its address must not be
-   `AA:AA:AA:AA:AA:AA`; if it is, the patchram was not found.
+1. Boot. `S:Startup-Sequence` runs `BTStackLoader`, which binds the firmware
+   loader (`brcmbt.fwl`), and then registers the on-board radio
+   (`AddBTHardware DEVS:Bluetooth/h4bthci.device`); nothing has to be done by
+   hand.
+2. In Bluetooth Preferences the radio is listed with a real address. If it
+   shows `AA:AA:AA:AA:AA:AA`, the patchram was not found.
 3. On the Classes page check that `btgatt.class` and `btmidi.class` are
    loaded. Open the `btgatt.class` settings: tick "Let Bluetooth LE devices
    find and connect to this machine" and keep `BLE MIDI` offered. Use or

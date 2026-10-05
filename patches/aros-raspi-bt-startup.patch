@@ -1,0 +1,18 @@
+diff --git a/workbench/s/Startup-Sequence b/workbench/s/Startup-Sequence
+index 57ce65b54f..41d709cce6 100644
+--- a/workbench/s/Startup-Sequence
++++ b/workbench/s/Startup-Sequence
+@@ -111,6 +111,13 @@ EndIf
+ If EXISTS "C:BTStackLoader"
+     BTStackLoader >NIL:
+ EndIf
++; A radio on a UART (the Raspberry Pi's on-board one) does not announce
++; itself the way a USB dongle does: register it here. After BTStackLoader,
++; which binds the firmware loaders, so the patchram goes in during the radio's
++; own bring-up instead of restarting a controller that is already up.
++If EXISTS "DEVS:Bluetooth/h4bthci.device"
++    AddBTHardware DEVS:Bluetooth/h4bthci.device QUIET
++EndIf
+ 
+ Run <NIL: >NIL: QUIET ConClip
+ 
