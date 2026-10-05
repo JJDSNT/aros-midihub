@@ -1,7 +1,9 @@
+#include <midihub/ble_midi.h>
 #include <midihub/config.h>
 #include <midihub/routes.h>
 #include "MIDIHubPrefsClass.h"
 #include "router_control.h"
+#include "btmidi/btmidi_cfg.h"
 
 #include <dos/dostags.h>
 #include <dos/dos.h>
@@ -9,10 +11,15 @@
 #include <intuition/classusr.h>
 #include <libraries/mui.h>
 #include <midi/camd.h>
+#include <libraries/bluetooth.h>
+#include <libraries/btclass.h>
 
+#include <proto/bluetooth.h>
+#include <proto/btclass.h>
 #include <proto/camd.h>
 #include <proto/dos.h>
 #include <proto/exec.h>
+#include <proto/intuition.h>
 #include <proto/muimaster.h>
 #include <proto/utility.h>
 #include <clib/alib_protos.h>
@@ -26,6 +33,9 @@
 #pragma GCC diagnostic ignored "-Wpointer-sign"
 
 #define CONFIG_MAX 65536
+
+/* Optional: without bluetooth.library the overview simply lacks BLE detail */
+struct Library *BluetoothBase;
 
 static CONST_STRPTR nav_entries[] = {
     "Overview", "Routing", "Network MIDI", "Synthesizer", "Profiles", NULL
@@ -56,7 +66,9 @@ static int contains_ci(CONST_STRPTR text, CONST_STRPTR needle)
 static CONST_STRPTR endpoint_transport(CONST_STRPTR name)
 {
     if (contains_ci(name, "synth")) return "Software";
-    if (contains_ci(name, "ble") || contains_ci(name, "bluetooth")) return "BLE MIDI";
+    /* MIDIHubBLE's ports; btmidi.class's are known from bluetooth.library */
+    if (!strncmp(name, BTMIDI_DEFAULT_NODE " ", sizeof(BTMIDI_DEFAULT_NODE)) ||
+        contains_ci(name, "bluetooth")) return "BLE MIDI";
     if (contains_ci(name, "usb")) return "USB";
     if (contains_ci(name, "rtp") || contains_ci(name, "apple") ||
         contains_ci(name, "midihub")) return "Network";
@@ -246,6 +258,146 @@ static void fill_routes(struct MHPrefsData *data)
     set(data->route_list, MUIA_List_Quiet, FALSE);
 }
 
+/* ---- BLE MIDI: what btmidi.class serves, as bluetooth.library tells ---- */
+
+static void add_ble(struct MHPrefsData *data, CONST_STRPTR name, CONST_STRPTR state)
+{
+    struct MHPrefsBle *ble;
+
+    if (data->ble_count == MH_PREFS_BLE_MAX || !name[0])
+        return;
+    ble = &data->ble[data->ble_count++];
+    snprintf(ble->name, sizeof(ble->name), "%s", name);
+    snprintf(ble->state, sizeof(ble->state), "%s", state);
+}
+
+/* The library base must be read-locked. */
+static APTR find_btmidi_class(void)
+{
+    struct List *classes = NULL;
+    struct Node *node;
+    STRPTR name;
+
+    btGetAttrs(BGA_STACK, NULL, BSA_ClassList, &classes, TAG_END);
+    if (!classes)
+        return NULL;
+    for (node = classes->lh_Head; node->ln_Succ; node = node->ln_Succ) {
+        name = NULL;
+        btGetAttrs(BGA_BTCLASS, node, BCA_ClassName, &name, TAG_END);
+        if (name && !strcmp((char *)name, "btmidi.class"))
+            return node;
+    }
+    return NULL;
+}
+
+static void collect_ble(struct MHPrefsData *data)
+{
+    struct BTMidiCfg cfg, *chunk;
+    struct List *records = NULL;
+    struct Node *node;
+    struct BtDevice *device;
+    char node_name[BTMIDI_NAME_SIZE], in[BTMIDI_NAME_SIZE], out[BTMIDI_NAME_SIZE];
+    CONST_STRPTR service = "Stopped";
+    APTR cls, pic;
+
+    data->ble_count = 0;
+    if (!BluetoothBase)
+        return;
+    btLockReadBase();
+    if (!(cls = find_btmidi_class())) {
+        btUnlockBase();
+        return;
+    }
+    /* AROS as the peripheral: the service btmidi.class registered */
+    btGetAttrs(BGA_STACK, NULL, BSA_ServiceRecordList, &records, TAG_END);
+    for (node = records ? records->lh_Head : NULL; node && node->ln_Succ;
+         node = node->ln_Succ) {
+        STRPTR owner = NULL;
+        IPTR enabled = FALSE;
+        btGetAttrs(BGA_SERVICERECORD, node, BSRA_Owner, &owner,
+                   BSRA_Enabled, &enabled, TAG_END);
+        if (owner && !strcmp((char *)owner, "btmidi.class"))
+            service = enabled ? "Offered" : "Not offered";
+    }
+    /* AROS as the central: the devices btmidi.class is bound to */
+    for (device = btFindDevice(NULL, TAG_END); device;
+         device = btFindDevice(device, TAG_END)) {
+        struct List *services = NULL;
+        STRPTR device_name = NULL;
+        IPTR connected = FALSE;
+        BOOL bound = FALSE;
+
+        btLockReadDevice(device);
+        btGetAttrs(BGA_DEVICE, device, BDA_ServiceList, &services,
+                   BDA_Name, &device_name, BDA_IsConnected, &connected, TAG_END);
+        for (node = services ? services->lh_Head : NULL; node && node->ln_Succ;
+             node = node->ln_Succ) {
+            APTR binding_class = NULL;
+            btGetAttrs(BGA_SERVICE, node, BSVA_BindingClass, &binding_class, TAG_END);
+            if (binding_class == cls)
+                bound = TRUE;
+        }
+        if (bound)
+            mh_ble_midi_port_names((const char *)device_name, node_name, in, out,
+                                   sizeof(node_name));
+        btUnlockDevice(device);
+        if (bound) {
+            add_ble(data, in, connected ? "Connected" : "Not connected");
+            add_ble(data, out, connected ? "Connected" : "Not connected");
+        }
+    }
+    btUnlockBase();
+
+    /* the peripheral role's names, from the class configuration */
+    Forbid();
+    strcpy(cfg.mc_InName, BTMIDI_DEFAULT_IN);
+    strcpy(cfg.mc_OutName, BTMIDI_DEFAULT_OUT);
+    if ((pic = btGetClsCfg((STRPTR)"btmidi.class")) &&
+        (chunk = btGetCfgChunk(pic, MAKE_ID('B','M','I','D')))) {
+        ULONG len = AROS_LONG2BE(chunk->mc_Length);
+        if (len > sizeof(cfg) - 8)
+            len = sizeof(cfg) - 8;
+        CopyMem(((UBYTE *)chunk) + 8, ((UBYTE *)&cfg) + 8, len);
+        btFreeVec(chunk);
+        cfg.mc_InName[BTMIDI_NAME_SIZE - 1] = 0;
+        cfg.mc_OutName[BTMIDI_NAME_SIZE - 1] = 0;
+    }
+    Permit();
+    add_ble(data, cfg.mc_InName, service);
+    add_ble(data, cfg.mc_OutName, service);
+}
+
+static const struct MHPrefsBle *find_ble(struct MHPrefsData *data, CONST_STRPTR name)
+{
+    ULONG i;
+    for (i = 0; i < data->ble_count; ++i)
+        if (!strcmp(data->ble[i].name, name))
+            return &data->ble[i];
+    return NULL;
+}
+
+static void open_ble_midi(struct MHPrefsData *data)
+{
+    struct Library *BtClsBase = NULL;
+    APTR cls;
+    BOOL opened = FALSE;
+
+    if (!BluetoothBase) {
+        set_status(data, "bluetooth.library is not available.");
+        return;
+    }
+    btLockReadBase();
+    if ((cls = find_btmidi_class())) {
+        btGetAttrs(BGA_BTCLASS, cls, BCA_ClassBase, &BtClsBase, TAG_END);
+        if (BtClsBase)
+            opened = btcDoMethod(BCM_OpenCfgWindow) ? TRUE : FALSE;
+    }
+    btUnlockBase();
+    set_status(data, opened ? "Opened the BLE MIDI settings." :
+               cls ? "btmidi.class could not open its settings window." :
+               "btmidi.class is not loaded; add it in Bluetooth Preferences.");
+}
+
 static void refresh(struct MHPrefsData *data)
 {
     struct MidiCluster *cluster;
@@ -254,6 +406,7 @@ static void refresh(struct MHPrefsData *data)
     ULONG i, active = 0, waiting = 0;
     char summary[160];
 
+    collect_ble(data);
     data->endpoint_count = 0;
     set(data->endpoint_list, MUIA_List_Quiet, TRUE);
     DoMethod(data->endpoint_list, MUIM_List_Clear);
@@ -262,17 +415,19 @@ static void refresh(struct MHPrefsData *data)
          data->endpoint_count < MH_PREFS_ENDPOINT_MAX;
          cluster = NextCluster(cluster)) {
         struct MHPrefsEndpoint *entry = &data->endpoints[data->endpoint_count++];
+        const struct MHPrefsBle *ble;
         int senders = !IsListEmpty(&cluster->mcl_Senders);
         int receivers = !IsListEmpty(&cluster->mcl_Receivers);
         snprintf(entry->name, sizeof(entry->name), "%s",
                  cluster->mcl_Node.ln_Name ? cluster->mcl_Node.ln_Name : "");
+        ble = find_ble(data, entry->name);
         snprintf(entry->transport, sizeof(entry->transport), "%s",
-                 endpoint_transport(entry->name));
+                 ble ? "BLE MIDI" : (const char *)endpoint_transport(entry->name));
         snprintf(entry->direction, sizeof(entry->direction), "%s",
                  senders && receivers ? "In / Out" : senders ? "Source" :
                  receivers ? "Destination" : "Idle");
         snprintf(entry->state, sizeof(entry->state), "%s",
-                 senders || receivers ? "Online" : "Idle");
+                 ble ? ble->state : senders || receivers ? "Online" : "Idle");
         DoMethod(data->endpoint_list, MUIM_List_InsertSingle, entry,
                  MUIV_List_Insert_Bottom);
     }
@@ -608,6 +763,7 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
     struct MHPrefsData *data;
     Object *main_group, *refresh_button, *source_button, *destination_button;
     Object *add_button, *preview_button, *usb_button, *bluetooth_button;
+    Object *ble_button;
     Object *overview_ahi_button, *synth_ahi_button, *use_button, *save_button;
     Object *profile_save_button, *profile_load_button, *profile_delete_button;
     ULONG i;
@@ -653,6 +809,7 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
                     Child, HGroup, GroupFrameT("Transport preferences"),
                         Child, usb_button = SimpleButton("USB / Trident"),
                         Child, bluetooth_button = SimpleButton("Bluetooth"),
+                        Child, ble_button = SimpleButton("BLE MIDI"),
                         Child, overview_ahi_button = SimpleButton("AHI"),
                         End,
                     End,
@@ -770,6 +927,11 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
     DoMethod(preview_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_Preview);
     DoMethod(usb_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_OpenUSB);
     DoMethod(bluetooth_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_OpenBluetooth);
+    DoMethod(ble_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_OpenBLEMidi);
+    set(ble_button, MUIA_ShortHelp,
+        (IPTR)"Port names and activity of btmidi.class,\n"
+              "the Bluetooth LE MIDI class.");
+    data->ble_button = ble_button;
     DoMethod(overview_ahi_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_OpenAHI);
     DoMethod(synth_ahi_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_OpenAHI);
     DoMethod(use_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_Use);
@@ -814,6 +976,16 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
         case MUIM_MHP_OpenUSB: open_prefs("SYS:Prefs/Trident"); return 0;
         case MUIM_MHP_OpenBluetooth: open_prefs("SYS:Prefs/Bluetooth"); return 0;
         case MUIM_MHP_OpenAHI: open_prefs("SYS:Prefs/AHI"); return 0;
+        case MUIM_MHP_OpenBLEMidi: open_ble_midi(data); return 0;
+        case MUIM_MHP_BluetoothEvent:
+            {
+                /* a device came or went, or a binding or class changed */
+                struct Message *event;
+                while ((event = GetMsg(data->bt_port)))
+                    ReplyMsg(event);
+            }
+            refresh(data);
+            return 0;
         case MUIM_MHP_Changed: data->dirty = TRUE; return 0;
         case MUIM_MHP_SaveProfile: save_profile(data); return 0;
         case MUIM_MHP_LoadProfile: load_profile(data); return 0;
@@ -830,6 +1002,19 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
             return 0;
         case MUIM_Setup:
             if (!DoSuperMethodA(cl, obj, msg)) return FALSE;
+            BluetoothBase = OpenLibrary((CONST_STRPTR)"bluetooth.library", 45);
+            if (BluetoothBase && (data->bt_port = CreateMsgPort()) &&
+                (data->bt_handler = btAddEventHandler(data->bt_port,
+                     BEHMF_DEVICECONNECTED | BEHMF_DEVICEDISCONNECTED |
+                     BEHMF_ADDBINDING | BEHMF_REMBINDING | BEHMF_SERVICESCHG |
+                     BEHMF_ADDCLASS | BEHMF_REMCLASS | BEHMF_CONFIGCHG))) {
+                data->bt_input.ihn_Object = obj;
+                data->bt_input.ihn_Method = MUIM_MHP_BluetoothEvent;
+                data->bt_input.ihn_Signals = 1UL << data->bt_port->mp_SigBit;
+                DoMethod(_app(obj), MUIM_Application_AddInputHandler, &data->bt_input);
+                data->bt_input_added = TRUE;
+            }
+            set(data->ble_button, MUIA_Disabled, BluetoothBase == NULL);
             if (load_routes(data)) set_status(data, "The route configuration is invalid.");
             mh_config_defaults(&data->network);
             if (mh_config_load("ENV:MidiHub/Network", &data->network) != 0)
@@ -875,6 +1060,25 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
             }
             if (data->cluster_signal >= 0) {
                 FreeSignal(data->cluster_signal); data->cluster_signal = -1;
+            }
+            if (data->bt_input_added) {
+                DoMethod(_app(obj), MUIM_Application_RemInputHandler, &data->bt_input);
+                data->bt_input_added = FALSE;
+            }
+            if (data->bt_handler) {
+                btRemEventHandler(data->bt_handler);
+                data->bt_handler = NULL;
+            }
+            if (data->bt_port) {
+                struct Message *event;
+                while ((event = GetMsg(data->bt_port)))
+                    ReplyMsg(event);
+                DeleteMsgPort(data->bt_port);
+                data->bt_port = NULL;
+            }
+            if (BluetoothBase) {
+                CloseLibrary(BluetoothBase);
+                BluetoothBase = NULL;
             }
             break;
     }

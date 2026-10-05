@@ -164,7 +164,6 @@ fixed.
    when they arrive, without jitter correction.
 2. **Bound devices in the settings window.** The window shows the peripheral
    role only; it could list the bound devices and their CAMD names.
-3. **MIDIHub.prefs integration.** Show the BLE MIDI endpoint in the overview
-   and link to the class settings window.
+   MIDIHub.prefs already lists them with their connection state.
 
 Protocol reference: [MIDI Association BLE MIDI 1.0 specification](https://midi.org/midi-over-bluetooth-low-energy-ble-midi).

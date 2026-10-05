@@ -16,7 +16,8 @@ actions, and live CAMD notifications.
 The current pages are:
 
 - **Overview**, with live CAMD endpoint, transport, direction, and state
-  columns plus shortcuts to Trident, Bluetooth Preferences, and AHI
+  columns plus shortcuts to Trident, Bluetooth Preferences, the BLE MIDI
+  class settings, and AHI
 - **Routing**, with route creation/removal, reconnect policy, and per-route
   active/waiting state from `MIDIHubRouter`
 - **Network MIDI**, editing the AppleMIDI/RTP-MIDI session and peer settings
@@ -27,7 +28,20 @@ The current pages are:
   MIDIHub-owned settings
 
 CAMD cluster additions and removals refresh the overview through a MUI input
-handler. `Use` writes `ENV:MidiHub`; `Save` writes both `ENV:MidiHub` and
+handler.
+
+BLE MIDI endpoints are recognised through `bluetooth.library` rather than by
+their names, because `btmidi.class` names a bound device's ports after the
+device. The overview asks the stack which registered devices are bound to
+`btmidi.class` and whether they are connected, and reads the peripheral
+role's port names from the class configuration. Their Status column then
+shows `Connected` or `Not connected` for a device AROS connects to, and
+`Offered` or `Not offered` for the service a phone connects to. Bluetooth
+connect, disconnect, binding, and class events refresh the overview too.
+The `BLE MIDI` button opens the class's own settings window; MIDIHub.prefs
+keeps no copy of those settings, and pairing stays in Bluetooth Preferences.
+Without `bluetooth.library` the button is disabled and the rest works as
+before. `Use` writes `ENV:MidiHub`; `Save` writes both `ENV:MidiHub` and
 `ENVARC:MidiHub`. Route changes are reloaded immediately. The network and
 synth services currently read their new settings when restarted.
 

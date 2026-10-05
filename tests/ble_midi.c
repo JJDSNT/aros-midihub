@@ -177,6 +177,24 @@ static void check_streams(void)
     assert(log_a.messages == 1 && log_a.bytes[0] == 0x90);
 }
 
+static void check_port_names(void)
+{
+    char node[32], in[32], out[32];
+
+    mh_ble_midi_port_names("KORG microKEY  ", node, in, out, sizeof(node));
+    assert(!strcmp(node, "KORG microKEY"));
+    assert(!strcmp(in, "KORG microKEY In"));
+    assert(!strcmp(out, "KORG microKEY Out"));
+    mh_ble_midi_port_names("A very long Bluetooth device name indeed",
+                           node, in, out, sizeof(node));
+    assert(strlen(out) == sizeof(out) - 1 && !strcmp(out + strlen(out) - 4, " Out"));
+    assert(!strncmp(in, node, strlen(node)));
+    mh_ble_midi_port_names(NULL, node, in, out, sizeof(node));
+    assert(!strcmp(in, "BLE MIDI device In"));
+    mh_ble_midi_port_names("   ", node, in, out, sizeof(node));
+    assert(!strcmp(out, "BLE MIDI device Out"));
+}
+
 int main(void)
 {
     struct mh_ble_midi_decoder decoder;
@@ -253,6 +271,7 @@ int main(void)
     check_advertising();
     check_packet_sizes();
     check_streams();
+    check_port_names();
     puts("BLE MIDI codec OK");
     return 0;
 }

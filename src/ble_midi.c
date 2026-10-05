@@ -290,3 +290,26 @@ int mh_ble_midi_stream_feed(struct mh_ble_midi_stream *stream,
     }
     return 0;
 }
+
+void mh_ble_midi_port_names(const char *device_name, char *node, char *in,
+                            char *out, size_t size)
+{
+    size_t n = 0, limit = size > 5 ? size - 5 : 0;
+
+    if (device_name)
+        while (device_name[n] && n < limit) {
+            node[n] = device_name[n];
+            n++;
+        }
+    while (n && node[n - 1] == ' ')
+        n--;
+    node[n] = 0;
+    if (!n && limit >= 15) {
+        strcpy(node, "BLE MIDI device");
+        n = 15;
+    }
+    memcpy(in, node, n);
+    memcpy(in + n, " In", 4);
+    memcpy(out, node, n);
+    memcpy(out + n, " Out", 5);
+}

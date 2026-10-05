@@ -17,6 +17,8 @@ include $(SRCDIR)/config/aros.cfg
 #MM contrib-aros-midihub-selftest : linklibs-arosmidihub
 #MM contrib-aros-midihub-ble : linklibs-arosmidihub kernel-bluetooth-library-includes
 #MM- contrib-aros-midihub-prefs : contrib-aros-midihub-prefs-icon
+#MM contrib-aros-midihub-prefs : linklibs-arosmidihub \
+#MM      kernel-bluetooth-library-includes kernel-bluetooth-btclass
 
 MIDIHUB_ROOT := $(SRCDIR)/$(CURDIR)
 MIDIHUB_PACKAGE := $(AROS_CONTRIB)/aros-midihub

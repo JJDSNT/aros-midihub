@@ -49,29 +49,6 @@ static BOOL is_ble_midi(struct Library *bluetooth, struct BtService *service)
     return proto == BSVP_ATT && service_uuid && !memcmp(service_uuid, uuid, 16);
 }
 
-/* "<device name>", "<device name> In" and "<device name> Out" */
-static void make_names(struct btmidi_binding *binding, STRPTR device_name)
-{
-    char name[BTMIDI_NAME_SIZE - 4];
-    ULONG n = 0;
-
-    if (device_name)
-        while (device_name[n] && n < sizeof(name) - 1) {
-            name[n] = device_name[n];
-            n++;
-        }
-    while (n && name[n - 1] == ' ')
-        n--;
-    name[n] = 0;
-    if (!n)
-        strcpy(name, "BLE MIDI device");
-    strcpy(binding->node_name, name);
-    strcpy(binding->in_name, name);
-    strcat(binding->in_name, " In");
-    strcpy(binding->out_name, name);
-    strcat(binding->out_name, " Out");
-}
-
 struct btmidi_binding *btmidi_force_binding(struct BTMidiBase *base,
                                             struct BtService *service)
 {
@@ -100,7 +77,9 @@ struct btmidi_binding *btmidi_force_binding(struct BTMidiBase *base,
         binding->endpoint = endpoint;
         binding->handle = handle;
         binding->camd.signal_bit = -1;
-        make_names(binding, device_name);
+        mh_ble_midi_port_names((const char *)device_name, binding->node_name,
+                               binding->in_name, binding->out_name,
+                               BTMIDI_NAME_SIZE);
 
         btSafeRawDoFmt(task_name, sizeof(task_name),
                        (STRPTR)"btmidi.class<%08lx>", (IPTR)binding);

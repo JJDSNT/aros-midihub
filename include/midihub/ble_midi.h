@@ -60,4 +60,12 @@ void mh_ble_midi_stream_reset(struct mh_ble_midi_stream *stream);
 int mh_ble_midi_stream_feed(struct mh_ble_midi_stream *stream,
                             const uint8_t *packet, size_t length);
 
+/* The CAMD names of a BLE MIDI device AROS connects to: the node is named
+   after the device, its clusters "<name> In" (what the device plays) and
+   "<name> Out" (what is sent to it). Each buffer holds size bytes; the name
+   is shortened so that " Out" still fits. btmidi.class makes the ports and
+   MIDIHub.prefs recognises them by these names. */
+void mh_ble_midi_port_names(const char *device_name, char *node, char *in,
+                            char *out, size_t size);
+
 #endif

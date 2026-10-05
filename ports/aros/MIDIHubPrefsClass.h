@@ -11,6 +11,13 @@
 #define MH_PREFS_ENDPOINT_MAX 128
 #define MH_PREFS_PROFILE_MAX 64
 #define MH_PREFS_PROFILE_NAME_MAX 63
+#define MH_PREFS_BLE_MAX 32
+
+/* A CAMD cluster btmidi.class owns, as bluetooth.library describes it */
+struct MHPrefsBle {
+    char name[MH_ROUTE_NAME_MAX + 1];
+    char state[16];
+};
 
 struct MHPrefsEndpoint {
     char name[MH_ROUTE_NAME_MAX + 1];
@@ -41,6 +48,14 @@ struct MHPrefsData {
     struct MUI_InputHandlerNode input_handler;
     BYTE cluster_signal;
     BOOL notifying, input_added, dirty;
+    /* BLE MIDI, when bluetooth.library is there */
+    Object *ble_button;
+    struct MHPrefsBle ble[MH_PREFS_BLE_MAX];
+    ULONG ble_count;
+    struct MsgPort *bt_port;
+    APTR bt_handler;
+    struct MUI_InputHandlerNode bt_input;
+    BOOL bt_input_added;
 };
 
 enum { MHPAGE_OVERVIEW, MHPAGE_ROUTING, MHPAGE_NETWORK,
@@ -62,6 +77,8 @@ enum { MHPAGE_OVERVIEW, MHPAGE_ROUTING, MHPAGE_NETWORK,
 #define MUIM_MHP_SaveProfile   (TAGBASE_MHP | 0x0d)
 #define MUIM_MHP_LoadProfile   (TAGBASE_MHP | 0x0e)
 #define MUIM_MHP_DeleteProfile (TAGBASE_MHP | 0x0f)
+#define MUIM_MHP_OpenBLEMidi   (TAGBASE_MHP | 0x10)
+#define MUIM_MHP_BluetoothEvent (TAGBASE_MHP | 0x11)
 
 AROS_UFP3(IPTR, MHPrefsDispatcher,
           AROS_UFPA(struct IClass *, cl, A0),

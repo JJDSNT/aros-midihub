@@ -17,21 +17,7 @@
 #include <midihub/ble_midi.h>
 #include "midihub/camd_bridge.h"
 
-#define BTMIDI_NAME_SIZE 32
-
-#define BTMIDI_DEFAULT_NODE "MIDIHub BLE"
-#define BTMIDI_DEFAULT_IN   "MIDIHub BLE In"
-#define BTMIDI_DEFAULT_OUT  "MIDIHub BLE Out"
-
-/* The class configuration, stored as an IFF chunk by bluetooth.library.
-   The names are those of the CAMD node and of its two clusters. */
-struct BTMidiCfg {
-    ULONG mc_ChunkID;
-    ULONG mc_Length;
-    char mc_NodeName[BTMIDI_NAME_SIZE];
-    char mc_InName[BTMIDI_NAME_SIZE];
-    char mc_OutName[BTMIDI_NAME_SIZE];
-};
+#include "btmidi_cfg.h"
 
 /* Written by the service task only; the settings window reads them. */
 struct BTMidiStats {
