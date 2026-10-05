@@ -63,7 +63,7 @@ static CONST_STRPTR endpoint_transport(CONST_STRPTR name)
     return "CAMD";
 }
 
-AROS_UFH3(LONG, EndpointDisplay,
+AROS_UFH3(IPTR, EndpointDisplay,
           AROS_UFHA(struct Hook *, hook, A0),
           AROS_UFHA(STRPTR *, columns, A2),
           AROS_UFHA(struct MHPrefsEndpoint *, entry, A1))
@@ -85,7 +85,7 @@ AROS_UFH3(LONG, EndpointDisplay,
     AROS_USERFUNC_EXIT
 }
 
-AROS_UFH3(LONG, RouteDisplay,
+AROS_UFH3(IPTR, RouteDisplay,
           AROS_UFHA(struct Hook *, hook, A0),
           AROS_UFHA(STRPTR *, columns, A2),
           AROS_UFHA(struct mh_route_config *, route, A1))
@@ -403,9 +403,10 @@ static void refresh_profiles(struct MHPrefsData *data)
     if (fib && Examine(lock, fib)) {
         while (data->profile_count < MH_PREFS_PROFILE_MAX && ExNext(lock, fib)) {
             if (fib->fib_DirEntryType > 0 && profile_name_valid(fib->fib_FileName)) {
-                snprintf(data->profiles[data->profile_count],
-                         sizeof(data->profiles[data->profile_count]), "%s",
-                         fib->fib_FileName);
+                size_t length = strlen((const char *)fib->fib_FileName);
+                memcpy(data->profiles[data->profile_count], fib->fib_FileName,
+                       length);
+                data->profiles[data->profile_count][length] = 0;
                 DoMethod(data->profile_list, MUIM_List_InsertSingle,
                          data->profiles[data->profile_count],
                          MUIV_List_Insert_Bottom);
