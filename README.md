@@ -268,8 +268,9 @@ components create CAMD-visible endpoints directly; mature transport components
 should move to their natural AROS subsystems. MIDIHub can then enumerate those
 endpoints and preserve simple source-to-destination routes between them. The
 [rescan patch](patches/aros-camd-rescan.patch) helps drivers installed after
-CAMD opens. See [the CAMD integration design](docs/camd-integration.md) and
-[MIDIHub runtime architecture](docs/midihub-architecture.md).
+CAMD opens. See [the CAMD integration design](docs/camd-integration.md),
+[MIDIHub runtime architecture](docs/midihub-architecture.md), and
+[possible CAMD improvements](docs/camd-improvements.md) proposed for upstream.
 
 ## Initial Implementation Sources
 

@@ -88,8 +88,10 @@ belongs in specialized CAMD applications.
 A saved route can therefore remain in a waiting state while an endpoint is
 absent and become active when that endpoint appears.
 
-See [midihub-architecture.md](midihub-architecture.md) for runtime ownership and
-[preferences.md](preferences.md) for the user-facing model.
+See [midihub-architecture.md](midihub-architecture.md) for runtime ownership,
+[preferences.md](preferences.md) for the user-facing model, and
+[camd-improvements.md](camd-improvements.md) for changes proposed to CAMD
+itself.
 
 ## Implementation sequence
 
