@@ -54,6 +54,17 @@ find a cluster by name. Found on a Raspberry Pi 3 running `raspi-aarch64`;
 [the fix](../patches/aros-camd-names-64bit.patch) uses `VNewRawDoFmt()`
 with a `va_list`.
 
+### 1.5 Driver scan breaks on arena-loaded modules (verified, fixed)
+
+`LoadDriver()` (`openmididevice.c`) read each hunk's size before its
+`BPTR` and scanned it for `MidiDeviceData`. Modules loaded into one arena
+(`ELF_MODULE_ARENA`) store a size of 0 in each section hunk and the real
+size in a container hunk; the subtraction wrapped and the scan ran off the
+end of memory. [The fix](../patches/aros-camd-arena-segments.patch) skips
+hunks no larger than their header. A cleaner long-term design would be for
+a driver to export its `MidiDeviceData` through a symbol or a resident
+structure rather than being found by scanning memory.
+
 ## 2. Endpoint metadata
 
 ### 2.1 Link and cluster comments do nothing (verified)
@@ -149,8 +160,8 @@ the same standing as USB ones without writing driver files at run time.
 
 ## Suggested order
 
-1. Fix cluster names on 64-bit targets (1.4): without it CAMD is unusable
-   there.
+1. Fix cluster names on 64-bit targets (1.4) and the driver scan of
+   arena-loaded modules (1.5): without them CAMD is unusable or crashes.
 2. Lock the cluster notification list (1.1): small and safe.
 3. Upstream the rescan patch (1.2).
 4. Implement `MLINK_Comment` and cluster comments (2.1).

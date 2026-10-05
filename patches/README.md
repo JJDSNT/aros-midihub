@@ -186,6 +186,26 @@ BLE In`/`Out` by name. The patch formats through `VNewRawDoFmt()` with a
 git -C ~/AROS apply "$PWD/patches/aros-camd-names-64bit.patch"
 ```
 
+## CAMD driver scan of arena-loaded modules
+
+`aros-camd-arena-segments.patch` fixes a crash in `camd.library` when it
+loads a `DEVS:Midi` driver. To find the driver's `MidiDeviceData`, CAMD
+walks the driver's segments and reads each hunk's size from the longword
+before it. The ELF loader now loads a module into one arena
+(`ELF_MODULE_ARENA`): every section's hunk then has a stored size of 0, and
+a container hunk at the end of the list has the size of the whole arena.
+CAMD subtracted the header from 0, the size wrapped to about 4 GB, and the
+scan ran to the end of memory. On a Raspberry Pi 3 this happened in the
+first task that opened `camd.library`, as a bus fault at the top of RAM.
+`lddemon` reads the same size but finds its `Resident` in the first bytes.
+The patch skips hunks no larger than their header, in the scan and in
+`isPointerInSeglist()`; the container hunk still covers their contents. It
+is not specific to 64-bit targets.
+
+```sh
+git -C ~/AROS apply "$PWD/patches/aros-camd-arena-segments.patch"
+```
+
 ## CAMD driver rescan
 
 `aros-camd-rescan.patch` still applies cleanly to upstream commit
