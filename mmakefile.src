@@ -11,10 +11,12 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-selftest \
 #MM      contrib-aros-midihub-camdprobe \
 #MM      contrib-aros-midihub-router \
+#MM      contrib-aros-midihub-prefs \
 #MM      contrib-aros-midihub-btmidi
 #MM contrib-aros-midihub-program : linklibs-arosmidihub
 #MM contrib-aros-midihub-selftest : linklibs-arosmidihub
 #MM contrib-aros-midihub-ble : linklibs-arosmidihub kernel-bluetooth-library-includes
+#MM- contrib-aros-midihub-prefs : contrib-aros-midihub-prefs-icon
 
 MIDIHUB_ROOT := $(SRCDIR)/$(CURDIR)
 MIDIHUB_PACKAGE := $(AROS_CONTRIB)/aros-midihub
@@ -72,6 +74,17 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
     files="$(MIDIHUB_ROOT)/ports/aros/router" \
     uselibs=arosmidihub \
     targetdir=$(MIDIHUB_PACKAGE)/C
+
+%build_prog mmake=contrib-aros-midihub-prefs \
+    progname=MIDIHubPrefs \
+    files="$(MIDIHUB_ROOT)/ports/aros/prefs \
+           $(MIDIHUB_ROOT)/ports/aros/MIDIHubPrefsClass" \
+    uselibs="arosmidihub mui" \
+    targetdir=$(AROS_PREFS)
+
+%copy_files_q mmake=contrib-aros-midihub-prefs-icon \
+    src="$(MIDIHUB_ROOT)/ports/aros" files="MIDIHubPrefs.info" \
+    dst="$(AROS_PREFS)"
 
 # Optional: requires the AROS bluetooth.library and the GATT prerequisite patch.
 %build_prog mmake=contrib-aros-midihub-ble \

@@ -6,6 +6,33 @@
 
 It is not intended to become a DAW, a MIDI processor, or a sophisticated node-graph environment.
 
+## Current implementation
+
+The native `MIDIHubPrefs` program follows the same application structure as
+AROS Bluetooth Preferences and Poseidon Trident. The executable is a small
+shell around a custom `Group.mui` class that owns navigation, pages, state,
+actions, and live CAMD notifications.
+
+The current pages are:
+
+- **Overview**, with live CAMD endpoint, transport, direction, and state
+  columns plus shortcuts to Trident, Bluetooth Preferences, and AHI
+- **Routing**, with route creation/removal, reconnect policy, and per-route
+  active/waiting state from `MIDIHubRouter`
+- **Network MIDI**, editing the AppleMIDI/RTP-MIDI session and peer settings
+- **Synthesizer**, selecting TinySoundFont or an externally supplied
+  FluidSynth backend, a SoundFont path, and sending a preview note through
+  CAMD
+
+CAMD cluster additions and removals refresh the overview through a MUI input
+handler. `Use` writes `ENV:MidiHub`; `Save` writes both `ENV:MidiHub` and
+`ENVARC:MidiHub`. Route changes are reloaded immediately. The network and
+synth services currently read their new settings when restarted.
+
+The Preferences drawer icon is a two-state 64×64 PNG icon derived from
+`images/midihub-icon-states.png`. Its AROS `icOn` metadata and reproducible
+generation procedure are documented in `images/README.md`.
+
 The five primary areas are:
 
 1. **Overview / Devices**

@@ -196,6 +196,22 @@ static void route_counts(struct router_runtime *rt, ULONG *active, ULONG *waitin
     }
 }
 
+static void route_status(struct router_runtime *rt,
+                         struct mh_router_message *message)
+{
+    size_t i;
+    message->route_count = (ULONG)rt->table.count;
+    memset(message->route_state, MH_ROUTE_STATE_DISABLED,
+           sizeof(message->route_state));
+    for (i = 0; i < rt->table.count; ++i) {
+        if (!rt->table.routes[i].enabled)
+            continue;
+        message->route_state[i] = route_connected(&rt->routes[i]) ?
+                                  MH_ROUTE_STATE_ACTIVE :
+                                  MH_ROUTE_STATE_WAITING;
+    }
+}
+
 static int handle_control(struct router_runtime *rt)
 {
     struct mh_router_message *message;
@@ -211,6 +227,7 @@ static int handle_control(struct router_runtime *rt)
             message->result = -1;
         message->configured = (ULONG)rt->table.count;
         route_counts(rt, &message->active, &message->waiting);
+        route_status(rt, message);
         ReplyMsg(&message->message);
     }
     return stop;
