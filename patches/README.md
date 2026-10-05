@@ -81,9 +81,12 @@ pairing popup and Passkey Entry. OOB pairing remains unsupported.
 ## Raspberry Pi on-board Bluetooth
 
 Upstream AROS has the Raspberry Pi 3's on-board Bluetooth transport
-(`pl011bt.resource`, `h4bthci.device`, `brcmbt.fwl`), but two pieces did not
-come with it. Without them the radio neither comes up at boot nor gets a
-real address. Both are independent of BLE MIDI and meant for upstream; each
+(`pl011bt.resource`, `h4bthci.device`, `brcmbt.fwl`). The transport went in
+before the stack had its firmware-loader mechanism (loaders in
+`DEVS:Bluetooth/FWLoaders/`, bound by `BTStackLoader`), so there was nothing
+to load a patchram with yet. Now that the mechanism exists, two pieces
+complete the radio's support: without them it neither comes up at boot nor
+gets a real address. Both are independent of BLE MIDI and meant for upstream; each
 applies on its own to upstream commit `37313d8aa0`.
 
 `aros-raspi-bt-firmware.patch` adds `distfiles-raspi-aarch64-bt-fw` to
