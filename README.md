@@ -355,7 +355,7 @@ Note Off release velocities, supplementing Chapter N recovery. Other
 alternate logs and extended Chapter X history remain to be implemented. The
 first native MIDIHub Preferences application now provides a live CAMD endpoint
 overview, persistent routing, Network MIDI settings, SoundFont/backend
-selection, and a CAMD synth preview action.
+selection, named profiles, and a CAMD synth preview action.
 Chapter M now decodes RPN/NRPN logs and protects parameter selection plus
 Data Entry MSB/LSB, Data Increment/Decrement operations, and transaction
 counts. Parameter transaction identity is retained for up to 128 distinct

@@ -4,6 +4,7 @@
 #include "router_control.h"
 
 #include <dos/dostags.h>
+#include <dos/dos.h>
 #include <exec/memory.h>
 #include <intuition/classusr.h>
 #include <libraries/mui.h>
@@ -27,7 +28,7 @@
 #define CONFIG_MAX 65536
 
 static CONST_STRPTR nav_entries[] = {
-    "Overview", "Routing", "Network MIDI", "Synthesizer", NULL
+    "Overview", "Routing", "Network MIDI", "Synthesizer", "Profiles", NULL
 };
 static CONST_STRPTR backend_entries[] = { "TinySoundFont", "FluidSynth", NULL };
 
@@ -132,17 +133,26 @@ static int read_file(CONST_STRPTR path, char **text, size_t *length)
     return 0;
 }
 
-static int load_routes(struct MHPrefsData *data)
+static int load_routes_path(struct MHPrefsData *data, CONST_STRPTR path)
 {
+    struct mh_route_table next;
     char *text;
     size_t length, error_line;
-    memset(&data->routes, 0, sizeof(data->routes));
-    if (read_file("ENV:MidiHub/Routes", &text, &length) &&
-        read_file("ENVARC:MidiHub/Routes", &text, &length)) return 0;
-    if (mh_routes_parse(&data->routes, text, length, &error_line)) {
+    if (read_file(path, &text, &length)) return -1;
+    if (mh_routes_parse(&next, text, length, &error_line)) {
         free(text); return -1;
     }
-    free(text); return 0;
+    free(text);
+    data->routes = next;
+    return 0;
+}
+
+static int load_routes(struct MHPrefsData *data)
+{
+    if (!load_routes_path(data, "ENV:MidiHub/Routes")) return 0;
+    if (!load_routes_path(data, "ENVARC:MidiHub/Routes")) return 0;
+    memset(&data->routes, 0, sizeof(data->routes));
+    return 0;
 }
 
 static int ensure_directory(CONST_STRPTR path)
@@ -344,16 +354,174 @@ static int apply_settings(struct MHPrefsData *data, BOOL persistent)
         (soundfont && soundfont[0] &&
          write_value("ENV:MidiHub/SoundFont", soundfont)) ||
         write_value("ENV:MidiHub/Backend", backend_name)) return -1;
+    if (!soundfont || !soundfont[0])
+        (void)DeleteFile("ENV:MidiHub/SoundFont");
     if (persistent && (ensure_directory("ENVARC:MidiHub") ||
         write_routes(data, "ENVARC:MidiHub/Routes") ||
         write_network(data, "ENVARC:MidiHub/Network") ||
         (soundfont && soundfont[0] &&
          write_value("ENVARC:MidiHub/SoundFont", soundfont)) ||
         write_value("ENVARC:MidiHub/Backend", backend_name))) return -1;
+    if (persistent && (!soundfont || !soundfont[0]))
+        (void)DeleteFile("ENVARC:MidiHub/SoundFont");
     (void)router_command(MH_ROUTER_RELOAD, NULL);
     data->dirty = FALSE;
     refresh(data);
     return 0;
+}
+
+static int profile_name_valid(CONST_STRPTR name)
+{
+    ULONG i;
+    if (!name || !name[0] || strlen((const char *)name) > MH_PREFS_PROFILE_NAME_MAX)
+        return 0;
+    for (i = 0; name[i]; ++i)
+        if (!((name[i] >= 'A' && name[i] <= 'Z') ||
+              (name[i] >= 'a' && name[i] <= 'z') ||
+              (name[i] >= '0' && name[i] <= '9') ||
+              name[i] == ' ' || name[i] == '_' || name[i] == '-'))
+            return 0;
+    return 1;
+}
+
+static void profile_path(char *path, size_t capacity, CONST_STRPTR name,
+                         CONST_STRPTR file)
+{
+    snprintf(path, capacity, "ENVARC:MidiHub/Profiles/%s%s%s", name,
+             file ? "/" : "", file ? (const char *)file : "");
+}
+
+static void refresh_profiles(struct MHPrefsData *data)
+{
+    BPTR lock;
+    struct FileInfoBlock *fib;
+    data->profile_count = 0;
+    set(data->profile_list, MUIA_List_Quiet, TRUE);
+    DoMethod(data->profile_list, MUIM_List_Clear);
+    lock = Lock((STRPTR)"ENVARC:MidiHub/Profiles", ACCESS_READ);
+    fib = lock ? AllocDosObject(DOS_FIB, NULL) : NULL;
+    if (fib && Examine(lock, fib)) {
+        while (data->profile_count < MH_PREFS_PROFILE_MAX && ExNext(lock, fib)) {
+            if (fib->fib_DirEntryType > 0 && profile_name_valid(fib->fib_FileName)) {
+                snprintf(data->profiles[data->profile_count],
+                         sizeof(data->profiles[data->profile_count]), "%s",
+                         fib->fib_FileName);
+                DoMethod(data->profile_list, MUIM_List_InsertSingle,
+                         data->profiles[data->profile_count],
+                         MUIV_List_Insert_Bottom);
+                ++data->profile_count;
+            }
+        }
+    }
+    if (fib) FreeDosObject(DOS_FIB, fib);
+    if (lock) UnLock(lock);
+    set(data->profile_list, MUIA_List_Quiet, FALSE);
+}
+
+static STRPTR selected_profile(struct MHPrefsData *data)
+{
+    STRPTR name = NULL;
+    DoMethod(data->profile_list, MUIM_List_GetEntry,
+             MUIV_List_GetEntry_Active, &name);
+    return name;
+}
+
+static void save_profile(struct MHPrefsData *data)
+{
+    STRPTR name = NULL, soundfont = NULL;
+    IPTR backend = 0;
+    char directory[256], path[320];
+    get(data->profile_name, MUIA_String_Contents, &name);
+    if (!profile_name_valid(name)) {
+        set_status(data, "Profile names may use letters, numbers, spaces, '_' and '-'.");
+        return;
+    }
+    if (collect_settings(data) || validate_routes(data) ||
+        ensure_directory("ENVARC:MidiHub") ||
+        ensure_directory("ENVARC:MidiHub/Profiles")) {
+        set_status(data, "The current settings cannot be saved as a profile.");
+        return;
+    }
+    profile_path(directory, sizeof(directory), name, NULL);
+    if (ensure_directory(directory)) {
+        set_status(data, "Could not create the profile directory."); return;
+    }
+    profile_path(path, sizeof(path), name, "Routes");
+    if (write_routes(data, path)) goto failed;
+    profile_path(path, sizeof(path), name, "Network");
+    if (write_network(data, path)) goto failed;
+    get(data->synth_backend, MUIA_Cycle_Active, &backend);
+    profile_path(path, sizeof(path), name, "Backend");
+    if (write_value(path, backend == 1 ? "fluid" : "tiny")) goto failed;
+    get(data->synth_soundfont, MUIA_String_Contents, &soundfont);
+    if (soundfont && soundfont[0]) {
+        profile_path(path, sizeof(path), name, "SoundFont");
+        if (write_value(path, soundfont)) goto failed;
+    } else {
+        profile_path(path, sizeof(path), name, "SoundFont");
+        (void)DeleteFile(path);
+    }
+    refresh_profiles(data);
+    set_status(data, "Profile saved.");
+    return;
+failed:
+    set_status(data, "Could not write the profile.");
+}
+
+static void load_profile(struct MHPrefsData *data)
+{
+    STRPTR name = selected_profile(data);
+    char path[320], value[1024];
+    if (!name) { set_status(data, "Select a profile first."); return; }
+    profile_path(path, sizeof(path), name, "Routes");
+    if (load_routes_path(data, path)) {
+        set_status(data, "The profile route configuration is invalid."); return;
+    }
+    mh_config_defaults(&data->network);
+    profile_path(path, sizeof(path), name, "Network");
+    if (mh_config_load(path, &data->network)) {
+        set_status(data, "The profile network configuration is invalid."); return;
+    }
+    set(data->network_session, MUIA_String_Contents, data->network.session_name);
+    set(data->network_local_port, MUIA_String_Integer, data->network.local_port);
+    set(data->network_peer_ip, MUIA_String_Contents, data->network.peer_ip);
+    set(data->network_peer_port, MUIA_String_Integer, data->network.peer_port);
+    profile_path(path, sizeof(path), name, "Backend");
+    strcpy(value, "tiny");
+    (void)read_value(path, value, sizeof(value));
+    set(data->synth_backend, MUIA_Cycle_Active,
+        strcmp(value, "fluid") == 0 ? 1 : 0);
+    profile_path(path, sizeof(path), name, "SoundFont");
+    if (read_value(path, value, sizeof(value))) value[0] = 0;
+    set(data->synth_soundfont, MUIA_String_Contents, value);
+    fill_routes(data);
+    if (apply_settings(data, TRUE)) {
+        set_status(data, "The profile loaded, but its settings could not be applied.");
+        return;
+    }
+    if (!write_value("ENVARC:MidiHub/Profile", name))
+        set_status(data, "Profile activated and saved as the startup profile.");
+    else
+        set_status(data, "Profile activated.");
+}
+
+static void delete_profile(struct MHPrefsData *data)
+{
+    STRPTR name = selected_profile(data);
+    static CONST_STRPTR files[] = { "Routes", "Network", "Backend", "SoundFont", NULL };
+    char path[320];
+    ULONG i;
+    if (!name) { set_status(data, "Select a profile first."); return; }
+    for (i = 0; files[i]; ++i) {
+        profile_path(path, sizeof(path), name, files[i]);
+        (void)DeleteFile(path);
+    }
+    profile_path(path, sizeof(path), name, NULL);
+    if (!DeleteFile(path)) {
+        set_status(data, "Could not delete the profile."); return;
+    }
+    refresh_profiles(data);
+    set_status(data, "Profile deleted.");
 }
 
 static void selected_endpoint(struct MHPrefsData *data, Object *target)
@@ -440,6 +608,7 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
     Object *main_group, *refresh_button, *source_button, *destination_button;
     Object *add_button, *preview_button, *usb_button, *bluetooth_button;
     Object *overview_ahi_button, *synth_ahi_button, *use_button, *save_button;
+    Object *profile_save_button, *profile_load_button, *profile_delete_button;
     ULONG i;
     struct TagItem tags[] = { { TAG_MORE, (IPTR)msg->ops_AttrList } };
     struct opSet supermsg = { OM_NEW, tags, msg->ops_GInfo };
@@ -553,6 +722,27 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
                         MUIA_Text_Contents, "TinySoundFont is the package backend. FluidSynth is offered for external builds that provide it.", End,
                     Child, VSpace(0),
                     End,
+                Child, VGroup,
+                    Child, TextObject,
+                        MUIA_Text_Contents, "Profiles store MIDIHub routes, Network MIDI, and synthesizer settings:", End,
+                    Child, ListviewObject,
+                        MUIA_Listview_List, data->profile_list = ListObject,
+                            InputListFrame,
+                            End,
+                        End,
+                    Child, ColGroup(2),
+                        Child, Label("Profile name"),
+                        Child, data->profile_name = StringObject,
+                            StringFrame,
+                            MUIA_String_MaxLen, MH_PREFS_PROFILE_NAME_MAX + 1,
+                            End,
+                        End,
+                    Child, HGroup,
+                        Child, profile_save_button = SimpleButton("Save Current"),
+                        Child, profile_load_button = SimpleButton("Activate"),
+                        Child, profile_delete_button = SimpleButton("Delete"),
+                        End,
+                    End,
                 End,
             Child, data->status_text = TextObject,
                 TextFrame, MUIA_Background, MUII_TextBack,
@@ -583,6 +773,12 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
     DoMethod(synth_ahi_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_OpenAHI);
     DoMethod(use_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_Use);
     DoMethod(save_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_Save);
+    DoMethod(profile_save_button, MUIM_Notify, MUIA_Pressed, FALSE,
+             obj, 1, MUIM_MHP_SaveProfile);
+    DoMethod(profile_load_button, MUIM_Notify, MUIA_Pressed, FALSE,
+             obj, 1, MUIM_MHP_LoadProfile);
+    DoMethod(profile_delete_button, MUIM_Notify, MUIA_Pressed, FALSE,
+             obj, 1, MUIM_MHP_DeleteProfile);
 
     {
         Object *changed[] = { data->source_string, data->destination_string,
@@ -618,6 +814,9 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
         case MUIM_MHP_OpenBluetooth: open_prefs("SYS:Prefs/Bluetooth"); return 0;
         case MUIM_MHP_OpenAHI: open_prefs("SYS:Prefs/AHI"); return 0;
         case MUIM_MHP_Changed: data->dirty = TRUE; return 0;
+        case MUIM_MHP_SaveProfile: save_profile(data); return 0;
+        case MUIM_MHP_LoadProfile: load_profile(data); return 0;
+        case MUIM_MHP_DeleteProfile: delete_profile(data); return 0;
         case MUIM_MHP_Use:
             set_status(data, apply_settings(data, FALSE) ?
                        "Could not apply the MIDIHub settings." :
@@ -648,7 +847,7 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
                 set(data->synth_backend, MUIA_Cycle_Active,
                     strcmp(value, "fluid") == 0 ? 1 : 0);
             }
-            fill_routes(data); refresh(data); data->dirty = FALSE;
+            fill_routes(data); refresh_profiles(data); refresh(data); data->dirty = FALSE;
             data->cluster_signal = AllocSignal(-1);
             if (data->cluster_signal >= 0) {
                 data->cluster_notify.cnn_Task = FindTask(NULL);

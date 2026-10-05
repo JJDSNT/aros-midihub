@@ -23,11 +23,21 @@ The current pages are:
 - **Synthesizer**, selecting TinySoundFont or an externally supplied
   FluidSynth backend, a SoundFont path, and sending a preview note through
   CAMD
+- **Profiles**, saving, activating, and deleting named snapshots of all
+  MIDIHub-owned settings
 
 CAMD cluster additions and removals refresh the overview through a MUI input
 handler. `Use` writes `ENV:MidiHub`; `Save` writes both `ENV:MidiHub` and
 `ENVARC:MidiHub`. Route changes are reloaded immediately. The network and
 synth services currently read their new settings when restarted.
+
+Profiles are stored under `ENVARC:MidiHub/Profiles/<name>/` using the same
+`Routes`, `Network`, `SoundFont`, and `Backend` files as the active
+configuration. Activating a profile copies those choices into `ENV:` and
+`ENVARC:`, reloads the router, and records its name in
+`ENVARC:MidiHub/Profile`. Profile names are limited to letters, numbers,
+spaces, underscores, and hyphens so they remain safe directory names on all
+AROS filesystems.
 
 The Preferences drawer icon is a two-state 64×64 PNG icon derived from
 `images/midihub-icon-states.png`. Its AROS `icOn` metadata and reproducible

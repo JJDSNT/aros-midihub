@@ -9,6 +9,8 @@
 #include <utility/hooks.h>
 
 #define MH_PREFS_ENDPOINT_MAX 128
+#define MH_PREFS_PROFILE_MAX 64
+#define MH_PREFS_PROFILE_NAME_MAX 63
 
 struct MHPrefsEndpoint {
     char name[MH_ROUTE_NAME_MAX + 1];
@@ -25,6 +27,7 @@ struct MHPrefsData {
     Object *network_session, *network_local_port;
     Object *network_peer_ip, *network_peer_port;
     Object *synth_backend, *synth_soundfont;
+    Object *profile_list, *profile_name;
     Object *status_text;
     struct Hook endpoint_hook, route_hook;
     struct MHPrefsEndpoint endpoints[MH_PREFS_ENDPOINT_MAX];
@@ -32,6 +35,8 @@ struct MHPrefsData {
     struct mh_route_table routes;
     struct mh_network_config network;
     UBYTE route_states[MH_ROUTE_MAX];
+    char profiles[MH_PREFS_PROFILE_MAX][MH_PREFS_PROFILE_NAME_MAX + 1];
+    ULONG profile_count;
     struct ClusterNotifyNode cluster_notify;
     struct MUI_InputHandlerNode input_handler;
     BYTE cluster_signal;
@@ -39,7 +44,7 @@ struct MHPrefsData {
 };
 
 enum { MHPAGE_OVERVIEW, MHPAGE_ROUTING, MHPAGE_NETWORK,
-       MHPAGE_SYNTH, MHPAGE_COUNT };
+       MHPAGE_SYNTH, MHPAGE_PROFILES, MHPAGE_COUNT };
 
 #define TAGBASE_MHP (TAG_USER | 0x2d00)
 #define MUIM_MHP_Refresh       (TAGBASE_MHP | 0x01)
@@ -54,6 +59,9 @@ enum { MHPAGE_OVERVIEW, MHPAGE_ROUTING, MHPAGE_NETWORK,
 #define MUIM_MHP_OpenBluetooth (TAGBASE_MHP | 0x0a)
 #define MUIM_MHP_OpenAHI       (TAGBASE_MHP | 0x0b)
 #define MUIM_MHP_Changed       (TAGBASE_MHP | 0x0c)
+#define MUIM_MHP_SaveProfile   (TAGBASE_MHP | 0x0d)
+#define MUIM_MHP_LoadProfile   (TAGBASE_MHP | 0x0e)
+#define MUIM_MHP_DeleteProfile (TAGBASE_MHP | 0x0f)
 
 AROS_UFP3(IPTR, MHPrefsDispatcher,
           AROS_UFPA(struct IClass *, cl, A0),
