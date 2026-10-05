@@ -62,6 +62,61 @@ static void check_advertising(void)
     assert(scan_response[1] == 0x08);
 }
 
+struct big_capture {
+    uint8_t bytes[1024];
+    size_t count;
+};
+
+static int capture_big(void *context, uint16_t time, uint8_t byte)
+{
+    struct big_capture *capture = context;
+    (void)time;
+    if (capture->count == sizeof(capture->bytes))
+        return -1;
+    capture->bytes[capture->count++] = byte;
+    return 0;
+}
+
+/* Packets sized to the negotiated ATT MTU: each fits, and a long SysEx
+   needs far fewer of them than with the 20-byte default. */
+static size_t sysex_packets(const uint8_t *sysex, size_t length,
+                            size_t capacity)
+{
+    struct mh_ble_midi_decoder decoder;
+    struct big_capture result;
+    uint8_t packet[244];
+    size_t offset = 0, written, packets = 0;
+
+    mh_ble_midi_decoder_init(&decoder);
+    memset(&result, 0, sizeof(result));
+    while (offset < length) {
+        assert(mh_ble_midi_encode_sysex_chunk(sysex, length, &offset, 77,
+                                              packet, capacity,
+                                              &written) == 0);
+        assert(written <= capacity);
+        assert(mh_ble_midi_decode(&decoder, packet, written,
+                                  capture_big, &result) == 0);
+        packets++;
+    }
+    assert(result.count == length);
+    assert(memcmp(result.bytes, sysex, length) == 0);
+    return packets;
+}
+
+static void check_packet_sizes(void)
+{
+    uint8_t sysex[1000];
+    size_t i, small, large;
+
+    sysex[0] = 0xf0;
+    for (i = 1; i < sizeof(sysex) - 1; i++)
+        sysex[i] = (uint8_t)(i & 0x7f);
+    sysex[sizeof(sysex) - 1] = 0xf7;
+    small = sysex_packets(sysex, sizeof(sysex), 20);
+    large = sysex_packets(sysex, sizeof(sysex), 244);
+    assert(large * 10 < small);
+}
+
 int main(void)
 {
     struct mh_ble_midi_decoder decoder;
@@ -136,6 +191,7 @@ int main(void)
     check(&decoder, realtime_sysex, sizeof(realtime_sysex),
           realtime_sysex_expected, sizeof(realtime_sysex_expected), 1);
     check_advertising();
+    check_packet_sizes();
     puts("BLE MIDI codec OK");
     return 0;
 }

@@ -53,9 +53,13 @@ and SysEx buffer (up to four at once), so centrals sending at the same time do
 not corrupt each other's messages. As the peripheral the class asks the
 central for a 15 ms connection interval about a second after it connects;
 iOS otherwise tends to keep 30 ms or more.
-Outgoing values are likewise queued as immutable notifications. The class uses
-20-byte packets so it also works before a central negotiates an ATT MTU larger
-than the mandatory default. The generic queue retains up to 256 pending
+Outgoing values are likewise queued as immutable notifications. A notification
+carries at most the ATT MTU less 3 bytes and goes to every subscribed central,
+so the class sizes its packets to the smallest payload among the connected
+centrals (`BSA_LENotifyPayload`): 20 bytes until every central has negotiated
+a larger MTU, up to 244. A long SysEx then needs about a tenth of the packets.
+A read of the characteristic returns no data, as the specification requires
+(`BGDP_STREAM`). The generic queue retains up to 256 pending
 snapshots and drops the oldest if producers sustain a higher rate than every
 active radio can consume.
 
@@ -133,19 +137,13 @@ Besides a full build and tests with physical radios and iOS, these gaps remain.
 They are listed by impact, and each one is removed from this list once it is
 fixed.
 
-1. **Read returns MIDI data.** The specification requires a read of the
-   BLE MIDI I/O characteristic to return no payload. The GATT server returns
-   the last written or notified value.
-2. **Packet size.** The class sends 20-byte notifications even when the
-   negotiated ATT MTU is larger, which slows SysEx. Notifications go to every
-   subscriber, so the size must fit the smallest MTU among them.
-3. **Incoming timestamps.** They are parsed but not used; messages reach CAMD
+1. **Incoming timestamps.** They are parsed but not used; messages reach CAMD
    when they arrive, without jitter correction.
-4. **Central role as a class binding.** As a central, AROS uses the
+2. **Central role as a class binding.** As a central, AROS uses the
    `MIDIHubBLE` program, one instance per peripheral, started by hand. The
    native design is a `btmidi.class` binding (`BCM_AttemptServiceBinding`)
    made when a BLE MIDI peripheral connects, as `bthid.class` does for HID.
-5. **MIDIHub.prefs integration.** Show the BLE MIDI endpoint in the overview
+3. **MIDIHub.prefs integration.** Show the BLE MIDI endpoint in the overview
    and link to the class settings window.
 
 Protocol reference: [MIDI Association BLE MIDI 1.0 specification](https://midi.org/midi-over-bluetooth-low-energy-ble-midi).

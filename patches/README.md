@@ -29,7 +29,12 @@ remain:
   stack grants a peripheral's request through HCI LE Connection Update; as
   the peripheral it asks for the interval set with the new
   `BSA_LEConnInterval` stack attribute, within the limits iOS accepts.
-  `btmidi.class` sets 15 ms, as the BLE MIDI specification asks.
+  `btmidi.class` sets 15 ms, as the BLE MIDI specification asks;
+- report the largest notification payload every connected LE device receives
+  whole (`BSA_LENotifyPayload`), so BLE MIDI can size packets to the
+  negotiated ATT MTU;
+- add `BGDP_STREAM` for characteristics whose value is a stream of events:
+  a read returns no data, as the BLE MIDI specification requires.
 
 It also fixes two generic SMP issues that affect the central role as well:
 

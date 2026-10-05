@@ -12,7 +12,8 @@
 #include <sys/time.h>
 
 #define BTMIDI_VALUE_SIZE 512
-#define BTMIDI_TX_PACKET_SIZE 20
+#define BTMIDI_TX_PACKET_MIN 20    /* fits the default ATT MTU */
+#define BTMIDI_TX_PACKET_MAX 244   /* the stack's largest ATT MTU, less 3 */
 #define BTMIDI_MAX_PEERS 4
 #define BTMIDI_CONN_INTERVAL 12   /* 15 ms, as the BLE MIDI specification asks */
 
@@ -46,6 +47,7 @@ struct btmidi_runtime {
     struct mh_camd_bridge camd;
     struct btmidi_peer *peers[BTMIDI_MAX_PEERS];
     ULONG use_counter;
+    ULONG tx_payload;         /* what every connected central receives whole */
 };
 
 static UWORD now_milliseconds(void)
@@ -138,7 +140,7 @@ static int set_packet(struct btmidi_runtime *runtime,
 static int send_to_ble(void *context, const uint8_t *message, size_t length)
 {
     struct btmidi_runtime *runtime = context;
-    UBYTE packet[BTMIDI_TX_PACKET_SIZE];
+    UBYTE packet[BTMIDI_TX_PACKET_MAX];
     size_t written;
     UWORD timestamp = now_milliseconds();
 
@@ -149,14 +151,14 @@ static int send_to_ble(void *context, const uint8_t *message, size_t length)
         while (offset < length) {
             if (mh_ble_midi_encode_sysex_chunk(message, length, &offset,
                                                 timestamp, packet,
-                                                sizeof(packet), &written) ||
+                                                runtime->tx_payload, &written) ||
                 set_packet(runtime, packet, written))
                 return -1;
         }
         return 0;
     }
     if (mh_ble_midi_encode_message(message, length, timestamp, packet,
-                                   sizeof(packet), &written))
+                                   runtime->tx_payload, &written))
         return -1;
     return set_packet(runtime, packet, written);
 }
@@ -169,8 +171,9 @@ static APTR add_service(void)
 
     memset(&characteristic, 0, sizeof(characteristic));
     characteristic.bgd_UUID128 = io_uuid;
+    /* the specification wants a read answered with no payload */
     characteristic.bgd_Properties = BGDP_READ | BGDP_WRITENR |
-                                    BGDP_WRITE | BGDP_NOTIFY;
+                                    BGDP_WRITE | BGDP_NOTIFY | BGDP_STREAM;
     characteristic.bgd_MaxLen = BTMIDI_VALUE_SIZE;
     return btAddServiceRecord(BSRA_Protocol, BSVP_ATT,
                               BSRA_UUID128, (IPTR)service_uuid,
@@ -353,8 +356,18 @@ AROS_UFH0(void, btmidi_task)
             while ((message = GetMsg(runtime.event_port)))
                 handle_event(&runtime, message);
             if ((runtime.camd.signal_bit >= 0) &&
-                (signals & (1UL << runtime.camd.signal_bit)))
+                (signals & (1UL << runtime.camd.signal_bit))) {
+                /* larger packets once every central has negotiated a
+                   larger ATT MTU: SysEx needs fewer of them */
+                runtime.tx_payload = BTMIDI_TX_PACKET_MIN;
+                btGetAttrs(BGA_STACK, NULL, BSA_LENotifyPayload,
+                           &runtime.tx_payload, TAG_END);
+                if (runtime.tx_payload < BTMIDI_TX_PACKET_MIN)
+                    runtime.tx_payload = BTMIDI_TX_PACKET_MIN;
+                if (runtime.tx_payload > BTMIDI_TX_PACKET_MAX)
+                    runtime.tx_payload = BTMIDI_TX_PACKET_MAX;
                 mh_camd_bridge_poll(&runtime.camd, send_to_ble, &runtime);
+            }
             if (signals & SIGBREAKF_CTRL_E) {
                 /* new port names: CAMD clients reconnect by name */
                 mh_camd_bridge_close(&runtime.camd);
