@@ -45,6 +45,15 @@ lifecycle: mark the driver's ports as gone, detach clients' links from them
 (their clusters can stay and wait, as MIDIHub routes do), then unload once no
 port is open. This needs runtime tests with real devices.
 
+### 1.4 Cluster names are garbage on 64-bit targets (verified, fixed)
+
+`mysprintf()` (`strings.c`) read its variadic arguments from `&fmt+1`,
+which only works where they are passed on the stack. On AArch64 and x86_64
+every cluster name and driver path came out as garbage, so no program could
+find a cluster by name. Found on a Raspberry Pi 3 running `raspi-aarch64`;
+[the fix](../patches/aros-camd-names-64bit.patch) uses `VNewRawDoFmt()`
+with a `va_list`.
+
 ## 2. Endpoint metadata
 
 ### 2.1 Link and cluster comments do nothing (verified)
@@ -140,10 +149,12 @@ the same standing as USB ones without writing driver files at run time.
 
 ## Suggested order
 
-1. Lock the cluster notification list (1.1): small and safe.
-2. Upstream the rescan patch (1.2).
-3. Implement `MLINK_Comment` and cluster comments (2.1).
-4. Notify participant changes (3.1).
-5. A common timestamp source (4.1).
-6. SysEx and error reporting (5).
-7. Driver removal (1.3) and registered virtual ports (6.1), with hardware tests.
+1. Fix cluster names on 64-bit targets (1.4): without it CAMD is unusable
+   there.
+2. Lock the cluster notification list (1.1): small and safe.
+3. Upstream the rescan patch (1.2).
+4. Implement `MLINK_Comment` and cluster comments (2.1).
+5. Notify participant changes (3.1).
+6. A common timestamp source (4.1).
+7. SysEx and error reporting (5).
+8. Driver removal (1.3) and registered virtual ports (6.1), with hardware tests.

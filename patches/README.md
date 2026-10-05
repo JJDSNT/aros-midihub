@@ -168,6 +168,24 @@ git -C ~/AROS apply "$PWD/patches/aros-usb-midi-camd.patch"
 The patch passed `git apply --check`. Runtime status and the hardware test
 procedure are in [USB MIDI validation](../docs/usb-midi.md).
 
+## CAMD names on 64-bit targets
+
+`aros-camd-names-64bit.patch` fixes `camd.library` on AArch64 and x86_64.
+Its internal `mysprintf()` took its arguments from `&fmt+1`, which only
+works where variadic arguments sit on the stack one after the other (m68k,
+i386). Elsewhere they are passed in registers, so every cluster name, built
+by `NewCluster()` with `mysprintf(..., "%s", name)`, came out as garbage.
+The same went for the `DEVS:Midi` driver paths (`devs:Midi/0▒▒` in the
+boot log). On a Raspberry Pi 3 running `raspi-aarch64`, MIDIHub.prefs
+showed the endpoints with garbled names, and nothing could reach `MIDIHub
+BLE In`/`Out` by name. The patch formats through `VNewRawDoFmt()` with a
+`va_list`, which is correct on every architecture and reads `%ld` as the
+`int` the callers pass.
+
+```sh
+git -C ~/AROS apply "$PWD/patches/aros-camd-names-64bit.patch"
+```
+
 ## CAMD driver rescan
 
 `aros-camd-rescan.patch` still applies cleanly to upstream commit
