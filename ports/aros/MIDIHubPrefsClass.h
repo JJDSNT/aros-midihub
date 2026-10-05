@@ -56,10 +56,21 @@ struct MHPrefsData {
     APTR bt_handler;
     struct MUI_InputHandlerNode bt_input;
     BOOL bt_input_added;
+    /* Diagnostics page: one screen to photograph when something is wrong */
+    Object *diag_endpoint_list, *diag_monitor, *diag_monitor_info;
+    Object *diag_ble_text, *diag_btlog, *diag_interval;
+    struct MidiNode *diag_node;
+    struct MidiLink *diag_in;
+    BYTE diag_signal;
+    struct MUI_InputHandlerNode diag_input;
+    BOOL diag_input_added;
+    ULONG diag_count, diag_lines;
+    char diag_in_name[MH_ROUTE_NAME_MAX + 1];
+    UBYTE diag_sysex[4096];
 };
 
 enum { MHPAGE_OVERVIEW, MHPAGE_ROUTING, MHPAGE_NETWORK,
-       MHPAGE_SYNTH, MHPAGE_PROFILES, MHPAGE_COUNT };
+       MHPAGE_SYNTH, MHPAGE_PROFILES, MHPAGE_DIAGNOSTICS, MHPAGE_COUNT };
 
 #define TAGBASE_MHP (TAG_USER | 0x2d00)
 #define MUIM_MHP_Refresh       (TAGBASE_MHP | 0x01)
@@ -79,6 +90,12 @@ enum { MHPAGE_OVERVIEW, MHPAGE_ROUTING, MHPAGE_NETWORK,
 #define MUIM_MHP_DeleteProfile (TAGBASE_MHP | 0x0f)
 #define MUIM_MHP_OpenBLEMidi   (TAGBASE_MHP | 0x10)
 #define MUIM_MHP_BluetoothEvent (TAGBASE_MHP | 0x11)
+#define MUIM_MHP_DiagMonitor   (TAGBASE_MHP | 0x12)
+#define MUIM_MHP_DiagSend      (TAGBASE_MHP | 0x13)
+#define MUIM_MHP_DiagPoll      (TAGBASE_MHP | 0x14)
+#define MUIM_MHP_DiagInterval  (TAGBASE_MHP | 0x15)
+#define MUIM_MHP_DiagStop      (TAGBASE_MHP | 0x16)
+#define MUIM_MHP_DiagClear     (TAGBASE_MHP | 0x17)
 
 AROS_UFP3(IPTR, MHPrefsDispatcher,
           AROS_UFPA(struct IClass *, cl, A0),

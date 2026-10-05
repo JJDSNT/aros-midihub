@@ -44,6 +44,20 @@ empty reads.
 Keep the Bluetooth Preferences log window open during the tests; most checks
 below read it.
 
+## The Diagnostics page
+
+MIDIHub.prefs' **Diagnostics** page shows on one screen what the tests below
+check: the CAMD endpoints, a MIDI monitor, a Send test button, the BLE MIDI
+state with the connected devices, and the latest Bluetooth log lines. Select
+an endpoint, then **Monitor** to watch it or **Send test** to play a scale
+and a SysEx to it; this replaces the `MIDIHubCAMDProbe` commands. A photo of
+this page is usually all that is needed to report a result.
+
+The **Ask centrals for a 15 ms connection interval** switch turns the
+connection-interval request on or off for the next connection. If the iPhone
+disconnects about a second after connecting (`connection timeout` in the
+log), switch it off, reconnect, and compare.
+
 ## Test 1: MIDI Wrench connects, iPhone to AROS
 
 1. On AROS, in a Shell: `MIDIHUB:C/MIDIHubCAMDProbe --monitor "MIDIHub BLE In" 300`.

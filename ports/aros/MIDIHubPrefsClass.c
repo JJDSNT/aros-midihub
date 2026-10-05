@@ -38,7 +38,8 @@
 struct Library *BluetoothBase;
 
 static CONST_STRPTR nav_entries[] = {
-    "Overview", "Routing", "Network MIDI", "Synthesizer", "Profiles", NULL
+    "Overview", "Routing", "Network MIDI", "Synthesizer", "Profiles",
+    "Diagnostics", NULL
 };
 static CONST_STRPTR backend_entries[] = { "TinySoundFont", "FluidSynth", NULL };
 
@@ -398,6 +399,318 @@ static void open_ble_midi(struct MHPrefsData *data)
                "btmidi.class is not loaded; add it in Bluetooth Preferences.");
 }
 
+/* ---- Diagnostics: endpoints, a MIDI monitor, a test sender, the BLE state
+   and the Bluetooth log on one page, so one screenshot shows it all ---- */
+
+#define DIAG_MAX_LINES 200
+
+static void diag_line(struct MHPrefsData *data, CONST_STRPTR text)
+{
+    if (data->diag_lines >= DIAG_MAX_LINES) {
+        DoMethod(data->diag_monitor, MUIM_List_Remove, MUIV_List_Remove_First);
+        data->diag_lines--;
+    }
+    DoMethod(data->diag_monitor, MUIM_List_InsertSingle, text, MUIV_List_Insert_Bottom);
+    data->diag_lines++;
+    set(data->diag_monitor, MUIA_List_Active, MUIV_List_Active_Bottom);
+}
+
+static void diag_info(struct MHPrefsData *data)
+{
+    char text[160];
+    if (data->diag_in)
+        snprintf(text, sizeof(text), "Monitoring \"%s\": %lu messages",
+                 data->diag_in_name, (unsigned long)data->diag_count);
+    else
+        snprintf(text, sizeof(text), "Not monitoring. Select an endpoint, then Monitor.");
+    set(data->diag_monitor_info, MUIA_Text_Contents, text);
+}
+
+static void describe_message(char *buf, size_t size, UBYTE status, UBYTE d1, UBYTE d2)
+{
+    static const char *names[] = { "C", "C#", "D", "D#", "E", "F",
+                                   "F#", "G", "G#", "A", "A#", "B" };
+    unsigned ch = (status & 0x0f) + 1;
+
+    switch (status & 0xf0) {
+    case 0x80:
+    case 0x90:
+        snprintf(buf, size, "%02x %02x %02x  Note %s  ch %u  %s%d  vel %u",
+                 status, d1, d2,
+                 ((status & 0xf0) == 0x90 && d2) ? "On " : "Off",
+                 ch, names[d1 % 12], (int)(d1 / 12) - 1, d2);
+        return;
+    case 0xa0:
+        snprintf(buf, size, "%02x %02x %02x  Poly pressure  ch %u", status, d1, d2, ch);
+        return;
+    case 0xb0:
+        snprintf(buf, size, "%02x %02x %02x  Control %u = %u  ch %u", status, d1, d2, d1, d2, ch);
+        return;
+    case 0xc0:
+        snprintf(buf, size, "%02x %02x     Program %u  ch %u", status, d1, d1 + 1, ch);
+        return;
+    case 0xd0:
+        snprintf(buf, size, "%02x %02x     Channel pressure %u  ch %u", status, d1, d1, ch);
+        return;
+    case 0xe0:
+        snprintf(buf, size, "%02x %02x %02x  Pitch bend %d  ch %u", status, d1, d2,
+                 (int)((d2 << 7) | d1) - 8192, ch);
+        return;
+    }
+    snprintf(buf, size, "%02x %02x %02x  System %s", status, d1, d2,
+             status == 0xf8 ? "clock" : status == 0xfa ? "start" :
+             status == 0xfb ? "continue" : status == 0xfc ? "stop" :
+             status == 0xfe ? "active sensing" : status == 0xf2 ? "song position" :
+             status == 0xf3 ? "song select" : status == 0xf1 ? "MTC quarter frame" :
+             "message");
+}
+
+static void diag_poll(struct MHPrefsData *data)
+{
+    MidiMsg message;
+    char text[200];
+
+    if (!data->diag_node)
+        return;
+    while (GetMidi(data->diag_node, &message)) {
+        data->diag_count++;
+        if (message.mm_Status == 0xf0) {
+            ULONG length = QuerySysEx(data->diag_node), i;
+            size_t n;
+            if (length > sizeof(data->diag_sysex) ||
+                GetSysEx(data->diag_node, data->diag_sysex, length) != length) {
+                SkipSysEx(data->diag_node);
+                snprintf(text, sizeof(text), "SysEx of %lu bytes, too long to show",
+                         (unsigned long)length);
+            } else {
+                n = (size_t)snprintf(text, sizeof(text), "SysEx %lu bytes:", (unsigned long)length);
+                for (i = 0; i < length && i < 16 && n < sizeof(text) - 4; i++)
+                    n += (size_t)snprintf(text + n, sizeof(text) - n, " %02x",
+                                          (unsigned)data->diag_sysex[i]);
+                if (length > 16 && n < sizeof(text) - 5)
+                    snprintf(text + n, sizeof(text) - n, " ...");
+            }
+        } else {
+            describe_message(text, sizeof(text), message.mm_Status,
+                             message.mm_Data1, message.mm_Data2);
+        }
+        diag_line(data, text);
+    }
+    diag_info(data);
+}
+
+static struct MHPrefsEndpoint *diag_selected(struct MHPrefsData *data)
+{
+    struct MHPrefsEndpoint *entry = NULL;
+    DoMethod(data->diag_endpoint_list, MUIM_List_GetEntry,
+             MUIV_List_GetEntry_Active, &entry);
+    if (!entry)
+        set_status(data, "Select an endpoint in the Diagnostics list first.");
+    return entry;
+}
+
+static void diag_stop(struct MHPrefsData *data)
+{
+    if (data->diag_in) {
+        RemoveMidiLink(data->diag_in);
+        data->diag_in = NULL;
+    }
+    diag_info(data);
+}
+
+static void diag_monitor(struct MHPrefsData *data, Object *obj)
+{
+    struct MHPrefsEndpoint *entry = diag_selected(data);
+    char line[160];
+
+    if (!entry)
+        return;
+    if (!data->diag_node) {
+        if (data->diag_signal < 0 && (data->diag_signal = AllocSignal(-1)) < 0) {
+            set_status(data, "No signal left for the monitor.");
+            return;
+        }
+        {
+            struct TagItem tags[] = {
+                { MIDI_Name, (IPTR)"MIDIHub Prefs Monitor" },
+                { MIDI_MsgQueue, 512 },
+                { MIDI_SysExSize, sizeof(data->diag_sysex) },
+                { MIDI_RecvSignal, (IPTR)data->diag_signal },
+                { TAG_DONE, 0 }
+            };
+            data->diag_node = CreateMidiA(tags);
+        }
+        if (!data->diag_node) {
+            set_status(data, "CAMD refused the monitor node.");
+            return;
+        }
+        data->diag_input.ihn_Object = obj;
+        data->diag_input.ihn_Method = MUIM_MHP_DiagPoll;
+        data->diag_input.ihn_Signals = 1UL << data->diag_signal;
+        DoMethod(_app(obj), MUIM_Application_AddInputHandler, &data->diag_input);
+        data->diag_input_added = TRUE;
+    }
+    diag_stop(data);
+    snprintf(data->diag_in_name, sizeof(data->diag_in_name), "%s", entry->name);
+    {
+        struct TagItem tags[] = {
+            { MLINK_Name, (IPTR)"MIDIHub Prefs Monitor" },
+            { MLINK_Location, (IPTR)data->diag_in_name },
+            { TAG_DONE, 0 }
+        };
+        data->diag_in = AddMidiLinkA(data->diag_node, MLTYPE_Receiver, tags);
+    }
+    data->diag_count = 0;
+    snprintf(line, sizeof(line), "--- monitoring %s ---", data->diag_in_name);
+    diag_line(data, line);
+    diag_info(data);
+}
+
+/* A C major scale and a SysEx Identity Request, as MIDIHubCAMDProbe --send */
+static void diag_send(struct MHPrefsData *data)
+{
+    static UBYTE identity_request[] = { 0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7 };
+    static const UBYTE scale[] = { 60, 62, 64, 65, 67, 69, 71, 72 };
+    static char name[] = "MIDIHub Prefs Test";
+    struct MHPrefsEndpoint *entry = diag_selected(data);
+    struct MidiNode *node;
+    struct MidiLink *link = NULL;
+    char line[160];
+    ULONG i;
+
+    if (!entry)
+        return;
+    {
+        struct TagItem tags[] = { { MIDI_Name, (IPTR)name }, { TAG_DONE, 0 } };
+        node = CreateMidiA(tags);
+    }
+    if (node) {
+        struct TagItem tags[] = {
+            { MLINK_Name, (IPTR)name },
+            { MLINK_Location, (IPTR)entry->name },
+            { TAG_DONE, 0 }
+        };
+        link = AddMidiLinkA(node, MLTYPE_Sender, tags);
+    }
+    if (!link) {
+        if (node) DeleteMidi(node);
+        set_status(data, "Could not link to that endpoint.");
+        return;
+    }
+    snprintf(line, sizeof(line), "--- sending a C major scale and a SysEx to %s%s ---",
+             entry->name, MidiLinkConnected(link) ? "" : " (nothing receives there)");
+    diag_line(data, line);
+    Delay(5);
+    for (i = 0; i < sizeof(scale); i++) {
+        PutMidi(link, 0x90000000UL | ((ULONG)scale[i] << 16) | (100UL << 8));
+        Delay(15);
+        PutMidi(link, 0x80000000UL | ((ULONG)scale[i] << 16));
+        Delay(3);
+    }
+    PutSysEx(link, identity_request);
+    Delay(10);
+    RemoveMidiLink(link);
+    DeleteMidi(node);
+    diag_line(data, "--- sent ---");
+}
+
+/* The BLE MIDI state and the latest Bluetooth log lines */
+static void diag_refresh_bt(struct MHPrefsData *data)
+{
+    char text[1024];
+    size_t n = 0;
+    ULONG i;
+
+    if (!BluetoothBase) {
+        set(data->diag_ble_text, MUIA_Text_Contents,
+            (IPTR)"bluetooth.library is not available.");
+        return;
+    }
+    {
+        IPTR advertising = FALSE, interval = 0;
+        struct BtDevice *device;
+        APTR cls;
+        ULONG connected = 0;
+
+        btGetAttrs(BGA_STACK, NULL, BSA_LEAdvertising, &advertising,
+                   BSA_LEConnInterval, &interval, TAG_END);
+        btLockReadBase();
+        cls = find_btmidi_class();
+        btUnlockBase();
+        n += (size_t)snprintf(text + n, sizeof(text) - n,
+                              "btmidi.class: %s    Advertising: %s\n"
+                              "Asks centrals for: %s\n",
+                              cls ? "loaded" : "NOT loaded",
+                              advertising ? "on" : "OFF",
+                              interval ? "15 ms interval" : "nothing (central decides)");
+        for (i = 0; i < data->ble_count && n < sizeof(text) - 80; i++)
+            n += (size_t)snprintf(text + n, sizeof(text) - n, "  %s: %s\n",
+                                  data->ble[i].name, data->ble[i].state);
+        btLockReadBase();
+        for (device = btFindDevice(NULL, TAG_END); device;
+             device = btFindDevice(device, TAG_END)) {
+            IPTR is_connected = FALSE;
+            STRPTR address = NULL, name = NULL;
+            btGetAttrs(BGA_DEVICE, device, BDA_IsConnected, &is_connected,
+                       BDA_AddressString, &address, BDA_Name, &name, TAG_END);
+            if (is_connected && n < sizeof(text) - 80) {
+                n += (size_t)snprintf(text + n, sizeof(text) - n, "Connected: %s %s\n",
+                                      address ? (char *)address : "?",
+                                      name ? (char *)name : "(no name)");
+                connected++;
+            }
+        }
+        btUnlockBase();
+        if (!connected && n < sizeof(text) - 40)
+            snprintf(text + n, sizeof(text) - n, "No device connected.");
+        set(data->diag_ble_text, MUIA_Text_Contents, (IPTR)text);
+        set(data->diag_interval, MUIA_Selected, interval ? TRUE : FALSE);
+    }
+    /* the last lines of the Bluetooth log */
+    {
+        struct List *log = NULL;
+        struct Node *message;
+        char line[300];
+        ULONG total = 0, skip;
+
+        set(data->diag_btlog, MUIA_List_Quiet, TRUE);
+        DoMethod(data->diag_btlog, MUIM_List_Clear);
+        btLockReadBase();
+        btGetAttrs(BGA_STACK, NULL, BSA_ErrorMsgList, &log, TAG_END);
+        if (log) {
+            for (message = log->lh_Head; message->ln_Succ; message = message->ln_Succ)
+                total++;
+            skip = total > 14 ? total - 14 : 0;
+            for (message = log->lh_Head; message->ln_Succ; message = message->ln_Succ) {
+                IPTR level = 0;
+                STRPTR text_msg = NULL;
+                if (skip) { skip--; continue; }
+                btGetAttrs(BGA_ERRORMSG, message, BEMA_Level, &level,
+                           BEMA_Msg, &text_msg, TAG_END);
+                snprintf(line, sizeof(line), "%2ld %s", (long)level,
+                         text_msg ? (char *)text_msg : "");
+                DoMethod(data->diag_btlog, MUIM_List_InsertSingle, line,
+                         MUIV_List_Insert_Bottom);
+            }
+        }
+        btUnlockBase();
+        set(data->diag_btlog, MUIA_List_Quiet, FALSE);
+        set(data->diag_btlog, MUIA_List_Active, MUIV_List_Active_Bottom);
+    }
+}
+
+static void diag_interval(struct MHPrefsData *data)
+{
+    IPTR selected = FALSE;
+    if (!BluetoothBase)
+        return;
+    get(data->diag_interval, MUIA_Selected, &selected);
+    btSetAttrs(BGA_STACK, NULL, BSA_LEConnInterval, selected ? 12 : 0, TAG_END);
+    diag_line(data, selected ? "--- will ask the next central for a 15 ms interval ---" :
+                               "--- will not ask centrals for a connection interval ---");
+    diag_refresh_bt(data);
+}
+
 static void refresh(struct MHPrefsData *data)
 {
     struct MidiCluster *cluster;
@@ -410,6 +723,8 @@ static void refresh(struct MHPrefsData *data)
     data->endpoint_count = 0;
     set(data->endpoint_list, MUIA_List_Quiet, TRUE);
     DoMethod(data->endpoint_list, MUIM_List_Clear);
+    set(data->diag_endpoint_list, MUIA_List_Quiet, TRUE);
+    DoMethod(data->diag_endpoint_list, MUIM_List_Clear);
     lock = LockCAMD(CD_Linkages);
     for (cluster = NextCluster(NULL); cluster &&
          data->endpoint_count < MH_PREFS_ENDPOINT_MAX;
@@ -430,9 +745,13 @@ static void refresh(struct MHPrefsData *data)
                  ble ? ble->state : senders || receivers ? "Online" : "Idle");
         DoMethod(data->endpoint_list, MUIM_List_InsertSingle, entry,
                  MUIV_List_Insert_Bottom);
+        DoMethod(data->diag_endpoint_list, MUIM_List_InsertSingle, entry,
+                 MUIV_List_Insert_Bottom);
     }
     UnlockCAMD(lock);
     set(data->endpoint_list, MUIA_List_Quiet, FALSE);
+    set(data->diag_endpoint_list, MUIA_List_Quiet, FALSE);
+    diag_refresh_bt(data);
 
     memset(data->route_states, 0, sizeof(data->route_states));
     if (!router_command(MH_ROUTER_STATUS, &status)) {
@@ -764,6 +1083,8 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
     Object *main_group, *refresh_button, *source_button, *destination_button;
     Object *add_button, *preview_button, *usb_button, *bluetooth_button;
     Object *ble_button;
+    Object *diag_monitor_button, *diag_stop_button, *diag_send_button;
+    Object *diag_clear_button, *diag_refresh_button;
     Object *overview_ahi_button, *synth_ahi_button, *use_button, *save_button;
     Object *profile_save_button, *profile_load_button, *profile_delete_button;
     ULONG i;
@@ -775,6 +1096,7 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
     data = INST_DATA(cl, obj);
     memset(data, 0, sizeof(*data));
     data->cluster_signal = -1;
+    data->diag_signal = -1;
     data->endpoint_hook.h_Entry = (HOOKFUNC)EndpointDisplay;
     data->route_hook.h_Entry = (HOOKFUNC)RouteDisplay;
     data->route_hook.h_Data = data;
@@ -901,6 +1223,60 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
                         Child, profile_delete_button = SimpleButton("Delete"),
                         End,
                     End,
+                Child, VGroup,
+                    Child, HGroup,
+                        Child, VGroup, GroupFrameT("CAMD endpoints"),
+                            Child, ListviewObject,
+                                MUIA_Listview_List, data->diag_endpoint_list = ListObject,
+                                    InputListFrame,
+                                    MUIA_List_Title, TRUE,
+                                    MUIA_List_Format, "BAR,BAR,BAR,",
+                                    MUIA_List_DisplayHook, &data->endpoint_hook,
+                                    End,
+                                End,
+                            Child, HGroup,
+                                Child, diag_monitor_button = SimpleButton("Monitor"),
+                                Child, diag_stop_button = SimpleButton("Stop"),
+                                Child, diag_send_button = SimpleButton("Send test"),
+                                End,
+                            End,
+                        Child, VGroup, GroupFrameT("Bluetooth LE MIDI"),
+                            Child, data->diag_ble_text = TextObject,
+                                TextFrame,
+                                MUIA_Background, MUII_TextBack,
+                                MUIA_Text_SetVMax, FALSE,
+                                End,
+                            Child, HGroup,
+                                Child, data->diag_interval = MUI_MakeObject(MUIO_Checkmark, NULL),
+                                Child, Label1("Ask centrals for a 15 ms connection interval"),
+                                Child, HSpace(0),
+                                End,
+                            End,
+                        End,
+                    Child, VGroup, GroupFrameT("MIDI monitor"),
+                        Child, ListviewObject,
+                            MUIA_Listview_List, data->diag_monitor = ListObject,
+                                ReadListFrame,
+                                MUIA_List_ConstructHook, MUIV_List_ConstructHook_String,
+                                MUIA_List_DestructHook, MUIV_List_DestructHook_String,
+                                End,
+                            End,
+                        Child, HGroup,
+                            Child, data->diag_monitor_info = TextObject, End,
+                            Child, diag_clear_button = SimpleButton("Clear"),
+                            End,
+                        End,
+                    Child, VGroup, GroupFrameT("Bluetooth log"),
+                        Child, ListviewObject,
+                            MUIA_Listview_List, data->diag_btlog = ListObject,
+                                ReadListFrame,
+                                MUIA_List_ConstructHook, MUIV_List_ConstructHook_String,
+                                MUIA_List_DestructHook, MUIV_List_DestructHook_String,
+                                End,
+                            End,
+                        Child, diag_refresh_button = SimpleButton("Refresh"),
+                        End,
+                    End,
                 End,
             Child, data->status_text = TextObject,
                 TextFrame, MUIA_Background, MUII_TextBack,
@@ -932,6 +1308,13 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
         (IPTR)"Port names and activity of btmidi.class,\n"
               "the Bluetooth LE MIDI class.");
     data->ble_button = ble_button;
+    DoMethod(diag_monitor_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_DiagMonitor);
+    DoMethod(diag_stop_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_DiagStop);
+    DoMethod(diag_send_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_DiagSend);
+    DoMethod(diag_clear_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_DiagClear);
+    DoMethod(diag_refresh_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_Refresh);
+    DoMethod(data->diag_interval, MUIM_Notify, MUIA_Selected, MUIV_EveryTime,
+             obj, 1, MUIM_MHP_DiagInterval);
     DoMethod(overview_ahi_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_OpenAHI);
     DoMethod(synth_ahi_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_OpenAHI);
     DoMethod(use_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_Use);
@@ -977,6 +1360,17 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
         case MUIM_MHP_OpenBluetooth: open_prefs("SYS:Prefs/Bluetooth"); return 0;
         case MUIM_MHP_OpenAHI: open_prefs("SYS:Prefs/AHI"); return 0;
         case MUIM_MHP_OpenBLEMidi: open_ble_midi(data); return 0;
+        case MUIM_MHP_DiagMonitor: diag_monitor(data, obj); return 0;
+        case MUIM_MHP_DiagStop: diag_stop(data); return 0;
+        case MUIM_MHP_DiagSend: diag_send(data); return 0;
+        case MUIM_MHP_DiagPoll: diag_poll(data); return 0;
+        case MUIM_MHP_DiagInterval: diag_interval(data); return 0;
+        case MUIM_MHP_DiagClear:
+            DoMethod(data->diag_monitor, MUIM_List_Clear);
+            data->diag_lines = 0;
+            data->diag_count = 0;
+            diag_info(data);
+            return 0;
         case MUIM_MHP_BluetoothEvent:
             {
                 /* a device came or went, or a binding or class changed */
@@ -1007,7 +1401,8 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
                 (data->bt_handler = btAddEventHandler(data->bt_port,
                      BEHMF_DEVICECONNECTED | BEHMF_DEVICEDISCONNECTED |
                      BEHMF_ADDBINDING | BEHMF_REMBINDING | BEHMF_SERVICESCHG |
-                     BEHMF_ADDCLASS | BEHMF_REMCLASS | BEHMF_CONFIGCHG))) {
+                     BEHMF_ADDCLASS | BEHMF_REMCLASS | BEHMF_CONFIGCHG |
+                     BEHMF_ADDERRORMSG))) {
                 data->bt_input.ihn_Object = obj;
                 data->bt_input.ihn_Method = MUIM_MHP_BluetoothEvent;
                 data->bt_input.ihn_Signals = 1UL << data->bt_port->mp_SigBit;
@@ -1033,7 +1428,8 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
                 set(data->synth_backend, MUIA_Cycle_Active,
                     strcmp(value, "fluid") == 0 ? 1 : 0);
             }
-            fill_routes(data); refresh_profiles(data); refresh(data); data->dirty = FALSE;
+            fill_routes(data); refresh_profiles(data); refresh(data); diag_info(data);
+            data->dirty = FALSE;
             data->cluster_signal = AllocSignal(-1);
             if (data->cluster_signal >= 0) {
                 data->cluster_notify.cnn_Task = FindTask(NULL);
@@ -1049,6 +1445,19 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
             }
             return TRUE;
         case MUIM_Cleanup:
+            if (data->diag_input_added) {
+                DoMethod(_app(obj), MUIM_Application_RemInputHandler, &data->diag_input);
+                data->diag_input_added = FALSE;
+            }
+            diag_stop(data);
+            if (data->diag_node) {
+                DeleteMidi(data->diag_node);
+                data->diag_node = NULL;
+            }
+            if (data->diag_signal >= 0) {
+                FreeSignal(data->diag_signal);
+                data->diag_signal = -1;
+            }
             if (data->input_added) {
                 DoMethod(_app(obj), MUIM_Application_RemInputHandler,
                          &data->input_handler);

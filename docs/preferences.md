@@ -26,6 +26,13 @@ The current pages are:
   CAMD
 - **Profiles**, saving, activating, and deleting named snapshots of all
   MIDIHub-owned settings
+- **Diagnostics**, one page meant to be photographed when something does not
+  work: the CAMD endpoints; a MIDI monitor that decodes what arrives on a
+  selected endpoint (notes, controllers, SysEx); a Send test button that
+  plays a C major scale and a SysEx Identity Request to a selected
+  destination; the BLE MIDI state (class, advertising, port states,
+  connected devices); a switch for the 15 ms connection-interval request;
+  and the latest Bluetooth log lines, updated as they arrive
 
 CAMD cluster additions and removals refresh the overview through a MUI input
 handler.
