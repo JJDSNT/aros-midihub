@@ -425,7 +425,7 @@ index 2f42c283f0..94a98d7df2 100644
  }
  /* \\\ */
 diff --git a/rom/bluetooth/bluetooth/hwconn.c b/rom/bluetooth/bluetooth/hwconn.c
-index ba2a88a72b..3d26b99da7 100644
+index ba2a88a72b..f5692021b0 100644
 --- a/rom/bluetooth/bluetooth/hwconn.c
 +++ b/rom/bluetooth/bluetooth/hwconn.c
 @@ -891,6 +891,87 @@ static struct BtHWConn * bAllocConn(struct BtHWCore *hc, struct BtDevice *bd, UB
@@ -702,7 +702,7 @@ index ba2a88a72b..3d26b99da7 100644
  
      aes.encrypt = bSMPAES;
      aes.context = hc;
-@@ -3437,14 +3568,32 @@ BOOL bConnHandleEvent(struct BtHWCore *hc, UBYTE code, const UBYTE *params, ULON
+@@ -3437,14 +3568,89 @@ BOOL bConnHandleEvent(struct BtHWCore *hc, UBYTE code, const UBYTE *params, ULON
              return(TRUE);
          }
          if(sub == HC_LE_SUB_LTK_REQUEST) {
@@ -736,10 +736,67 @@ index ba2a88a72b..3d26b99da7 100644
 +            }
 +            bSubmitCmd(hc, have ? HC_OP_LE_LTK_REQ_REPLY : HC_OP_LE_LTK_REQ_NEG_REPLY,
 +                       p, have ? 18 : 2, bIgnoreCompletion, hc);
++            return(TRUE);
++        }
++        if(sub == HC_LE_SUB_REMOTE_CONN_PARAM) {
++            /* The peer asked through the link layer (Connection Parameters
++               Request procedure) for other parameters, and the controller
++               waits for our answer: left unanswered, the procedure times
++               out and the link goes with it. Take what it asks for if it is
++               valid, as a central does with an L2CAP request. */
++            struct bt_l2cap_conn_params cp;
++            UBYTE p[14];
++            UWORD handle;
++            if(len < 11) {
++                return(TRUE);
++            }
++            handle = (params[1] | (params[2] << 8)) & 0x0fff;
++            cp.interval_min = params[3] | (params[4] << 8);
++            cp.interval_max = params[5] | (params[6] << 8);
++            cp.latency = params[7] | (params[8] << 8);
++            cp.timeout = params[9] | (params[10] << 8);
++            cn = bFindConnByHandle(hc, handle);
++            CopyMem((APTR) &params[1], p, 10);          /* handle and the four values */
++            memset(&p[10], 0, 4);                       /* connection event length: any */
++            if(bt_l2cap_conn_params_valid(&cp)) {
++                bSubmitCmd(hc, HC_OP_LE_REM_CONN_PARAM_REPLY, p, 14, bIgnoreCompletion, hc);
++            } else {
++                p[2] = 0x3b;                            /* unacceptable connection parameters */
++                bSubmitCmd(hc, HC_OP_LE_REM_CONN_PARAM_NEG, p, 3, bIgnoreCompletion, hc);
++            }
++            if(cn) {
++                btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
++                               "%s asked for a %ld.%02ld-%ld.%02ld ms connection interval - %s.",
++                               cn->cn_Device->bd_Name,
++                               (ULONG) (cp.interval_min * 125 / 100), (ULONG) (cp.interval_min * 125 % 100),
++                               (ULONG) (cp.interval_max * 125 / 100), (ULONG) (cp.interval_max * 125 % 100),
++                               bt_l2cap_conn_params_valid(&cp) ? "granted" : "refused, invalid");
++            }
++            return(TRUE);
++        }
++        if(sub == HC_LE_SUB_CONN_UPDATE) {
++            /* what the link runs at now, whoever asked for it */
++            UWORD handle, interval;
++            if(len < 10) {
++                return(TRUE);
++            }
++            handle = (params[2] | (params[3] << 8)) & 0x0fff;
++            interval = params[4] | (params[5] << 8);
++            cn = bFindConnByHandle(hc, handle);
++            if(cn) {
++                btAddErrorMsg(params[1] ? RETURN_WARN : RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
++                               params[1] ? "%s: connection update failed (0x%02lx)."
++                                         : "%s: connection interval now %ld.%02ld ms, latency %ld, timeout %ld ms.",
++                               cn->cn_Device->bd_Name,
++                               params[1] ? (ULONG) params[1] : (ULONG) (interval * 125 / 100),
++                               (ULONG) (interval * 125 % 100),
++                               (ULONG) (params[6] | (params[7] << 8)),
++                               (ULONG) ((params[8] | (params[9] << 8)) * 10));
++            }
              return(TRUE);
          }
          return(FALSE);
-@@ -3716,6 +3865,13 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
+@@ -3716,6 +3922,13 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
                      cn->cn_CtrlReq = NULL;
                      bReplyChannel(BluetoothBase, bch, BTIOERR_HOSTERROR, 0);
                  }
@@ -753,7 +810,7 @@ index ba2a88a72b..3d26b99da7 100644
              } else {
                  if(bt_gatt_client_write(&cn->cn_GATT, bch->bch_Value, bch->bch_Data, bch->bch_Length,
                                          bGATTOpComplete, cn, now) != BT_OK) {
-@@ -3896,8 +4052,15 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
+@@ -3896,8 +4109,15 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
                      return(TRUE);
                  }
                  cn->cn_CtrlReq = bch;
@@ -771,7 +828,7 @@ index ba2a88a72b..3d26b99da7 100644
                      cn->cn_CtrlReq = NULL;
                      bReplyChannel(BluetoothBase, bch, BTIOERR_HOSTERROR, 0);
                  }
-@@ -4007,6 +4170,7 @@ void bConnTick(struct BtHWCore *hc)
+@@ -4007,6 +4227,7 @@ void bConnTick(struct BtHWCore *hc)
  {
      struct MinNode *mn, *next;
      uint64_t now = bNowUS(hc);
@@ -779,7 +836,7 @@ index ba2a88a72b..3d26b99da7 100644
  
      for(mn = hc->hc_Conns.mlh_Head; (next = mn->mln_Succ); mn = next) {
          struct BtHWConn *cn = (struct BtHWConn *) mn;
-@@ -4060,6 +4224,14 @@ void bConnTick(struct BtHWCore *hc)
+@@ -4060,6 +4281,14 @@ void bConnTick(struct BtHWCore *hc)
              cn->cn_PairRetry = FALSE;
              bStartPairing(cn);
          }
@@ -794,7 +851,7 @@ index ba2a88a72b..3d26b99da7 100644
          if(cn->cn_EncryptPending && ((LONG) (hc->hc_Tick - cn->cn_EncryptSince) > 10000)) {
              /* no Authentication Complete / Encryption Change came back:
                 do not hold the enumeration hostage to it */
-@@ -4100,6 +4272,9 @@ void bConnTick(struct BtHWCore *hc)
+@@ -4100,6 +4329,9 @@ void bConnTick(struct BtHWCore *hc)
              }
          }
      }
@@ -805,18 +862,30 @@ index ba2a88a72b..3d26b99da7 100644
  }
  /* \\\ */
 diff --git a/rom/bluetooth/bluetooth/hwtask.h b/rom/bluetooth/bluetooth/hwtask.h
-index 7ec0e799d3..fb719e852c 100644
+index 7ec0e799d3..78d25708e6 100644
 --- a/rom/bluetooth/bluetooth/hwtask.h
 +++ b/rom/bluetooth/bluetooth/hwtask.h
-@@ -106,6 +106,7 @@
+@@ -106,6 +106,9 @@
  #define HC_OP_LE_CREATE_CONNECTION    HC_OP(0x08, 0x000d)
  #define HC_OP_LE_CREATE_CONN_CANCEL   HC_OP(0x08, 0x000e)
  #define HC_OP_LE_START_ENCRYPTION     HC_OP(0x08, 0x0019)
 +#define HC_OP_LE_CONN_UPDATE          HC_OP(0x08, 0x0013)
++#define HC_OP_LE_REM_CONN_PARAM_REPLY HC_OP(0x08, 0x0020)
++#define HC_OP_LE_REM_CONN_PARAM_NEG   HC_OP(0x08, 0x0021)
  #define HC_OP_LE_LTK_REQ_REPLY        HC_OP(0x08, 0x001a)
  #define HC_OP_LE_LTK_REQ_NEG_REPLY    HC_OP(0x08, 0x001b)
  #define HC_GIAC_LAP                   0x9E8B33
-@@ -244,6 +245,8 @@ struct BtHWConn
+@@ -137,7 +140,9 @@
+ #define HC_EVT_LE_META                0x3e
+ #define HC_LE_SUB_CONN_COMPLETE       0x01
+ #define HC_LE_SUB_ADV_REPORT          0x02
++#define HC_LE_SUB_CONN_UPDATE         0x03
+ #define HC_LE_SUB_LTK_REQUEST         0x05
++#define HC_LE_SUB_REMOTE_CONN_PARAM   0x06
+ #define HC_LE_SUB_P256_COMPLETE       0x08
+ #define HC_LE_SUB_DHKEY_COMPLETE      0x09
+ #define HC_LE_SUB_ENH_CONN_COMPLETE   0x0a
+@@ -244,6 +249,8 @@ struct BtHWConn
      }                   cn_GATTSubs[HC_GATT_MAXSUBS];
      struct BtServiceRecord *cn_GATTWrRec; /* a value the device wrote during this request */
      UWORD               cn_GATTWrIdx;
@@ -825,7 +894,7 @@ index 7ec0e799d3..fb719e852c 100644
      BOOL                cn_GATTSeen;   /* the device has asked for something */
      UBYTE               cn_GATTVal[BGATT_MAXVALUE]; /* the value being read */
      struct MinList      cn_Endpoints;  /* BtHWEndpoint */
-@@ -285,6 +288,8 @@ struct BtHWConn
+@@ -285,6 +292,8 @@ struct BtHWConn
         (a keyboard), the pairing is run again without offering SC */
      BOOL                cn_SMPLegacy;     /* do not offer SC this time */
      BOOL                cn_PairRetry;     /* restart the pairing from bConnTick() (outside the SMP callback) */

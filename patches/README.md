@@ -30,6 +30,13 @@ remain:
   the peripheral it asks for the interval set with the new
   `BSA_LEConnInterval` stack attribute, within the limits iOS accepts.
   `btmidi.class` sets 15 ms, as the BLE MIDI specification asks;
+- answer the LE Remote Connection Parameter Request event (subevent 0x06)
+  that a controller raises when the peer starts the link-layer Connection
+  Parameters Request procedure: valid parameters are accepted, others are
+  refused. Before, the event was ignored and the procedure could time out
+  with the link; on a Pi 3 an iPhone's connections dropped with "connection
+  timeout". The Connection Update Complete event (0x03) is now logged with
+  the interval in effect;
 - report the largest notification payload every connected LE device receives
   whole (`BSA_LENotifyPayload`), so BLE MIDI can size packets to the
   negotiated ATT MTU;

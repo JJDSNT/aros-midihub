@@ -664,7 +664,9 @@ static void diag_refresh_bt(struct MHPrefsData *data)
         if (!connected && n < sizeof(text) - 40)
             snprintf(text + n, sizeof(text) - n, "No device connected.");
         set(data->diag_ble_text, MUIA_Text_Contents, (IPTR)text);
-        set(data->diag_interval, MUIA_Selected, interval ? TRUE : FALSE);
+        /* nnset: showing the stack's value must not set it again, or every
+           refresh would make the stack ask connected centrals once more */
+        nnset(data->diag_interval, MUIA_Selected, interval ? TRUE : FALSE);
     }
     /* the last lines of the Bluetooth log */
     {
