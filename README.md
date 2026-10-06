@@ -110,6 +110,11 @@ Planned support includes:
 MIDIHub advertises `_apple-midi._udp.local` over IPv4 mDNS and answers
 DNS-SD browse queries when the network stack has a multicast-capable interface.
 
+[Network MIDI in AROS](docs/network-midi-integration.md) proposes where
+RTP-MIDI, AppleMIDI and Network MIDI 2.0 belong in AROS: one network MIDI
+service with a CAMD node per peer, a system mDNS responder, and UMP
+translated at the transport until CAMD learns UMP.
+
 ## Additional MIDI Transports
 
 The project is intended to evolve beyond RTP-MIDI.
@@ -163,9 +168,13 @@ BLE validation remains.
 
 ### MIDI 2.0 / UMP
 
-Future versions may investigate support for the MIDI 2.0 **Universal MIDI Packet (UMP)** format.
-
-The architecture should avoid assumptions that would prevent MIDI 2.0 transports from being introduced later.
+`src/ump.c` handles the MIDI 2.0 **Universal MIDI Packet**: MIDI 1.0 bytes to
+UMP and back, translating MIDI 2.0 Channel Voice down to MIDI 1.0 for CAMD,
+and the UMP Stream messages that answer Endpoint Discovery. `src/netmidi2.c`
+implements **Network MIDI 2.0 (UDP)**: its command packets and Host and
+Client sessions with forward error correction. Both have host tests; neither
+is connected to CAMD or tested against another implementation yet. See
+[Network MIDI in AROS](docs/network-midi-integration.md).
 
 ## SoundFont Synthesis
 
