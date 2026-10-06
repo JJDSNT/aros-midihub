@@ -99,7 +99,11 @@ use it too. AROS now also has a clean-room Envoy-compatible `nipc.library`
 an optional NIPC discovery bridge using `_nipc._tcp`, so the same system mDNS
 service can potentially support Envoy/NIPC discovery as well. This is another
 reason to keep Bonami generic infrastructure rather than make it MIDI-specific;
-NIPC remains optional and is not a dependency of Network MIDI.
+AROS has subsequently added `services.library`, a Services Manager,
+`accounts.library`, and an Accounts Server, with `nipc.library` answering
+service inquiries from the native service list. Bonami's NIPC bridge should
+therefore complement rather than replace that native Envoy inquiry path.
+NIPC/Envoy remains optional and is not a dependency of Network MIDI.
 
 ## UMP: translate at the edge first
 
