@@ -29,9 +29,9 @@ BLE MIDI became a *class* because the Bluetooth stack has a class mechanism
 that loads, binds to devices and reports events. AROSTCP has nothing
 equivalent, so the natural form here is a resident service:
 
-- **Process:** one process, started when the network comes up, from
-  the normal system startup after a `bsdsocket.library` provider becomes
-  available. It must not be part of AROSTCP itself: the service owns the UDP
+- **Process:** one process launched from the normal system startup once a
+  `bsdsocket.library` provider becomes available. It must not be part of
+  AROSTCP itself: the service owns the UDP
   sockets (AppleMIDI control and data ports, Network MIDI 2.0 port) and one
   event loop, while AROSTCP supplies sockets and multicast transport.
 - **Source location:** for example `workbench/network/midi`, with the
