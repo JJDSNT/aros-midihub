@@ -14,6 +14,8 @@ port, and interoperability are validated.
   [amigazen Bonami](https://github.com/amigazen/Bonami) repository as a Git
   submodule. It is the primary implementation and API reference for the AROS
   port. Bonami uses the BSD 2-Clause license.
+- `aros/` contains the initial native AROS port derived from the pinned Bonami
+  revision. It builds `bonami.library` and keeps the public Bonami API intact.
 
 Clone this repository with submodules, or initialize this reference after an
 ordinary clone:
@@ -22,7 +24,9 @@ ordinary clone:
 git submodule update --init network/mdns/bonami
 ```
 
-The submodule is not yet a MIDIHub build dependency.
+The submodule is a source and history reference. The AROS build uses the
+reviewable snapshot in `aros/`, so an AROS source checkout does not need to
+fetch a nested repository before it can build the library.
 
 ## Design decision
 
@@ -50,23 +54,22 @@ Bonami port and their origin can be recorded in the affected files.
 The pinned Bonami revision is a working classic-Amiga implementation rather
 than a drop-in AROS component. The AROS port needs:
 
-1. an AROS MetaMake library/service definition and generated public headers;
-2. compiler and library-entry conversion from the classic SAS/C ABI;
-3. native AROSTCP validation with UDP 5353 as the normal bind port;
-4. full RFC 6762 probing, conflict detection, automatic rename, defensive
+1. native AROSTCP runtime validation with UDP 5353 as the normal bind port;
+2. full RFC 6762 probing, conflict detection, automatic rename, defensive
    announcements, known-answer suppression, and goodbyes;
-5. interface enumeration and address-change handling, then IPv6 mDNS on
+3. interface enumeration and address-change handling, then IPv6 mDNS on
    `ff02::fb`; current AROSTCP already supplies scoped link-local/multicast
    output (`sin6_scope_id` / `IPV6_PKTINFO`) and `SO_BINDTODEVICE`, so this is
    primarily Bonami/service integration rather than a missing socket-stack
    prerequisite;
-6. working update and resolve cancellation operations;
-7. optional message-port event delivery so clients need not do work in an
+4. working update and resolve cancellation operations;
+5. per-client ownership and cleanup for the shared engine;
+6. optional message-port event delivery so clients need not do work in an
    engine-task Hook;
-8. client lifetime cleanup and tests with Bonjour and Avahi;
-9. Network MIDI registration and browsing for `_apple-midi._udp` and
+7. tests with Bonjour and Avahi;
+8. Network MIDI registration and browsing for `_apple-midi._udp` and
    `_midi2._udp`;
-10. build and validate Bonami's optional Envoy/NIPC bridge against the
+9. build and validate Bonami's optional Envoy/NIPC bridge against the
     `nipc.library` and public `<envoy/nipc.h>` API added upstream to AROS in
     commit `fbc2e274d880868c3fe447dffdfc9226fae0bd66`, including
     `_nipc._tcp` publication and browsing.

@@ -15,7 +15,9 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-router \
 #MM      contrib-aros-midihub-prefs \
 #MM      contrib-aros-midihub-drawer-icons \
-#MM      contrib-aros-midihub-btmidi
+#MM      contrib-aros-midihub-btmidi \
+#MM      contrib-aros-midihub-bonami \
+#MM      contrib-aros-midihub-mdnsprobe
 #MM contrib-aros-midihub-program : linklibs-arosmidihub
 #MM contrib-aros-midihub-selftest : linklibs-arosmidihub
 #MM contrib-aros-midihub-ble : linklibs-arosmidihub kernel-bluetooth-library-includes
@@ -27,7 +29,9 @@ MIDIHUB_ROOT := $(SRCDIR)/$(CURDIR)
 MIDIHUB_PACKAGE := $(AROS_CONTRIB)/aros-midihub
 
 USER_INCLUDES := -I$(MIDIHUB_ROOT)/include \
-    -I$(MIDIHUB_ROOT)/third_party/TinySoundFont
+    -I$(MIDIHUB_ROOT)/third_party/TinySoundFont \
+    -I$(MIDIHUB_ROOT)/network/mdns/aros/include \
+    -I$(MIDIHUB_ROOT)/network/mdns/aros/src
 # Older m68k AROS inline stubs intentionally use volatile register variables.
 USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
 
@@ -41,6 +45,49 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
            $(MIDIHUB_ROOT)/src/ble_midi \
            $(MIDIHUB_ROOT)/src/ble_peripheral \
            $(MIDIHUB_ROOT)/src/ump $(MIDIHUB_ROOT)/src/netmidi2"
+
+BONAMI_AROS := $(MIDIHUB_ROOT)/network/mdns/aros
+BONAMI_SRC := $(BONAMI_AROS)/src
+BONAMI_FILES := \
+    $(BONAMI_SRC)/bonami_init \
+    $(BONAMI_SRC)/bonami_api \
+    $(BONAMI_SRC)/bonami_ipc \
+    $(BONAMI_SRC)/mdns_dns \
+    $(BONAMI_SRC)/mdns_net \
+    $(BONAMI_SRC)/mdns_token \
+    $(BONAMI_SRC)/mdns_engine \
+    $(BONAMI_SRC)/mdns_reg \
+    $(BONAMI_SRC)/mdns_browse \
+    $(BONAMI_SRC)/mdns_inquiry_stub
+
+# Incubating system mDNS/DNS-SD library. It installs in LIBS: for package
+# testing and is intended to move to workbench/network when upstreamed.
+#MM contrib-aros-midihub-bonami : \
+#MM      contrib-aros-midihub-bonami-includes
+%build_module mmake=contrib-aros-midihub-bonami \
+    modname=bonami modtype=library \
+    conffile=$(BONAMI_AROS)/bonami.conf \
+    files="$(BONAMI_FILES)" \
+    cflags="-Wall -Wextra -Werror -Wno-volatile-register-var \
+            -Wno-unused-parameter -Wno-missing-field-initializers \
+            -Wno-pointer-sign"
+
+#MM- contrib-aros-midihub-bonami-includes : \
+#MM      contrib-aros-midihub-bonami-include-api \
+#MM      contrib-aros-midihub-bonami-include-base
+%copy_includes mmake=contrib-aros-midihub-bonami-include-api \
+    path=bonami dir=$(BONAMI_AROS)/include/bonami \
+    includes="mdns.h nipc.h"
+%copy_includes mmake=contrib-aros-midihub-bonami-include-base \
+    path=libraries dir=$(BONAMI_AROS)/include/libraries \
+    includes="bonamibase.h"
+
+#MM contrib-aros-midihub-mdnsprobe : \
+#MM      contrib-aros-midihub-bonami
+%build_prog mmake=contrib-aros-midihub-mdnsprobe \
+    progname=BonamiProbe \
+    files="$(MIDIHUB_ROOT)/ports/aros/mdns_probe" \
+    targetdir=$(MIDIHUB_PACKAGE)/C
 
 #MM- contrib-aros-midihub-package : \
 #MM      contrib-aros-midihub-package-startup \
