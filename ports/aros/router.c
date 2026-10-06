@@ -2,6 +2,7 @@
 #include "router_control.h"
 
 #ifdef __AROS__
+#include <devices/timer.h>
 #include <dos/dos.h>
 #include <exec/libraries.h>
 #include <exec/tasks.h>
@@ -36,7 +37,24 @@ struct router_runtime {
     BYTE midi_signal;
     BYTE notify_signal;
     int notifying;
+    /* Before camd.library 42 a link joining or leaving a cluster is not
+       signalled, so the route states are checked on a timer. */
+    struct MsgPort *timer_port;
+    struct timerequest *timer;
+    int timer_open;
+    int timer_pending;
 };
+
+#define ROUTE_POLL_MICROS 500000
+
+static void start_poll(struct router_runtime *rt)
+{
+    rt->timer->tr_node.io_Command = TR_ADDREQUEST;
+    rt->timer->tr_time.tv_secs = 0;
+    rt->timer->tr_time.tv_micro = ROUTE_POLL_MICROS;
+    SendIO((struct IORequest *)rt->timer);
+    rt->timer_pending = 1;
+}
 
 static int read_file(const char *path, char **text, size_t *length)
 {
@@ -292,6 +310,16 @@ static void close_router(struct router_runtime *rt)
 {
     size_t i;
 
+    if (rt->timer_pending) {
+        AbortIO((struct IORequest *)rt->timer);
+        WaitIO((struct IORequest *)rt->timer);
+    }
+    if (rt->timer_open)
+        CloseDevice((struct IORequest *)rt->timer);
+    if (rt->timer)
+        DeleteIORequest((struct IORequest *)rt->timer);
+    if (rt->timer_port)
+        DeleteMsgPort(rt->timer_port);
     if (rt->notifying)
         EndClusterNotify(&rt->notify);
     if (rt->control) {
@@ -327,6 +355,7 @@ int main(int argc, char **argv)
         {MIDI_MsgQueue, 1024},
         {MIDI_SysExSize, ROUTE_SYSEX_MAX},
         {MIDI_RecvSignal, 0},
+        {MIDI_PartSignal, 0},
         {TAG_DONE, 0}
     };
     ULONG signals;
@@ -361,6 +390,9 @@ int main(int argc, char **argv)
     if (!rt.sysex || rt.midi_signal < 0 || rt.notify_signal < 0)
         goto done;
     node_tags[3].ti_Data = (IPTR)rt.midi_signal;
+    /* camd.library 42 signals a link or a device joining or leaving a
+       route's cluster; older versions ignore the tag. */
+    node_tags[4].ti_Data = (IPTR)rt.notify_signal;
     rt.node = CreateMidiA(node_tags);
     if (!rt.node)
         goto done;
@@ -384,16 +416,30 @@ int main(int argc, char **argv)
     rt.notify.cnn_SigBit = rt.notify_signal;
     StartClusterNotify(&rt.notify);
     rt.notifying = 1;
+    if (CamdBase->lib_Version < 42) {
+        rt.timer_port = CreateMsgPort();
+        rt.timer = rt.timer_port ? (struct timerequest *)
+            CreateIORequest(rt.timer_port, sizeof(struct timerequest)) : NULL;
+        if (!rt.timer ||
+            OpenDevice((CONST_STRPTR)TIMERNAME, UNIT_VBLANK,
+                       (struct IORequest *)rt.timer, 0) != 0)
+            goto done;
+        rt.timer_open = 1;
+        start_poll(&rt);
+    }
     puts("MIDIHubRouter: running");
     update_route_states(&rt);
     signal_mask = SIGBREAKF_CTRL_C | (1UL << rt.midi_signal) |
-                  (1UL << rt.notify_signal) | (1UL << rt.control->mp_SigBit);
+                  (1UL << rt.notify_signal) | (1UL << rt.control->mp_SigBit) |
+                  (rt.timer_port ? 1UL << rt.timer_port->mp_SigBit : 0);
     for (;;) {
-        /* Cluster notification covers creation/removal. Participant changes
-           inside an existing cluster are not notified by CAMD, so poll the
-           link state as well. Delay() keeps this task dormant between polls. */
-        Delay(25);
-        signals = SetSignal(0, signal_mask) & signal_mask;
+        /* MIDI is forwarded as soon as it arrives. Route states change on
+           cluster and participant signals, or on the timer before 42. */
+        signals = Wait(signal_mask);
+        if (rt.timer_pending && CheckIO((struct IORequest *)rt.timer)) {
+            WaitIO((struct IORequest *)rt.timer);
+            start_poll(&rt);
+        }
         if (signals & SIGBREAKF_CTRL_C) {
             result = 0;
             break;

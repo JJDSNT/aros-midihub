@@ -29,7 +29,12 @@ struct synth_runtime {
     uint8_t sysex[SYSEX_CAPACITY];
     LONG midi_signal;
     unsigned long messages;
+    /* Public, so MIDIHub.prefs can tell the synth runs and stop it with
+       Ctrl-C to the port's task. No messages are sent to it. */
+    struct MsgPort *service_port;
 };
+
+#define MIDIHUB_SYNTH_PORT "MIDIHub.Synth"
 
 static int read_bank_path(const char *file_name, char *path, size_t capacity)
 {
@@ -142,6 +147,10 @@ static int complete_audio(struct synth_runtime *rt, unsigned index)
 static void cleanup(struct synth_runtime *rt)
 {
     unsigned index;
+    if (rt->service_port) {
+        RemPort(rt->service_port);
+        DeleteMsgPort(rt->service_port);
+    }
     if (rt->input)
         RemoveMidiLink(rt->input);
     if (rt->node)
@@ -241,6 +250,20 @@ int main(int argc, char **argv)
     }
     memset(&rt, 0, sizeof(rt));
     rt.midi_signal = -1;
+    rt.service_port = CreateMsgPort();
+    if (!rt.service_port)
+        return 20;
+    rt.service_port->mp_Node.ln_Name = (char *)MIDIHUB_SYNTH_PORT;
+    rt.service_port->mp_Node.ln_Pri = 0;
+    Forbid();
+    if (FindPort((CONST_STRPTR)MIDIHUB_SYNTH_PORT)) {
+        Permit();
+        DeleteMsgPort(rt.service_port);
+        puts("MIDIHub Synth is already running");
+        return 20;
+    }
+    AddPort(rt.service_port);
+    Permit();
     rt.synth = mh_synth_open_backend(bank_path, SAMPLE_RATE, backend);
     if (!rt.synth) {
         printf("Cannot load SoundFont: %s\n", bank_path);

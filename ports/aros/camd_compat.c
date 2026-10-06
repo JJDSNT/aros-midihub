@@ -10,6 +10,9 @@
                                 notification, GetClusterAttrsA(),
                                 CamdTime(), MIDI_SystemClock and cluster
                                 watches; skipped before 42
+   MIDIHubCAMDCompat --router SOURCE DESTINATION
+                                how long MIDIHubRouter, routing SOURCE to
+                                DESTINATION, takes to forward a message
    MIDIHubCAMDCompat --rethink  RethinkCAMD() loading DEVS:Midi/debugdriver
                                 at run time; needs the driver moved to
                                 SYS:camdcompat-debugdriver before CAMD starts
@@ -962,15 +965,74 @@ out:
           "the driver's cluster stays after the client leaves", NULL);
 }
 
+/* Milliseconds: CamdTime() from 42 on, the DOS clock (20 ms steps) before. */
+static ULONG now_ms(void)
+{
+    struct DateStamp ds;
+
+    if (CamdBase->lib_Version >= 42)
+        return CamdTime();
+    DateStamp(&ds);
+    return (ULONG)(ds.ds_Minute * 60000 + ds.ds_Tick * 20);
+}
+
+/* MIDIHubRouter forwarding: what a user hears as latency. */
+static void test_router(char *source, char *destination)
+{
+    struct MidiNode *out = new_node("camdcompat router out", 32, 256);
+    struct MidiNode *in = new_node("camdcompat router in", 32, 256);
+    struct MidiLink *sender = NULL, *receiver = NULL;
+    MidiMsg msg;
+    ULONG worst = 0, start, waited;
+    int i, received = 0;
+
+    if (!out || !in) {
+        check(0, "router: CreateMidiA", NULL);
+        goto out;
+    }
+    sender = link_to(out, MLTYPE_Sender, source);
+    receiver = link_to(in, MLTYPE_Receiver, destination);
+    if (!sender || !receiver) {
+        check(0, "router: AddMidiLinkA", NULL);
+        goto out;
+    }
+    /* Let the router see both links. */
+    Delay(100);
+    for (i = 0; i < 10; i++) {
+        start = now_ms();
+        PutMidi(sender, 0x90000000UL | ((ULONG)(60 + i) << 16) | (100UL << 8));
+        for (waited = 0; waited < 1000; waited = now_ms() - start) {
+            if (GetMidi(in, &msg))
+                break;
+            Delay(1);
+        }
+        if (waited < 1000) {
+            received++;
+            if (waited > worst)
+                worst = waited;
+        }
+        Delay(10);
+    }
+    printf("     %d of 10 forwarded, slowest after %lu ms\n", received, (unsigned long)worst);
+    check(received == 10, "MIDIHubRouter forwards every message", NULL);
+    check(received && worst <= 100, "MIDIHubRouter forwards within 100 ms", NULL);
+out:
+    if (sender) RemoveMidiLink(sender);
+    if (receiver) RemoveMidiLink(receiver);
+    if (out) DeleteMidi(out);
+    if (in) DeleteMidi(in);
+}
+
 int main(int argc, char **argv)
 {
     int rethink_mode = argc == 2 && !strcmp(argv[1], "--rethink");
     int v42_mode = argc == 2 && !strcmp(argv[1], "--v42");
+    int router_mode = argc == 4 && !strcmp(argv[1], "--router");
 
     /* Unbuffered, so a crash still leaves the checks before it in the log. */
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (argc != 1 && !rethink_mode && !v42_mode) {
-        puts("Usage: MIDIHubCAMDCompat [--v42 | --rethink]");
+    if (argc != 1 && !rethink_mode && !v42_mode && !router_mode) {
+        puts("Usage: MIDIHubCAMDCompat [--v42 | --rethink | --router SOURCE DESTINATION]");
         return 20;
     }
     CamdBase = OpenLibrary((CONST_STRPTR)"camd.library", 0);
@@ -979,7 +1041,9 @@ int main(int argc, char **argv)
         return 20;
     }
     printf("camd.library %d.%d\n", CamdBase->lib_Version, CamdBase->lib_Revision);
-    if (rethink_mode) {
+    if (router_mode) {
+        test_router(argv[2], argv[3]);
+    } else if (rethink_mode) {
         RUN(test_rethink_load);
     } else if (v42_mode) {
         if (CamdBase->lib_Version < 42) {

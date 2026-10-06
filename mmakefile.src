@@ -11,6 +11,7 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-selftest \
 #MM      contrib-aros-midihub-camdprobe \
 #MM      contrib-aros-midihub-camdcompat \
+#MM      contrib-aros-midihub-synth \
 #MM      contrib-aros-midihub-router \
 #MM      contrib-aros-midihub-prefs \
 #MM      contrib-aros-midihub-btmidi
@@ -104,7 +105,8 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
     uselibs=arosmidihub \
     targetdir=$(MIDIHUB_PACKAGE)/C
 
-# The live synthesizer is opt-in and accepts a user-selected SoundFont.
+# The live synthesizer plays a user-selected SoundFont; the bank is not
+# part of the package.
 #MM contrib-aros-midihub-synth : linklibs-arosmidihub
 
 %build_prog mmake=contrib-aros-midihub-synth \

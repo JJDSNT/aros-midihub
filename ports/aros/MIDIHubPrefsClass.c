@@ -250,6 +250,91 @@ static int router_command(ULONG command, struct mh_router_message *result)
     return message.result ? -1 : 0;
 }
 
+/* Services that keep working once this window is closed: the router owns
+   the routes, the synth plays MIDIHub Synth. Each has a public port that
+   says it runs. Package-Startup starts them at boot. */
+#define MIDIHUB_SYNTH_PORT "MIDIHub.Synth"
+
+static int service_running(CONST_STRPTR port_name)
+{
+    struct MsgPort *port;
+    Forbid();
+    port = FindPort(port_name);
+    Permit();
+    return port != NULL;
+}
+
+static void wait_service(CONST_STRPTR port_name, int running)
+{
+    int tries;
+    for (tries = 0; tries < 50 && service_running(port_name) != running; ++tries)
+        Delay(5);
+}
+
+static void start_service(CONST_STRPTR command, CONST_STRPTR port_name)
+{
+    BPTR nil = Open((CONST_STRPTR)"NIL:", MODE_OLDFILE);
+
+    if (!nil)
+        return;
+    SystemTags((STRPTR)command, SYS_Input, (IPTR)nil, SYS_Output, (IPTR)NULL, TAG_DONE);
+    Close(nil);
+    /* So that the state shown next is the service's. */
+    wait_service(port_name, 1);
+}
+
+static void start_router(void)
+{
+    start_service((CONST_STRPTR)"Run >NIL: <NIL: MIDIHUB:C/MIDIHubRouter",
+                  (CONST_STRPTR)MIDIHUB_ROUTER_PORT);
+}
+
+static void stop_router(void)
+{
+    if (router_command(MH_ROUTER_STOP, NULL) == 0)
+        wait_service((CONST_STRPTR)MIDIHUB_ROUTER_PORT, 0);
+}
+
+static int synth_installed(void)
+{
+    BPTR lock = Lock((CONST_STRPTR)"MIDIHUB:C/MIDIHubSynth", ACCESS_READ);
+    if (!lock)
+        return 0;
+    UnLock(lock);
+    return 1;
+}
+
+static void start_synth(void)
+{
+    start_service((CONST_STRPTR)"Run >NIL: <NIL: MIDIHUB:C/MIDIHubSynth",
+                  (CONST_STRPTR)MIDIHUB_SYNTH_PORT);
+}
+
+static void stop_synth(void)
+{
+    struct MsgPort *port;
+    Forbid();
+    port = FindPort((CONST_STRPTR)MIDIHUB_SYNTH_PORT);
+    if (port && port->mp_SigTask)
+        Signal((struct Task *)port->mp_SigTask, SIGBREAKF_CTRL_C);
+    Permit();
+    if (port)
+        wait_service((CONST_STRPTR)MIDIHUB_SYNTH_PORT, 0);
+}
+
+static void refresh_synth_state(struct MHPrefsData *data)
+{
+    int installed = synth_installed();
+    int running = service_running((CONST_STRPTR)MIDIHUB_SYNTH_PORT);
+
+    set(data->synth_state, MUIA_Text_Contents,
+        running ? "Running: MIDIHub Synth plays what is routed to it" :
+        installed ? "Stopped" : "Not installed in this package");
+    set(data->synth_start, MUIA_Disabled, running || !installed);
+    set(data->synth_stop, MUIA_Disabled, !running);
+    set(data->synth_boot, MUIA_Disabled, !installed);
+}
+
 static void fill_routes(struct MHPrefsData *data)
 {
     ULONG i;
@@ -747,6 +832,24 @@ static void refresh(struct MHPrefsData *data)
                  receivers ? "Destination" : "Idle");
         snprintf(entry->state, sizeof(entry->state), "%s",
                  ble ? ble->state : senders || receivers ? "Online" : "Idle");
+        if (CamdBase->lib_Version >= 42) {
+            /* What CAMD dropped for this endpoint since it was created */
+            IPTR overflows = 0, sysex = 0, errors = 0;
+            struct TagItem counters[] = {
+                {MCLA_Overflows, (IPTR)&overflows},
+                {MCLA_SysExDropped, (IPTR)&sysex},
+                {MCLA_RecvErrors, (IPTR)&errors},
+                {TAG_DONE, 0}
+            };
+            ULONG lost;
+            GetClusterAttrsA(cluster, counters);
+            lost = (ULONG)(overflows + sysex + errors);
+            if (lost) {
+                size_t used = strlen(entry->state);
+                snprintf(entry->state + used, sizeof(entry->state) - used,
+                         ", %lu lost", (unsigned long)lost);
+            }
+        }
         DoMethod(data->endpoint_list, MUIM_List_InsertSingle, entry,
                  MUIV_List_Insert_Bottom);
         DoMethod(data->diag_endpoint_list, MUIM_List_InsertSingle, entry,
@@ -759,7 +862,13 @@ static void refresh(struct MHPrefsData *data)
 
     memset(data->route_states, 0, sizeof(data->route_states));
     if (!router_command(MH_ROUTER_STATUS, &status)) {
+        char state[80];
         active = status.active; waiting = status.waiting;
+        snprintf(state, sizeof(state), "Running: %lu active, %lu waiting",
+                 (unsigned long)active, (unsigned long)waiting);
+        set(data->router_state, MUIA_Text_Contents, state);
+        set(data->router_start, MUIA_Disabled, TRUE);
+        set(data->router_stop, MUIA_Disabled, FALSE);
         for (i = 0; i < status.route_count && i < MH_ROUTE_MAX; ++i)
             data->route_states[i] = status.route_state[i];
         snprintf(summary, sizeof(summary),
@@ -767,11 +876,16 @@ static void refresh(struct MHPrefsData *data)
                  (unsigned long)data->endpoint_count,
                  (unsigned long)active, (unsigned long)waiting);
     } else {
+        set(data->router_state, MUIA_Text_Contents,
+            "Stopped: routes are not forwarded");
+        set(data->router_start, MUIA_Disabled, FALSE);
+        set(data->router_stop, MUIA_Disabled, TRUE);
         snprintf(summary, sizeof(summary),
                  "CAMD: %lu endpoints | Router is not running",
                  (unsigned long)data->endpoint_count);
     }
     set_status(data, summary);
+    refresh_synth_state(data);
     DoMethod(data->route_list, MUIM_List_Redraw, MUIV_List_Redraw_All);
 }
 
@@ -821,7 +935,10 @@ static int apply_settings(struct MHPrefsData *data, BOOL persistent)
 {
     STRPTR soundfont = NULL;
     IPTR backend = 0;
+    IPTR router_boot = TRUE, synth_boot = FALSE;
     CONST_STRPTR backend_name;
+    get(data->router_boot, MUIA_Selected, &router_boot);
+    get(data->synth_boot, MUIA_Selected, &synth_boot);
     if (collect_settings(data) || validate_routes(data) ||
         ensure_directory("ENV:MidiHub")) return -1;
     get(data->synth_soundfont, MUIA_String_Contents, &soundfont);
@@ -831,7 +948,9 @@ static int apply_settings(struct MHPrefsData *data, BOOL persistent)
         write_network(data, "ENV:MidiHub/Network") ||
         (soundfont && soundfont[0] &&
          write_value("ENV:MidiHub/SoundFont", soundfont)) ||
-        write_value("ENV:MidiHub/Backend", backend_name)) return -1;
+        write_value("ENV:MidiHub/Backend", backend_name) ||
+        write_value("ENV:MidiHub/RouterAtBoot", router_boot ? "1" : "0") ||
+        write_value("ENV:MidiHub/SynthAtBoot", synth_boot ? "1" : "0")) return -1;
     if (!soundfont || !soundfont[0])
         (void)DeleteFile("ENV:MidiHub/SoundFont");
     if (persistent && (ensure_directory("ENVARC:MidiHub") ||
@@ -839,10 +958,22 @@ static int apply_settings(struct MHPrefsData *data, BOOL persistent)
         write_network(data, "ENVARC:MidiHub/Network") ||
         (soundfont && soundfont[0] &&
          write_value("ENVARC:MidiHub/SoundFont", soundfont)) ||
-        write_value("ENVARC:MidiHub/Backend", backend_name))) return -1;
+        write_value("ENVARC:MidiHub/Backend", backend_name) ||
+        write_value("ENVARC:MidiHub/RouterAtBoot", router_boot ? "1" : "0") ||
+        write_value("ENVARC:MidiHub/SynthAtBoot", synth_boot ? "1" : "0"))) return -1;
     if (persistent && (!soundfont || !soundfont[0]))
         (void)DeleteFile("ENVARC:MidiHub/SoundFont");
-    (void)router_command(MH_ROUTER_RELOAD, NULL);
+    /* With "Start at boot" off the router is left to the Start button. */
+    if (router_command(MH_ROUTER_RELOAD, NULL) != 0 && data->routes.count > 0 &&
+        router_boot) {
+        Forbid();
+        if (!FindPort((CONST_STRPTR)MIDIHUB_ROUTER_PORT)) {
+            Permit();
+            start_router();
+        } else {
+            Permit();
+        }
+    }
     data->dirty = FALSE;
     refresh(data);
     return 0;
@@ -1163,6 +1294,19 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
                         Child, data->remove_button = SimpleButton("Remove Route"),
                         Child, HSpace(0),
                         End,
+                    Child, VGroup, GroupFrameT("Router service"),
+                        Child, HGroup,
+                            Child, data->router_state = TextObject,
+                                TextFrame, MUIA_Background, MUII_TextBack, End,
+                            Child, data->router_start = SimpleButton("Start"),
+                            Child, data->router_stop = SimpleButton("Stop"),
+                            End,
+                        Child, HGroup,
+                            Child, data->router_boot = MUI_MakeObject(MUIO_Checkmark, NULL),
+                            Child, Label("Start at boot (routes keep working with this window closed)"),
+                            Child, HSpace(0),
+                            End,
+                        End,
                     End,
                 Child, VGroup,
                     Child, VGroup, GroupFrameT("AppleMIDI / RTP-MIDI session"),
@@ -1199,6 +1343,19 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
                         Child, HGroup,
                             Child, preview_button = SimpleButton("Test Note"),
                             Child, synth_ahi_button = SimpleButton("AHI Preferences"),
+                            Child, HSpace(0),
+                            End,
+                        End,
+                    Child, VGroup, GroupFrameT("Synth service"),
+                        Child, HGroup,
+                            Child, data->synth_state = TextObject,
+                                TextFrame, MUIA_Background, MUII_TextBack, End,
+                            Child, data->synth_start = SimpleButton("Start"),
+                            Child, data->synth_stop = SimpleButton("Stop"),
+                            End,
+                        Child, HGroup,
+                            Child, data->synth_boot = MUI_MakeObject(MUIO_Checkmark, NULL),
+                            Child, Label("Start at boot (route an input to MIDIHub Synth to play it)"),
                             Child, HSpace(0),
                             End,
                         End,
@@ -1316,6 +1473,14 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
     DoMethod(diag_stop_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_DiagStop);
     DoMethod(diag_send_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_DiagSend);
     DoMethod(diag_clear_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_DiagClear);
+    DoMethod(data->router_start, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_RouterStart);
+    DoMethod(data->router_stop, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_RouterStop);
+    DoMethod(data->router_boot, MUIM_Notify, MUIA_Selected, MUIV_EveryTime,
+             obj, 1, MUIM_MHP_Changed);
+    DoMethod(data->synth_start, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_SynthStart);
+    DoMethod(data->synth_stop, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_SynthStop);
+    DoMethod(data->synth_boot, MUIM_Notify, MUIA_Selected, MUIV_EveryTime,
+             obj, 1, MUIM_MHP_Changed);
     DoMethod(diag_refresh_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_Refresh);
     DoMethod(data->diag_interval, MUIM_Notify, MUIA_Selected, MUIV_EveryTime,
              obj, 1, MUIM_MHP_DiagInterval);
@@ -1354,7 +1519,16 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
     if (msg->MethodID == OM_NEW) return mNew(cl, obj, (struct opSet *)msg);
     data = INST_DATA(cl, obj);
     switch (msg->MethodID) {
-        case MUIM_MHP_Refresh: refresh(data); return 0;
+        case MUIM_MHP_Refresh:
+            if (data->cluster_watch) {
+                struct ClusterWatchEvent event;
+                /* Everything is listed again, so the events only need
+                   taking. */
+                while (GetClusterWatchEvent(data->cluster_watch, &event))
+                    ;
+            }
+            refresh(data);
+            return 0;
         case MUIM_MHP_Source: selected_endpoint(data, data->source_string); return 0;
         case MUIM_MHP_Destination: selected_endpoint(data, data->destination_string); return 0;
         case MUIM_MHP_AddRoute: add_route(data); return 0;
@@ -1369,6 +1543,25 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
         case MUIM_MHP_DiagSend: diag_send(data); return 0;
         case MUIM_MHP_DiagPoll: diag_poll(data); return 0;
         case MUIM_MHP_DiagInterval: diag_interval(data); return 0;
+        case MUIM_MHP_RouterStart:
+            start_router();
+            refresh(data);
+            return 0;
+        case MUIM_MHP_RouterStop:
+            stop_router();
+            refresh(data);
+            return 0;
+        case MUIM_MHP_SynthStart:
+            /* The synth reads the SoundFont and backend from ENV:. */
+            if (data->dirty)
+                set_status(data, "Use or Save first: the synth reads the saved SoundFont.");
+            start_synth();
+            refresh(data);
+            return 0;
+        case MUIM_MHP_SynthStop:
+            stop_synth();
+            refresh(data);
+            return 0;
         case MUIM_MHP_DiagClear:
             DoMethod(data->diag_monitor, MUIM_List_Clear);
             data->diag_lines = 0;
@@ -1431,15 +1624,34 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
                     read_value("ENVARC:MidiHub/Backend", value, sizeof(value))) strcpy(value, "tiny");
                 set(data->synth_backend, MUIA_Cycle_Active,
                     strcmp(value, "fluid") == 0 ? 1 : 0);
+                if (read_value("ENV:MidiHub/RouterAtBoot", value, sizeof(value)) &&
+                    read_value("ENVARC:MidiHub/RouterAtBoot", value, sizeof(value)))
+                    strcpy(value, "1");
+                nnset(data->router_boot, MUIA_Selected, strcmp(value, "0") != 0);
+                if (read_value("ENV:MidiHub/SynthAtBoot", value, sizeof(value)) &&
+                    read_value("ENVARC:MidiHub/SynthAtBoot", value, sizeof(value)))
+                    strcpy(value, "0");
+                nnset(data->synth_boot, MUIA_Selected, strcmp(value, "1") == 0);
             }
             fill_routes(data); refresh_profiles(data); refresh(data); diag_info(data);
             data->dirty = FALSE;
             data->cluster_signal = AllocSignal(-1);
             if (data->cluster_signal >= 0) {
-                data->cluster_notify.cnn_Task = FindTask(NULL);
-                data->cluster_notify.cnn_SigBit = data->cluster_signal;
-                StartClusterNotify(&data->cluster_notify);
-                data->notifying = TRUE;
+                if (CamdBase->lib_Version >= 42) {
+                    /* Also tells when a link joins or leaves a cluster,
+                       which the Direction column shows. */
+                    struct TagItem watch_tags[] = {
+                        {CWA_SigBit, (IPTR)data->cluster_signal},
+                        {TAG_DONE, 0}
+                    };
+                    data->cluster_watch = StartClusterWatchA(watch_tags);
+                }
+                if (!data->cluster_watch) {
+                    data->cluster_notify.cnn_Task = FindTask(NULL);
+                    data->cluster_notify.cnn_SigBit = data->cluster_signal;
+                    StartClusterNotify(&data->cluster_notify);
+                    data->notifying = TRUE;
+                }
                 data->input_handler.ihn_Object = obj;
                 data->input_handler.ihn_Method = MUIM_MHP_Refresh;
                 data->input_handler.ihn_Signals = 1UL << data->cluster_signal;
@@ -1466,6 +1678,10 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
                 DoMethod(_app(obj), MUIM_Application_RemInputHandler,
                          &data->input_handler);
                 data->input_added = FALSE;
+            }
+            if (data->cluster_watch) {
+                EndClusterWatch(data->cluster_watch);
+                data->cluster_watch = NULL;
             }
             if (data->notifying) {
                 EndClusterNotify(&data->cluster_notify);

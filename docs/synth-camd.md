@@ -27,6 +27,16 @@ half a second. To use another application, connect its CAMD sender to
 When a SoundFont path is configured, start the service with
 `MIDIHUB:C/MIDIHubSynth` and no argument.
 
+MIDIHub.prefs' Synthesizer page sets the SoundFont and backend and has a
+**Synth service** box: **Start**, **Stop** and **Start at boot**
+(`ENVARC:MidiHub/SynthAtBoot`, off unless `1`, since the synth keeps AHI
+busy). The synth publishes the Exec port `MIDIHub.Synth` while it runs;
+Stop sends its task Ctrl-C.
+
+To play incoming MIDI on it, route an input to it on the Routing page, for
+example `BLE MIDI In` to `MIDIHub Synth`: an iPhone or a USB keyboard then
+plays the SoundFont through AHI, with MIDIHub.prefs closed.
+
 ## Synth backend
 
 TinySoundFont is the default backend. Use `--backend tiny` or

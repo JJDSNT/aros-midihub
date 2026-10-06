@@ -1,2 +1,20 @@
 Assign MIDIHUB: SYS:Extras/aros-midihub
 Path MIDIHUB:C ADD
+
+; Services that keep working with MIDIHub.prefs closed. Its "Start at
+; boot" settings are ENV:MidiHub/RouterAtBoot (on unless 0) and
+; ENV:MidiHub/SynthAtBoot (off unless 1). The shell does not expand
+; $MidiHub/..., so the values are read with GetEnv.
+Set mhboot `GetEnv MidiHub/SynthAtBoot`
+If "$mhboot" EQ "1"
+    If EXISTS MIDIHUB:C/MIDIHubSynth
+        Run >NIL: <NIL: MIDIHUB:C/MIDIHubSynth
+    EndIf
+EndIf
+Set mhboot `GetEnv MidiHub/RouterAtBoot`
+If EXISTS ENV:MidiHub/Routes
+    If NOT "$mhboot" EQ "0"
+        Run >NIL: <NIL: MIDIHUB:C/MIDIHubRouter
+    EndIf
+EndIf
+UnSet mhboot

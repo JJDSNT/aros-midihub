@@ -150,9 +150,19 @@ multi-route cycles are rejected to prevent feedback loops. Preferences should
 write this same contract; `Use` targets `ENV:` and `Save` targets both `ENV:`
 and `ENVARC:`.
 
-Run `MIDIHUB:C/MIDIHubRouter` to load the file. The service owns the CAMD
-links until it receives Ctrl-C, forwards channel/system messages and SysEx,
-and reports each route as `active` or `waiting`. A reconnecting route keeps its
+The router is a service of its own, so routes keep working with
+MIDIHub.prefs closed. The **Router service** box on the Routing page shows
+whether it runs, with **Start** and **Stop**, and **Start at boot**
+(`ENVARC:MidiHub/RouterAtBoot`, on unless `0`). At boot the package's
+`Package-Startup` starts it when a route file exists; **Use** and **Save**
+start it too when it is not running and Start at boot is on. By hand:
+`MIDIHUB:C/MIDIHubRouter`.
+
+The service owns the CAMD links until it receives Ctrl-C or `STOP`,
+forwards channel/system messages and SysEx as they arrive, and reports each
+route as `active` or `waiting`. With camd.library 42 it is told when an
+endpoint joins or leaves a route's cluster; before 42 it checks the route
+states every half second. A reconnecting route keeps its
 links attached to the named clusters, so a transport that re-creates its CAMD
 endpoint automatically rejoins the route. A route with reconnect disabled is
 removed after its first active-to-disconnected transition.

@@ -23,7 +23,7 @@ struct MHPrefsEndpoint {
     char name[MH_ROUTE_NAME_MAX + 1];
     char transport[20];
     char direction[16];
-    char state[16];
+    char state[32];
 };
 
 struct MHPrefsData {
@@ -31,6 +31,8 @@ struct MHPrefsData {
     Object *endpoint_list, *route_list;
     Object *source_string, *destination_string, *reconnect_check;
     Object *remove_button;
+    Object *router_state, *router_start, *router_stop, *router_boot;
+    Object *synth_state, *synth_start, *synth_stop, *synth_boot;
     Object *network_session, *network_local_port;
     Object *network_peer_ip, *network_peer_port;
     Object *synth_backend, *synth_soundfont;
@@ -45,6 +47,7 @@ struct MHPrefsData {
     char profiles[MH_PREFS_PROFILE_MAX][MH_PREFS_PROFILE_NAME_MAX + 1];
     ULONG profile_count;
     struct ClusterNotifyNode cluster_notify;
+    APTR cluster_watch;     /* camd.library 42: also follows links */
     struct MUI_InputHandlerNode input_handler;
     BYTE cluster_signal;
     BOOL notifying, input_added, dirty;
@@ -96,6 +99,10 @@ enum { MHPAGE_OVERVIEW, MHPAGE_ROUTING, MHPAGE_NETWORK,
 #define MUIM_MHP_DiagInterval  (TAGBASE_MHP | 0x15)
 #define MUIM_MHP_DiagStop      (TAGBASE_MHP | 0x16)
 #define MUIM_MHP_DiagClear     (TAGBASE_MHP | 0x17)
+#define MUIM_MHP_RouterStart   (TAGBASE_MHP | 0x18)
+#define MUIM_MHP_RouterStop    (TAGBASE_MHP | 0x19)
+#define MUIM_MHP_SynthStart    (TAGBASE_MHP | 0x1a)
+#define MUIM_MHP_SynthStop     (TAGBASE_MHP | 0x1b)
 
 AROS_UFP3(IPTR, MHPrefsDispatcher,
           AROS_UFPA(struct IClass *, cl, A0),
