@@ -29,6 +29,27 @@ Network MIDI, printing, file sharing, other clients
               AROSTCP or another stack
 ```
 
+AROS now also provides a clean-room Envoy-compatible `nipc.library` over
+`bsdsocket.library`. Bonami's optional NIPC bridge can therefore form a
+parallel discovery path without changing this responsibility boundary:
+
+```text
+Envoy/NIPC applications
+          |
+     nipc.library
+       /      \
+     RDP      discovery
+      |           |
+bsdsocket     Bonami / _nipc._tcp
+                  |
+             shared mDNS engine
+                  |
+           bsdsocket.library
+```
+
+NIPC remains a client/integration of the mDNS service rather than part of the
+TCP/IP stack, and Bonami's core API must remain usable without NIPC.
+
 The responder should be an AROS network service, for example under
 `workbench/network/services/mdns`, rather than part of the AROSTCP stack
 directory. Keeping Bonami's public API also allows Amiga applications to share
