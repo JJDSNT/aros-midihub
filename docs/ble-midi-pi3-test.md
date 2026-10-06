@@ -94,6 +94,16 @@ log), switch it off, reconnect, and compare.
    plays the scale. Timing should sound even; an uneven scale suggests the
    connection interval stayed long (see the log from test 1).
 
+## Test 3b: the iPhone plays the SoundFont on the Pi
+
+1. MIDIHub's Synthesizer page: the SoundFont is set (the test package
+   brings `MIDIHUB:SoundFonts/TimGM6mb.sf2`); **Start**.
+2. Routing page: `BLE MIDI In` in the From list, `MIDIHub Synth` in the To
+   list, **Add Route**, **Save**. The route shows `Active`.
+3. Play in MIDI Wrench or GarageBand: the Pi plays the notes through AHI.
+
+Passed on a Raspberry Pi 3 with an iPhone on October 6, 2026.
+
 ## Test 4: reconnection and the read
 
 1. Turn Bluetooth off on the iPhone and on again, and reconnect from MIDI
