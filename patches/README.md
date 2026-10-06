@@ -20,16 +20,20 @@ remain:
   per-connection state;
 - queue outgoing notification snapshots until each active radio consumes
   them, instead of coalescing a MIDI burst into the latest value. The queue is
-  bounded at 256 snapshots; on sustained producer overrun it drops the oldest;
-- accept peripheral-role SMP pairing, including Legacy Just Works and Secure
-  Connections Just Works, Numeric Comparison, and Passkey Entry; answer
+  bounded at 256 snapshots and reports backpressure instead of silently
+  dropping data. A new value wakes the radio tasks immediately rather than
+  waiting for their 100 ms maintenance tick;
+- accept peripheral-role SMP pairing after explicit user consent, including
+  Legacy Just Works and Secure Connections Just Works, Numeric Comparison,
+  and Passkey Entry; answer
   controller LTK requests, distribute bonding keys, and reuse stored keys on
   reconnection;
 - add the L2CAP LE Connection Parameter Update procedure. As the central the
   stack grants a peripheral's request through HCI LE Connection Update; as
-  the peripheral it asks for the interval set with the new
-  `BSA_LEConnInterval` stack attribute, within the limits iOS accepts.
-  `btmidi.class` sets 15 ms, as the BLE MIDI specification asks;
+  the peripheral it asks for the shortest interval preferred by an enabled
+  service (`BSRA_LEConnInterval`), within the limits iOS accepts.
+  `btmidi.class` requests 15 ms only while its service is enabled; the legacy
+  stack-wide `BSA_LEConnInterval` remains available;
 - answer the LE Remote Connection Parameter Request event (subevent 0x06)
   that a controller raises when the peer starts the link-layer Connection
   Parameters Request procedure: valid parameters are accepted, others are
@@ -37,9 +41,9 @@ remain:
   with the link; on a Pi 3 an iPhone's connections dropped with "connection
   timeout". The Connection Update Complete event (0x03) is now logged with
   the interval in effect;
-- report the largest notification payload every connected LE device receives
-  whole (`BSA_LENotifyPayload`), so BLE MIDI can size packets to the
-  negotiated ATT MTU;
+- report the largest notification payload every subscribed LE device receives
+  whole (`BSA_LENotifyPayload`), so an unrelated connected device with the
+  default MTU does not shrink BLE MIDI packets;
 - add `BGDP_STREAM` for characteristics whose value is a stream of events:
   a read returns no data, as the BLE MIDI specification requires.
 
@@ -57,7 +61,7 @@ received them.
 
 The modified AROS files and their diff context are covered by the AROS Public
 License 1.1; see [AROS-LICENSE](AROS-LICENSE). MIDIHub's own source remains
-under its existing license. The patch advances `bluetooth.library` to 45.18
+under its existing license. The patch advances `bluetooth.library` to 45.19
 because it adds event data tags used by `btmidi.class`.
 
 Apply it to the updated `~/AROS` checkout, without changing Bellatrix:
@@ -80,10 +84,12 @@ service with `btAddServiceRecord()`, receives incoming values through
 `btSetServiceValue()`. `btgatt.class` owns radio advertising and the list of
 enabled services in Bluetooth Preferences.
 
-Peripheral-role pairing falls back to Legacy Just Works by default. With the
-existing `btlesc` boot argument, capable controllers and peers negotiate Secure
-Connections, including Numeric Comparison through the standard Bluetooth
-pairing popup and Passkey Entry. OOB pairing remains unsupported.
+Peripheral-role pairing falls back to Legacy Just Works by default, but the
+standard Bluetooth pairing popup must still explicitly accept the peer. With
+the existing `btlesc` boot argument, capable controllers and peers negotiate
+Secure Connections, including Numeric Comparison and Passkey Entry. Central-
+and peripheral-role long-term keys are persisted separately. OOB pairing
+remains unsupported.
 
 ## Raspberry Pi on-board Bluetooth
 

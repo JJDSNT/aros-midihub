@@ -1,27 +1,28 @@
 diff --git a/rom/bluetooth/bluetooth/bluetooth.conf b/rom/bluetooth/bluetooth/bluetooth.conf
-index 0279e73b2b..20721d09da 100644
+index 0279e73b2b..c747fe1f2a 100644
 --- a/rom/bluetooth/bluetooth/bluetooth.conf
 +++ b/rom/bluetooth/bluetooth/bluetooth.conf
 @@ -1,5 +1,5 @@
  ##begin config
 -version 45.17
-+version 45.18
++version 45.19
  libbase BluetoothBase
  libbasetype struct BtBase
  libbasetypeextern struct Library
 diff --git a/rom/bluetooth/bluetooth/bluetooth.library.c b/rom/bluetooth/bluetooth/bluetooth.library.c
-index b2355e4cb5..8d9957458a 100644
+index b2355e4cb5..2a83fea528 100644
 --- a/rom/bluetooth/bluetooth/bluetooth.library.c
 +++ b/rom/bluetooth/bluetooth/bluetooth.library.c
-@@ -88,6 +88,7 @@ static int GM_UNIQUENAME(libInit)(LIBBASETYPEPTR BluetoothBase)
+@@ -88,6 +88,8 @@ static int GM_UNIQUENAME(libInit)(LIBBASETYPEPTR BluetoothBase)
  
          NewList(&BluetoothBase->bt_DeadlockDebug);
          NewList(&BluetoothBase->bt_ServiceRecords);
 +        NewList(&BluetoothBase->bt_GattNotifications);
++        InitSemaphore(&BluetoothBase->bt_GattLock);
          BluetoothBase->bt_NextRecordHandle = 0x00010000;
          BluetoothBase->bt_NextGattHandle = 0x0001;
  
-@@ -1228,6 +1229,7 @@ static const ULONG BtBasePT[] = {
+@@ -1228,6 +1230,7 @@ static const ULONG BtBasePT[] = {
      PACK_ENTRY(BSA_Dummy, BSA_OSVersion, BtBase, bt_OSVersion, PKCTRL_ULONG|PKCTRL_UNPACKONLY),
      PACK_ENTRY(BSA_Dummy, BSA_LEAdvertising, BtBase, bt_LEAdvertising, PKCTRL_UWORD|PKCTRL_UNPACKONLY),
      PACK_ENTRY(BSA_Dummy, BSA_EIRServices, BtBase, bt_EIRServices, PKCTRL_UWORD|PKCTRL_UNPACKONLY),
@@ -29,7 +30,7 @@ index b2355e4cb5..8d9957458a 100644
      PACK_ENDTABLE
  };
  
-@@ -1410,6 +1412,9 @@ static const ULONG BtEventNotePT[] = {
+@@ -1410,6 +1413,9 @@ static const ULONG BtEventNotePT[] = {
      PACK_ENTRY(BENA_Dummy, BENA_EventID, BtEventNote, ben_Event, PKCTRL_UWORD|PKCTRL_UNPACKONLY),
      PACK_ENTRY(BENA_Dummy, BENA_Param1, BtEventNote, ben_Param1, PKCTRL_IPTR|PKCTRL_UNPACKONLY),
      PACK_ENTRY(BENA_Dummy, BENA_Param2, BtEventNote, ben_Param2, PKCTRL_IPTR|PKCTRL_UNPACKONLY),
@@ -39,7 +40,15 @@ index b2355e4cb5..8d9957458a 100644
      PACK_ENDTABLE
  };
  
-@@ -1498,6 +1503,22 @@ AROS_LH3(LONG, btGetAttrsA,
+@@ -1446,6 +1452,7 @@ static const ULONG BtServiceRecordPT[] = {
+     PACK_ENTRY(BSRA_Dummy, BSRA_Name, BtServiceRecord, bsr_Name, PKCTRL_IPTR|PKCTRL_UNPACKONLY),
+     PACK_ENTRY(BSRA_Dummy, BSRA_NumCharacteristics, BtServiceRecord, bsr_NumChars, PKCTRL_UWORD|PKCTRL_UNPACKONLY),
+     PACK_ENTRY(BSRA_Dummy, BSRA_Owner, BtServiceRecord, bsr_Owner, PKCTRL_IPTR|PKCTRL_UNPACKONLY),
++    PACK_ENTRY(BSRA_Dummy, BSRA_LEConnInterval, BtServiceRecord, bsr_LEConnInterval, PKCTRL_UWORD|PKCTRL_UNPACKONLY),
+     PACK_ENTRY(BSRA_Dummy, BSRA_Enabled, BtServiceRecord, bsr_Enabled, PKCTRL_UWORD|PKCTRL_UNPACKONLY),
+     PACK_ENTRY(BSRA_Dummy, BSRA_FirstHandle, BtServiceRecord, bsr_FirstHandle, PKCTRL_UWORD|PKCTRL_UNPACKONLY),
+     PACK_ENTRY(BSRA_Dummy, BSRA_LastHandle, BtServiceRecord, bsr_LastHandle, PKCTRL_UWORD|PKCTRL_UNPACKONLY),
+@@ -1498,6 +1505,22 @@ AROS_LH3(LONG, btGetAttrsA,
              *((struct List **) ti->ti_Data) = &BluetoothBase->bt_Classes;
              count++;
          }
@@ -62,21 +71,31 @@ index b2355e4cb5..8d9957458a 100644
          if((ti = FindTagItem(BSA_ErrorMsgList, tags))) {
              *((struct List **) ti->ti_Data) = &BluetoothBase->bt_ErrorMsgs;
              count++;
-@@ -1736,6 +1757,12 @@ AROS_LH3(LONG, btSetAttrsA,
+@@ -1736,6 +1759,14 @@ AROS_LH3(LONG, btSetAttrsA,
              BluetoothBase->bt_LEAdvSeq++;
              count++;
          }
 +        if((ti = FindTagItem(BSA_LEConnInterval, tags))) {
 +            /* peripheral links ask for it with their next tick */
-+            BluetoothBase->bt_LEConnInterval = (ti->ti_Data > 3200) ? 3200 : (ULONG) ti->ti_Data;
-+            BluetoothBase->bt_LEConnSeq++;
++            /* The fixed 3 s supervision timeout must be strictly greater
++               than twice the maximum interval: 1200 units is already 3 s. */
++            BluetoothBase->bt_LEConnInterval = (ti->ti_Data >= 1200) ? 1199 : (ULONG) ti->ti_Data;
++            bUpdateLEConnInterval(BluetoothBase);
 +            count++;
 +        }
          if((ti = FindTagItem(BSA_EIRServices, tags))) {
              BluetoothBase->bt_EIRServices = ti->ti_Data ? TRUE : FALSE;
              BluetoothBase->bt_EIRSeq++;
+@@ -1750,6 +1781,7 @@ AROS_LH3(LONG, btSetAttrsA,
+             /* the service list the radios broadcast follows */
+             if(bsr->bsr_Protocol == BSVP_ATT) {
+                 BluetoothBase->bt_LEAdvSeq++;
++                bUpdateLEConnInterval(BluetoothBase);
+             } else {
+                 BluetoothBase->bt_EIRSeq++;
+             }
 diff --git a/rom/bluetooth/bluetooth/bluetooth.library.h b/rom/bluetooth/bluetooth/bluetooth.library.h
-index 2d2fe16627..0d880c4d3c 100644
+index 2d2fe16627..f5d520384b 100644
 --- a/rom/bluetooth/bluetooth/bluetooth.library.h
 +++ b/rom/bluetooth/bluetooth/bluetooth.library.h
 @@ -66,6 +66,8 @@ BOOL bOpenDOS(struct BtBase *BluetoothBase);
@@ -88,25 +107,43 @@ index 2d2fe16627..0d880c4d3c 100644
  BOOL bStartEventHandler(struct BtBase *BluetoothBase);
  
  /* PoPo-style pairing popup handled inside the library */
+@@ -73,6 +75,7 @@ void bShowPairingPopup(struct BtBase *BluetoothBase, struct BtDevice *bd, ULONG
+ void bStopPopup(struct BtBase *BluetoothBase);
+ 
+ void bStripString(struct BtBase *BluetoothBase, STRPTR str);
++void bUpdateLEConnInterval(struct BtBase *BluetoothBase);
+ struct Node * bFindName(struct BtBase *BluetoothBase, struct List *list, STRPTR name);
+ struct BtHardware * bFindHardware(struct BtBase *BluetoothBase, STRPTR name, ULONG unit);
+ 
 diff --git a/rom/bluetooth/bluetooth/bluetooth_intern.h b/rom/bluetooth/bluetooth/bluetooth_intern.h
-index c0a6abd7c6..d8591630c2 100644
+index c0a6abd7c6..72e24fc67b 100644
 --- a/rom/bluetooth/bluetooth/bluetooth_intern.h
 +++ b/rom/bluetooth/bluetooth/bluetooth_intern.h
-@@ -190,9 +190,13 @@ struct BtBase
+@@ -190,9 +190,15 @@ struct BtBase
      BOOL                bt_LEAdvertising; /* advertise on the LE radios */
      ULONG               bt_LEAdvSeq;      /* bumped when what is advertised changed */
      ULONG               bt_GattSeq;       /* bumped with every value set */
++    struct SignalSemaphore bt_GattLock;   /* values and notification queue */
 +    struct List         bt_GattNotifications; /* queued value snapshots for subscribers */
 +    ULONG               bt_GattNotificationCount;
      /* SDP server */
      BOOL                bt_EIRServices;   /* name and classic services in the extended inquiry response */
      ULONG               bt_EIRSeq;        /* bumped when what it would say changed */
 +    ULONG               bt_LEConnInterval; /* BSA_LEConnInterval */
++    ULONG               bt_LEServiceInterval; /* enabled-service aggregate */
 +    ULONG               bt_LEConnSeq;     /* bumped when it changed */
  };
  
  /* bt_Flags */
-@@ -238,6 +242,16 @@ struct BtGattChar
+@@ -224,6 +230,7 @@ struct BtServiceRecord
+     UWORD               bsr_FirstHandle;
+     UWORD               bsr_LastHandle;
+     UWORD               bsr_NumChars;
++    UWORD               bsr_LEConnInterval; /* preferred interval while enabled */
+     struct BtGattChar  *bsr_Chars;
+ };
+ 
+@@ -238,6 +245,16 @@ struct BtGattChar
      ULONG               bgc_Seq;          /* bt_GattSeq of the last btSetServiceValue() */
  };
  
@@ -123,7 +160,7 @@ index c0a6abd7c6..d8591630c2 100644
  struct BtEventHook
  {
      struct Node         beh_Node;         /* Node linkage */
-@@ -251,6 +265,9 @@ struct BtEventNote
+@@ -251,6 +268,9 @@ struct BtEventNote
      UWORD               ben_Event;        /* Event number as specified above */
      APTR                ben_Param1;       /* Parameter 1 for event */
      APTR                ben_Param2;       /* Parameter 2 */
@@ -133,7 +170,7 @@ index c0a6abd7c6..d8591630c2 100644
  };
  
  struct BtEventNoteInternal
-@@ -368,6 +385,8 @@ struct BtHardware
+@@ -368,6 +388,8 @@ struct BtHardware
      UWORD               bth_SCONumPkts;
      UWORD               bth_LEACLMaxPktSize;
      UWORD               bth_LEACLNumPkts;
@@ -142,6 +179,27 @@ index c0a6abd7c6..d8591630c2 100644
      BOOL                bth_RemoveMe;           /* Hardware scheduled for removal */
      ULONG               bth_ErrorCount;         /* transport errors */
      ULONG               bth_LastHCIError;       /* last HCI status */
+@@ -416,6 +438,11 @@ struct BtKeyCfg
+     UBYTE bkc_IRK[16];
+     UBYTE bkc_CSRK[16];
+     UBYTE bkc_Reserved[4];
++    /* Key our peripheral role distributed to a remote central.  It cannot
++       share bkc_LTK, which is the peer key used when we are central. */
++    UBYTE bkc_LocalLTK[16];
++    UBYTE bkc_LocalEDIV[2];
++    UBYTE bkc_LocalRand[8];
+ };
+ 
+ #define BKCF_LINKKEY 0x01
+@@ -423,6 +450,8 @@ struct BtKeyCfg
+ #define BKCF_IRK     0x04
+ #define BKCF_CSRK    0x08
+ #define BKCF_SC      0x10                 /* LE secure connections key */
++#define BKCF_LOCAL_LTK 0x20               /* our key, used while peripheral */
++#define BKCF_LOCAL_SC  0x40               /* local key is secure connections */
+ 
+ struct BtDevice
+ {
 diff --git a/rom/bluetooth/bluetooth/classes.c b/rom/bluetooth/bluetooth/classes.c
 index b1b251a2ec..89ce7c0c56 100644
 --- a/rom/bluetooth/bluetooth/classes.c
@@ -199,20 +257,35 @@ index b1b251a2ec..89ce7c0c56 100644
  void bGarbageCollectEvents(LIBBASETYPEPTR BluetoothBase)
  {
 diff --git a/rom/bluetooth/bluetooth/gattsrv.c b/rom/bluetooth/bluetooth/gattsrv.c
-index 2f42c283f0..94a98d7df2 100644
+index 2f42c283f0..f10af84f31 100644
 --- a/rom/bluetooth/bluetooth/gattsrv.c
 +++ b/rom/bluetooth/bluetooth/gattsrv.c
-@@ -84,6 +84,9 @@ static UWORD bGattValue(struct BtHWConn *cn, struct BtGattChar *bgc)
+@@ -84,12 +84,13 @@ static UWORD bGattValue(struct BtHWConn *cn, struct BtGattChar *bgc)
          }
          return(len);
      }
+-    Forbid();
 +    if(bgc->bgc_Properties & BGDP_STREAM) {
 +        return(0);                      /* past events are not a value */
 +    }
-     Forbid();
      len = bgc->bgc_Len;
      if(len) {
-@@ -208,6 +211,8 @@ static uint8_t bGattWrite(void *context, const struct bt_gatt_server_attr *a, co
+         CopyMem(bgc->bgc_Value, cn->cn_GATTVal, len);
+     }
+-    Permit();
+     return(len);
+ }
+ /* \\\ */
+@@ -199,15 +200,15 @@ static uint8_t bGattWrite(void *context, const struct bt_gatt_server_attr *a, co
+     if(len > bgc->bgc_MaxLen) {
+         return(ATT_ERR_INVALID_VALUE_LEN);
+     }
+-    Forbid();
+     if(len) {
+         CopyMem((APTR) data, bgc->bgc_Value, len);
+     }
+     bgc->bgc_Len = len;
+-    Permit();
      /* the owner hears about it once the base is unlocked again */
      cn->cn_GATTWrRec = bsr;
      cn->cn_GATTWrIdx = a->ref_index;
@@ -221,16 +294,18 @@ index 2f42c283f0..94a98d7df2 100644
      return(0);
  }
  /* \\\ */
-@@ -227,6 +232,8 @@ static void bGattRequest(const uint8_t *pdu, size_t len, uint64_t now_us, void *
+@@ -227,15 +228,22 @@ static void bGattRequest(const uint8_t *pdu, size_t len, uint64_t now_us, void *
                         cn->cn_Device->bd_Name);
      }
      cn->cn_GATTWrRec = NULL;
 +    cn->cn_GATTWrData = NULL;
 +    cn->cn_GATTWrLen = 0;
      btLockReadBase();
++    ObtainSemaphore(&BluetoothBase->bt_GattLock);
      n = bt_gatt_server_handle_pdu(&cn->cn_GATTServer, pdu, len, rsp, sizeof(rsp));
++    ReleaseSemaphore(&BluetoothBase->bt_GattLock);
      btUnlockBase();
-@@ -234,8 +241,11 @@ static void bGattRequest(const uint8_t *pdu, size_t len, uint64_t now_us, void *
+     if(n) {
          bt_l2cap_channel_manager_send(&cn->cn_L2CAP, BT_L2CAP_CID_ATT, rsp, n, now_us);
      }
      if(cn->cn_GATTWrRec) {
@@ -243,7 +318,7 @@ index 2f42c283f0..94a98d7df2 100644
      }
  }
  /* \\\ */
-@@ -248,6 +258,8 @@ void bGattSrvInit(struct BtHWConn *cn)
+@@ -248,6 +256,8 @@ void bGattSrvInit(struct BtHWConn *cn)
      memset(cn->cn_GATTSubs, 0, sizeof(cn->cn_GATTSubs));
      cn->cn_GATTSeen = FALSE;
      cn->cn_GATTWrRec = NULL;
@@ -252,7 +327,7 @@ index 2f42c283f0..94a98d7df2 100644
      bt_gatt_server_init(&cn->cn_GATTServer, bGattNext, bGattWrite, cn);
      bt_gatt_client_set_request_handler(&cn->cn_GATT, bGattRequest, cn);
      if(cn->cn_LinkType == BDLT_LE) {
-@@ -261,42 +273,75 @@ void bGattSrvInit(struct BtHWConn *cn)
+@@ -261,43 +271,80 @@ void bGattSrvInit(struct BtHWConn *cn)
  static void bGattNotifyChanged(struct BtHWCore *hc, ULONG oldseq, ULONG newseq)
  {
      struct BtBase *BluetoothBase = hc->hc_Base;
@@ -267,6 +342,7 @@ index 2f42c283f0..94a98d7df2 100644
 -        ULONG k;
 -
 -        if((bsr->bsr_Protocol != BSVP_ATT) || !bsr->bsr_Enabled) {
++    ObtainSemaphore(&BluetoothBase->bt_GattLock);
 +    for(bgn = (struct BtGattNotification *) BluetoothBase->bt_GattNotifications.lh_Head;
 +        bgn->bgn_Node.ln_Succ;
 +        bgn = (struct BtGattNotification *) bgn->bgn_Node.ln_Succ) {
@@ -308,6 +384,7 @@ index 2f42c283f0..94a98d7df2 100644
 +            }
 +        }
 +    }
++    ReleaseSemaphore(&BluetoothBase->bt_GattLock);
 +    btUnlockBase();
 +}
 +/* \\\ */
@@ -328,7 +405,8 @@ index 2f42c283f0..94a98d7df2 100644
 +    struct BtGattNotification *bgn, *next;
 +    struct BtHardware *bth;
 +
-+    btLockWriteBase();
++    btLockReadBase();
++    ObtainSemaphore(&BluetoothBase->bt_GattLock);
 +    bgn = (struct BtGattNotification *) BluetoothBase->bt_GattNotifications.lh_Head;
 +    while(bgn->bgn_Node.ln_Succ) {
 +        BOOL consumed = TRUE;
@@ -350,9 +428,11 @@ index 2f42c283f0..94a98d7df2 100644
 +        btFreeVec(bgn);
 +        bgn = next;
      }
++    ReleaseSemaphore(&BluetoothBase->bt_GattLock);
      btUnlockBase();
  }
-@@ -347,7 +392,8 @@ static void bLEAdvUpdate(struct BtHWCore *hc)
+ /* \\\ */
+@@ -347,7 +394,8 @@ static void bLEAdvUpdate(struct BtHWCore *hc)
      struct BtServiceRecord *bsr;
      STRPTR name = bth->bth_LocalName ? bth->bth_LocalName : (STRPTR) "AROS";
      UBYTE p[32];
@@ -362,7 +442,7 @@ index 2f42c283f0..94a98d7df2 100644
  
      if(!(bth->bth_Flags & BTHF_LE) || !hc->hc_BringupDone || hc->hc_Shutdown) {
          return;
-@@ -385,22 +431,50 @@ static void bLEAdvUpdate(struct BtHWCore *hc)
+@@ -385,22 +433,50 @@ static void bLEAdvUpdate(struct BtHWCore *hc)
      p[pos++] = (bth->bth_Flags & BTHF_CLASSIC) ? 0x1a : 0x06;
      p[pos++] = 3; p[pos++] = 0x19;  /* appearance: computer */
      p[pos++] = 0x80; p[pos++] = 0x00;
@@ -416,7 +496,7 @@ index 2f42c283f0..94a98d7df2 100644
      } else {
          pos = lenpos;
          p[pos] = p[pos + 1] = 0;
-@@ -450,6 +524,7 @@ void bGattSrvPoll(struct BtHWCore *hc)
+@@ -450,6 +526,7 @@ void bGattSrvPoll(struct BtHWCore *hc)
      if(hc->hc_GattSeq != seq) {
          bGattNotifyChanged(hc, hc->hc_GattSeq, seq);
          hc->hc_GattSeq = seq;
@@ -425,7 +505,7 @@ index 2f42c283f0..94a98d7df2 100644
  }
  /* \\\ */
 diff --git a/rom/bluetooth/bluetooth/hwconn.c b/rom/bluetooth/bluetooth/hwconn.c
-index ba2a88a72b..f5692021b0 100644
+index ba2a88a72b..0dc20b9c24 100644
 --- a/rom/bluetooth/bluetooth/hwconn.c
 +++ b/rom/bluetooth/bluetooth/hwconn.c
 @@ -891,6 +891,87 @@ static struct BtHWConn * bAllocConn(struct BtHWCore *hc, struct BtDevice *bd, UB
@@ -486,7 +566,7 @@ index ba2a88a72b..f5692021b0 100644
 +    struct BtHWCore *hc = cn->cn_Core;
 +    struct BtBase *BluetoothBase = hc->hc_Base;
 +    struct bt_l2cap_conn_params p;
-+    ULONG want = BluetoothBase->bt_LEConnInterval;
++    ULONG want = BluetoothBase->bt_LEServiceInterval;
 +
 +    if((cn->cn_LinkType != BDLT_LE) || (cn->cn_Role != BDR_PERIPHERAL) ||
 +       (cn->cn_ConnParamSeq == BluetoothBase->bt_LEConnSeq) ||
@@ -548,7 +628,35 @@ index ba2a88a72b..f5692021b0 100644
                      /* the characteristic's descriptors live between its value
                         handle and the next declaration (or the service end) */
                      bep->bep_EndHandle = endh;
-@@ -2472,11 +2562,14 @@ static LONG bPairingReply(struct BtHWConn *cn, struct BtPairParams *bpp)
+@@ -2402,6 +2492,27 @@ static LONG bPairingReply(struct BtHWConn *cn, struct BtPairParams *bpp)
+         bd->bd_PairingState = BDPS_INPROGRESS;
+         bd->bd_PairingRequest = BPRT_NONE;
+         btUnlockDevice(bd);
++        if(cn->cn_SMPRequestLen) {
++            UBYTE request[sizeof(cn->cn_SMPRequest)];
++            UBYTE request_len = cn->cn_SMPRequestLen;
++
++            CopyMem(cn->cn_SMPRequest, request, request_len);
++            cn->cn_SMPRequestLen = 0;
++            if(!bpp->bpp_HaveConfirm || !bpp->bpp_Confirm) {
++                bSMPFail(cn, 0x05, "pairing was not accepted by the user");
++                return(0);
++            }
++            if(!bSMPSetup(cn) ||
++               (bt_smp_manager_accept(&cn->cn_SMP, request, request_len, now) != BT_OK)) {
++                bSMPFail(cn, 0x05, "pairing request could not be accepted");
++                return(0);
++            }
++            btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
++                           "%s: LE pairing accepted as peripheral after user consent (%s).",
++                           bd->bd_Name, cn->cn_SMP.negotiation.secure_connections ?
++                           (STRPTR) "secure connections" : (STRPTR) "legacy");
++            return(0);
++        }
+         if(!cn->cn_SMPActive) {
+             return(0);                      /* pairing already finished */
+         }
+@@ -2472,11 +2583,14 @@ static LONG bPairingReply(struct BtHWConn *cn, struct BtPairParams *bpp)
  /* The btcore SMP manager runs the pairing state machine; this glue supplies
     what it needs from the port: AES-128, random numbers, the L2CAP fixed
     channel (CID 6), the controller's crypto commands (LE Start Encryption,
@@ -565,7 +673,7 @@ index ba2a88a72b..f5692021b0 100644
  
  static void bReverseBytes(UBYTE *dst, const UBYTE *src, ULONG len)
  {
-@@ -2604,6 +2697,11 @@ static bt_status_t bSMPStartEncryption(void *context, const uint8_t stk[16], uin
+@@ -2604,6 +2718,11 @@ static bt_status_t bSMPStartEncryption(void *context, const uint8_t stk[16], uin
      /* the manager keeps keys most-significant octet first; HCI wants them LSB first */
      bReverseBytes(cn->cn_SMPLTK, stk, 16);
      cn->cn_SMPKeySize = key_size;
@@ -577,31 +685,56 @@ index ba2a88a72b..f5692021b0 100644
      return(bLEStartEncryption(cn, cn->cn_SMPLTK, zero8, 0) ? BT_OK : BT_ERR_NO_RESOURCES);
  }
  
-@@ -2652,15 +2750,16 @@ static void bSMPKeysComplete(void *context, const struct bt_smp_distributed_keys
+@@ -2652,10 +2771,18 @@ static void bSMPKeysComplete(void *context, const struct bt_smp_distributed_keys
      struct BtHWConn *cn = context;
      struct BtBase *BluetoothBase = cn->cn_Core->hc_Base;
      struct BtDevice *bd = cn->cn_Device;
 -    (void) local;
-+    const struct bt_smp_distributed_keys *bond =
-+        (cn->cn_Role == BDR_PERIPHERAL) ? local : peer;
      cn->cn_Core->hc_Hardware->bth_LEListsDirty = TRUE;   /* a new bond for the controller's lists */
      btLockWriteDevice(bd);
 -    if(peer->key_mask & BT_SMP_KEYDIST_ENC_KEY) {
-+    if(bond->key_mask & BT_SMP_KEYDIST_ENC_KEY) {
++    if((cn->cn_Role == BDR_PERIPHERAL) &&
++       (local->key_mask & BT_SMP_KEYDIST_ENC_KEY)) {
++        CopyMem((APTR) local->ltk, bd->bd_Keys.bkc_LocalLTK, 16);
++        CopyMem((APTR) local->rand, bd->bd_Keys.bkc_LocalRand, 8);
++        bd->bd_Keys.bkc_LocalEDIV[0] = local->ediv & 0xff;
++        bd->bd_Keys.bkc_LocalEDIV[1] = local->ediv >> 8;
++        bd->bd_Keys.bkc_Flags |= BKCF_LOCAL_LTK;
++        bd->bd_Keys.bkc_Flags &= ~BKCF_LOCAL_SC;
++    } else if((cn->cn_Role == BDR_CENTRAL) &&
++              (peer->key_mask & BT_SMP_KEYDIST_ENC_KEY)) {
          /* distributed as on the wire = HCI byte order */
--        CopyMem((APTR) peer->ltk, bd->bd_Keys.bkc_LTK, 16);
--        CopyMem((APTR) peer->rand, bd->bd_Keys.bkc_Rand, 8);
--        bd->bd_Keys.bkc_EDIV[0] = peer->ediv & 0xff;
--        bd->bd_Keys.bkc_EDIV[1] = peer->ediv >> 8;
-+        CopyMem((APTR) bond->ltk, bd->bd_Keys.bkc_LTK, 16);
-+        CopyMem((APTR) bond->rand, bd->bd_Keys.bkc_Rand, 8);
-+        bd->bd_Keys.bkc_EDIV[0] = bond->ediv & 0xff;
-+        bd->bd_Keys.bkc_EDIV[1] = bond->ediv >> 8;
-         bd->bd_Keys.bkc_Flags |= BKCF_LTK;
-         bd->bd_Keys.bkc_Flags &= ~BKCF_SC;
-     }
-@@ -2746,11 +2845,11 @@ static void bSMPComplete(void *context, enum bt_smp_manager_result result,
-                        (bd->bd_Keys.bkc_Flags & BKCF_LTK) ? (STRPTR) ", key stored" : (STRPTR) "");
+         CopyMem((APTR) peer->ltk, bd->bd_Keys.bkc_LTK, 16);
+         CopyMem((APTR) peer->rand, bd->bd_Keys.bkc_Rand, 8);
+@@ -2731,10 +2858,17 @@ static void bSMPComplete(void *context, enum bt_smp_manager_result result,
+         btLockWriteDevice(bd);
+         if(neg && neg->secure_connections) {
+             /* LE Secure Connections: the LTK is the f5-derived key we encrypted with */
+-            CopyMem(cn->cn_SMPLTK, bd->bd_Keys.bkc_LTK, 16);
+-            memset(bd->bd_Keys.bkc_Rand, 0, 8);
+-            bd->bd_Keys.bkc_EDIV[0] = bd->bd_Keys.bkc_EDIV[1] = 0;
+-            bd->bd_Keys.bkc_Flags |= BKCF_LTK | BKCF_SC;
++            if(cn->cn_Role == BDR_PERIPHERAL) {
++                CopyMem(cn->cn_SMPLTK, bd->bd_Keys.bkc_LocalLTK, 16);
++                memset(bd->bd_Keys.bkc_LocalRand, 0, 8);
++                bd->bd_Keys.bkc_LocalEDIV[0] = bd->bd_Keys.bkc_LocalEDIV[1] = 0;
++                bd->bd_Keys.bkc_Flags |= BKCF_LOCAL_LTK | BKCF_LOCAL_SC;
++            } else {
++                CopyMem(cn->cn_SMPLTK, bd->bd_Keys.bkc_LTK, 16);
++                memset(bd->bd_Keys.bkc_Rand, 0, 8);
++                bd->bd_Keys.bkc_EDIV[0] = bd->bd_Keys.bkc_EDIV[1] = 0;
++                bd->bd_Keys.bkc_Flags |= BKCF_LTK | BKCF_SC;
++            }
+         }
+         btUnlockDevice(bd);
+         btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
+@@ -2743,14 +2877,15 @@ static void bSMPComplete(void *context, enum bt_smp_manager_result result,
+                        neg ? (STRPTR) assocname[neg->association] : (STRPTR) "?",
+                        neg ? (ULONG) neg->encryption_key_size : 0UL,
+                        (neg && neg->mitm_requested) ? (STRPTR) ", authenticated" : (STRPTR) "",
+-                       (bd->bd_Keys.bkc_Flags & BKCF_LTK) ? (STRPTR) ", key stored" : (STRPTR) "");
++                       (bd->bd_Keys.bkc_Flags & (BKCF_LTK|BKCF_LOCAL_LTK)) ?
++                       (STRPTR) ", key stored" : (STRPTR) "");
          bPairingDone(cn, 0, 0);
      } else if((result == BT_SMP_MANAGER_ERROR_UNSUPPORTED) && neg && neg->secure_connections &&
 -              !cn->cn_SMPLegacy && (cn->cn_State == HCNS_CONNECTED)) {
@@ -617,7 +750,7 @@ index ba2a88a72b..f5692021b0 100644
          btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
                         "%s: %s is not available with LE Secure Connections - pairing the legacy way.",
                         bd->bd_Name, assocname[neg->association]);
-@@ -2824,11 +2923,23 @@ static void bSMPChannelEvent(struct bt_l2cap_channel_event_info *info, void *use
+@@ -2824,11 +2959,18 @@ static void bSMPChannelEvent(struct bt_l2cap_channel_event_info *info, void *use
                  bStartPairing(cn);
              }
          } else if(info->data[0] == BT_SMP_PAIRING_REQUEST) {
@@ -626,27 +759,22 @@ index ba2a88a72b..f5692021b0 100644
 -            pdu[0] = BT_SMP_PAIRING_FAILED;
 -            pdu[1] = 0x05;
 -            bSMPSend(cn, pdu, 2);
-+            /* A central connecting to one of our GATT services starts SMP. */
-+            if(cn->cn_Role != BDR_PERIPHERAL || !bSMPSetup(cn) ||
-+               bt_smp_manager_accept(&cn->cn_SMP, info->data, info->data_len,
-+                                     info->now_us) != BT_OK) {
++            /* Never turn an unsolicited connection into a bond.  Hold the
++               request until the normal pairing UI explicitly accepts it. */
++            if(cn->cn_Role != BDR_PERIPHERAL || info->data_len != 7 ||
++               (bd->bd_Flags & BDFF_BONDED) || cn->cn_SMPRequestLen) {
 +                UBYTE pdu[2] = { BT_SMP_PAIRING_FAILED, 0x05 };
 +                cn->cn_SMPActive = FALSE;
 +                bSMPSend(cn, pdu, 2);
 +            } else {
-+                cn->cn_PairState = PAIR_SMP;
-+                btLockWriteDevice(bd);
-+                bd->bd_PairingState = BDPS_INPROGRESS;
-+                btUnlockDevice(bd);
-+                btAddErrorMsg(RETURN_OK, (STRPTR) GM_UNIQUENAME(libname),
-+                               "%s: LE pairing accepted as peripheral (%s).", bd->bd_Name,
-+                               cn->cn_SMP.negotiation.secure_connections ?
-+                               (STRPTR) "secure connections" : (STRPTR) "legacy Just Works");
++                CopyMem((APTR) info->data, cn->cn_SMPRequest, 7);
++                cn->cn_SMPRequestLen = 7;
++                bAskUser(cn, BPRT_CONSENT, 0);
 +            }
          }
          break;
      }
-@@ -2845,26 +2956,46 @@ static BOOL bSMPSetup(struct BtHWConn *cn)
+@@ -2845,26 +2987,46 @@ static BOOL bSMPSetup(struct BtHWConn *cn)
      struct bt_smp_manager_config cfg;
      struct bt_smp_aes128 aes;
      struct bt_smp_aes_cmac cmac;
@@ -702,7 +830,7 @@ index ba2a88a72b..f5692021b0 100644
  
      aes.encrypt = bSMPAES;
      aes.context = hc;
-@@ -3437,14 +3568,89 @@ BOOL bConnHandleEvent(struct BtHWCore *hc, UBYTE code, const UBYTE *params, ULON
+@@ -3437,14 +3599,90 @@ BOOL bConnHandleEvent(struct BtHWCore *hc, UBYTE code, const UBYTE *params, ULON
              return(TRUE);
          }
          if(sub == HC_LE_SUB_LTK_REQUEST) {
@@ -727,11 +855,12 @@ index ba2a88a72b..f5692021b0 100644
 +                    CopyMem(cn->cn_SMPLTK, &p[2], 16);
 +                    have = TRUE;
 +                }
-+            } else if(cn && (cn->cn_Device->bd_Keys.bkc_Flags & BKCF_LTK) &&
-+                      !memcmp(&params[3], cn->cn_Device->bd_Keys.bkc_Rand, 8) &&
-+                      params[11] == cn->cn_Device->bd_Keys.bkc_EDIV[0] &&
-+                      params[12] == cn->cn_Device->bd_Keys.bkc_EDIV[1]) {
-+                CopyMem(cn->cn_Device->bd_Keys.bkc_LTK, &p[2], 16);
++            } else if(cn && (cn->cn_Role == BDR_PERIPHERAL) &&
++                      (cn->cn_Device->bd_Keys.bkc_Flags & BKCF_LOCAL_LTK) &&
++                      !memcmp(&params[3], cn->cn_Device->bd_Keys.bkc_LocalRand, 8) &&
++                      params[11] == cn->cn_Device->bd_Keys.bkc_LocalEDIV[0] &&
++                      params[12] == cn->cn_Device->bd_Keys.bkc_LocalEDIV[1]) {
++                CopyMem(cn->cn_Device->bd_Keys.bkc_LocalLTK, &p[2], 16);
 +                have = TRUE;
 +            }
 +            bSubmitCmd(hc, have ? HC_OP_LE_LTK_REQ_REPLY : HC_OP_LE_LTK_REQ_NEG_REPLY,
@@ -796,39 +925,75 @@ index ba2a88a72b..f5692021b0 100644
              return(TRUE);
          }
          return(FALSE);
-@@ -3716,6 +3922,13 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
+@@ -3698,11 +3936,11 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
+                 bReplyChannel(BluetoothBase, bch, BTIOERR_NOTSUPPORTED, 0);
+                 return(TRUE);
+             }
+-            if(cn->cn_CtrlReq || (cn->cn_EnumState != ENUM_IDLE)) {
+-                bReplyChannel(BluetoothBase, bch, IOERR_UNITBUSY, 0);
+-                return(TRUE);
+-            }
+             if(!cn->cn_GATTReady) {
++                if(cn->cn_CtrlReq) {
++                    bReqQueueAdd(&cn->cn_WaitReqs, bch);
++                    return(TRUE);
++                }
+                 cn->cn_CtrlReq = bch;
+                 if(bt_gatt_client_connect(&cn->cn_GATT, bGATTConnectCB, cn, now) != BT_OK) {
                      cn->cn_CtrlReq = NULL;
-                     bReplyChannel(BluetoothBase, bch, BTIOERR_HOSTERROR, 0);
+@@ -3710,6 +3948,19 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
                  }
-+            } else if(bch->bch_Request == BTPR_GATTWRITENORSP) {
+                 return(TRUE);
+             }
++            /* A Write Command has no response and is not a GATT transaction;
++               it may be sent while a request or enumeration is in flight. */
++            if(bch->bch_Request == BTPR_GATTWRITENORSP) {
 +                bt_status_t st = bt_gatt_client_write_without_response(&cn->cn_GATT,
 +                                            bch->bch_Value, bch->bch_Data, bch->bch_Length);
-+                cn->cn_CtrlReq = NULL;
 +                bReplyChannel(BluetoothBase, bch, st == BT_OK ? 0 : BTIOERR_HOSTERROR,
 +                              st == BT_OK ? bch->bch_Length : 0);
-+                bDispatchWaiting(cn);
-             } else {
-                 if(bt_gatt_client_write(&cn->cn_GATT, bch->bch_Value, bch->bch_Data, bch->bch_Length,
-                                         bGATTOpComplete, cn, now) != BT_OK) {
-@@ -3896,8 +4109,15 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
-                     return(TRUE);
++                return(TRUE);
++            }
++            if(cn->cn_CtrlReq || (cn->cn_EnumState != ENUM_IDLE)) {
++                bReplyChannel(BluetoothBase, bch, IOERR_UNITBUSY, 0);
++                return(TRUE);
++            }
+             cn->cn_CtrlReq = bch;
+             if(bch->bch_Request == BTPR_GATTREAD) {
+                 if(bt_gatt_client_read(&cn->cn_GATT, bch->bch_Value, bGATTOpComplete, cn, now) != BT_OK) {
+@@ -3891,15 +4142,22 @@ BOOL bConnHandleRequest(struct BtHWCore *hc, struct BtChannel *bch)
+                     bReqQueueAdd(&hep->hep_ReadReqs, bch);
                  }
-                 cn->cn_CtrlReq = bch;
+             } else {
+-                if(cn->cn_CtrlReq || (cn->cn_EnumState != ENUM_IDLE)) {
+-                    bReplyChannel(BluetoothBase, bch, IOERR_UNITBUSY, 0);
+-                    return(TRUE);
+-                }
+-                cn->cn_CtrlReq = bch;
 -                if(bt_gatt_client_write(&cn->cn_GATT, bep->bep_Handle, bch->bch_Data, bch->bch_Length,
 -                                        bGATTOpComplete, cn, now) != BT_OK) {
+-                    cn->cn_CtrlReq = NULL;
+-                    bReplyChannel(BluetoothBase, bch, BTIOERR_HOSTERROR, 0);
 +                if((bep->bep_Properties & 0x04) && !(bep->bep_Properties & 0x08)) {
 +                    bt_status_t st = bt_gatt_client_write_without_response(&cn->cn_GATT,
 +                                             bep->bep_Handle, bch->bch_Data, bch->bch_Length);
-+                    cn->cn_CtrlReq = NULL;
 +                    bReplyChannel(BluetoothBase, bch, st == BT_OK ? 0 : BTIOERR_HOSTERROR,
 +                                  st == BT_OK ? bch->bch_Length : 0);
-+                    bDispatchWaiting(cn);
-+                } else if(bt_gatt_client_write(&cn->cn_GATT, bep->bep_Handle, bch->bch_Data,
++                } else {
++                    if(cn->cn_CtrlReq || (cn->cn_EnumState != ENUM_IDLE)) {
++                        bReplyChannel(BluetoothBase, bch, IOERR_UNITBUSY, 0);
++                        return(TRUE);
++                    }
++                    cn->cn_CtrlReq = bch;
++                    if(bt_gatt_client_write(&cn->cn_GATT, bep->bep_Handle, bch->bch_Data,
 +                                               bch->bch_Length, bGATTOpComplete, cn, now) != BT_OK) {
-                     cn->cn_CtrlReq = NULL;
-                     bReplyChannel(BluetoothBase, bch, BTIOERR_HOSTERROR, 0);
++                        cn->cn_CtrlReq = NULL;
++                        bReplyChannel(BluetoothBase, bch, BTIOERR_HOSTERROR, 0);
++                    }
                  }
-@@ -4007,6 +4227,7 @@ void bConnTick(struct BtHWCore *hc)
+             }
+             return(TRUE);
+@@ -4007,6 +4265,7 @@ void bConnTick(struct BtHWCore *hc)
  {
      struct MinNode *mn, *next;
      uint64_t now = bNowUS(hc);
@@ -836,22 +1001,33 @@ index ba2a88a72b..f5692021b0 100644
  
      for(mn = hc->hc_Conns.mlh_Head; (next = mn->mln_Succ); mn = next) {
          struct BtHWConn *cn = (struct BtHWConn *) mn;
-@@ -4060,6 +4281,14 @@ void bConnTick(struct BtHWCore *hc)
+@@ -4060,6 +4319,25 @@ void bConnTick(struct BtHWCore *hc)
              cn->cn_PairRetry = FALSE;
              bStartPairing(cn);
          }
 +        bConnAskParams(cn);
 +        if(cn->cn_LinkType == BDLT_LE) {
-+            /* what a notification carries whole (BSA_LENotifyPayload) */
-+            UWORD p = (cn->cn_GATTServer.mtu > 3) ? cn->cn_GATTServer.mtu - 3 : 0;
-+            if(!payload || (p < payload)) {
-+                payload = p;
++            UWORD n;
++            BOOL subscribed = FALSE;
++
++            for(n = 0; n < HC_GATT_MAXSUBS; n++) {
++                if(cn->cn_GATTSubs[n].handle && (cn->cn_GATTSubs[n].value & 3)) {
++                    subscribed = TRUE;
++                    break;
++                }
++            }
++            if(subscribed) {
++                /* Minimum only across links that consume notifications. */
++                UWORD p = (cn->cn_GATTServer.mtu > 3) ? cn->cn_GATTServer.mtu - 3 : 0;
++                if(!payload || (p < payload)) {
++                    payload = p;
++                }
 +            }
 +        }
          if(cn->cn_EncryptPending && ((LONG) (hc->hc_Tick - cn->cn_EncryptSince) > 10000)) {
              /* no Authentication Complete / Encryption Change came back:
                 do not hold the enumeration hostage to it */
-@@ -4100,6 +4329,9 @@ void bConnTick(struct BtHWCore *hc)
+@@ -4100,6 +4378,9 @@ void bConnTick(struct BtHWCore *hc)
              }
          }
      }
@@ -861,8 +1037,40 @@ index ba2a88a72b..f5692021b0 100644
      bConnClassicTick(hc);
  }
  /* \\\ */
+diff --git a/rom/bluetooth/bluetooth/hwtask.c b/rom/bluetooth/bluetooth/hwtask.c
+index d2db9b5bc4..ee158d4a0b 100644
+--- a/rom/bluetooth/bluetooth/hwtask.c
++++ b/rom/bluetooth/bluetooth/hwtask.c
+@@ -2871,7 +2871,7 @@ AROS_UFH0(void, bHWTask)
+     struct BtHardware *bth;
+     struct BtHWCore *hc = NULL;
+     struct Task *thistask;
+-    ULONG sigs;
++    ULONG sigs = 0;
+     ULONG sigmask;
+     LONG ioerr;
+     struct BtChannel *bch;
+@@ -2957,7 +2957,7 @@ AROS_UFH0(void, bHWTask)
+                 }
+                 bConnInit(hc);
+ 
+-                sigmask = SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_F |
++                sigmask = SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_E | SIGBREAKF_CTRL_F |
+                           (1UL<<bth->bth_DevMsgPort.mp_SigBit) |
+                           (1UL<<bth->bth_TaskMsgPort.mp_SigBit) |
+                           (1UL<<bth->bth_EventMsgPort.mp_SigBit) |
+@@ -3060,6 +3060,9 @@ AROS_UFH0(void, bHWTask)
+                             bTick(hc);
+                             bArmTimer(hc);
+                         }
++                        if(sigs & SIGBREAKF_CTRL_E) {
++                            bGattSrvPoll(hc);
++                        }
+                         if(hc->hc_FirmwarePending) {
+                             /* HCB_FIRMWARE reached during a re-run bring-up (or
+                                the first bring-up once the controller is in
 diff --git a/rom/bluetooth/bluetooth/hwtask.h b/rom/bluetooth/bluetooth/hwtask.h
-index 7ec0e799d3..78d25708e6 100644
+index 7ec0e799d3..94471eb95a 100644
 --- a/rom/bluetooth/bluetooth/hwtask.h
 +++ b/rom/bluetooth/bluetooth/hwtask.h
 @@ -106,6 +106,9 @@
@@ -894,7 +1102,16 @@ index 7ec0e799d3..78d25708e6 100644
      BOOL                cn_GATTSeen;   /* the device has asked for something */
      UBYTE               cn_GATTVal[BGATT_MAXVALUE]; /* the value being read */
      struct MinList      cn_Endpoints;  /* BtHWEndpoint */
-@@ -285,6 +292,8 @@ struct BtHWConn
+@@ -277,6 +284,8 @@ struct BtHWConn
+     struct bt_smp_cmac_aes128 cn_SMPCmac;
+     BOOL                cn_SMPActive;     /* manager initialised for a pairing in progress */
+     BOOL                cn_SMPChanOpen;   /* fixed SMP channel registered on this link */
++    UBYTE               cn_SMPRequest[7]; /* inbound request held for user consent */
++    UBYTE               cn_SMPRequestLen;
+     BOOL                cn_EncryptPending;/* encryption with the stored key in flight (enumeration held back) */
+     ULONG               cn_EncryptSince;  /* hc_Tick when it was requested (bConnTick() gives up on silence) */
+     UBYTE               cn_SMPRandWait;   /* LE Rand completions to collect before starting */
+@@ -285,6 +294,8 @@ struct BtHWConn
         (a keyboard), the pairing is run again without offering SC */
      BOOL                cn_SMPLegacy;     /* do not offer SC this time */
      BOOL                cn_PairRetry;     /* restart the pairing from bConnTick() (outside the SMP callback) */
@@ -904,7 +1121,7 @@ index 7ec0e799d3..78d25708e6 100644
      UBYTE               cn_SMPLTK[16];    /* key handed to LE Start Encryption (HCI byte order) */
      ULONG               cn_LastActivity;
 diff --git a/rom/bluetooth/bluetooth/include/libraries/bluetooth.h b/rom/bluetooth/bluetooth/include/libraries/bluetooth.h
-index 6a3de0b4a1..8b25f4c01e 100644
+index 6a3de0b4a1..b03e2a84ce 100644
 --- a/rom/bluetooth/bluetooth/include/libraries/bluetooth.h
 +++ b/rom/bluetooth/bluetooth/include/libraries/bluetooth.h
 @@ -65,6 +65,13 @@
@@ -914,7 +1131,7 @@ index 6a3de0b4a1..8b25f4c01e 100644
 +#define BSA_LENotifyPayload  (BSA_Dummy + 0x73) /* ULONG: the largest value a notification
 +                                                   carries whole to every connected LE device
 +                                                   (ATT MTU - 3, at least 20) */
-+#define BSA_LEConnInterval   (BSA_Dummy + 0x72) /* ULONG (settable): when this machine is the LE peripheral,
++#define BSA_LEConnInterval   (BSA_Dummy + 0x72) /* ULONG (settable, 0..1199): when this machine is the LE peripheral,
 +                                                   the connection interval to ask the central for, in
 +                                                   1.25 ms units (12 = 15 ms, what BLE MIDI wants);
 +                                                   0 leaves it to the central */
@@ -931,7 +1148,15 @@ index 6a3de0b4a1..8b25f4c01e 100644
  
  /* Tags for btGetAttrs(BGA_STACKCFG,...) */
  #define BGCA_Dummy           (BT_TAGBASE + 0xa00)
-@@ -390,6 +400,9 @@ struct BtGattCharDef
+@@ -369,6 +379,7 @@
+ #define BSRA_NumCharacteristics (BSRA_Dummy + 0x0a) /* ULONG entries in that array */
+ /* for every kind of record */
+ #define BSRA_Owner           (BSRA_Dummy + 0x0b) /* STRPTR who offers the service (default: the name of the calling task) */
++#define BSRA_LEConnInterval  (BSRA_Dummy + 0x0c) /* ULONG 1.25 ms units (0..1199): preferred while this GATT service is enabled */
+ /* btGetAttrs(BGA_SERVICERECORD): the above (not BSRA_Characteristics) and */
+ #define BSRA_Enabled         (BSRA_Dummy + 0x10) /* BOOL (settable): offered to connecting devices */
+ #define BSRA_FirstHandle     (BSRA_Dummy + 0x11) /* ULONG first attribute handle (BSVP_ATT) */
+@@ -390,6 +401,9 @@ struct BtGattCharDef
  #define BGDP_WRITE    0x08 /* devices may write it */
  #define BGDP_NOTIFY   0x10 /* devices may subscribe to changes */
  #define BGDP_INDICATE 0x20 /* the same, acknowledged */
@@ -941,7 +1166,7 @@ index 6a3de0b4a1..8b25f4c01e 100644
  
  #define BGATT_MAXVALUE 512
  
-@@ -481,7 +494,7 @@ struct BtGattCharDef
+@@ -481,7 +495,7 @@ struct BtGattCharDef
  #define BEHMB_SERVICEGONE     0x18 /* Param1 = bsv (an incoming service whose connection closed; released and freed by the stack) */
  #define BEHMB_ADDSERVICEREC   0x19 /* Param1 = service record */
  #define BEHMB_REMSERVICEREC   0x1a /* Param1 = service record (already gone: only good for comparing) */
@@ -951,10 +1176,53 @@ index 6a3de0b4a1..8b25f4c01e 100644
  #define BEHMF_ADDHARDWARE     (1L<<BEHMB_ADDHARDWARE)
  #define BEHMF_REMHARDWARE     (1L<<BEHMB_REMHARDWARE)
 diff --git a/rom/bluetooth/bluetooth/objects.c b/rom/bluetooth/bluetooth/objects.c
-index 72f3821ec3..d357970a26 100644
+index 72f3821ec3..ad61d1e12a 100644
 --- a/rom/bluetooth/bluetooth/objects.c
 +++ b/rom/bluetooth/bluetooth/objects.c
-@@ -1828,12 +1828,23 @@ AROS_LH1(void, btRemServiceRecord,
+@@ -1633,6 +1633,7 @@ static struct BtServiceRecord *bAddGattRecord(LIBBASETYPEPTR BluetoothBase, stru
+     ULONG num = GetTagData(BSRA_NumCharacteristics, 0, tags);
+     STRPTR name = (STRPTR) GetTagData(BSRA_Name, 0, tags);
+     STRPTR owner = (STRPTR) GetTagData(BSRA_Owner, 0, tags);
++    ULONG interval = GetTagData(BSRA_LEConnInterval, 0, tags);
+     ULONG n;
+ 
+     if((!uuid16 && !uuid128) || (num && !defs) || (num > 64)) {
+@@ -1661,6 +1662,7 @@ static struct BtServiceRecord *bAddGattRecord(LIBBASETYPEPTR BluetoothBase, stru
+     }
+     bsr->bsr_Owner = owner ? btCopyStr(owner) : NULL;
+     bsr->bsr_NumChars = num;
++    bsr->bsr_LEConnInterval = (interval >= 1200) ? 1199 : interval;
+     if(num) {
+         if(!(bsr->bsr_Chars = btAllocVec(num * sizeof(struct BtGattChar)))) {
+             bFreeServiceRecord(BluetoothBase, bsr);
+@@ -1710,6 +1712,26 @@ static struct BtServiceRecord *bAddGattRecord(LIBBASETYPEPTR BluetoothBase, stru
+ }
+ /* \\\ */
+ 
++/* Cache the shortest interval requested by an enabled GATT service. */
++void bUpdateLEConnInterval(LIBBASETYPEPTR BluetoothBase)
++{
++    struct BtServiceRecord *bsr;
++    ULONG interval = BluetoothBase->bt_LEConnInterval;
++
++    btLockReadBase();
++    for(bsr = (struct BtServiceRecord *) BluetoothBase->bt_ServiceRecords.lh_Head;
++        bsr->bsr_Node.ln_Succ; bsr = (struct BtServiceRecord *) bsr->bsr_Node.ln_Succ) {
++        if(bsr->bsr_Enabled && (bsr->bsr_Protocol == BSVP_ATT) &&
++           bsr->bsr_LEConnInterval &&
++           (!interval || (bsr->bsr_LEConnInterval < interval))) {
++            interval = bsr->bsr_LEConnInterval;
++        }
++    }
++    BluetoothBase->bt_LEServiceInterval = interval;
++    BluetoothBase->bt_LEConnSeq++;
++    btUnlockBase();
++}
++
+ /* /// "btAddServiceRecordA()" */
+ /*
+  * A record the SDP server advertises: ServiceRecordHandle, ServiceClassIDList,
+@@ -1828,13 +1850,27 @@ AROS_LH1(void, btRemServiceRecord,
  {
      AROS_LIBFUNC_INIT
      struct BtServiceRecord *bsr = record;
@@ -965,6 +1233,7 @@ index 72f3821ec3..d357970a26 100644
      /* the radio tasks only look at the records with the base locked */
      btLockWriteBase();
      Remove(&bsr->bsr_Node);
++    ObtainSemaphore(&BluetoothBase->bt_GattLock);
 +    bgn = (struct BtGattNotification *) BluetoothBase->bt_GattNotifications.lh_Head;
 +    while(bgn->bgn_Node.ln_Succ) {
 +        next = (struct BtGattNotification *) bgn->bgn_Node.ln_Succ;
@@ -975,19 +1244,23 @@ index 72f3821ec3..d357970a26 100644
 +        }
 +        bgn = next;
 +    }
++    ReleaseSemaphore(&BluetoothBase->bt_GattLock);
      btUnlockBase();
++    bUpdateLEConnInterval(BluetoothBase);
      BluetoothBase->bt_LEAdvSeq++;
      BluetoothBase->bt_EIRSeq++;
-@@ -1859,6 +1870,8 @@ AROS_LH4(LONG, btSetServiceValue,
+     bServiceRecordEvent(BluetoothBase, bsr, FALSE);
+@@ -1859,6 +1895,9 @@ AROS_LH4(LONG, btSetServiceValue,
      AROS_LIBFUNC_INIT
      struct BtServiceRecord *bsr = record;
      struct BtGattChar *bgc;
-+    struct BtGattNotification *bgn = NULL, *old;
++    struct BtGattNotification *bgn = NULL;
++    struct BtHardware *bth;
 +    ULONG seq;
  
      if(!bsr || (bsr->bsr_Protocol != BSVP_ATT) || (index >= bsr->bsr_NumChars) || (len && !data)) {
          return(-1);
-@@ -1867,13 +1880,36 @@ AROS_LH4(LONG, btSetServiceValue,
+@@ -1867,13 +1906,44 @@ AROS_LH4(LONG, btSetServiceValue,
      if(len > bgc->bgc_MaxLen) {
          return(-1);
      }
@@ -1003,7 +1276,12 @@ index 72f3821ec3..d357970a26 100644
 +            CopyMem(data, bgn->bgn_Data, len);
 +        }
 +    }
-+    btLockWriteBase();
++    ObtainSemaphore(&BluetoothBase->bt_GattLock);
++    if(bgn && (BluetoothBase->bt_GattNotificationCount >= 256)) {
++        ReleaseSemaphore(&BluetoothBase->bt_GattLock);
++        btFreeVec(bgn);
++        return(-1);             /* explicit backpressure: no silent data loss */
++    }
      if(len) {
          CopyMem(data, bgc->bgc_Value, len);
      }
@@ -1016,15 +1294,33 @@ index 72f3821ec3..d357970a26 100644
 +        bgn->bgn_Seq = seq;
 +        AddTail(&BluetoothBase->bt_GattNotifications, &bgn->bgn_Node);
 +        BluetoothBase->bt_GattNotificationCount++;
-+        /* Bound memory if producers outrun every radio for a long time. */
-+        while(BluetoothBase->bt_GattNotificationCount > 256) {
-+            old = (struct BtGattNotification *) RemHead(&BluetoothBase->bt_GattNotifications);
-+            BluetoothBase->bt_GattNotificationCount--;
-+            btFreeVec(old);
-+        }
++    }
++    ReleaseSemaphore(&BluetoothBase->bt_GattLock);
++
++    /* Do not quantise notifications to the radio's 100 ms maintenance tick. */
++    btLockReadBase();
++    for(bth = (struct BtHardware *) BluetoothBase->bt_Hardware.lh_Head;
++        bth->bth_Node.ln_Succ; bth = (struct BtHardware *) bth->bth_Node.ln_Succ) {
++        if(bth->bth_Task)
++            Signal(bth->bth_Task, SIGBREAKF_CTRL_E);
 +    }
 +    btUnlockBase();
      return((LONG) len);
+     AROS_LIBFUNC_EXIT
+ }
+@@ -1898,12 +1968,12 @@ AROS_LH4(LONG, btGetServiceValue,
+         return(-1);
+     }
+     bgc = &bsr->bsr_Chars[index];
+-    Forbid();
++    ObtainSemaphore(&BluetoothBase->bt_GattLock);
+     actual = bgc->bgc_Len;
+     if(buf && len && actual) {
+         CopyMem(bgc->bgc_Value, buf, min((ULONG) actual, len));
+     }
+-    Permit();
++    ReleaseSemaphore(&BluetoothBase->bt_GattLock);
+     return(actual);
      AROS_LIBFUNC_EXIT
  }
 diff --git a/rom/bluetooth/stack/core/security/smp_manager.c b/rom/bluetooth/stack/core/security/smp_manager.c

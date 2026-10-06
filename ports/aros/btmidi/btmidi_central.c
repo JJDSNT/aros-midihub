@@ -347,16 +347,34 @@ AROS_UFH0(void, btmidi_binding_task)
     binding->bt_base = OpenLibrary((CONST_STRPTR)"bluetooth.library", 45);
     if (binding->bt_base && setup(binding))
         binding->task = FindTask(NULL);
+
+    /* On failure the parent owns and frees binding as soon as it is woken.
+       Finish every access to it before publishing the failed start. */
+    if (!binding->task) {
+        cleanup(binding);
+        if (binding->bt_base)
+            CloseLibrary(binding->bt_base);
+        binding->bt_base = NULL;
+        Forbid();
+        if (binding->ready_task)
+            Signal(binding->ready_task, 1UL << binding->ready_signal);
+        Permit();
+        return;
+    }
+
     Forbid();
     if (binding->ready_task)
         Signal(binding->ready_task, 1UL << binding->ready_signal);
     Permit();
 
-    if (binding->task) {
-        /* a service is bound right after its device was looked at, so the
-           device is most likely connected */
-        binding->connected = TRUE;
-        arm_timer(binding, BTMIDI_SETTLE_MS);
+    {
+        IPTR connected = FALSE;
+
+        btGetAttrs(BGA_DEVICE, binding->device, BDA_IsConnected, &connected,
+                   TAG_END);
+        binding->connected = connected ? TRUE : FALSE;
+        if (binding->connected)
+            arm_timer(binding, BTMIDI_SETTLE_MS);
         while (!(signals & SIGBREAKF_CTRL_C)) {
             signals = Wait((1UL << binding->channel_port->mp_SigBit) |
                            (1UL << binding->event_port->mp_SigBit) |

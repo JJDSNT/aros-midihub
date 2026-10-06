@@ -127,6 +127,7 @@ static APTR add_service(void)
                               BSRA_UUID128, (IPTR)service_uuid,
                               BSRA_Name, (IPTR)"BLE MIDI",
                               BSRA_Owner, (IPTR)"btmidi.class",
+                              BSRA_LEConnInterval, BTMIDI_CONN_INTERVAL,
                               BSRA_Characteristics, (IPTR)&characteristic,
                               BSRA_NumCharacteristics, 1, TAG_END);
 }
@@ -235,6 +236,21 @@ static void open_camd(struct btmidi_runtime *runtime)
     base->camd_state = state;
 }
 
+static BOOL camd_names_changed(struct btmidi_runtime *runtime)
+{
+    BOOL changed;
+
+    Forbid();
+    changed = memcmp(runtime->node_name, runtime->base->cfg.mc_NodeName,
+                     BTMIDI_NAME_SIZE) ||
+              memcmp(runtime->in_name, runtime->base->cfg.mc_InName,
+                     BTMIDI_NAME_SIZE) ||
+              memcmp(runtime->out_name, runtime->base->cfg.mc_OutName,
+                     BTMIDI_NAME_SIZE);
+    Permit();
+    return changed;
+}
+
 /* At most one wake-up per refresh of the settings window. */
 static void notify_gui(struct BTMidiBase *base)
 {
@@ -262,7 +278,7 @@ AROS_UFH0(void, btmidi_task)
         runtime.timer = runtime.timer_io.tr_node.io_Device;
     BluetoothBase = OpenLibrary((CONST_STRPTR)"bluetooth.library", 45);
     if (BluetoothBase && (BluetoothBase->lib_Version == 45) &&
-        (BluetoothBase->lib_Revision < 18)) {
+        (BluetoothBase->lib_Revision < 19)) {
         CloseLibrary(BluetoothBase);
         BluetoothBase = NULL;
     }
@@ -276,15 +292,16 @@ AROS_UFH0(void, btmidi_task)
         if (runtime.event_handler) {
             runtime.base->record = runtime.record;
             runtime.base->task = task;
-            /* centrals otherwise tend to keep a 30 ms interval or longer */
-            btSetAttrs(BGA_STACK, NULL, BSA_LEConnInterval, BTMIDI_CONN_INTERVAL,
-                       TAG_END);
         }
     }
-    Forbid();
-    if (runtime.base->ready_task)
-        Signal(runtime.base->ready_task, 1UL << runtime.base->ready_signal);
-    Permit();
+    /* A failed start must remain private to this task until cleanup is done:
+       libInit frees the base after the readiness signal. */
+    if (runtime.base->task) {
+        Forbid();
+        if (runtime.base->ready_task)
+            Signal(runtime.base->ready_task, 1UL << runtime.base->ready_signal);
+        Permit();
+    }
     if (runtime.base->task) {
         do {
             ULONG mask = (1UL << runtime.event_port->mp_SigBit) |
@@ -308,7 +325,7 @@ AROS_UFH0(void, btmidi_task)
                     runtime.tx_payload = BTMIDI_TX_PACKET_MAX;
                 mh_camd_bridge_poll(&runtime.camd, send_to_ble, &runtime);
             }
-            if (signals & SIGBREAKF_CTRL_E) {
+            if ((signals & SIGBREAKF_CTRL_E) && camd_names_changed(&runtime)) {
                 /* new port names: CAMD clients reconnect by name */
                 mh_camd_bridge_close(&runtime.camd);
                 reset_peers(&runtime);
@@ -317,8 +334,6 @@ AROS_UFH0(void, btmidi_task)
             notify_gui(runtime.base);
         } while (!(signals & SIGBREAKF_CTRL_C));
     }
-    if (runtime.base->task)
-        btSetAttrs(BGA_STACK, NULL, BSA_LEConnInterval, 0, TAG_END);
     runtime.base->record = NULL;
     runtime.base->camd_state = BTMIDI_CAMD_CLOSED;
     if (runtime.event_handler)
@@ -439,7 +454,7 @@ static int GM_UNIQUENAME(libInit)(LIBBASETYPEPTR base)
         return FALSE;
     bluetooth = OpenLibrary((CONST_STRPTR)"bluetooth.library", 45);
     if (!bluetooth || ((bluetooth->lib_Version == 45) &&
-                       (bluetooth->lib_Revision < 18))) {
+                       (bluetooth->lib_Revision < 19))) {
         if (bluetooth) CloseLibrary(bluetooth);
         CloseLibrary(base->utility_base);
         return FALSE;

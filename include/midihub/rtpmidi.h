@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <midihub/midi.h>
 
 /* Apple Network MIDI RTP profile. The MIDI list and any recovery journal are
  * exposed as bounded byte spans for separate decoding. */
@@ -236,8 +237,6 @@ struct mh_midi_event {
     const uint8_t *sysex;
     size_t sysex_length;
 };
-
-enum { MH_SYSEX_MAX = 4096 };
 
 struct mh_sysex_assembler {
     uint8_t bytes[MH_SYSEX_MAX];
