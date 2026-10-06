@@ -28,14 +28,14 @@ device may internally manage sockets, long-lived tasks, discovery, multiple
 peers, sessions and transports.
 
 RTP-MIDI and AppleMIDI remain one protocol family: AppleMIDI provides session
-control and RTP-MIDI carries the MIDI payload and recovery journal. Network
-MIDI 2.0/UMP is a second transport family. Whether AROS should expose both
-through one `networkmidi.device`-style interface or through separate
-`applemidi.device` and `networkmidi2.device` interfaces remains an upstream
-design choice.
+control and RTP-MIDI carries the MIDI payload and recovery journal. They are
+exposed through `applemidi.device`. Network MIDI 2.0/UMP is a second
+transport family and is exposed through `networkmidi2.device`.
 
-The expected native source home follows the existing MIDI-driver convention
-under `workbench/devs/midi/`, rather than `workbench/network/midi`.
+The devices should initially be packaged under AROS `contrib` while their
+interfaces, interoperability and peer lifecycle are validated. If they later
+graduate into the system tree, the native MIDI-device area under
+`workbench/devs/midi/` is the natural destination.
 
 ### Dynamic peers versus CAMD ports
 
@@ -44,7 +44,7 @@ The current CAMD driver ABI reads `MidiDeviceData.NPorts` after the driver's
 state and clusters. It does not currently resize the device's port set when
 network peers later appear or disappear.
 
-That means the first Network MIDI device needs an explicit peer-to-port policy,
+That means each network MIDI device needs an explicit peer-to-port policy,
 for example a bounded pool of ports whose backing peer/session can change.
 The existing Poseidon USB MIDI implementation provides a useful precedent: it
 exposes a fixed pool of CAMD ports while hotplug and hardware state are handled
@@ -57,17 +57,19 @@ service.
 
 ### Internal runtime
 
-The device implementation may own an internal event loop/task that handles:
+Each device implementation may own an internal event loop/task that handles its transport responsibilities, including:
 
-- AppleMIDI control and RTP-MIDI data sockets;
-- Network MIDI 2.0 traffic;
+- AppleMIDI control and RTP-MIDI data sockets in `applemidi.device`;
+- Network MIDI 2.0 traffic in `networkmidi2.device`;
 - Bonami/system mDNS browse and registration events;
 - peer/session lifecycle and reconnection;
 - timers and clock synchronization;
 - mapping between CAMD ports and active network peers.
 
-This persistent state remains an implementation detail behind the MIDI device
-interface.
+This persistent state remains an implementation detail behind each MIDI device
+interface. Applications use CAMD to discover/select the exposed endpoints or
+units and decide how to bind or use them; they do not own transport discovery
+or session management.
 
 ## mDNS: the missing system piece
 
