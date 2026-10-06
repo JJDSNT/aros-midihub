@@ -15,10 +15,21 @@ HEADERS = include/midihub/applemidi.h include/midihub/rtpmidi.h \
 
 .PHONY: test test-network test-synth test-synth-fluid demo m68k synth-m68k clean
 
-test: build/protocol-test build/ble-midi-test build/routes-test
+test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test build/netmidi2-test
 	./build/protocol-test
 	./build/ble-midi-test
 	./build/routes-test
+	./build/ump-test
+	./build/netmidi2-test
+
+build/ump-test: tests/ump.c src/ump.c include/midihub/ump.h
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/ump.c src/ump.c
+
+build/netmidi2-test: tests/netmidi2.c src/netmidi2.c src/ump.c \
+                     include/midihub/netmidi2.h include/midihub/ump.h
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/netmidi2.c src/netmidi2.c src/ump.c
 
 build/routes-test: tests/routes.c src/routes.c include/midihub/routes.h
 	mkdir -p build
