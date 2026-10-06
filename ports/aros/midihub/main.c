@@ -650,8 +650,105 @@ static void recover_controls(struct runtime *rt,
             continue;
         channel = entry->number;
         message[0] = (uint8_t)(0xb0 | channel);
+        if (controls.enhanced) {
+            uint8_t handled[128] = {0};
+            size_t first;
+
+            for (first = 0; first < controls.count; ++first) {
+                uint8_t number = controls.logs[first].number;
+                uint8_t highest = 0;
+                uint8_t command;
+                uint8_t target = 0;
+                int target_known = 0;
+
+                if (handled[number]) continue;
+                handled[number] = 1;
+                for (j = first; j < controls.count; ++j)
+                    if (controls.logs[j].number == number &&
+                        controls.logs[j].command > highest)
+                        highest = controls.logs[j].command;
+                /* A single command does not need enhanced matching. Let the
+                 * ordinary tool handling below process it. */
+                if (!highest) {
+                    handled[number] = 0;
+                    continue;
+                }
+                for (command = 0; command <= highest; ++command) {
+                    const struct mh_journal_control_log *value = NULL;
+                    const struct mh_journal_control_log *toggle = NULL;
+                    const struct mh_journal_control_log *count = NULL;
+                    uint8_t missing;
+                    int all_safe = 1;
+
+                    for (j = first; j < controls.count; ++j) {
+                        const struct mh_journal_control_log *log =
+                            &controls.logs[j];
+                        if (log->number != number || log->command != command)
+                            continue;
+                        if (!log->single_packet_safe) all_safe = 0;
+                        if (!log->alternate) value = log;
+                        else if (log->count_tool) count = log;
+                        else toggle = log;
+                    }
+                    if (count) {
+                        target = count->value;
+                        target_known = 1;
+                    } else if (target_known) {
+                        target = (uint8_t)((target + 1) & 0x3f);
+                    } else {
+                        continue;
+                    }
+                    if (single_loss && all_safe) continue;
+                    missing = (uint8_t)(
+                        (target - rt->controller_count[channel][number]) &
+                        0x3f);
+                    if (!missing) continue;
+                    message[1] = number;
+                    while (missing > 1) {
+                        message[2] = 0;
+                        deliver_short(rt, message, sizeof(message));
+                        --missing;
+                    }
+                    if (value) {
+                        message[2] = value->value;
+                        deliver_short(rt, message, sizeof(message));
+                    } else if (toggle) {
+                        int desired = toggle->value & 1;
+                        int current = rt->controllers[channel][number] >= 64;
+                        if (current == desired) {
+                            message[2] = desired ? 0 : 127;
+                            deliver_short(rt, message, sizeof(message));
+                        }
+                        message[2] = desired ? 127 : 0;
+                        deliver_short(rt, message, sizeof(message));
+                    } else {
+                        message[2] = 0;
+                        deliver_short(rt, message, sizeof(message));
+                    }
+                    /* Multiple tools describe one command. Compensate for a
+                     * toggle's two-message reconstruction and retain the
+                     * count identity from the journal. */
+                    rt->controller_count[channel][number] = target;
+                    printf("MIDIHub: recovered enhanced controller channel=%u controller=%u command=%u count=%u\n",
+                           channel, (unsigned int)number,
+                           (unsigned int)command, (unsigned int)target);
+                }
+            }
+        }
         for (j = 0; j < controls.count; ++j) {
             const struct mh_journal_control_log *log = &controls.logs[j];
+            size_t k;
+            int repeated = 0;
+
+            if (controls.enhanced) {
+                for (k = 0; k < controls.count; ++k)
+                    if (controls.logs[k].number == log->number &&
+                        controls.logs[k].command != log->command) {
+                        repeated = 1;
+                        break;
+                    }
+                if (repeated) continue;
+            }
             if (single_loss && log->single_packet_safe)
                 continue;
             if (log->alternate) {

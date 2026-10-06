@@ -115,9 +115,10 @@ linked for AROS x64 and m68k, but live AROS playback has not been run.
   MSB/LSB values plus Data Increment/Decrement adjustments. Its
   transaction-count tool tracks up to 128 distinct channel, type, and
   parameter combinations, identifies missed selections, and suppresses
-  count-only recovery when the receiver has already observed the count. Other
-  alternate logs remain to be
-  implemented. System Chapters D, V, Q, and F
+  count-only recovery when the receiver has already observed the count.
+  Enhanced Chapter C lists are decoded and recovered in command order; the
+  sender uses default Chapter C encoding. Channel journal CHAN and H fields
+  use their RFC 6295 bit positions. System Chapters D, V, Q, and F
   are decoded. Chapters D and V recover System Reset, Tune Request, Song Select,
   and Active Sense. Chapter Q recovers standard sequencer transport, downbeat,
   and positions in the MIDI Song Position Pointer range. Larger positions and

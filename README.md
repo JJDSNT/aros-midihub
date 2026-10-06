@@ -365,7 +365,11 @@ Off (123), Omni Off/On (124/125), and Poly Mode (127). Chapter E now protects
 repeated Note On reference counts and
 non-default
 Note Off release velocities, supplementing Chapter N recovery. Other
-alternate logs and extended Chapter X history remain to be implemented. The
+extended Chapter X history remains to be implemented. Enhanced Chapter C
+lists are decoded and recovered command by command; the sender continues to
+use the default Chapter C form. Channel journals encode CHAN in bits 6..3 and
+reserve bit 2 for the enhanced-controller flag, including on non-zero MIDI
+channels. The
 first native MIDIHub Preferences application now provides a live CAMD endpoint
 overview, persistent routing, Network MIDI settings, SoundFont/backend
 selection, named profiles, and a CAMD synth preview action.

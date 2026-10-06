@@ -910,7 +910,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
     }
     if (*length - start > 1023) return -1;
     data[start] = (uint8_t)((*recent ? 0 : 0x80) |
-                            (channel << 2) | ((*length - start) >> 8));
+                            (channel << 3) | ((*length - start) >> 8));
     data[start + 1] = (uint8_t)(*length - start);
     data[start + 2] = toc;
     return 1;

@@ -164,11 +164,13 @@ struct mh_journal_control_log {
     uint8_t alternate;
     uint8_t count_tool;
     uint8_t single_packet_safe;
+    uint8_t command;
 };
 
 struct mh_journal_controls {
     struct mh_journal_control_log logs[128];
     size_t count;
+    uint8_t enhanced;
 };
 
 /* Decode Chapter C logs; alternate tools are marked for separate handling. */

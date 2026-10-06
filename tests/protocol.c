@@ -230,7 +230,7 @@ static void journal_framing(void)
         0xe1, 0x12, 0x34,
         0x00, 0x02,
         0x80, 0x03, 0x10,
-        0x94, 0x03, 0x20
+        0xa8, 0x03, 0x20
     };
     uint8_t broken[sizeof(sections)];
     struct mh_journal journal;
@@ -487,6 +487,14 @@ static void journal_controls(void)
         0x20, 0, 4, 0x00, 0x08, 0x40,
         0x01, 0x07, 0x64, 0x07, 0x65
     };
+    static const uint8_t enhanced[] = {
+        0x30, 0, 4, 0x04, 0x0a, 0x40,
+        0x02, 0x10, 0xc1, 0x10, 0x41, 0x10, 0x42
+    };
+    static const uint8_t enhanced_without_count[] = {
+        0x30, 0, 4, 0x04, 0x08, 0x40,
+        0x01, 0x10, 0x41, 0x10, 0x42
+    };
     struct mh_journal journal;
     struct mh_journal_controls controls;
 
@@ -512,6 +520,27 @@ static void journal_controls(void)
                              &journal) == 0);
     assert(mh_journal_decode_controls(&journal.channels[0],
                                        &controls) == -1);
+    assert(mh_journal_decode(enhanced, sizeof(enhanced), &journal) == 0);
+    assert(mh_journal_decode_controls(&journal.channels[0],
+                                      &controls) == 1);
+    assert(controls.enhanced && controls.count == 3 &&
+           controls.logs[0].number == 16 && controls.logs[0].count_tool &&
+           controls.logs[0].command == 0 &&
+           controls.logs[1].command == 0 &&
+           controls.logs[1].value == 65 &&
+           controls.logs[2].command == 1 &&
+           controls.logs[2].value == 66);
+    assert(mh_journal_decode(enhanced_without_count,
+                             sizeof(enhanced_without_count), &journal) == 0);
+    assert(mh_journal_decode_controls(&journal.channels[0],
+                                      &controls) == -1);
+    {
+        uint8_t inconsistent[sizeof(enhanced)];
+        memcpy(inconsistent, enhanced, sizeof(inconsistent));
+        inconsistent[0] &= (uint8_t)~0x10;
+        assert(mh_journal_decode(inconsistent, sizeof(inconsistent),
+                                 &journal) == -1);
+    }
 }
 
 static void outgoing_journal(void)
@@ -522,6 +551,7 @@ static void outgoing_journal(void)
     const uint8_t program[] = {0xc0, 5};
     const uint8_t pitch[] = {0xe0, 1, 32};
     const uint8_t volume[] = {0xb0, 7, 90};
+    const uint8_t channel_five_volume[] = {0xb5, 7, 91};
     const uint8_t channel_pressure[] = {0xd0, 40};
     const uint8_t poly_pressure[] = {0xa0, 60, 50};
     const uint8_t reset_controllers[] = {0xb0, 121, 0};
@@ -631,6 +661,17 @@ static void outgoing_journal(void)
            note_extras.logs[0].value == 1 &&
            note_extras.logs[1].velocity &&
            note_extras.logs[1].value == 45);
+    mh_sender_reset(&sender);
+
+    /* CHAN occupies bits 6..3; bit 2 is the enhanced Chapter C H flag. */
+    mh_sender_record(&sender, 99, 950, channel_five_volume,
+                     sizeof(channel_five_volume));
+    assert(mh_sender_journal(&sender, 100, 1000,
+                             bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(journal.channel_count == 1 &&
+           journal.channels[0].number == 5 &&
+           !(journal.channels[0].data[0] & 0x04));
     mh_sender_reset(&sender);
 
     /* Controllers 6/38/96/97 are ordinary Chapter C controllers when no

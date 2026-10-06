@@ -151,7 +151,9 @@ int mh_journal_decode(const uint8_t *data, size_t length,
                          data[offset + 1];
         if (section_length < 3 || section_length > length - offset)
             return -1;
-        channel->number = (data[offset] >> 2) & 0x0f;
+        channel->number = (data[offset] >> 3) & 0x0f;
+        if ((data[offset] & 0x04) && !journal->enhanced_controllers)
+            return -1;
         if (channel->number <= previous_channel)
             return -1;
         previous_channel = channel->number;
@@ -426,7 +428,7 @@ int mh_journal_decode_aftertouch(const struct mh_journal_channel *channel,
         offset += 3;
     }
     if (channel->chapters & 0x40) {
-        if (length - offset < 1 || (data[0] & 0x04)) return -1;
+        if (length - offset < 1) return -1;
         size = 1 + 2 * ((size_t)(data[offset] & 0x7f) + 1);
         if (size > length - offset) return -1;
         offset += size;
@@ -520,8 +522,8 @@ int mh_journal_decode_notes(const struct mh_journal_channel *channel,
         offset += 3; /* Chapter P. */
     }
     if (channel->chapters & 0x40) {
-        if (length - offset < 1 || (data[0] & 0x04))
-            return -1; /* Enhanced Chapter C needs separate decoding. */
+        if (length - offset < 1)
+            return -1;
         size = 1 + 2 * ((size_t)(data[offset] & 0x7f) + 1);
         if (size > length - offset) return -1;
         offset += size;
@@ -602,7 +604,7 @@ int mh_journal_decode_note_extras(
         offset += 3;
     }
     if (channel->chapters & 0x40) {
-        if (length - offset < 1 || (data[0] & 0x04)) return -1;
+        if (length - offset < 1) return -1;
         size = 1 + 2 * ((size_t)(data[offset] & 0x7f) + 1);
         if (size > length - offset) return -1;
         offset += size;
@@ -680,7 +682,7 @@ int mh_journal_decode_channel_state(
         offset += 3;
     }
     if (channel->chapters & 0x40) {
-        if (length - offset < 1 || (data[0] & 0x04))
+        if (length - offset < 1)
             return -1;
         size = 1 + 2 * ((size_t)(data[offset] & 0x7f) + 1);
         if (size > length - offset) return -1;
@@ -711,6 +713,11 @@ int mh_journal_decode_controls(const struct mh_journal_channel *channel,
     size_t count;
     size_t i;
     uint8_t seen[128] = {0};
+    uint8_t last_tool[128] = {0};
+    uint8_t command[128] = {0};
+    uint8_t command_mask[128] = {0};
+    uint8_t expected_mask[128] = {0};
+    uint8_t repeated[128] = {0};
     uint8_t number;
     uint8_t tool;
     if (!channel || !controls || !channel->data || channel->length < 3)
@@ -720,8 +727,7 @@ int mh_journal_decode_controls(const struct mh_journal_channel *channel,
         return 0;
     data = channel->data;
     length = channel->length;
-    if (data[0] & 0x04)
-        return -1; /* Enhanced Chapter C requires a separate decoder. */
+    controls->enhanced = !!(data[0] & 0x04);
     if (channel->chapters & 0x80) {
         if (length - offset < 3) return -1;
         offset += 3;
@@ -738,11 +744,37 @@ int mh_journal_decode_controls(const struct mh_journal_channel *channel,
         entry->alternate = !!(log[1] & 0x80);
         entry->count_tool = entry->alternate && !!(log[1] & 0x40);
         tool = !entry->alternate ? 2 : entry->count_tool ? 1 : 4;
-        if (seen[number] & tool)
-            return -1;
-        seen[number] |= tool;
+        if (!controls->enhanced) {
+            if (seen[number] & tool)
+                return -1;
+            seen[number] |= tool;
+        } else {
+            if (last_tool[number] && tool <= last_tool[number]) {
+                if (!repeated[number]) {
+                    if (!(command_mask[number] & 1)) return -1;
+                    expected_mask[number] = command_mask[number] & 6;
+                    repeated[number] = 1;
+                } else if ((command_mask[number] & 6) !=
+                           expected_mask[number]) {
+                    return -1;
+                }
+                if (command[number] == 255) return -1;
+                ++command[number];
+                command_mask[number] = 0;
+            }
+            if (command_mask[number] & tool) return -1;
+            command_mask[number] |= tool;
+            last_tool[number] = tool;
+            entry->command = command[number];
+        }
         entry->value = log[1] & (entry->alternate ? 0x3f : 0x7f);
         entry->single_packet_safe = !!(log[0] & 0x80);
+    }
+    if (controls->enhanced) {
+        for (i = 0; i < 128; ++i) {
+            if (repeated[i] && ((command_mask[i] & 6) != expected_mask[i]))
+                return -1;
+        }
     }
     return 1;
 }
@@ -772,7 +804,7 @@ int mh_journal_decode_parameters(const struct mh_journal_channel *channel,
     }
     if (channel->chapters & 0x40) {
         size_t size;
-        if (length - offset < 1 || (data[0] & 0x04)) return -1;
+        if (length - offset < 1) return -1;
         size = 1 + 2 * ((size_t)(data[offset] & 0x7f) + 1);
         if (size > length - offset) return -1;
         offset += size;
