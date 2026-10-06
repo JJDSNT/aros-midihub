@@ -337,20 +337,111 @@ to each client.
 new query function or the proposed cluster getter. Do not extend a public
 structure or change when `GetMidiErr()` clears the per-node error bits.
 
-## 6. Driver interface
+## 6. Driver and endpoint interface
 
-### 6.1 Virtual ports without a driver file
+The fixed CAMD driver model is now a concrete limitation rather than only a
+virtual-port concern. In the current implementation, `LoadDriver()` copies
+`MidiDeviceData.NPorts` once and `AllocDriverData()` allocates a fixed
+`driverdatas` array plus the corresponding input/output clusters. There is
+no supported operation for a loaded driver to add or remove one of those
+ports later.
 
-MIDIHub creates network, BLE and synth ports as ordinary CAMD clients, which
-works but makes them look like applications: they have no
+`RethinkCAMD()` solves a different problem: it lets a complete driver appear
+after CAMD has started. It does not let an already loaded driver change its
+endpoint set. AppleMIDI peers, future Network MIDI 2.0 endpoints and other
+discoverable transports make that distinction important.
+
+The design direction is therefore an additive **dynamic endpoint lifecycle**,
+not a change in the meaning of `NPorts`.
+
+### 6.1 Virtual endpoints without a driver file
+
+MIDIHub creates network, BLE and synth endpoints as ordinary CAMD clients,
+which works but makes them look like applications: they have no
 `DEVS:Midi`-style identity and are gone while their process is not running.
-An API for a program to register a port that CAMD lists like a hardware port,
-with the metadata from section 2, would give software and network endpoints
-the same standing as USB ones without writing driver files at run time.
+A future API could let software register a CAMD-visible endpoint with the
+metadata from section 2, giving software endpoints the same standing as
+driver-backed ones without writing driver files at run time.
 
-**Compatibility:** use new appended functions and opaque handles. Existing
-application links must keep their current identity and cluster lifetime;
-only clients that call the registration API acquire the new port semantics.
+This should be designed together with dynamic driver endpoints rather than as
+an unrelated virtual-port mechanism. Both need identity, metadata, lifecycle,
+notification and a representation that remains compatible with ordinary CAMD
+clusters.
+
+### 6.2 Dynamic endpoint registration
+
+A loaded driver should eventually be able to expose endpoints discovered
+after its initial `Init()`. The motivating case is a long-lived
+`applemidi.device`: network peers may appear and disappear without the
+device itself being reloaded.
+
+Do not make `MidiDeviceData.NPorts` variable. It retains its 41.1 meaning:
+the number of legacy fixed ports established during driver initialization.
+Dynamic endpoints should instead use a versioned extension backed by
+CAMD-private state or opaque handles.
+
+The API names are deliberately left open. Before choosing calls such as
+`Register...()` or `Unregister...()`, the model must establish:
+
+- stable endpoint identity independent of a transient connection;
+- direction and capabilities;
+- human-readable and structured metadata;
+- mapping to legacy CAMD clusters so old applications can use the endpoint;
+- safe ownership and locking while clients hold links;
+- notification of endpoint creation and state changes.
+
+A fixed pool of `NPorts` with peer-to-port mapping remains a compatibility
+fallback for a transport whose target CAMD does not provide this extension;
+it should not define the long-term architecture.
+
+### 6.3 Endpoint lifecycle and identity
+
+Discovery, connectivity and existence are different states. A known endpoint
+should not necessarily be destroyed because its transport is temporarily
+unavailable. A useful lifecycle must be able to represent at least the
+distinction between a registered endpoint that is connected, one that is
+temporarily disconnected/inactive, and one that has actually been
+unregistered.
+
+That distinction matters to persistent routing: a saved route can continue
+to refer to the same endpoint identity while a peer is offline and resume
+when it returns. It also avoids unnecessary destruction and recreation of
+clusters and links during transient network or radio loss.
+
+The current `RemoveCluster()` frees the cluster immediately. Dynamic endpoint
+removal therefore cannot simply expose that operation to drivers: the design
+must specify what happens to existing links/references and which locks protect
+the transition. Prefer state changes such as connected/disconnected where
+identity should survive; reserve unregister/removal for actual endpoint
+retirement.
+
+The structured `connected` metadata discussed in section 2.2 belongs to this
+lifecycle. It should be supplied through the new extension without growing
+`MidiDeviceData`.
+
+### 6.4 MIDI 2.0 extensibility
+
+The initial dynamic-endpoint work does not require CAMD to carry native UMP,
+but its terminology and object model should not assume that every future
+endpoint is only a MIDI 1.0 port. MIDI 2.0 distinguishes a UMP Endpoint from
+the Function Blocks and Groups it contains.
+
+The first implementation may still project an endpoint into ordinary CAMD
+clusters for legacy applications. The opaque/versioned model should leave room
+for richer Endpoint, Function Block and Group metadata later, rather than
+baking those concepts into `NPorts` or public 41.1 structures.
+
+This follows the same broad compatibility pattern used by modern MIDI
+subsystems: retain the traditional port-facing contract while adding richer
+endpoint identity and topology beside it.
+
+**Compatibility:** sections 6.1-6.4 are additive. `MidiDeviceData.NPorts`
+keeps its existing meaning and no CAMD 41.1 public structure changes size or
+layout. Existing drivers continue to expose fixed ports exactly as before.
+Dynamically registered endpoints appear through compatible CAMD clusters to
+legacy clients; richer identity, state and metadata require the versioned
+extension. New library vectors are appended after the existing ABI and new
+state remains private or opaque.
 
 ## Implementing the rest
 
@@ -457,11 +548,17 @@ genmodule would derive a `StartClusterNotify()` varargs macro from that name,
 clashing with the 41.1 call, which keeps signalling only clusters coming and
 going.
 
-### Step 6: virtual ports (6.1)
+### Step 6: dynamic endpoint design (6.1-6.4)
 
-Design only after steps 1 to 5 have been used by MIDIHub's BLE, network and
-synth ports for a while: what those ports needed from CAMD will say what a
-registration API has to offer.
+Use AppleMIDI/Network MIDI, BLE, USB hot-plug and the software synth as
+concrete lifecycle cases. Specify identity, connected/disconnected state,
+legacy cluster projection, ownership, locking and safe unregister semantics
+before naming the public API. Keep `NPorts` untouched. A first implementation
+can then cover virtual endpoints and dynamic driver endpoints through the same
+underlying model where practical.
+
+Native UMP is not a prerequisite for this step, but the opaque model must not
+prevent later Endpoint, Function Block and Group metadata.
 
 ## Order and why
 
@@ -471,4 +568,7 @@ registration API has to offer.
 3. Then MIDIHub uses version 42: MIDIHub.prefs follows clusters with a
    cluster watch and shows the counters, routes use `MIDI_PartSignal` to
    notice a device coming back, BLE MIDI stamps with `CamdTime()`.
-4. Step 6 after that, from what those ports needed.
+4. Then design step 6 from the now-concrete dynamic endpoint requirements.
+   AppleMIDI is the primary case; fixed `NPorts` pools are only a fallback.
+5. Treat persistent routing and native MIDI 2.0/UMP as subsequent CAMD design
+   questions rather than requirements for the first dynamic-endpoint API.
