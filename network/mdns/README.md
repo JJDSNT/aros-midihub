@@ -55,7 +55,11 @@ than a drop-in AROS component. The AROS port needs:
 3. native AROSTCP validation with UDP 5353 as the normal bind port;
 4. full RFC 6762 probing, conflict detection, automatic rename, defensive
    announcements, known-answer suppression, and goodbyes;
-5. interface enumeration and address-change handling, followed by IPv6;
+5. interface enumeration and address-change handling, then IPv6 mDNS on
+   `ff02::fb`; current AROSTCP already supplies scoped link-local/multicast
+   output (`sin6_scope_id` / `IPV6_PKTINFO`) and `SO_BINDTODEVICE`, so this is
+   primarily Bonami/service integration rather than a missing socket-stack
+   prerequisite;
 6. working update and resolve cancellation operations;
 7. optional message-port event delivery so clients need not do work in an
    engine-task Hook;
@@ -66,6 +70,13 @@ than a drop-in AROS component. The AROS port needs:
     `nipc.library` and public `<envoy/nipc.h>` API added upstream to AROS in
     commit `fbc2e274d880868c3fe447dffdfc9226fae0bd66`, including
     `_nipc._tcp` publication and browsing.
+
+AROSTCP upstream commit `28dd8854eae4ccc1325d600689790938dd0f7fba` also
+records the multi-interface primitives needed by the responder: scoped IPv6
+link-local/multicast output and per-interface UDP binding. This removes a
+socket-stack uncertainty from the IPv6/multi-interface roadmap; Bonami still
+needs to enumerate interfaces, track address/link changes, join the mDNS group
+per interface, and select the correct scope for announcements and replies.
 
 The AROS NIPC addition removes the former reason to disable Bonami's Envoy
 bridge merely because the platform lacked NIPC headers or a `nipc.library`.
