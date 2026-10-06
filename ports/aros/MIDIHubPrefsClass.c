@@ -826,8 +826,38 @@ static void diag_interval(struct MHPrefsData *data)
     diag_refresh_bt(data);
 }
 
+/* The endpoint lists are filled again on every CAMD change; with a
+   camd.library 42 cluster watch that is every link joining or leaving,
+   including Send test's own. Keep each list's selection across it. */
+static void remember_active(Object *list, char *name, size_t size)
+{
+    struct MHPrefsEndpoint *entry = NULL;
+    DoMethod(list, MUIM_List_GetEntry, MUIV_List_GetEntry_Active, &entry);
+    snprintf(name, size, "%s", entry ? entry->name : "");
+}
+
+static void restore_active(Object *list, const char *name)
+{
+    struct MHPrefsEndpoint *entry;
+    LONG i;
+    if (!name[0])
+        return;
+    for (i = 0; ; ++i) {
+        entry = NULL;
+        DoMethod(list, MUIM_List_GetEntry, i, &entry);
+        if (!entry)
+            return;
+        if (!strcmp(entry->name, name)) {
+            /* nnset: picking it again must not refill the route fields */
+            nnset(list, MUIA_List_Active, i);
+            return;
+        }
+    }
+}
+
 static void refresh(struct MHPrefsData *data)
 {
+    char selected[4][MH_ROUTE_NAME_MAX + 1];
     struct MidiCluster *cluster;
     struct mh_router_message status;
     APTR lock;
@@ -835,6 +865,10 @@ static void refresh(struct MHPrefsData *data)
     char summary[160];
 
     collect_ble(data);
+    remember_active(data->endpoint_list, selected[0], sizeof(selected[0]));
+    remember_active(data->diag_endpoint_list, selected[1], sizeof(selected[1]));
+    remember_active(data->route_from_list, selected[2], sizeof(selected[2]));
+    remember_active(data->route_to_list, selected[3], sizeof(selected[3]));
     data->endpoint_count = 0;
     set(data->endpoint_list, MUIA_List_Quiet, TRUE);
     DoMethod(data->endpoint_list, MUIM_List_Clear);
@@ -898,6 +932,10 @@ static void refresh(struct MHPrefsData *data)
     set(data->diag_endpoint_list, MUIA_List_Quiet, FALSE);
     set(data->route_from_list, MUIA_List_Quiet, FALSE);
     set(data->route_to_list, MUIA_List_Quiet, FALSE);
+    restore_active(data->endpoint_list, selected[0]);
+    restore_active(data->diag_endpoint_list, selected[1]);
+    restore_active(data->route_from_list, selected[2]);
+    restore_active(data->route_to_list, selected[3]);
     diag_refresh_bt(data);
 
     memset(data->route_states, 0, sizeof(data->route_states));
