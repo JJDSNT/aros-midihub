@@ -149,7 +149,7 @@ static void check_streams(void)
                                   0x90, 62, 102, 0xff};
     const uint8_t b_expected[] = {0xf8, 0xff,
                                   0xf0, 0x7e, 0x01, 0x02, 0x03, 0xf7, 0xff};
-    uint8_t big[1 + MH_BLE_MIDI_SYSEX_MAX + 2];
+    uint8_t big[1 + BTMIDI_SYSEX_MAX + 2];
     size_t i;
 
     memset(&log_a, 0, sizeof(log_a));

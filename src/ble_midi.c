@@ -236,7 +236,7 @@ static int stream_byte(void *context, uint16_t timestamp, uint8_t byte)
         return 0;
     }
     if (stream->sysex_length) {
-        if (stream->sysex_length == MH_BLE_MIDI_SYSEX_MAX) {
+        if (stream->sysex_length == BTMIDI_SYSEX_MAX) {
             stream->sysex_length = 0;
             return -1;
         }

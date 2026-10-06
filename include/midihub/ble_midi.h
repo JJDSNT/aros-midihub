@@ -3,7 +3,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <midihub/midi.h>
+
+#define BTMIDI_SYSEX_MAX 4096
 
 #define MH_BLE_MIDI_SERVICE_UUID \
     {0x03,0xb8,0x0e,0x5a,0xed,0xe8,0x4b,0x33,0xa7,0x51,0x6c,0xe3,0x4e,0xc4,0xc7,0x00}
@@ -34,8 +35,6 @@ int mh_ble_midi_encode_sysex_chunk(const uint8_t *message, size_t length,
    sender: running status and SysEx span packets, so every connection needs
    its own stream. The callback receives each channel, System Common or
    Real-Time message, and each SysEx from F0 to F7. */
-#define MH_BLE_MIDI_SYSEX_MAX MH_SYSEX_MAX
-
 typedef void (*mh_ble_midi_message_callback)(void *context,
                                              const uint8_t *message,
                                              size_t length);
@@ -48,7 +47,7 @@ struct mh_ble_midi_stream {
     uint8_t message_length;
     uint8_t message_needed;
     size_t sysex_length;
-    uint8_t sysex[MH_BLE_MIDI_SYSEX_MAX];
+    uint8_t sysex[BTMIDI_SYSEX_MAX];
 };
 
 void mh_ble_midi_stream_init(struct mh_ble_midi_stream *stream,

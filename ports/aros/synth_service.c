@@ -1,6 +1,5 @@
 /* CAMD SoundFont instrument using the default ahi.device output. */
 #include <midihub/synth.h>
-#include <midihub/midi.h>
 
 #include <devices/ahi.h>
 #include <dos/dos.h>
@@ -14,7 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { SAMPLE_RATE = 44100, BLOCK_FRAMES = 2048 };
+enum { SAMPLE_RATE = 44100, BLOCK_FRAMES = 2048, SYSEX_CAPACITY = 4096 };
 
 struct Library *CamdBase;
 
@@ -27,7 +26,7 @@ struct synth_runtime {
     int16_t *samples[2];
     int audio_open;
     int pending[2];
-    uint8_t sysex[MH_SYSEX_MAX];
+    uint8_t sysex[SYSEX_CAPACITY];
     LONG midi_signal;
     unsigned long messages;
     /* Public, so MIDIHub.prefs can tell the synth runs and stop it with
@@ -191,7 +190,7 @@ int main(int argc, char **argv)
     struct TagItem node_tags[] = {
         {MIDI_Name, (IPTR)node_name},
         {MIDI_MsgQueue, 256},
-        {MIDI_SysExSize, MH_SYSEX_MAX},
+        {MIDI_SysExSize, SYSEX_CAPACITY},
         {MIDI_RecvSignal, 0},
         {TAG_DONE, 0}
     };
