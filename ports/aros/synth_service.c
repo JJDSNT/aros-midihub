@@ -32,6 +32,7 @@ struct synth_runtime {
     /* Public, so MIDIHub.prefs can tell the synth runs and stop it with
        Ctrl-C to the port's task. No messages are sent to it. */
     struct MsgPort *service_port;
+    int service_port_public;
 };
 
 #define MIDIHUB_SYNTH_PORT "MIDIHub.Synth"
@@ -148,7 +149,8 @@ static void cleanup(struct synth_runtime *rt)
 {
     unsigned index;
     if (rt->service_port) {
-        RemPort(rt->service_port);
+        if (rt->service_port_public)
+            RemPort(rt->service_port);
         DeleteMsgPort(rt->service_port);
     }
     if (rt->input)
@@ -262,7 +264,6 @@ int main(int argc, char **argv)
         puts("MIDIHub Synth is already running");
         return 20;
     }
-    AddPort(rt.service_port);
     Permit();
     rt.synth = mh_synth_open_backend(bank_path, SAMPLE_RATE, backend);
     if (!rt.synth) {
@@ -310,6 +311,10 @@ int main(int argc, char **argv)
     }
     queue_audio(&rt, 0, NULL);
     queue_audio(&rt, 1, rt.audio[0]);
+    /* Published once the bank is loaded and AHI plays, so that a running
+       MIDIHub.Synth port means a working synth. */
+    AddPort(rt.service_port);
+    rt.service_port_public = 1;
     printf("MIDIHub Synth: CAMD port '%s', backend %s, bank %s\n",
            port_name, mh_synth_backend_name(backend), bank_path);
     result = 0;

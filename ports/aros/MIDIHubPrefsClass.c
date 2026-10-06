@@ -268,10 +268,10 @@ static int service_running(CONST_STRPTR port_name)
     return port != NULL;
 }
 
-static void wait_service(CONST_STRPTR port_name, int running)
+static void wait_service(CONST_STRPTR port_name, int running, int seconds)
 {
     int tries;
-    for (tries = 0; tries < 50 && service_running(port_name) != running; ++tries)
+    for (tries = 0; tries < seconds * 10 && service_running(port_name) != running; ++tries)
         Delay(5);
 }
 
@@ -284,7 +284,7 @@ static void start_service(CONST_STRPTR command, CONST_STRPTR port_name)
     SystemTags((STRPTR)command, SYS_Input, (IPTR)nil, SYS_Output, (IPTR)NULL, TAG_DONE);
     Close(nil);
     /* So that the state shown next is the service's. */
-    wait_service(port_name, 1);
+    wait_service(port_name, 1, 5);
 }
 
 static void start_router(void)
@@ -296,7 +296,7 @@ static void start_router(void)
 static void stop_router(void)
 {
     if (router_command(MH_ROUTER_STOP, NULL) == 0)
-        wait_service((CONST_STRPTR)MIDIHUB_ROUTER_PORT, 0);
+        wait_service((CONST_STRPTR)MIDIHUB_ROUTER_PORT, 0, 5);
 }
 
 static int synth_installed(void)
@@ -308,10 +308,32 @@ static int synth_installed(void)
     return 1;
 }
 
-static void start_synth(void)
+/* The synth writes why it did not start (no SoundFont, AHI, ...) to its
+   output, kept in T: so it can be shown. Loading a large bank takes a
+   while, hence the longer wait. */
+#define SYNTH_LOG "T:MIDIHubSynth.log"
+
+static void start_synth(struct MHPrefsData *data)
 {
-    start_service((CONST_STRPTR)"Run >NIL: <NIL: MIDIHUB:C/MIDIHubSynth",
-                  (CONST_STRPTR)MIDIHUB_SYNTH_PORT);
+    BPTR nil = Open((CONST_STRPTR)"NIL:", MODE_OLDFILE);
+    char reason[160];
+
+    if (!nil)
+        return;
+    (void)DeleteFile((CONST_STRPTR)SYNTH_LOG);
+    SystemTags((STRPTR)"Run >" SYNTH_LOG " <NIL: MIDIHUB:C/MIDIHubSynth",
+               SYS_Input, (IPTR)nil, SYS_Output, (IPTR)NULL, TAG_DONE);
+    Close(nil);
+    wait_service((CONST_STRPTR)MIDIHUB_SYNTH_PORT, 1, 20);
+    if (service_running((CONST_STRPTR)MIDIHUB_SYNTH_PORT))
+        return;
+    if (read_value(SYNTH_LOG, reason, sizeof(reason)) == 0) {
+        char status[200];
+        snprintf(status, sizeof(status), "The synth did not start: %s", reason);
+        set_status(data, status);
+    } else {
+        set_status(data, "The synth did not start; run MIDIHUB:C/MIDIHubSynth in a Shell to see why.");
+    }
 }
 
 static void stop_synth(void)
@@ -323,7 +345,7 @@ static void stop_synth(void)
         Signal((struct Task *)port->mp_SigTask, SIGBREAKF_CTRL_C);
     Permit();
     if (port)
-        wait_service((CONST_STRPTR)MIDIHUB_SYNTH_PORT, 0);
+        wait_service((CONST_STRPTR)MIDIHUB_SYNTH_PORT, 0, 5);
 }
 
 static void refresh_synth_state(struct MHPrefsData *data)
@@ -1644,10 +1666,11 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
             return 0;
         case MUIM_MHP_SynthStart:
             /* The synth reads the SoundFont and backend from ENV:. */
+            refresh(data);
             if (data->dirty)
                 set_status(data, "Use or Save first: the synth reads the saved SoundFont.");
-            start_synth();
-            refresh(data);
+            start_synth(data);
+            refresh_synth_state(data);
             return 0;
         case MUIM_MHP_SynthStop:
             stop_synth();
