@@ -14,6 +14,7 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-synth \
 #MM      contrib-aros-midihub-router \
 #MM      contrib-aros-midihub-prefs \
+#MM      contrib-aros-midihub-drawer-icons \
 #MM      contrib-aros-midihub-btmidi
 #MM contrib-aros-midihub-program : linklibs-arosmidihub
 #MM contrib-aros-midihub-selftest : linklibs-arosmidihub
@@ -96,6 +97,17 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
 %copy_files_q mmake=contrib-aros-midihub-prefs-icon \
     src="$(MIDIHUB_ROOT)/ports/aros" files="MIDIHubPrefs.info" \
     dst="$(MIDIHUB_PACKAGE)/Prefs"
+
+# Drawer icons (AROS's default drawer), so Workbench shows the package
+# drawer and its Prefs drawer.
+#MM- contrib-aros-midihub-drawer-icons : \
+#MM      contrib-aros-midihub-drawer-icon contrib-aros-midihub-prefs-drawer-icon
+%copy_files_q mmake=contrib-aros-midihub-drawer-icon \
+    src="$(MIDIHUB_ROOT)/ports/aros/package/icons" files="aros-midihub.info" \
+    dst="$(AROS_CONTRIB)"
+%copy_files_q mmake=contrib-aros-midihub-prefs-drawer-icon \
+    src="$(MIDIHUB_ROOT)/ports/aros/package/icons" files="Prefs.info" \
+    dst="$(MIDIHUB_PACKAGE)"
 
 # Optional: requires the AROS bluetooth.library and the GATT prerequisite patch.
 %build_prog mmake=contrib-aros-midihub-ble \
