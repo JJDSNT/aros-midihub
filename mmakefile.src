@@ -37,7 +37,7 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
            $(MIDIHUB_ROOT)/src/session $(MIDIHUB_ROOT)/src/peers \
            $(MIDIHUB_ROOT)/src/config \
            $(MIDIHUB_ROOT)/src/timing $(MIDIHUB_ROOT)/src/sender \
-           $(MIDIHUB_ROOT)/src/mdns $(MIDIHUB_ROOT)/src/routes \
+           $(MIDIHUB_ROOT)/network/mdns/embedded $(MIDIHUB_ROOT)/src/routes \
            $(MIDIHUB_ROOT)/src/ble_midi \
            $(MIDIHUB_ROOT)/src/ble_peripheral \
            $(MIDIHUB_ROOT)/src/ump $(MIDIHUB_ROOT)/src/netmidi2"

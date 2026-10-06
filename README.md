@@ -116,6 +116,8 @@ service with a CAMD node per peer, a system mDNS responder, and UMP
 translated at the transport until CAMD learns UMP.
 [mDNS integration with AROSTCP](docs/mdns-arostcp.md) defines the boundary
 between that responder and the socket stack.
+The code and external reference used to close this AROS network gap live in
+[`network/mdns`](network/mdns/README.md).
 
 ## Additional MIDI Transports
 

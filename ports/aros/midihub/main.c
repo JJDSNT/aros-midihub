@@ -191,6 +191,11 @@ static int open_mdns(uint8_t address[4])
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const void *)&reuse,
                    sizeof(reuse)) < 0)
         goto fail;
+#ifdef SO_REUSEPORT
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, (const void *)&reuse,
+                   sizeof(reuse)) < 0)
+        goto fail;
+#endif
     memset(&local, 0, sizeof(local));
     local.sin_family = AF_INET;
     local.sin_addr.s_addr = htonl(INADDR_ANY);

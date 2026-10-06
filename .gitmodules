@@ -4,3 +4,6 @@
 [submodule "soundfonts/GeneralUser-GS"]
 	path = soundfonts/GeneralUser-GS
 	url = https://github.com/mrbumpy409/GeneralUser-GS.git
+[submodule "network/mdns/bonami"]
+	path = network/mdns/bonami
+	url = https://github.com/amigazen/Bonami.git

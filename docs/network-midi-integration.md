@@ -11,7 +11,7 @@ it inside MIDIHub.
 |---|---|---|
 | AppleMIDI session (IN, OK, NO, BY, CK, RS) | `src/applemidi.c`, `src/session.c`, `src/peers.c` | up to eight peers, either role; host tests |
 | RTP-MIDI payload, recovery journal | `src/rtpmidi.c`, `src/sender.c`, `src/timing.c` | chapters N, C, P, W, M, E, Q, F, X; host tests |
-| mDNS for `_apple-midi._udp` | `src/mdns.c` | advertises, answers browse queries |
+| mDNS for `_apple-midi._udp` | `network/mdns/embedded.c` | interim embedded advertiser and query responder |
 | Universal MIDI Packet, MIDI 1.0 translation | `src/ump.c` | host tests |
 | Network MIDI 2.0 (UDP), M2-124-UM | `src/netmidi2.c` | Host and Client sessions, FEC; host tests |
 | AROS program bridging to CAMD | `ports/aros/midihub/main.c` | AppleMIDI, one active peer, `MIDIHub In`/`Out` |
@@ -73,10 +73,13 @@ AppleMIDI advertises `_apple-midi._udp` and Network MIDI 2.0 advertises
 AROS has no system mDNS responder, which is why MIDIHub carries a minimal
 one.
 
-The right home is a **system responder** shared by every service: a resident
-process with a public register/browse API, optionally wrapped later by an
-`mdns.library`. If each service embeds its own, several processes compete for
-UDP port 5353 and duplicate the cache, probing, and conflict-resolution state.
+The right home is a **system responder** shared by every service. The preferred
+starting point is Bonami's BSD-licensed Amiga design: `bonami.library` exposes
+register, browse, and resolve operations while one engine task owns the socket,
+cache, and timers, and is the natural owner for probing and conflict state as
+those features are completed. Library calls reach that engine through private
+Exec message-port IPC. If each service embeds its own responder, several
+processes compete for UDP port 5353 and duplicate all that state.
 
 AROSTCP already supplies the required IPv4 multicast transport,
 `IP_ADD_MEMBERSHIP`, `SO_REUSEADDR`, and `SO_REUSEPORT`. Its multicast bind
