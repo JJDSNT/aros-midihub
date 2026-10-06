@@ -29,7 +29,8 @@ rather than retain duplicate transport implementations.
 | Endpoint | Discovery or configuration | CAMD-facing component | Transport or output |
 | --- | --- | --- | --- |
 | USB MIDI | Poseidon class binding | Existing `DEVS:Midi` driver | Poseidon USB class |
-| RTP-MIDI / AppleMIDI | MIDI Preferences, mDNS, session negotiation | Native Network MIDI CAMD device | `bsdsocket.library` |
+| RTP-MIDI / AppleMIDI | MIDI Preferences, mDNS, session negotiation | `applemidi.device` | `bsdsocket.library` |
+| Network MIDI 2.0 / UMP | MIDI Preferences, mDNS, session negotiation | `networkmidi2.device` | `bsdsocket.library` |
 | BLE MIDI | Bluetooth service discovery and binding | `btmidi.class` CAMD clients | `bluetooth.library` GATT |
 | Serial / DIN | Configured AROS serial device and port | Native serial MIDI component | AROS serial API |
 | Software synthesizer | SoundFont and AHI preferences | Native synth service CAMD client | TinySoundFont or FluidSynth to AHI |
@@ -40,10 +41,9 @@ when the transport disappears. MIDIHub can then provide a unified overview and
 basic persistent routes between those endpoints without requiring applications
 or users to understand AppleMIDI, GATT, USB binding, or other transport details.
 
-During incubation, CAMD client nodes remain useful for Network MIDI testing. The
-native Network MIDI target, however, is a CAMD MIDI device interface: sockets,
-discovery, peer/session state and any internal task remain behind that device
-boundary. Current CAMD devices have a fixed `NPorts` after initialization, so
+During incubation, CAMD client nodes remain useful for Network MIDI testing. The native targets, however, are `applemidi.device` and
+`networkmidi2.device`: sockets, discovery, peer/session state and any internal
+tasks remain behind their respective device boundaries. Current CAMD devices have a fixed `NPorts` after initialization, so
 peer-to-port mapping must be defined explicitly unless CAMD later gains dynamic
 port registration. The portable codecs remain independent of that native
 registration mechanism.
