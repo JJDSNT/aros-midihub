@@ -46,9 +46,9 @@ AROS MIDI application
         |
     camd.library
         |
- Network MIDI device
-        |
  +------+----------------------+
+ |                             |
+applemidi.device        networkmidi2.device
  |                             |
 AppleMIDI / RTP-MIDI    Network MIDI 2.0 / UMP
  |                             |
@@ -66,14 +66,14 @@ AppleMIDI / RTP-MIDI    Network MIDI 2.0 / UMP
 ```
 
 AROSTCP supplies network transport. Bonami supplies shared zero-configuration
-discovery. The Network MIDI device owns MIDI network sessions and presents
-them through the CAMD device interface.
+discovery. The transport devices own their respective MIDI network sessions and present
+their endpoints/units through the CAMD device interface.
 
-The remaining design question is whether upstream should expose one
-`networkmidi.device` containing both transport families or separate devices
-such as `applemidi.device` and `networkmidi2.device`. That choice should be
-reviewed with AROS maintainers and should not force duplication of the portable
-protocol engines.
+The current target is two transport-specific devices: `applemidi.device` for
+AppleMIDI/RTP-MIDI and `networkmidi2.device` for Network MIDI 2.0/UMP. They
+may share portable protocol, networking, timing, discovery and utility code
+where appropriate, but they remain separate application-facing device
+interfaces.
 
 A separate issue is dynamic peer representation. Current CAMD reads
 `MidiDeviceData.NPorts` after driver `Init()`, copies it into the driver's
@@ -87,32 +87,27 @@ Neither mDNS nor Network MIDI belongs inside AROSTCP itself.
 
 ## Proposed native AROS home
 
-The native source home should follow AROS MIDI-device conventions under
-`workbench/devs/midi/`. The exact device split remains open. A unified target
-could look like:
+During incubation/upstream preparation, the two devices should live under the
+AROS `contrib` area, following the maintainer-approved CAMD device packaging
+convention. The intended logical split is:
 
 ```text
-workbench/devs/midi/network/
+contrib/
 |
-+-- networkmidi.c
-+-- network.c
-+-- network.h
-+-- config.c
-+-- config.h
-+-- applemidi.c/.h
-+-- rtpmidi.c/.h
-+-- session.c/.h
-+-- peers.c/.h
-+-- netmidi2.c/.h
-+-- ump.c/.h
-+-- [sender/timing and other portable support files]
-+-- mmakefile.src
++-- applemidi/
+|   +-- applemidi.device
+|   +-- AppleMIDI / RTP-MIDI adapter code
+|   +-- mmakefile.src
+|
++-- networkmidi2/
+    +-- networkmidi2.device
+    +-- Network MIDI 2.0 / UMP adapter code
+    +-- mmakefile.src
 ```
 
-Alternatively AROS may prefer sibling `apple/` and `networkmidi2/`
-directories producing separate device interfaces while sharing portable
-protocol code. Exact installed filenames should follow the maintainer-approved
-CAMD device convention.
+Exact contrib paths and MetaMake target names should follow maintainer guidance.
+If these components later graduate from contrib, `workbench/devs/midi/` is
+the natural system-tree destination for CAMD MIDI device interfaces.
 
 Portable source files may remain grouped in a subdirectory or static support
 library if that produces a cleaner MetaMake definition. There is no
@@ -122,18 +117,18 @@ sketch.
 ## Device entry/runtime
 
 The current orchestration responsibility in `ports/aros/midihub/main.c`
-should evolve into the runtime behind the native MIDI device rather than into
+should be separated into reusable runtime pieces behind the two native MIDI devices rather than into
 a standalone `C:NetworkMIDI` process.
 
 That runtime may legitimately:
 
 1. open required AROS libraries, including `bsdsocket.library`;
 2. load Network MIDI configuration;
-3. initialize AppleMIDI/RTP-MIDI and Network MIDI 2.0 state;
+3. initialize the protocol state owned by that device;
 4. register and browse services through Bonami/system mDNS;
 5. own the required task/event loop internally;
 6. dispatch socket, timer, discovery and device-port events;
-7. map active peers/sessions onto the CAMD device's exposed ports;
+7. map active peers/sessions onto that device's exposed CAMD endpoints/units;
 8. perform orderly shutdown and release all resources.
 
 The important boundary is that applications use the normal CAMD MIDI-device
@@ -171,9 +166,9 @@ The current `camd.c/.h` extraction remains useful during incubation, but its
 role changes: it is preparation for the native CAMD device interface rather
 than a client that creates one `MidiNode` per peer.
 
-The native target should implement the CAMD MIDI driver contract
+Each native target should implement the CAMD MIDI driver contract
 (`MidiDeviceData`, `Init`, `Expunge`, `OpenPort`, `ClosePort`) and map
-those ports to Network MIDI peers/sessions internally.
+its ports/endpoints to the peers and sessions of its own transport internally.
 
 Current CAMD port allocation is static after device initialization. The design
 must therefore explicitly validate how discovered peers are assigned to
@@ -249,13 +244,13 @@ until that system service is available.
 
 | MIDIHub today | Native AROS target | Action |
 |---|---|---|
-| `ports/aros/midihub/main.c` | native Network MIDI device runtime | progressively reshape into device-owned orchestration/event loop |
-| `src/applemidi.c` | AppleMIDI portable component | retain/move with minimal OS coupling |
-| `src/rtpmidi.c` | RTP-MIDI portable component | retain/move |
+| `ports/aros/midihub/main.c` | shared incubation/runtime glue for `applemidi.device` and `networkmidi2.device` | split transport ownership while retaining reusable AROS adapters |
+| `src/applemidi.c` | portable engine used by `applemidi.device` | retain/move with minimal OS coupling |
+| `src/rtpmidi.c` | portable engine used by `applemidi.device` | retain/move |
 | `src/session.c` | session engine | retain/move |
 | `src/peers.c` | peer/session manager | retain/move |
-| `src/netmidi2.c` | Network MIDI 2.0 engine | retain/move |
-| `src/ump.c` | UMP edge translation | retain/move |
+| `src/netmidi2.c` | portable engine used by `networkmidi2.device` | retain/move |
+| `src/ump.c` | UMP engine/edge translation used by `networkmidi2.device` | retain/move |
 | `network/mdns/embedded.c` | none in Network MIDI | remove after system mDNS migration |
 | `network/mdns/bonami/` | generic AROS mDNS subsystem | port/upstream separately |
 | current CAMD bridge/runtime | native CAMD device boundary | evolve toward `MidiDeviceData` / port callbacks |
@@ -298,7 +293,7 @@ The namespace should make the eventual ownership of each layer explicit:
 - `mdns_*` and the Bonami public API remain generic system discovery APIs;
 - native CAMD calls retain their AROS API names.
 
-This lets the incubating AROS layer move to `workbench/devs/midi/<device>/` primarily
+This lets the incubating AROS layer move first into contrib device components and later, if accepted as system components, into `contrib `applemidi.device` / `networkmidi2.device`/` primarily
 as a source relocation instead of carrying a permanent MIDIHub identity into
 the system component. Shorter ambiguous prefixes such as `nm_*` should be
 avoided in new public or cross-file interfaces.
@@ -308,8 +303,9 @@ rewrite the portable protocol engines.
 
 ## Build direction
 
-The eventual AROS tree component should have a native `mmakefile.src`, following
-the existing `workbench/devs/midi` CAMD-driver conventions.
+Each contrib device should have a native `mmakefile.src`, following the
+existing CAMD-driver/device conventions so later promotion into
+`workbench/devs/midi` does not require an architectural rewrite.
 
 It should express dependencies on the normal AROS include/link infrastructure
 and on CAMD, without making Network MIDI part of the AROSTCP binary.
@@ -317,9 +313,11 @@ and on CAMD, without making Network MIDI part of the AROSTCP binary.
 A conceptual dependency graph is:
 
 ```text
-workbench-devs-midi
+AROS contrib
        |
-network-midi-device
+ +-----+----------------+
+ |                      |
+applemidi.device   networkmidi2.device
        |
  +-----+----------------+
  |                      |
@@ -420,8 +418,8 @@ This parallel plan is the immediate next development direction.
 
 ### Phase 3 - prepare upstream
 
-11. Re-home the portable and AROS adapter sources under the agreed
-    `workbench/devs/midi` device location.
+11. Package the transport-specific adapters as `applemidi.device` and
+    `networkmidi2.device` under the agreed AROS contrib locations.
 12. Add native `mmakefile.src`.
 13. Rename the settings namespace away from MIDIHub.
 14. Ensure startup ordering waits for a `bsdsocket.library` provider without
@@ -440,7 +438,7 @@ The component is a strong upstream candidate when:
 - settings can be loaded and changed without MIDIHub-specific assumptions;
 - discovery is behind a replaceable API so the embedded responder can be
   removed cleanly;
-- Network MIDI 2.0 shares the chosen device/runtime architecture without becoming an unrelated daemon;
+- AppleMIDI/RTP-MIDI is exposed through `applemidi.device` and Network MIDI 2.0/UMP through `networkmidi2.device`;
 - build and startup integration can be expressed with normal AROS MetaMake and
   system conventions.
 
@@ -461,5 +459,5 @@ native-shaped AROS port
        |
        | MetaMake + system mDNS + native settings
        v
-workbench/devs/midi/<device>
+contrib `applemidi.device` / `networkmidi2.device`
 ```
