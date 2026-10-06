@@ -53,6 +53,13 @@ bsdsocket     Bonami / _nipc._tcp
            bsdsocket.library
 ```
 
+AROS has since expanded this native Envoy layer with `services.library`, a
+Services Manager, `accounts.library`, and an Accounts Server. Native
+`nipc.library` service inquiry can consult the Services Manager's configured
+service list. Bonami's `_nipc._tcp` path should therefore be treated as an
+optional zero-configuration discovery integration to validate, not as the
+owner or replacement of native Envoy service inquiry.
+
 NIPC remains a client/integration of the mDNS service rather than part of the
 TCP/IP stack, and Bonami's core API must remain usable without NIPC.
 
