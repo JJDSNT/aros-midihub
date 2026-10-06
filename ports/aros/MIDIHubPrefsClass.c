@@ -530,7 +530,8 @@ static void diag_line(struct MHPrefsData *data, CONST_STRPTR text)
 
 static void diag_info(struct MHPrefsData *data)
 {
-    char text[160];
+    /* Room for an endpoint name of MH_ROUTE_NAME_MAX bytes */
+    char text[MH_ROUTE_NAME_MAX + 64];
     if (data->diag_in)
         snprintf(text, sizeof(text), "Monitoring \"%s\": %lu messages",
                  data->diag_in_name, (unsigned long)data->diag_count);
@@ -634,7 +635,7 @@ static void diag_stop(struct MHPrefsData *data)
 static void diag_monitor(struct MHPrefsData *data, Object *obj)
 {
     struct MHPrefsEndpoint *entry = diag_selected(data);
-    char line[160];
+    char line[MH_ROUTE_NAME_MAX + 96];
 
     if (!entry)
         return;
@@ -688,7 +689,7 @@ static void diag_send(struct MHPrefsData *data)
     struct MHPrefsEndpoint *entry = diag_selected(data);
     struct MidiNode *node;
     struct MidiLink *link = NULL;
-    char line[160];
+    char line[MH_ROUTE_NAME_MAX + 96];
     ULONG i;
 
     if (!entry)
