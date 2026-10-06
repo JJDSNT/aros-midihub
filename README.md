@@ -111,9 +111,9 @@ MIDIHub advertises `_apple-midi._udp.local` over IPv4 mDNS and answers
 DNS-SD browse queries when the network stack has a multicast-capable interface.
 
 [Network MIDI in AROS](docs/network-midi-integration.md) proposes where
-RTP-MIDI, AppleMIDI and Network MIDI 2.0 belong in AROS: one network MIDI
-service with a CAMD node per peer, a system mDNS responder, and UMP
-translated at the transport until CAMD learns UMP.
+RTP-MIDI, AppleMIDI and Network MIDI 2.0 belong in AROS: behind a native CAMD
+MIDI device interface, with system mDNS discovery and UMP translated at the
+transport until CAMD learns UMP.
 [mDNS integration with AROSTCP](docs/mdns-arostcp.md) defines the boundary
 between that responder and the socket stack.
 The code and external reference used to close this AROS network gap live in
