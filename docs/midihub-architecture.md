@@ -143,7 +143,7 @@ Display and edit persistent routes managed by MIDIHub. Source, destination, and 
 
 ### Network MIDI
 
-Configure the owning Network MIDI service and expose its MIDI-specific session
+Configure the owning Network MIDI device and expose its MIDI-specific session
 and peer state for AppleMIDI/RTP-MIDI and future network MIDI transports. IP
 addressing, interfaces, Wi-Fi, and general network configuration remain
 outside MIDIHub.
