@@ -341,6 +341,58 @@ This direction intentionally avoids several unnecessary abstractions:
 
 The resident process plus small AROS adapters should be sufficient.
 
+## Immediate next work: two parallel tracks
+
+Development should now advance on two parallel tracks rather than making one
+block the other.
+
+### Track A - Network MIDI AROS runtime
+
+Refactor `ports/aros/midihub/main.c` toward the native target boundaries:
+
+1. extract CAMD peer lifecycle into `camd.c/.h`;
+2. extract AROS socket/event-loop adaptation into `network.c/.h`;
+3. consolidate network settings in `config.c/.h`;
+4. keep `main.c` primarily as orchestration;
+5. connect the existing multi-peer engines so established peers can obtain
+   independent CAMD representations.
+
+This work can continue using `network/mdns/embedded.c` and therefore does
+not depend on completion of the Bonami port.
+
+### Track B - Bonami / system mDNS
+
+In parallel, continue the Bonami port as generic AROS infrastructure:
+
+1. make the Bonami core build and run correctly on current AROS;
+2. complete interface enumeration and address-change handling;
+3. use current AROSTCP multi-interface/scoped multicast facilities;
+4. add/validate IPv6 mDNS;
+5. validate register, browse and resolve behavior needed by
+   `_apple-midi._udp` and `_midi2._udp`;
+6. keep the optional Envoy/NIPC bridge separate from the Network MIDI
+   dependency.
+
+### Convergence point
+
+The tracks converge only at the discovery boundary:
+
+```text
+Track A                              Track B
+Network MIDI runtime                Bonami/system mDNS
+        |                                   |
+        +------------- discovery API -------+
+                           |
+             replace embedded.c fallback
+```
+
+The Network MIDI runtime should therefore avoid depending on details of the
+embedded responder. Discovery should have a small replaceable boundary so the
+working fallback can later be exchanged for the system mDNS API without
+rewriting AppleMIDI, RTP-MIDI, Network MIDI 2.0 or CAMD integration.
+
+This parallel plan is the immediate next development direction.
+
 ## Implementation sequence
 
 ### Phase 1 - establish native boundaries in MIDIHub
