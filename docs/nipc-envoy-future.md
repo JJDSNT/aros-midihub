@@ -1,12 +1,19 @@
-# Future investigation: AROS NIPC / Envoy compatibility
+# AROS NIPC / Envoy and Bonami integration
 
 ## Status
 
-**Future work / exploratory.** This is not a requirement for MIDIHub, AppleMIDI,
-Network MIDI 2.0, or the initial AROS port of Bonami.
+**Upstream capability available; integration and interoperability remain future work.**
 
-Bonami's Envoy/NIPC compatibility bridge should remain optional while the core
-mDNS/DNS-SD service is brought up on AROS.
+AROS now contains a clean-room `nipc.library` implementation of the Envoy NIPC
+API over `bsdsocket.library`, added upstream in commit
+`fbc2e274d880868c3fe447dffdfc9226fae0bd66`. The same change installs public
+`<envoy/nipc.h>`, `<envoy/nipclowlevel.h>`, and `<envoy/errors.h>` headers
+and adds a `NipcTest` command.
+
+This removes the previously identified API/header blocker for Bonami's optional
+Envoy/NIPC bridge. NIPC is still not a requirement for MIDIHub, AppleMIDI, or
+Network MIDI 2.0; it is an additional integration opportunity exposed by the
+Bonami port.
 
 ## Why this appeared during MIDIHub work
 
@@ -14,46 +21,39 @@ MIDIHub needs a system-wide mDNS/DNS-SD responder for AppleMIDI
 (`_apple-midi._udp`) and Network MIDI 2.0 (`_midi2._udp`). Bonami is being
 evaluated as the Amiga-native basis for that service.
 
-Bonami also contains an Envoy/NIPC compatibility layer. Its NIPC inquiry code
+Bonami also contains an Envoy/NIPC compatibility layer. Its inquiry bridge
 includes `<envoy/nipc.h>`, understands NIPC inquiry tags such as
 `MATCH_ENTITY`, `QUERY_ENTITY`, `QUERY_HOSTNAME`, and `QUERY_IPADDR`,
-and maps NIPC discovery onto DNS-SD/mDNS. Bonami also reserves the
-`_nipc._tcp` service type for this purpose.
+and maps NIPC discovery onto DNS-SD/mDNS. Bonami uses `_nipc._tcp` for that
+discovery path.
 
-AROS does not currently provide the Envoy/NIPC environment expected by this
-optional bridge. That should not block the Bonami port: the bridge can be
-disabled initially.
+The new AROS NIPC implementation provides the public API surface that this
+bridge expects, so the AROS Bonami port should now attempt to build and test
+the bridge instead of disabling it merely because NIPC is unavailable.
 
-## Two different goals
+## What AROS now provides
 
-It is important not to confuse two possible projects.
+The upstream implementation covers the main NIPC programming model:
 
-### 1. Enable Bonami's NIPC discovery bridge
-
-The smallest goal is only to provide enough compatible public definitions and
-integration for Bonami's optional NIPC bridge to build and operate on AROS.
-
-This may require only a limited compatibility header/API surface rather than a
-complete implementation of Envoy.
-
-Expected effort: **low to medium**, subject to an audit of the exact Bonami
-dependencies.
-
-### 2. Implement an AROS `nipc.library`
-
-The larger goal would be an open AROS implementation of the public NIPC API so
-software written for Envoy can use entities and transactions on AROS.
-
-Known public API areas include:
-
-- entity creation, lookup, attributes, and lifetime;
+- public Envoy-compatible headers and error definitions;
+- entity creation, lookup, attributes, ownership, and lifetime;
 - synchronous and asynchronous transactions;
-- transaction abort/wait/reply operations;
-- NIPC buffers;
-- inquiries and entity discovery;
-- routing and host/entity information.
+- transaction wait, abort, reply, and completion;
+- NIPC scatter/gather buffers;
+- resolver and inquiry support;
+- RDP transport over `bsdsocket.library`;
+- low-level NIPC/RDP configuration;
+- a native `NipcTest` exercising local and network behavior, inquiry, ping,
+  Accounts Server access, and Services Manager lookup.
 
-A possible modern AROS architecture is:
+The implementation deliberately leaves IP, ARP, fragmentation, and interface
+ownership to the AROS TCP/IP stack where appropriate. This matches the desired
+system boundary: NIPC supplies the Envoy programming/transaction model while
+`bsdsocket.library` supplies IP networking.
+
+## Bonami integration target
+
+The useful target is now:
 
 ```text
 Envoy/NIPC-aware application
@@ -61,105 +61,89 @@ Envoy/NIPC-aware application
           v
      nipc.library
           |
-   +------+-------+
-   |              |
-entities /     transactions
-discovery          |
-   |          network transport
-   v              |
-Bonami             v
-mDNS/DNS-SD   bsdsocket.library
-   |
-_nipc._tcp
+   +------+------------------+
+   |                         |
+entities / transactions     discovery
+   |                         |
+RDP over bsdsocket       Bonami bridge
+                             |
+                        bonami.library
+                             |
+                          mDNS/DNS-SD
+                             |
+                         _nipc._tcp
 ```
 
-Bonami could therefore provide the discovery portion while a future
-`nipc.library` implements the NIPC programming model and transport.
+Bonami does not replace `nipc.library`. It can complement it by providing
+DNS-SD/mDNS discovery of NIPC entities. Conversely, NIPC must not become a
+dependency of Bonami's core register/browse/resolve API: AppleMIDI, Network
+MIDI 2.0, printing, and other mDNS clients should work without Envoy.
 
-Expected effort: **medium to high** for useful AROS-to-AROS functionality.
+## Remaining validation
 
-## Compatibility with classic Envoy
+The next work is integration rather than implementing NIPC from scratch:
 
-API compatibility and wire-protocol compatibility are separate objectives.
+1. build the pinned Bonami revision against the upstream AROS Envoy headers;
+2. identify any source/ABI assumptions in Bonami that still require AROS port
+   changes;
+3. enable and test Bonami's NIPC inquiry bridge;
+4. verify publication and browsing of `_nipc._tcp`;
+5. compare Bonami discovery results with AROS `NIPCInquiryA()` semantics;
+6. test entity discovery and transactions between two AROS systems;
+7. separately test interoperability with classic Envoy releases;
+8. upstream generally useful Bonami fixes and keep AROS-specific build/service
+   glue in the AROS tree.
 
-An AROS `nipc.library` can reproduce the public programming API without
-necessarily being network-compatible with every historical Envoy release.
-Full interoperability with classic Amiga Envoy may require reverse engineering
-because the wire protocol is not as well documented as the public API and
-different Envoy generations may differ.
+## Classic Envoy interoperability
 
-A future interoperability investigation should:
+The presence of an AROS `nipc.library` changes the implementation problem but
+does not by itself prove compatibility with every historical Envoy release.
 
-1. inventory the original public NIPC headers, library vectors, tags, structures,
-   autodocs, and example programs;
-2. determine which NIPC/Envoy releases should be targeted;
-3. capture network traffic between real or emulated Amiga systems running
-   Envoy;
-4. correlate API operations such as entity discovery and transactions with
-   packets on the wire;
-5. document the protocol before implementing compatibility;
-6. build conformance tests for AROS-to-AROS and, separately, AROS-to-Envoy
-   operation.
+API compatibility, discovery compatibility, and wire-protocol compatibility
+should be tested separately. The upstream `NipcTest` already contains useful
+paths for entity transactions, ping, inquiry, Accounts Server, and Services
+Manager. These provide a practical basis for interoperability testing.
 
-Expected effort for broad classic Envoy interoperability: **high**.
+Future testing should determine which Envoy releases are compatible with the
+AROS RDP/resolver implementation and whether Bonami's `_nipc._tcp` discovery
+can coexist with or complement historical Envoy discovery.
 
-## Open-source situation
+## Relationship to MIDIHub
 
-At the time of this investigation, no complete open-source drop-in
-implementation of `nipc.library` had been identified. The public API/ABI,
-headers, historical documentation, and examples provide useful reference
-material, but the original Envoy implementation should not be assumed to be
-available as open source.
-
-This makes a clean-room AROS implementation a possible future contribution,
-rather than something required by MIDIHub.
-
-## Relationship to the Bonami port
-
-The near-term sequence should remain:
+The dependency direction remains deliberately loose:
 
 ```text
-MIDIHub requirement
-        |
-        v
-system mDNS/DNS-SD
-        |
-        v
-Bonami port to AROS
-        |
-        +--> AppleMIDI / Network MIDI 2.0
-        |
-        +--> Envoy/NIPC bridge (optional, initially disabled)
-                       |
-                       v
-             future NIPC investigation
+                    AROS network infrastructure
+                    /                       \
+          nipc.library                 bonami.library
+               |                         /       \
+          Envoy/NIPC              _nipc._tcp   mDNS/DNS-SD
+                                                |
+                                  +-------------+-------------+
+                                  |                           |
+                           _apple-midi._udp               _midi2._udp
+                                  |                           |
+                              AppleMIDI              Network MIDI 2.0
+                                  \                           /
+                                   +--------- MIDIHub --------+
 ```
 
-The Bonami port should therefore be designed so that the Envoy bridge can be
-enabled later without making NIPC a dependency of the core mDNS service.
-
-## Potential upstream destination
-
-If this work proceeds, `nipc.library` should be considered general AROS
-network infrastructure rather than a MIDIHub-specific component. MIDIHub is
-only where the missing capability was discovered.
-
-As with the system mDNS work, this repository can incubate documentation,
-experiments, and compatibility tests, while a mature implementation should be
-proposed upstream to AROS.
+MIDIHub does not need NIPC to provide MIDI networking. The project merely
+surfaced Bonami as a useful mDNS implementation and therefore exposed the
+opportunity to connect Bonami's existing Envoy bridge to the new AROS NIPC
+infrastructure.
 
 ## Future decision points
 
-Before implementation, answer:
+Before treating the integration as complete, answer:
 
-- Is enabling Bonami's bridge useful without a complete `nipc.library`?
-- What exact subset of `envoy/nipc.h` does Bonami require?
-- Is API/source compatibility sufficient, or is binary compatibility desired?
-- Which Envoy version defines the interoperability target?
-- Can Bonami discovery coexist cleanly with historical NIPC discovery?
-- Should network transport preserve the historical protocol or define a
-  modern AROS-only transport first?
-- Which parts belong in Bonami upstream versus AROS itself?
+- Does Bonami compile unchanged against AROS's new `<envoy/nipc.h>`?
+- Which Bonami NIPC publish operations are complete versus still stubs?
+- Should AROS NIPC use Bonami discovery directly, optionally, or through a
+  separate system integration layer?
+- Does `_nipc._tcp` interoperate with classic Bonami/Envoy environments?
+- Which classic Envoy version(s) should be explicit compatibility targets?
+- Which changes belong in Bonami upstream and which belong in AROS?
 
-Until those questions are answered, NIPC/Envoy support remains a documented
-future opportunity and must not delay the MIDI networking roadmap.
+None of this should delay the MIDI networking roadmap, but the former missing
+NIPC dependency is no longer a reason to disable Bonami's Envoy bridge.
