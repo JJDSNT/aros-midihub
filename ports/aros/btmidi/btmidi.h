@@ -15,7 +15,7 @@
 #include <libraries/btclass.h>
 
 #include <midihub/ble_midi.h>
-#include "midihub/camd_bridge.h"
+#include "camd_bridge.h"
 
 #include "btmidi_cfg.h"
 
@@ -67,7 +67,7 @@ struct btmidi_binding {
     BOOL primed;                    /* read done; notifications follow */
     ULONG packet_limit;
 
-    struct mh_camd_bridge camd;
+    struct aros_camd_bridge camd;
     char node_name[BTMIDI_NAME_SIZE];
     char in_name[BTMIDI_NAME_SIZE];
     char out_name[BTMIDI_NAME_SIZE];

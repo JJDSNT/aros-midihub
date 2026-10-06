@@ -8,11 +8,13 @@ FLUIDSYNTH_LIBS ?= $(shell pkg-config --libs fluidsynth 2>/dev/null)
 
 SOURCES = src/applemidi.c src/rtpmidi.c src/session.c src/peers.c src/config.c src/timing.c src/sender.c network/mdns/embedded.c src/routes.c
 PROGRAM_SOURCES = ports/aros/midihub/main.c ports/aros/midihub/camd.c \
-                  ports/aros/midihub/camd_bridge.c
+                  ports/aros/midihub/network.c \
+                  ports/aros/camd_bridge.c
 HEADERS = include/midihub/applemidi.h include/midihub/rtpmidi.h \
           include/midihub/session.h include/midihub/peers.h include/midihub/config.h include/midihub/timing.h \
           include/midihub/sender.h include/midihub/mdns.h include/midihub/routes.h \
-          ports/aros/midihub/camd.h ports/aros/midihub/camd_bridge.h
+          ports/aros/midihub/camd.h ports/aros/midihub/network.h \
+          ports/aros/camd_bridge.h
 
 .PHONY: test test-network test-synth test-synth-fluid demo m68k synth-m68k clean
 

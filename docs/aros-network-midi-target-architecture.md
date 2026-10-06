@@ -298,6 +298,24 @@ ports/aros/
 Exact placement under `ports/aros` may follow the existing build layout.
 The important part is responsibility separation.
 
+### Namespace during incubation
+
+The namespace should make the eventual ownership of each layer explicit:
+
+- `mh_*` remains the namespace of portable or legacy code incubated in
+  MIDIHub, including the AppleMIDI, RTP-MIDI, session and UMP components;
+- `netmidi_*` is used by new AROS-facing Network MIDI runtime code, including
+  the `network.c`, `camd.c` and future `config.c` boundaries;
+- `aros_*` is used by adapters shared by more than one AROS subsystem, such as
+  the CAMD bridge used by Network MIDI and BLE MIDI;
+- `mdns_*` and the Bonami public API remain generic system discovery APIs;
+- native CAMD calls retain their AROS API names.
+
+This lets the incubating AROS layer move to `workbench/network/midi` primarily
+as a source relocation instead of carrying a permanent MIDIHub identity into
+the system component. Shorter ambiguous prefixes such as `nm_*` should be
+avoided in new public or cross-file interfaces.
+
 The next refactoring should therefore extract code from `main.c` rather than
 rewrite the portable protocol engines.
 

@@ -3,7 +3,7 @@
 #include "btmidi.h"
 #include <midihub/ble_midi.h>
 #include <midihub/rtpmidi.h>
-#include "midihub/camd_bridge.h"
+#include "camd_bridge.h"
 #include <exec/memory.h>
 #include <proto/bluetooth.h>
 #include <proto/exec.h>
@@ -39,7 +39,7 @@ struct btmidi_runtime {
     struct MsgPort *event_port;
     APTR event_handler;
     APTR record;
-    struct mh_camd_bridge camd;
+    struct aros_camd_bridge camd;
     struct btmidi_peer *peers[BTMIDI_MAX_PEERS];
     ULONG use_counter;
     ULONG tx_payload;         /* what every connected central receives whole */
@@ -68,9 +68,9 @@ static void deliver(void *context, const uint8_t *message, size_t length)
     struct btmidi_runtime *runtime = peer->runtime;
 
     if (message[0] == 0xf0)
-        mh_camd_bridge_deliver_sysex(&runtime->camd, message, length);
+        aros_camd_bridge_deliver_sysex(&runtime->camd, message, length);
     else
-        mh_camd_bridge_deliver(&runtime->camd, message, length);
+        aros_camd_bridge_deliver(&runtime->camd, message, length);
     runtime->base->stats.ms_RxMessages++;
 }
 
@@ -224,13 +224,15 @@ static void open_camd(struct btmidi_runtime *runtime)
     CopyMem(base->cfg.mc_InName, runtime->in_name, BTMIDI_NAME_SIZE);
     CopyMem(base->cfg.mc_OutName, runtime->out_name, BTMIDI_NAME_SIZE);
     Permit();
-    if (mh_camd_bridge_open_named(&runtime->camd, runtime->node_name,
-                                  runtime->in_name, runtime->out_name)) {
+    if (aros_camd_bridge_open_named(&runtime->camd, runtime->node_name,
+                                    runtime->in_name, runtime->out_name)) {
         strcpy(runtime->node_name, BTMIDI_DEFAULT_NODE);
         strcpy(runtime->in_name, BTMIDI_DEFAULT_IN);
         strcpy(runtime->out_name, BTMIDI_DEFAULT_OUT);
-        state = mh_camd_bridge_open_named(&runtime->camd, runtime->node_name,
-                                          runtime->in_name, runtime->out_name)
+        state = aros_camd_bridge_open_named(&runtime->camd,
+                                            runtime->node_name,
+                                            runtime->in_name,
+                                            runtime->out_name)
                     ? BTMIDI_CAMD_CLOSED : BTMIDI_CAMD_DEFAULTS;
     }
     base->camd_state = state;
@@ -323,11 +325,11 @@ AROS_UFH0(void, btmidi_task)
                     runtime.tx_payload = BTMIDI_TX_PACKET_MIN;
                 if (runtime.tx_payload > BTMIDI_TX_PACKET_MAX)
                     runtime.tx_payload = BTMIDI_TX_PACKET_MAX;
-                mh_camd_bridge_poll(&runtime.camd, send_to_ble, &runtime);
+                aros_camd_bridge_poll(&runtime.camd, send_to_ble, &runtime);
             }
             if ((signals & SIGBREAKF_CTRL_E) && camd_names_changed(&runtime)) {
                 /* new port names: CAMD clients reconnect by name */
-                mh_camd_bridge_close(&runtime.camd);
+                aros_camd_bridge_close(&runtime.camd);
                 reset_peers(&runtime);
                 open_camd(&runtime);
             }
@@ -342,7 +344,7 @@ AROS_UFH0(void, btmidi_task)
         ReplyMsg(message);
     if (runtime.record)
         btRemServiceRecord(runtime.record);
-    mh_camd_bridge_close(&runtime.camd);
+    aros_camd_bridge_close(&runtime.camd);
     for (index = 0; index < BTMIDI_MAX_PEERS; index++)
         FreeVec(runtime.peers[index]);
     if (runtime.event_port)

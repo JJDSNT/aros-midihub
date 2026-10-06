@@ -146,9 +146,9 @@ static void deliver(void *context, const uint8_t *message, size_t length)
     struct btmidi_binding *binding = context;
 
     if (message[0] == 0xf0)
-        mh_camd_bridge_deliver_sysex(&binding->camd, message, length);
+        aros_camd_bridge_deliver_sysex(&binding->camd, message, length);
     else
-        mh_camd_bridge_deliver(&binding->camd, message, length);
+        aros_camd_bridge_deliver(&binding->camd, message, length);
 }
 
 static int write_packet(struct btmidi_binding *binding, UBYTE *packet,
@@ -285,8 +285,8 @@ static BOOL setup(struct btmidi_binding *binding)
     btChannelSetup(binding->read_ch, BTPR_GATTREAD, (UWORD)binding->handle, 0);
     btChannelSetup(binding->write_ch, BTPR_GATTWRITENORSP,
                    (UWORD)binding->handle, 0);
-    if (mh_camd_bridge_open_named(&binding->camd, binding->node_name,
-                                  binding->in_name, binding->out_name))
+    if (aros_camd_bridge_open_named(&binding->camd, binding->node_name,
+                                    binding->in_name, binding->out_name))
         return FALSE;
     mh_ble_midi_stream_init(&binding->stream, deliver, binding);
     binding->packet_limit = 20;
@@ -315,7 +315,7 @@ static void cleanup(struct btmidi_binding *binding)
     free_channel(binding, &binding->notify_ch);
     free_channel(binding, &binding->read_ch);
     free_channel(binding, &binding->write_ch);
-    mh_camd_bridge_close(&binding->camd);
+    aros_camd_bridge_close(&binding->camd);
     if (binding->timer_open) {
         if (binding->timer_pending) {
             AbortIO((struct IORequest *)binding->timer_req);
@@ -392,7 +392,8 @@ AROS_UFH0(void, btmidi_binding_task)
                     start_requests(binding);
             }
             if (signals & (1UL << binding->camd.signal_bit))
-                mh_camd_bridge_poll(&binding->camd, send_to_device, binding);
+                aros_camd_bridge_poll(&binding->camd, send_to_device,
+                                      binding);
         }
     }
 

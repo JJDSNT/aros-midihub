@@ -1,6 +1,6 @@
 #include <midihub/ble_midi.h>
 #include <midihub/rtpmidi.h>
-#include "midihub/camd_bridge.h"
+#include "camd_bridge.h"
 
 #ifdef __AROS__
 #include <exec/libraries.h>
@@ -16,7 +16,7 @@
 struct Library *BluetoothBase;
 
 struct ble_runtime {
-    struct mh_camd_bridge camd;
+    struct aros_camd_bridge camd;
     struct mh_ble_midi_stream stream;
     APTR write_channel;
     unsigned long received;
@@ -36,9 +36,9 @@ static void deliver(void *context, const uint8_t *message, size_t length)
 {
     struct ble_runtime *runtime = context;
     if (message[0] == 0xf0)
-        mh_camd_bridge_deliver_sysex(&runtime->camd, message, length);
+        aros_camd_bridge_deliver_sysex(&runtime->camd, message, length);
     else
-        mh_camd_bridge_deliver(&runtime->camd, message, length);
+        aros_camd_bridge_deliver(&runtime->camd, message, length);
     runtime->received++;
 }
 
@@ -158,8 +158,8 @@ int main(int argc, char **argv)
     btChannelSetup(read_channel, BTPR_READ, 0, 0);
     btChannelSetup(runtime.write_channel, BTPR_GATTWRITENORSP,
                    (UWORD)value_handle, 0);
-    if (mh_camd_bridge_open_named(&runtime.camd, node_name, incoming_name,
-                                   outgoing_name)) {
+    if (aros_camd_bridge_open_named(&runtime.camd, node_name, incoming_name,
+                                     outgoing_name)) {
         printf("Cannot open CAMD\n");
         goto done;
     }
@@ -193,12 +193,12 @@ int main(int argc, char **argv)
             }
         }
         if (signals & (1UL << runtime.camd.signal_bit))
-            mh_camd_bridge_poll(&runtime.camd, send_to_ble, &runtime);
+            aros_camd_bridge_poll(&runtime.camd, send_to_ble, &runtime);
     }
     printf("BLE MIDI: %lu received, %lu sent\n",
            runtime.received, runtime.sent);
 done:
-    mh_camd_bridge_close(&runtime.camd);
+    aros_camd_bridge_close(&runtime.camd);
     if (read_channel) {
         btAbortChannel(read_channel);
         btWaitChannel(read_channel);

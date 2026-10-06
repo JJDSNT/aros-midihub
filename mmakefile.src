@@ -109,7 +109,8 @@ BONAMI_FILES := \
     progname=MIDIHub \
     files="$(MIDIHUB_ROOT)/ports/aros/midihub/main \
            $(MIDIHUB_ROOT)/ports/aros/midihub/camd \
-           $(MIDIHUB_ROOT)/ports/aros/midihub/camd_bridge" \
+           $(MIDIHUB_ROOT)/ports/aros/midihub/network \
+           $(MIDIHUB_ROOT)/ports/aros/camd_bridge" \
     uselibs=arosmidihub \
     targetdir=$(MIDIHUB_PACKAGE)/C
 
@@ -163,7 +164,7 @@ BONAMI_FILES := \
 %build_prog mmake=contrib-aros-midihub-ble \
     progname=MIDIHubBLE \
     files="$(MIDIHUB_ROOT)/ports/aros/ble_bridge \
-           $(MIDIHUB_ROOT)/ports/aros/midihub/camd_bridge" \
+           $(MIDIHUB_ROOT)/ports/aros/camd_bridge" \
     uselibs=arosmidihub \
     targetdir=$(MIDIHUB_PACKAGE)/C
 

@@ -10,6 +10,7 @@
 #include <midihub/sender.h>
 #include <midihub/timing.h>
 #include "camd.h"
+#include "network.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -22,17 +23,9 @@
 
 #ifdef __AROS__
 #include <dos/dos.h>
-#include <exec/libraries.h>
-#include <exec/tasks.h>
-#include <proto/exec.h>
 #include <proto/bsdsocket.h>
-struct Library *SocketBase;
-#define mh_close CloseSocket
 #else
 #include <signal.h>
-#include <sys/select.h>
-#include <unistd.h>
-#define mh_close close
 static volatile sig_atomic_t stopping;
 static void stop_signal(int signal_number)
 {
@@ -42,8 +35,7 @@ static void stop_signal(int signal_number)
 #endif
 
 struct runtime {
-    int control;
-    int data;
+    struct netmidi_network_runtime network;
     int mdns;
     struct sockaddr_in peer_control;
     struct sockaddr_in peer_data;
@@ -115,7 +107,7 @@ struct runtime {
     uint8_t mtc_full_frame[4];
     uint8_t mtc_full_known;
     uint8_t sysex_count;
-    struct mh_camd_runtime camd;
+    struct netmidi_camd_runtime camd;
 };
 
 static void reset_channel_state(struct runtime *rt);
@@ -143,23 +135,6 @@ static int parse_port(const char *text, uint16_t *port)
     return 0;
 }
 
-static int open_udp(uint16_t port)
-{
-    struct sockaddr_in address;
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0)
-        return -1;
-    memset(&address, 0, sizeof(address));
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_ANY);
-    address.sin_port = htons(port);
-    if (bind(fd, (const struct sockaddr *)&address, sizeof(address)) < 0) {
-        mh_close(fd);
-        return -1;
-    }
-    return fd;
-}
-
 static int open_mdns(uint8_t address[4])
 {
     struct sockaddr_in local;
@@ -180,11 +155,11 @@ static int open_mdns(uint8_t address[4])
     if (connect(probe, (const struct sockaddr *)&multicast,
                 sizeof(multicast)) < 0 ||
         getsockname(probe, (struct sockaddr *)&local, &size) < 0) {
-        mh_close(probe);
+        netmidi_network_close_socket(probe);
         return -1;
     }
     memcpy(address, &local.sin_addr.s_addr, 4);
-    mh_close(probe);
+    netmidi_network_close_socket(probe);
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return -1;
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const void *)&reuse,
@@ -211,7 +186,7 @@ static int open_mdns(uint8_t address[4])
         goto fail;
     return fd;
 fail:
-    mh_close(fd);
+    netmidi_network_close_socket(fd);
     return -1;
 }
 
@@ -270,12 +245,10 @@ static int send_apple(struct runtime *rt, int data_port,
     size_t length;
     const struct sockaddr_in *address = data_port ? &rt->peer_data :
                                                   &rt->peer_control;
-    int fd = data_port ? rt->data : rt->control;
     if (mh_apple_encode(packet, bytes, sizeof(bytes), &length) != 0)
         return -1;
-    return sendto(fd, bytes, (int)length, 0,
-                  (const struct sockaddr *)address, sizeof(*address)) ==
-           (int)length ? 0 : -1;
+    return netmidi_network_send(&rt->network, data_port, bytes, length,
+                                address);
 }
 
 static void send_sync(struct runtime *rt, uint64_t now)
@@ -495,7 +468,7 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
     } else if (length == 3 && (status & 0xf0) == 0xe0) {
         rt->pitch[channel] = (uint16_t)(bytes[1] | (bytes[2] << 7));
     }
-    mh_camd_runtime_deliver(&rt->camd, bytes, length);
+    netmidi_camd_deliver(&rt->camd, bytes, length);
 }
 
 static void deliver_sysex(struct runtime *rt, const uint8_t *message,
@@ -514,7 +487,7 @@ static void deliver_sysex(struct runtime *rt, const uint8_t *message,
     } else if (length >= 2 && message[0] == 0xf0 &&
                message[length - 1] == 0xf7)
         ++rt->sysex_count;
-    mh_camd_runtime_deliver_sysex(&rt->camd, message, length);
+    netmidi_camd_deliver_sysex(&rt->camd, message, length);
 }
 
 static void reset_channel_state(struct runtime *rt)
@@ -1326,9 +1299,9 @@ static void receive_packet(struct runtime *rt, int data_port)
     struct sockaddr_in source;
     socklen_t source_length = sizeof(source);
     uint8_t bytes[1500];
-    int count = recvfrom(data_port ? rt->data : rt->control, bytes,
-                         sizeof(bytes), 0, (struct sockaddr *)&source,
-                         &source_length);
+    int count = netmidi_network_receive(&rt->network, data_port, bytes,
+                                        sizeof(bytes), &source,
+                                        &source_length);
     struct mh_apple_packet packet;
     struct mh_apple_packet response;
     struct mh_rtp_packet midi;
@@ -1560,9 +1533,8 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
             wire[12] |= 0x40;
             wire_length += journal_length;
         }
-        if (sendto(rt->data, wire, (int)wire_length, 0,
-                   (const struct sockaddr *)&rt->peer_data,
-                   sizeof(rt->peer_data)) != (int)wire_length)
+        if (netmidi_network_send(&rt->network, 1, wire, wire_length,
+                                 &rt->peer_data) != 0)
             return -1;
         if (mh_sender_supported(message, length))
             mh_sender_record(&rt->sender, rt->sequence, timestamp,
@@ -1585,9 +1557,8 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
         if (mh_rtp_encode_list(rt->sequence, timestamp,
                                rt->session.local_ssrc, message, length,
                                wire, sizeof(wire), &wire_length) != 0 ||
-            sendto(rt->data, wire, (int)wire_length, 0,
-                   (const struct sockaddr *)&rt->peer_data,
-                   sizeof(rt->peer_data)) != (int)wire_length)
+            netmidi_network_send(&rt->network, 1, wire, wire_length,
+                                 &rt->peer_data) != 0)
             return -1;
         ++rt->sequence;
         rt->last_rtp_send = now_ticks();
@@ -1612,9 +1583,8 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
                                rt->session.local_ssrc, segment,
                                segment_length, wire, sizeof(wire),
                                &wire_length) != 0 ||
-            sendto(rt->data, wire, (int)wire_length, 0,
-                   (const struct sockaddr *)&rt->peer_data,
-                   sizeof(rt->peer_data)) != (int)wire_length)
+            netmidi_network_send(&rt->network, 1, wire, wire_length,
+                                 &rt->peer_data) != 0)
             return -1;
         ++rt->sequence;
         rt->last_rtp_send = now_ticks();
@@ -1640,9 +1610,8 @@ static void send_guard(struct runtime *rt, uint64_t now)
         return;
     wire[12] |= 0x40;
     wire_length += journal_length;
-    if (sendto(rt->data, wire, (int)wire_length, 0,
-               (const struct sockaddr *)&rt->peer_data,
-               sizeof(rt->peer_data)) == (int)wire_length) {
+    if (netmidi_network_send(&rt->network, 1, wire, wire_length,
+                             &rt->peer_data) == 0) {
         ++rt->sequence;
         rt->last_rtp_send = now;
     }
@@ -1767,8 +1736,6 @@ int main(int argc, char **argv)
     struct sockaddr_in peer;
     struct mh_apple_packet invite;
     struct mh_apple_packet goodbye;
-    struct timeval timeout;
-    fd_set read_set;
     uint16_t local_port;
     uint16_t peer_port;
     struct mh_network_config config;
@@ -1782,11 +1749,9 @@ int main(int argc, char **argv)
 #ifdef __AROS__
     int config_result;
 #endif
-    int ready;
+    unsigned int network_events;
+    long wait_us;
     int result = 20;
-#ifdef __AROS__
-    ULONG signal_mask;
-#endif
 
     setvbuf(stdout, NULL, _IONBF, 0);
 
@@ -1826,7 +1791,8 @@ int main(int argc, char **argv)
         peer_ip = argv[argi + 1];
     memset(&rt, 0, sizeof(rt));
     reset_channel_state(&rt);
-    rt.control = rt.data = rt.mdns = -1;
+    netmidi_network_init(&rt.network);
+    rt.mdns = -1;
     rt.local_port = local_port;
     strcpy(rt.mdns_session, config.session_name);
     rt.initiating = *peer_ip != 0;
@@ -1835,13 +1801,11 @@ int main(int argc, char **argv)
     rt.probe_sysex = remaining == 4 &&
                      strcmp(argv[argi + 3], "--probe-sysex") == 0;
 
-#ifdef __AROS__
-    SocketBase = OpenLibrary((CONST_STRPTR)"bsdsocket.library", 4);
-    if (!SocketBase) {
+    if (netmidi_network_platform_open(&rt.network) != 0) {
         fputs("MIDIHub: bsdsocket.library unavailable\n", stderr);
         return 20;
     }
-#else
+#ifndef __AROS__
     signal(SIGINT, stop_signal);
     signal(SIGTERM, stop_signal);
 #endif
@@ -1863,13 +1827,11 @@ int main(int argc, char **argv)
         rt.peer_data = peer;
         rt.have_peer = 1;
     }
-    rt.control = open_udp(local_port);
-    rt.data = open_udp((uint16_t)(local_port + 1));
-    if (rt.control < 0 || rt.data < 0) {
+    if (netmidi_network_open_pair(&rt.network, local_port) != 0) {
         fputs("MIDIHub: cannot bind UDP port pair\n", stderr);
         goto cleanup;
     }
-    if (mh_camd_runtime_open(&rt.camd) != 0) {
+    if (netmidi_camd_open(&rt.camd) != 0) {
         fputs("MIDIHub: camd.library unavailable\n", stderr);
         goto cleanup;
     }
@@ -1904,43 +1866,26 @@ int main(int argc, char **argv)
         if (stopping)
             break;
 #endif
-        FD_ZERO(&read_set);
-        FD_SET(rt.control, &read_set);
-        FD_SET(rt.data, &read_set);
-        if (rt.mdns >= 0) FD_SET(rt.mdns, &read_set);
-        timeout.tv_sec = 0;
-        timeout.tv_usec = 100000;
+        wait_us = 100000;
         if (mh_queue_next_due(&rt.queue, &next_due)) {
             now = now_ticks();
             wait_ticks = next_due > now ? next_due - now : 0;
             if (wait_ticks < 1000)
-                timeout.tv_usec = (long)(wait_ticks * 100);
+                wait_us = (long)(wait_ticks * 100);
         }
-#ifdef __AROS__
-        signal_mask = SIGBREAKF_CTRL_C |
-                      (1UL << mh_camd_runtime_signal_bit(&rt.camd));
-        ready = WaitSelect((rt.mdns > rt.control && rt.mdns > rt.data ?
-                            rt.mdns : rt.control > rt.data ? rt.control :
-                            rt.data) + 1,
-                           &read_set, NULL, NULL, &timeout, &signal_mask);
-        if (signal_mask & SIGBREAKF_CTRL_C)
+        netmidi_network_wait(&rt.network, rt.mdns, wait_us,
+                             netmidi_camd_signal_bit(&rt.camd),
+                             &network_events);
+        if (network_events & NETMIDI_NETWORK_EVENT_STOP)
             break;
-#else
-        ready = select((rt.mdns > rt.control && rt.mdns > rt.data ?
-                        rt.mdns : rt.control > rt.data ? rt.control :
-                        rt.data) + 1,
-                       &read_set, NULL, NULL, &timeout);
-#endif
-        if (ready > 0) {
-            if (FD_ISSET(rt.control, &read_set))
-                receive_packet(&rt, 0);
-            if (FD_ISSET(rt.data, &read_set))
-                receive_packet(&rt, 1);
-            if (rt.mdns >= 0 && FD_ISSET(rt.mdns, &read_set))
-                receive_mdns(&rt);
-        }
+        if (network_events & NETMIDI_NETWORK_EVENT_CONTROL)
+            receive_packet(&rt, 0);
+        if (network_events & NETMIDI_NETWORK_EVENT_DATA)
+            receive_packet(&rt, 1);
+        if (network_events & NETMIDI_NETWORK_EVENT_AUXILIARY)
+            receive_mdns(&rt);
         periodic(&rt, now_ticks());
-        mh_camd_runtime_poll(&rt.camd, send_midi, &rt);
+        netmidi_camd_poll(&rt.camd, send_midi, &rt);
         if (rt.initiating && rt.session.phase == MH_SESSION_IDLE)
             break;
     }
@@ -1952,19 +1897,13 @@ int main(int argc, char **argv)
 cleanup:
     if (rt.mdns >= 0) {
         send_mdns(&rt, NULL, 0, 0);
-        mh_close(rt.mdns);
+        netmidi_network_close_socket(rt.mdns);
     }
-    if (mh_camd_runtime_is_open(&rt.camd)) {
+    if (netmidi_camd_is_open(&rt.camd)) {
         mh_queue_reset(&rt.queue);
         release_active_notes(&rt);
     }
-    mh_camd_runtime_close(&rt.camd);
-    if (rt.data >= 0)
-        mh_close(rt.data);
-    if (rt.control >= 0)
-        mh_close(rt.control);
-#ifdef __AROS__
-    CloseLibrary(SocketBase);
-#endif
+    netmidi_camd_close(&rt.camd);
+    netmidi_network_close(&rt.network);
     return result;
 }

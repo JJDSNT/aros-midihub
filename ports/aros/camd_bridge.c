@@ -16,7 +16,7 @@
    library under another, so the base is per bridge. */
 #define CamdBase ((struct Library *)bridge->camd_base)
 
-int mh_camd_bridge_open_named(struct mh_camd_bridge *bridge,
+int aros_camd_bridge_open_named(struct aros_camd_bridge *bridge,
                               char *node_name, char *incoming_name,
                               char *outgoing_name)
 {
@@ -64,20 +64,20 @@ int mh_camd_bridge_open_named(struct mh_camd_bridge *bridge,
     return 0;
 
 fail:
-    mh_camd_bridge_close(bridge);
+    aros_camd_bridge_close(bridge);
     return -1;
 }
 
-int mh_camd_bridge_open(struct mh_camd_bridge *bridge)
+int aros_camd_bridge_open(struct aros_camd_bridge *bridge)
 {
     static char node_name[] = "MIDIHub";
     static char incoming_name[] = "MIDIHub In";
     static char outgoing_name[] = "MIDIHub Out";
-    return mh_camd_bridge_open_named(bridge, node_name, incoming_name,
-                                     outgoing_name);
+    return aros_camd_bridge_open_named(bridge, node_name, incoming_name,
+                                       outgoing_name);
 }
 
-void mh_camd_bridge_close(struct mh_camd_bridge *bridge)
+void aros_camd_bridge_close(struct aros_camd_bridge *bridge)
 {
     if (bridge->from_clients)
         RemoveMidiLink(bridge->from_clients);
@@ -94,8 +94,8 @@ void mh_camd_bridge_close(struct mh_camd_bridge *bridge)
     bridge->signal_bit = -1;
 }
 
-void mh_camd_bridge_deliver(struct mh_camd_bridge *bridge,
-                            const uint8_t *message, size_t length)
+void aros_camd_bridge_deliver(struct aros_camd_bridge *bridge,
+                              const uint8_t *message, size_t length)
 {
     uint32_t packed;
     uint8_t status;
@@ -112,8 +112,8 @@ void mh_camd_bridge_deliver(struct mh_camd_bridge *bridge,
     PutMidi(bridge->to_clients, packed);
 }
 
-void mh_camd_bridge_deliver_sysex(struct mh_camd_bridge *bridge,
-                                  const uint8_t *message, size_t length)
+void aros_camd_bridge_deliver_sysex(struct aros_camd_bridge *bridge,
+                                    const uint8_t *message, size_t length)
 {
     if (!bridge->to_clients || !message || length < 2 ||
         length > MH_SYSEX_MAX || message[0] != 0xf0 ||
@@ -122,8 +122,8 @@ void mh_camd_bridge_deliver_sysex(struct mh_camd_bridge *bridge,
     PutSysEx(bridge->to_clients, (UBYTE *)message);
 }
 
-void mh_camd_bridge_poll(struct mh_camd_bridge *bridge,
-                         mh_camd_output output, void *context)
+void aros_camd_bridge_poll(struct aros_camd_bridge *bridge,
+                           aros_camd_output output, void *context)
 {
     MidiMsg message;
     uint8_t bytes[3];
@@ -156,7 +156,7 @@ void mh_camd_bridge_poll(struct mh_camd_bridge *bridge,
 
 #else
 
-int mh_camd_bridge_open_named(struct mh_camd_bridge *bridge,
+int aros_camd_bridge_open_named(struct aros_camd_bridge *bridge,
                               char *node_name, char *incoming_name,
                               char *outgoing_name)
 {
@@ -168,34 +168,34 @@ int mh_camd_bridge_open_named(struct mh_camd_bridge *bridge,
     return 0;
 }
 
-int mh_camd_bridge_open(struct mh_camd_bridge *bridge)
+int aros_camd_bridge_open(struct aros_camd_bridge *bridge)
 {
-    return mh_camd_bridge_open_named(bridge, NULL, NULL, NULL);
+    return aros_camd_bridge_open_named(bridge, NULL, NULL, NULL);
 }
 
-void mh_camd_bridge_close(struct mh_camd_bridge *bridge)
-{
-    (void)bridge;
-}
-
-void mh_camd_bridge_deliver(struct mh_camd_bridge *bridge,
-                            const uint8_t *message, size_t length)
+void aros_camd_bridge_close(struct aros_camd_bridge *bridge)
 {
     (void)bridge;
-    (void)message;
-    (void)length;
 }
 
-void mh_camd_bridge_deliver_sysex(struct mh_camd_bridge *bridge,
-                                  const uint8_t *message, size_t length)
+void aros_camd_bridge_deliver(struct aros_camd_bridge *bridge,
+                              const uint8_t *message, size_t length)
 {
     (void)bridge;
     (void)message;
     (void)length;
 }
 
-void mh_camd_bridge_poll(struct mh_camd_bridge *bridge,
-                         mh_camd_output output, void *context)
+void aros_camd_bridge_deliver_sysex(struct aros_camd_bridge *bridge,
+                                    const uint8_t *message, size_t length)
+{
+    (void)bridge;
+    (void)message;
+    (void)length;
+}
+
+void aros_camd_bridge_poll(struct aros_camd_bridge *bridge,
+                           aros_camd_output output, void *context)
 {
     (void)bridge;
     (void)output;
