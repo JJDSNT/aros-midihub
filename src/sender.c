@@ -489,6 +489,18 @@ static int parameter_controller(uint8_t number)
            (number >= 98 && number <= 101);
 }
 
+static int parameter_event(const struct mh_sent_event *event)
+{
+    uint8_t number = event->bytes[1];
+
+    /* RPN/NRPN selectors always belong to Chapter M. Data Entry and
+     * Increment/Decrement only do while a non-null parameter is selected;
+     * RFC 6295 A.3.4 requires their general-purpose use in Chapter C. */
+    if (number >= 98 && number <= 101)
+        return 1;
+    return parameter_controller(number) && event->parameter_valid;
+}
+
 struct parameter_build_log {
     uint16_t number;
     uint8_t nrpn;
@@ -521,7 +533,7 @@ static int build_parameters(const struct mh_sender *sender,
             (event->bytes[0] & 0x0f) != channel)
             continue;
         controller = event->bytes[1];
-        if (!parameter_controller(controller)) continue;
+        if (!parameter_event(event)) continue;
         activity = 1;
         if (event->sequence == (uint16_t)(sequence - 1)) chapter_recent = 1;
         if (!event->parameter_valid) continue;
@@ -653,7 +665,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
         type = event->bytes[0] & 0xf0;
         if (type == 0x80 || type == 0x90)
             latest_note[event->bytes[1]] = (int)i;
-        else if (type == 0xb0 && !parameter_controller(event->bytes[1]))
+        else if (type == 0xb0 && !parameter_event(event))
             latest_control[event->bytes[1]] = (int)i;
         else if (type == 0xa0)
             latest_poly[event->bytes[1]] = (int)i;
@@ -665,7 +677,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
             pitch = (int)i;
         if (type == 0xb0 && event->bytes[1] == 121)
             reset_controllers = (int)i;
-        if (type == 0xb0 && parameter_controller(event->bytes[1]))
+        if (type == 0xb0 && parameter_event(event))
             has_parameter = 1;
     }
     if (aftertouch <= reset_controllers)

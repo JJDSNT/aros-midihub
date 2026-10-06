@@ -676,10 +676,13 @@ static void recover_controls(struct runtime *rt,
                            count_controller(log->number) &&
                            rt->controller_count[channel][log->number] !=
                            log->value) {
+                    uint8_t missing = (uint8_t)(
+                        (log->value -
+                         rt->controller_count[channel][log->number]) & 0x3f);
                     message[1] = log->number;
                     message[2] = 0;
-                    deliver_short(rt, message, sizeof(message));
-                    rt->controller_count[channel][log->number] = log->value;
+                    while (missing--)
+                        deliver_short(rt, message, sizeof(message));
                     printf("MIDIHub: recovered controller count channel=%u controller=%u count=%u\n",
                            channel, (unsigned int)log->number,
                            (unsigned int)log->value);

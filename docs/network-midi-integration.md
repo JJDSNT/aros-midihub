@@ -9,12 +9,12 @@ it inside MIDIHub.
 
 | part | file | state |
 |---|---|---|
-| AppleMIDI session (IN, OK, NO, BY, CK, RS) | `src/applemidi.c`, `src/session.c` | one peer, either role; host tests |
+| AppleMIDI session (IN, OK, NO, BY, CK, RS) | `src/applemidi.c`, `src/session.c`, `src/peers.c` | up to eight peers, either role; host tests |
 | RTP-MIDI payload, recovery journal | `src/rtpmidi.c`, `src/sender.c`, `src/timing.c` | chapters N, C, P, W, M, E, Q, F, X; host tests |
 | mDNS for `_apple-midi._udp` | `src/mdns.c` | advertises, answers browse queries |
 | Universal MIDI Packet, MIDI 1.0 translation | `src/ump.c` | host tests |
 | Network MIDI 2.0 (UDP), M2-124-UM | `src/netmidi2.c` | Host and Client sessions, FEC; host tests |
-| AROS program bridging to CAMD | `ports/aros/midihub/main.c` | AppleMIDI, one peer, `MIDIHub In`/`Out` |
+| AROS program bridging to CAMD | `ports/aros/midihub/main.c` | AppleMIDI, one active peer, `MIDIHub In`/`Out` |
 
 The codecs and session state machines make no OS calls: the caller owns the
 sockets, the addresses and the clock. That is what lets them move.
@@ -104,8 +104,8 @@ MIDI 2.0 Channel Voice message is 64. So, in two steps:
 ## Order
 
 1. Finish the RTP-MIDI work in progress.
-2. AppleMIDI with several peers (a session manager over `session.c`, which
-   already answers invitations) and a CAMD node per peer.
+2. Connect the portable multi-peer AppleMIDI manager to the AROS event loop
+   and create a CAMD node per connected peer.
 3. The AROS service: AppleMIDI and Network MIDI 2.0 on one event loop and
    one mDNS responder, as a CAMD client per peer, started with the network.
 4. Upstream proposals: the system mDNS responder; the network MIDI service in

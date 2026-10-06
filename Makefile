@@ -6,10 +6,10 @@ M68K_CFLAGS ?= -O2 -Wall -Wextra -Werror -Wno-volatile-register-var -std=gnu99
 FLUIDSYNTH_CFLAGS ?= $(shell pkg-config --cflags fluidsynth 2>/dev/null)
 FLUIDSYNTH_LIBS ?= $(shell pkg-config --libs fluidsynth 2>/dev/null)
 
-SOURCES = src/applemidi.c src/rtpmidi.c src/session.c src/config.c src/timing.c src/sender.c src/mdns.c src/routes.c
+SOURCES = src/applemidi.c src/rtpmidi.c src/session.c src/peers.c src/config.c src/timing.c src/sender.c src/mdns.c src/routes.c
 PROGRAM_SOURCES = ports/aros/midihub/main.c ports/aros/midihub/camd_bridge.c
 HEADERS = include/midihub/applemidi.h include/midihub/rtpmidi.h \
-          include/midihub/session.h include/midihub/config.h include/midihub/timing.h \
+          include/midihub/session.h include/midihub/peers.h include/midihub/config.h include/midihub/timing.h \
           include/midihub/sender.h include/midihub/mdns.h include/midihub/routes.h \
           ports/aros/midihub/camd_bridge.h
 

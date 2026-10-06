@@ -3,6 +3,7 @@
 #include "midihub/session.h"
 #include "midihub/sender.h"
 #include "midihub/mdns.h"
+#include "midihub/peers.h"
 #include "midihub/timing.h"
 
 #include <assert.h>
@@ -86,6 +87,81 @@ static void apple_feedback(void)
     assert(mh_apple_decode(feedback, sizeof(feedback) - 1, &packet) == -1);
     assert(mh_apple_encode(&packet, encoded, sizeof(encoded) - 1,
                            &length) == -1);
+}
+
+static void applemidi_peers(void)
+{
+    struct mh_peers peers;
+    struct mh_apple_packet packet;
+    struct mh_apple_packet reply;
+    int data_port;
+    int index;
+    enum mh_peer_event event;
+    int first;
+    int second;
+
+    assert(mh_peers_init(&peers, 0x10203040,
+                         (const uint8_t *)"AROS MIDIHub", 12) == 0);
+    assert(peers.accept);
+
+    first = mh_peers_invite(&peers, 0xc0a86401, 5004, 0x11111111,
+                            100, &packet);
+    second = mh_peers_invite(&peers, 0xc0a86402, 5004, 0x22222222,
+                             100, &reply);
+    assert(first >= 0 && second >= 0 && first != second);
+    assert(packet.command == MH_APPLE_IN && packet.token == 0x11111111);
+    assert(mh_peers_retry(&peers, first, &reply, &data_port) == 0 &&
+           reply.command == MH_APPLE_IN && !data_port);
+    assert(mh_peers_invite(&peers, 0xc0a86401, 5004, 3, 100,
+                           &packet) == -1);
+
+    memset(&packet, 0, sizeof(packet));
+    packet.command = MH_APPLE_OK;
+    packet.token = 0x11111111;
+    packet.ssrc = 0xaaaa0001;
+    packet.name = (const uint8_t *)"iPhone";
+    packet.name_length = 6;
+    assert(mh_peers_receive(&peers, 0xc0a86401, 5004, 0, &packet, 110,
+                            &reply, &data_port, &index, &event) == 1);
+    assert(index == first && data_port && event == MH_PEER_NONE);
+    assert(reply.command == MH_APPLE_IN);
+    assert(mh_peers_retry(&peers, first, &reply, &data_port) == 0 &&
+           reply.command == MH_APPLE_IN && data_port);
+    assert(!strcmp(peers.peer[first].name, "iPhone"));
+    assert(mh_peers_receive(&peers, 0xc0a86401, 5005, 1, &packet, 120,
+                            &reply, &data_port, &index, &event) == 0);
+    assert(index == first && event == MH_PEER_CONNECTED);
+    assert(mh_peers_find_data(&peers, 0xc0a86401, 5005) == first);
+    assert(mh_peers_find_ssrc(&peers, 0xaaaa0001) == first);
+
+    memset(&packet, 0, sizeof(packet));
+    packet.command = MH_APPLE_IN;
+    packet.token = 0x33333333;
+    packet.ssrc = 0xaaaa0003;
+    packet.name = (const uint8_t *)"Mac";
+    packet.name_length = 3;
+    assert(mh_peers_receive(&peers, 0xc0a86403, 6000, 0, &packet, 130,
+                            &reply, &data_port, &index, &event) == 1);
+    assert(index >= 0 && reply.command == MH_APPLE_OK && !data_port);
+    assert(mh_peers_receive(&peers, 0xc0a86403, 6001, 1, &packet, 140,
+                            &reply, &data_port, &index, &event) == 1);
+    assert(reply.command == MH_APPLE_OK && data_port &&
+           event == MH_PEER_CONNECTED);
+
+    mh_peers_seen(&peers, first, 200);
+    assert(mh_peers_expired(&peers, 249, 50) != first);
+    assert(mh_peers_expired(&peers, 250, 50) == first);
+    assert(mh_peers_end(&peers, first, &reply) == 0);
+    assert(reply.command == MH_APPLE_BY &&
+           mh_peers_find_data(&peers, 0xc0a86401, 5005) == -1);
+
+    peers.accept = 0;
+    packet.command = MH_APPLE_IN;
+    packet.token = 0x44444444;
+    packet.ssrc = 0xaaaa0004;
+    assert(mh_peers_receive(&peers, 0xc0a86404, 7000, 0, &packet, 300,
+                            &reply, &data_port, &index, &event) == 1);
+    assert(index == -1 && reply.command == MH_APPLE_NO);
 }
 
 static void rtp_short(void)
@@ -454,6 +530,9 @@ static void outgoing_journal(void)
     const uint8_t data_msb[] = {0xb0, 6, 2};
     const uint8_t data_lsb[] = {0xb0, 38, 25};
     const uint8_t data_increment[] = {0xb0, 96, 0};
+    const uint8_t general_data_msb[] = {0xb0, 6, 55};
+    const uint8_t rpn_null_msb[] = {0xb0, 101, 127};
+    const uint8_t rpn_null_lsb[] = {0xb0, 100, 127};
     const uint8_t soft_on[] = {0xb0, 67, 127};
     const uint8_t soft_off[] = {0xb0, 67, 0};
     const uint8_t omni_on[] = {0xb0, 125, 0};
@@ -552,6 +631,33 @@ static void outgoing_journal(void)
            note_extras.logs[0].value == 1 &&
            note_extras.logs[1].velocity &&
            note_extras.logs[1].value == 45);
+    mh_sender_reset(&sender);
+
+    /* Controllers 6/38/96/97 are ordinary Chapter C controllers when no
+     * non-null RPN or NRPN is selected (RFC 6295 A.3.4). */
+    mh_sender_record(&sender, 105, 1250, general_data_msb,
+                     sizeof(general_data_msb));
+    assert(mh_sender_journal(&sender, 106, 1300,
+                             bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_controls(&journal.channels[0], &controls) == 1);
+    assert(controls.count == 1 && controls.logs[0].number == 6 &&
+           controls.logs[0].value == 55 && !controls.logs[0].alternate);
+    assert(mh_journal_decode_parameters(&journal.channels[0],
+                                        &parameters) == 0);
+    mh_sender_reset(&sender);
+    mh_sender_record(&sender, 106, 1300, rpn_null_msb,
+                     sizeof(rpn_null_msb));
+    mh_sender_record(&sender, 107, 1350, rpn_null_lsb,
+                     sizeof(rpn_null_lsb));
+    mh_sender_record(&sender, 108, 1400, general_data_msb,
+                     sizeof(general_data_msb));
+    assert(mh_sender_journal(&sender, 109, 1450,
+                             bytes, sizeof(bytes), &length) == 0);
+    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(mh_journal_decode_controls(&journal.channels[0], &controls) == 1);
+    assert(controls.count == 1 && controls.logs[0].number == 6 &&
+           controls.logs[0].value == 55);
     mh_sender_reset(&sender);
 
     mh_sender_record(&sender, 105, 1250, rpn_msb, sizeof(rpn_msb));
@@ -1197,6 +1303,7 @@ int main(void)
     apple_exchange();
     apple_sync();
     apple_feedback();
+    applemidi_peers();
     rtp_short();
     rtp_journal_and_lengths();
     journal_framing();

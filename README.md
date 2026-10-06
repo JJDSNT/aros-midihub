@@ -340,7 +340,10 @@ Network MIDI interoperability should eventually be tested with:
 AROS MIDIHub is currently in the **initial implementation phase**. AppleMIDI
 control and RTP-MIDI packet codecs, a one-peer invitation state machine, host
 tests, an AROS package self-test, and a UDP diagnostic program are present.
-The program negotiates a session, exchanges CK packets, and bridges MIDI
+The portable AppleMIDI layer manages up to eight concurrent peers, including
+incoming and outgoing invitations, retries, refusal, timeout, and BY teardown.
+The current AROS event loop still activates one of those peers at a time. It
+negotiates a session, exchanges CK packets, and bridges MIDI
 messages and SysEx through CAMD clusters on AROS. It acknowledges received
 RTP packets, including journal-only guard packets, with AppleMIDI `RS`
 feedback. The CK exchange estimates the peer clock offset. MIDI messages and
@@ -368,7 +371,9 @@ overview, persistent routing, Network MIDI settings, SoundFont/backend
 selection, named profiles, and a CAMD synth preview action.
 Chapter M now decodes RPN/NRPN logs and protects parameter selection plus
 Data Entry MSB/LSB, Data Increment/Decrement operations, and transaction
-counts. Parameter transaction identity is retained for up to 128 distinct
+counts. Data Entry and Increment/Decrement commands used without a non-null
+RPN/NRPN selection are correctly protected by Chapter C. Parameter transaction
+identity is retained for up to 128 distinct
 channel, type, and parameter combinations per session. The optional
 CAMD synthesizer now builds, but live AROS audio playback is unverified. A
 Linux-hosted AROS loopback run opened
