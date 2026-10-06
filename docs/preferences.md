@@ -89,7 +89,8 @@ MIDIHub presents MIDI information without taking ownership away from the AROS su
 | Bluetooth adapter, pairing, trust and security | Bluetooth Preferences |
 | IP, Ethernet and Wi-Fi configuration | Network Preferences |
 | Audio device and mode | AHI Preferences |
-| AppleMIDI session settings | Network MIDI device, configured through MIDIHub.prefs |
+| AppleMIDI session settings | `applemidi.device`, configured through MIDIHub.prefs |
+| Network MIDI 2.0 / UMP settings | `networkmidi2.device`, configured through MIDIHub.prefs |
 | SoundFont and MIDI synth settings | Synth service, configured through MIDIHub.prefs |
 | MIDI profiles | MIDIHub |
 
@@ -207,7 +208,7 @@ This page owns MIDI-specific network-session configuration, not general network 
 
 During incubation, the AppleMIDI/RTP-MIDI implementation reads
 `ENV:MidiHub/Network` and falls back to `ENVARC:MidiHub/Network`. Once it moves
-to its native AROS device, that device owns the settings contract while
+to `applemidi.device`, that device owns the AppleMIDI settings contract while
 `MIDIHub.prefs` remains its user-facing configuration client. The UTF-8 file
 uses one `name=value` option per line. Empty lines and lines beginning with
 `#` or `;` are ignored.
@@ -223,7 +224,7 @@ session_name=AROS MIDIHub
 
 The Preferences page should expose the relevant MIDI concepts: service enabled state, session name, local control port, discovery, known/discovered peers, connection state, and Connect/Disconnect actions where supported.
 
-Future Network MIDI 2.0 / UMP support can live on this page without implying that it is the same protocol as AppleMIDI.
+Network MIDI 2.0 / UMP configuration can live on this page as the configuration surface for `networkmidi2.device`, without implying that it is the same protocol as AppleMIDI.
 
 IP addresses may be used where a MIDI peer requires them, but interface, Wi-Fi, DNS, gateway, and general TCP/IP configuration remain in Network Preferences.
 
