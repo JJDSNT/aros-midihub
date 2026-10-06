@@ -6,6 +6,10 @@
    passes on the original must pass on the changed one too.
 
    MIDIHubCAMDCompat            the contract of the 41.1 API
+   MIDIHubCAMDCompat --v42      what camd.library 42 adds: participant
+                                notification, GetClusterAttrsA(),
+                                CamdTime(), MIDI_SystemClock and cluster
+                                watches; skipped before 42
    MIDIHubCAMDCompat --rethink  RethinkCAMD() loading DEVS:Midi/debugdriver
                                 at run time; needs the driver moved to
                                 SYS:camdcompat-debugdriver before CAMD starts
@@ -15,6 +19,7 @@
    when nothing failed, 5 otherwise. */
 #include <dos/dos.h>
 #include <dos/dostags.h>
+#include <utility/hooks.h>
 #include <exec/libraries.h>
 #include <exec/tasks.h>
 #include <midi/camd.h>
@@ -553,6 +558,344 @@ static void test_rethink_stub(void)
     check(result == 0, "RethinkCAMD returns 0", NULL);
 }
 
+/* camd.library 42 */
+
+static struct MidiNode *part_node(char *name, BYTE bit)
+{
+    struct TagItem tags[] = {
+        {MIDI_Name, (IPTR)name},
+        {MIDI_MsgQueue, 32},
+        {MIDI_SysExSize, 256},
+        {MIDI_PartSignal, (IPTR)bit},
+        {TAG_DONE, 0}
+    };
+    return CreateMidiA(tags);
+}
+
+static ULONG cluster_attr(char *cluster, ULONG tag)
+{
+    IPTR value = 0;
+    struct TagItem query[] = {
+        {tag, (IPTR)&value},
+        {TAG_DONE, 0}
+    };
+    APTR lock = LockCAMD(CD_Linkages);
+    struct MidiCluster *found = FindCluster(cluster);
+
+    if (found)
+        GetClusterAttrsA(found, query);
+    UnlockCAMD(lock);
+    return (ULONG)value;
+}
+
+static int hook_calls;
+static APTR hook_object, hook_message;
+
+AROS_UFH3(IPTR, part_hook,
+    AROS_UFHA(struct Hook *, hook, A0),
+    AROS_UFHA(APTR, object, A2),
+    AROS_UFHA(APTR, message, A1))
+{
+    AROS_USERFUNC_INIT
+
+    (void)hook;
+    hook_calls++;
+    hook_object = object;
+    hook_message = message;
+    return 0;
+
+    AROS_USERFUNC_EXIT
+}
+
+static void test_participants(void)
+{
+    static char cluster[] = "camdcompat.part";
+    static char other[] = "camdcompat.part2";
+    static struct Hook hook;
+    struct TagItem hook_tags[] = {
+        {MIDI_PartHook, (IPTR)&hook},
+        {TAG_DONE, 0}
+    };
+    struct TagItem private_tags[] = {
+        {MLINK_Location, (IPTR)cluster},
+        {MLINK_Private, TRUE},
+        {TAG_DONE, 0}
+    };
+    BYTE abit = AllocSignal(-1), bbit = AllocSignal(-1);
+    ULONG amask = 1UL << abit, bmask = 1UL << bbit;
+    struct MidiNode *a = NULL, *b = NULL, *c = NULL;
+    struct MidiLink *alink = NULL, *alink2 = NULL, *blink = NULL, *clink = NULL, *olink = NULL;
+    APTR lock;
+
+    if (abit < 0 || bbit < 0) {
+        check(0, "participants: signals", NULL);
+        goto out;
+    }
+    a = part_node("camdcompat part A", abit);
+    b = part_node("camdcompat part B", bbit);
+    c = new_node("camdcompat part C", 32, 256);
+    if (!a || !b || !c) {
+        check(0, "participants: CreateMidiA", NULL);
+        goto out;
+    }
+    alink = link_to(a, MLTYPE_Receiver, cluster);
+    SetSignal(0, amask | bmask);
+    blink = link_to(b, MLTYPE_Sender, cluster);
+    check(SetSignal(0, amask) & amask, "MIDI_PartSignal: another node joins", NULL);
+    check(!(SetSignal(0, bmask) & bmask), "MIDI_PartSignal: not for the node's own link", NULL);
+    check(cluster_attr(cluster, MCLA_Participants) == 2, "MCLA_Participants counts links", NULL);
+
+    alink2 = link_to(a, MLTYPE_Sender, cluster);
+    check(SetSignal(0, bmask) & bmask, "MIDI_PartSignal: once per node with two links", NULL);
+    check(!(SetSignal(0, amask) & amask), "MIDI_PartSignal: own second link is silent", NULL);
+
+    olink = link_to(b, MLTYPE_Receiver, other);
+    check(!(SetSignal(0, amask) & amask),
+          "MIDI_PartSignal: not for a cluster the node is not in", NULL);
+
+    hook.h_Entry = (HOOKFUNC)part_hook;
+    SetMidiAttrsA(a, hook_tags);
+    hook_calls = 0;
+    clink = AddMidiLinkA(c, MLTYPE_Receiver, private_tags);
+    lock = LockCAMD(CD_Linkages);
+    check(hook_calls == 1 && hook_object == a && hook_message == FindCluster(cluster),
+          "MIDI_PartHook gets the node and the cluster", NULL);
+    UnlockCAMD(lock);
+    check(cluster_attr(cluster, MCLA_Participants) == 4 &&
+          cluster_attr(cluster, MCLA_PublicParticipants) == 3,
+          "MCLA_PublicParticipants leaves out MLINK_Private links", NULL);
+
+    SetSignal(0, amask);
+    RemoveMidiLink(blink);
+    blink = NULL;
+    check(SetSignal(0, amask) & amask, "MIDI_PartSignal: another node leaves", NULL);
+    check(cluster_attr(cluster, MCLA_Participants) == 3, "MCLA_Participants follows", NULL);
+out:
+    if (olink) RemoveMidiLink(olink);
+    if (clink) RemoveMidiLink(clink);
+    if (blink) RemoveMidiLink(blink);
+    if (alink2) RemoveMidiLink(alink2);
+    if (alink) RemoveMidiLink(alink);
+    if (c) DeleteMidi(c);
+    if (b) DeleteMidi(b);
+    if (a) DeleteMidi(a);
+    if (bbit >= 0) FreeSignal(bbit);
+    if (abit >= 0) FreeSignal(abit);
+}
+
+static void test_cluster_attrs(void)
+{
+    static char cluster[] = "camdcompat.attrs";
+    struct MidiNode *out = new_node("camdcompat attrs out", 32, 256);
+    struct MidiNode *in = new_node("camdcompat attrs in", 8, 256);
+    struct MidiLink *sender = NULL, *receiver = NULL;
+    IPTR name = 0, comment = 1, hasdriver = 1;
+    struct TagItem query[] = {
+        {MCLA_Name, (IPTR)&name},
+        {MCLA_Comment, (IPTR)&comment},
+        {MCLA_HasDriver, (IPTR)&hasdriver},
+        {TAG_USER + 0x7fff, 0},
+        {TAG_DONE, 0}
+    };
+    APTR lock;
+    ULONG counted = 0;
+    int i;
+
+    if (!out || !in) {
+        check(0, "attrs: CreateMidiA", NULL);
+        goto out;
+    }
+    sender = link_to(out, MLTYPE_Sender, cluster);
+    receiver = link_to(in, MLTYPE_Receiver, cluster);
+    if (!sender || !receiver) {
+        check(0, "attrs: AddMidiLinkA", NULL);
+        goto out;
+    }
+    lock = LockCAMD(CD_Linkages);
+    if (FindCluster(cluster))
+        counted = GetClusterAttrsA(FindCluster(cluster), query);
+    UnlockCAMD(lock);
+    check(counted == 3, "GetClusterAttrsA counts known tags only", NULL);
+    check(name && !strcmp((char *)name, cluster), "MCLA_Name", NULL);
+    check(comment == 0, "MCLA_Comment is NULL without a comment", NULL);
+    check(hasdriver == 0, "MCLA_HasDriver: a client cluster", NULL);
+    if (FindCluster("debugdriver.out.0"))
+        check(cluster_attr("debugdriver.out.0", MCLA_HasDriver),
+              "MCLA_HasDriver: a driver port's cluster", NULL);
+
+    check(cluster_attr(cluster, MCLA_Overflows) == 0, "MCLA_Overflows starts at 0", NULL);
+    for (i = 0; i < 20; i++)
+        PutMidi(sender, 0x903c6400UL);
+    check(cluster_attr(cluster, MCLA_Overflows) > 0, "MCLA_Overflows counts dropped messages", NULL);
+    GetMidiErr(in);
+    drain(in);
+out:
+    if (sender) RemoveMidiLink(sender);
+    if (receiver) RemoveMidiLink(receiver);
+    if (out) DeleteMidi(out);
+    if (in) DeleteMidi(in);
+}
+
+static void test_clock(void)
+{
+    static char cluster[] = "camdcompat.clock";
+    struct TagItem clock_tags[] = {
+        {MIDI_SystemClock, TRUE},
+        {TAG_DONE, 0}
+    };
+    IPTR flag = 0;
+    struct TagItem query[] = {
+        {MIDI_SystemClock, (IPTR)&flag},
+        {TAG_DONE, 0}
+    };
+    struct MidiNode *out = new_node("camdcompat clock out", 32, 256);
+    struct MidiNode *in = new_node("camdcompat clock in", 32, 256);
+    struct MidiLink *sender = NULL, *receiver = NULL;
+    ULONG t1, t2, before, after;
+    MidiMsg msg;
+
+    t1 = CamdTime();
+    Delay(50);
+    t2 = CamdTime();
+    if (t2 - t1 < 900 || t2 - t1 > 1500)
+        printf("     one second took %lu ms\n", (unsigned long)(t2 - t1));
+    check(t2 - t1 >= 900 && t2 - t1 <= 1500, "CamdTime counts milliseconds", NULL);
+
+    if (!out || !in) {
+        check(0, "clock: CreateMidiA", NULL);
+        goto out;
+    }
+    SetMidiAttrsA(in, clock_tags);
+    GetMidiAttrsA(in, query);
+    check(flag, "MIDI_SystemClock reads back", NULL);
+    sender = link_to(out, MLTYPE_Sender, cluster);
+    receiver = link_to(in, MLTYPE_Receiver, cluster);
+    if (!sender || !receiver) {
+        check(0, "clock: AddMidiLinkA", NULL);
+        goto out;
+    }
+    before = CamdTime();
+    PutMidi(sender, 0x903c6400UL);
+    after = CamdTime();
+    check(GetMidi(in, &msg) && msg.mm_Time - before <= after - before,
+          "MIDI_SystemClock stamps with CamdTime", NULL);
+out:
+    if (sender) RemoveMidiLink(sender);
+    if (receiver) RemoveMidiLink(receiver);
+    if (out) DeleteMidi(out);
+    if (in) DeleteMidi(in);
+}
+
+static int next_event(APTR watch, ULONG type, const char *name)
+{
+    struct ClusterWatchEvent event;
+
+    while (GetClusterWatchEvent(watch, &event))
+        if (event.cwe_Type == type && !strcmp(event.cwe_Name, name))
+            return 1;
+    return 0;
+}
+
+static void test_watch(void)
+{
+    static char cluster[] = "camdcompat.watch";
+    struct ClusterWatchEvent event;
+    struct TagItem no_bit[] = {{TAG_DONE, 0}};
+    BYTE bit = AllocSignal(-1);
+    ULONG mask = 1UL << bit;
+    struct TagItem tags[] = {
+        {CWA_SigBit, (IPTR)bit},
+        {TAG_DONE, 0}
+    };
+    struct MidiNode *node = new_node("camdcompat watch", 32, 256);
+    struct MidiLink *first = NULL, *second = NULL;
+    APTR watch = NULL;
+    char name[32];
+    int i, ok;
+
+    check(StartClusterWatchA(no_bit) == NULL, "StartClusterWatchA needs CWA_SigBit", NULL);
+    if (bit < 0 || !node || !(watch = StartClusterWatchA(tags))) {
+        check(0, "watch: setup", NULL);
+        goto out;
+    }
+    SetSignal(0, mask);
+    first = link_to(node, MLTYPE_Receiver, cluster);
+    check(SetSignal(0, mask) & mask, "a cluster watch signals", NULL);
+    ok = next_event(watch, CWE_Added, cluster);
+    ok = ok && next_event(watch, CWE_Participants, cluster);
+    check(ok, "CWE_Added, then CWE_Participants", NULL);
+    second = link_to(node, MLTYPE_Sender, cluster);
+    check(next_event(watch, CWE_Participants, cluster), "CWE_Participants for a link joining", NULL);
+    RemoveMidiLink(second);
+    second = NULL;
+    RemoveMidiLink(first);
+    first = NULL;
+    check(next_event(watch, CWE_Removed, cluster), "CWE_Removed", NULL);
+    check(!GetClusterWatchEvent(watch, &event), "GetClusterWatchEvent is empty afterwards", NULL);
+
+    for (i = 0; i < 20; i++) {
+        sprintf(name, "camdcompat.watch%d", i);
+        first = link_to(node, MLTYPE_Receiver, name);
+        if (first) RemoveMidiLink(first);
+    }
+    first = NULL;
+    check(GetClusterWatchEvent(watch, &event) && event.cwe_Type == CWE_Lost,
+          "a full watch reports CWE_Lost first", NULL);
+    while (GetClusterWatchEvent(watch, &event))
+        ;
+    EndClusterWatch(watch);
+    watch = NULL;
+    EndClusterWatch(NULL);
+    SetSignal(0, mask);
+    first = link_to(node, MLTYPE_Receiver, cluster);
+    check(!(SetSignal(0, mask) & mask), "EndClusterWatch stops signals", NULL);
+out:
+    if (second) RemoveMidiLink(second);
+    if (first) RemoveMidiLink(first);
+    if (watch) EndClusterWatch(watch);
+    if (node) DeleteMidi(node);
+    if (bit >= 0) FreeSignal(bit);
+}
+
+static struct Task *watch_parent;
+static volatile int watch_done;
+
+static void locked_watch(void)
+{
+    struct TagItem tags[] = {
+        {CWA_SigBit, SIGBREAKB_CTRL_F},
+        {TAG_DONE, 0}
+    };
+    APTR lock = LockCAMD(CD_Linkages);
+    APTR watch = StartClusterWatchA(tags);
+
+    EndClusterWatch(watch);
+    UnlockCAMD(lock);
+    watch_done = 1;
+    Signal(watch_parent, SIGBREAKF_CTRL_E);
+}
+
+static void test_watch_locked(void)
+{
+    struct TagItem tags[] = {
+        {NP_Entry, (IPTR)locked_watch},
+        {NP_Name, (IPTR)"camdcompat locked watch"},
+        {TAG_DONE, 0}
+    };
+    int ticks;
+
+    watch_parent = FindTask(NULL);
+    watch_done = 0;
+    if (!CreateNewProc(tags)) {
+        check(0, "StartClusterWatchA under LockCAMD", "no process");
+        return;
+    }
+    for (ticks = 0; ticks < 150 && !watch_done; ticks++)
+        Delay(1);
+    check(watch_done, "Start/EndClusterWatch while holding LockCAMD",
+          watch_done ? NULL : "deadlock (the process is left waiting)");
+}
+
 static int copy_file(CONST_STRPTR from, CONST_STRPTR to)
 {
     static UBYTE buffer[4096];
@@ -622,11 +965,12 @@ out:
 int main(int argc, char **argv)
 {
     int rethink_mode = argc == 2 && !strcmp(argv[1], "--rethink");
+    int v42_mode = argc == 2 && !strcmp(argv[1], "--v42");
 
     /* Unbuffered, so a crash still leaves the checks before it in the log. */
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (argc != 1 && !rethink_mode) {
-        puts("Usage: MIDIHubCAMDCompat [--rethink]");
+    if (argc != 1 && !rethink_mode && !v42_mode) {
+        puts("Usage: MIDIHubCAMDCompat [--v42 | --rethink]");
         return 20;
     }
     CamdBase = OpenLibrary((CONST_STRPTR)"camd.library", 0);
@@ -637,6 +981,17 @@ int main(int argc, char **argv)
     printf("camd.library %d.%d\n", CamdBase->lib_Version, CamdBase->lib_Revision);
     if (rethink_mode) {
         RUN(test_rethink_load);
+    } else if (v42_mode) {
+        if (CamdBase->lib_Version < 42) {
+            skip("camd.library 42", "older library");
+        } else {
+            RUN(test_participants);
+            RUN(test_cluster_attrs);
+            RUN(test_clock);
+            RUN(test_watch);
+            /* Last: a deadlock leaves its process holding LockCAMD(). */
+            RUN(test_watch_locked);
+        }
     } else {
         RUN(test_nodes);
         RUN(test_links);

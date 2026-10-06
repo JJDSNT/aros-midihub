@@ -8,7 +8,8 @@
 # raspi-aarch64 SD card (the boot files, the system and
 # Extras/aros-midihub/C) and is not modified. Boots twice from a FAT image
 # built in WORK_DIR: once for the 41.1 contract, once with
-# DEVS:Midi/debugdriver moved out for RethinkCAMD(). Needs
+# DEVS:Midi/debugdriver moved out for RethinkCAMD(). The first boot also
+# runs the camd.library 42 checks, which skip themselves on 41. Needs
 # qemu-system-aarch64 (raspi3b), sfdisk and mtools.
 # Exit status: 0 when no check failed.
 set -eu
@@ -18,6 +19,7 @@ suite=$(realpath "$2")
 sd=$(realpath "$3")
 work=$(realpath "${4:-$(mktemp -d)}")
 seconds=${CAMDCOMPAT_SECONDS:-200}
+mkdir -p "$work"
 img="$work/camdcompat.img"
 
 test -f "$lib"
@@ -49,7 +51,7 @@ make_image() {
 }
 
 boot() {
-    printf '%s\n' "$1" > "$work/User-Startup"
+    printf '%b\n' "$1" > "$work/User-Startup"
     mcopy -o -Q -i "$img@@1M" "$work/User-Startup" ::/S/User-Startup
     timeout "$seconds" qemu-system-aarch64 -M raspi3b \
         -kernel "$sd/aros-aarch64-raspi.img" \
@@ -58,18 +60,21 @@ boot() {
         -drive "file=$img,format=raw,if=sd" \
         -serial null -serial "file:$work/serial-$2.log" \
         -display none >/dev/null 2>&1 || true
-    mtype -i "$img@@1M" "::/camdcompat-$2.log" > "$work/camdcompat-$2.log" 2>/dev/null || true
+    for run in $3; do
+        mtype -i "$img@@1M" "::/camdcompat-$run.log" > "$work/camdcompat-$run.log" 2>/dev/null || true
+    done
 }
 
 make_image
-boot 'SYS:Extras/aros-midihub/C/MIDIHubCAMDCompat >SYS:camdcompat-contract.log' contract
+cmd=SYS:Extras/aros-midihub/C/MIDIHubCAMDCompat
+boot "$cmd >SYS:camdcompat-contract.log\n$cmd --v42 >SYS:camdcompat-v42.log" contract "contract v42"
 
 mcopy -o -Q -i "$img@@1M" "$sd/Devs/Midi/debugdriver" ::/camdcompat-debugdriver
 mdel -i "$img@@1M" ::/Devs/Midi/debugdriver
-boot 'SYS:Extras/aros-midihub/C/MIDIHubCAMDCompat --rethink >SYS:camdcompat-rethink.log' rethink
+boot "$cmd --rethink >SYS:camdcompat-rethink.log" rethink rethink
 
 status=0
-for run in contract rethink; do
+for run in contract v42 rethink; do
     log="$work/camdcompat-$run.log"
     if [ ! -s "$log" ]; then
         echo "no $run log: AROS did not run the suite (see $work/serial-$run.log)"

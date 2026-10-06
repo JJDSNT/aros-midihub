@@ -12,11 +12,13 @@ upstream commit `37313d8aa0`; the others are design proposals.
 
 ## Status
 
-Section 1 and the USB MIDI driver lifecycle are implemented, as the
-`camd-robustness` branch in `~/AROS` and as patches in this repository
-([the patch guide](../patches/README.md#camd-and-usb-midi) lists them in
-order). Sections 2 to 6 are not: [Implementing the rest](#implementing-the-rest)
-gives each one a design to follow.
+Implemented, as the `camd-robustness` branch in `~/AROS` and as patches in
+this repository ([the patch guide](../patches/README.md#camd-and-usb-midi)
+lists them in order): section 1, the USB MIDI driver lifecycle, participant
+notification (step 3), version 42 with `GetClusterAttrsA()`, `CamdTime()`
+and `MIDI_SystemClock` (step 4), and cluster watches (step 5). Steps 1 and 2
+(`MLINK_Comment`, SysEx size and the error filter) are not:
+[Implementing the rest](#implementing-the-rest) gives their design.
 
 Every change to CAMD must keep passing the compatibility suite
 (`ports/aros/camd_compat.c`, `MIDIHubCAMDCompat`). It checks the 41.1
@@ -30,6 +32,8 @@ ports, and that notification works under `LockCAMD()`.
 tools/camd-compat-qemu.sh CAMD_LIBRARY MIDIHubCAMDCompat SD_DIR
 ```
 
+The first boot runs the 41.1 contract and, with a camd.library 42, the
+checks of what 42 adds (`--v42`); the second runs the `RethinkCAMD()` checks.
 Run it against the library before the change and after it. A check that
 passes before must pass after; a check whose result a change alters on
 purpose (for example `GetMidiLinkAttrsA does not count MLINK_Comment` once
@@ -357,7 +361,7 @@ designs follow the original CAMD autodoc
 ([camd.doc](https://wiki.amigaos.net/amiga/autodocs/camd.doc.txt)) wherever
 it defines the behaviour, and the contract above wherever it does not.
 
-### Step 1: `MLINK_Comment` as the cluster comment (2.1), stays 41.x
+### Step 1: `MLINK_Comment` as the cluster comment (2.1)
 
 - `SetMidiLinkAttrsA()` stores the caller's string in `ml_ClusterComment`
   (CAMD never copies or frees it, as with `MLINK_Name`).
@@ -370,12 +374,15 @@ it defines the behaviour, and the contract above wherever it does not.
   `MLINK_Comment` is set.
 - `GetMidiLinkAttrsA(MLINK_Comment)` returns the cluster's comment for a
   link in a cluster, `ml_ClusterComment` otherwise, and counts the tag.
+- `GetClusterAttrsA(MCLA_Comment)` returns the same comment (today it
+  returns NULL); its check, `MCLA_Comment is NULL without a comment`, stays
+  true for a cluster without one.
 - Suite: the check `GetMidiLinkAttrsA does not count MLINK_Comment` becomes
   `MLINK_Comment returns the cluster comment`. Add checks for the priority
   rule, for falling back to the next link when the commenting one leaves,
   and for the 34-character limit.
 
-### Step 2: SysEx size and the error filter (5.1), stays 41.x
+### Step 2: SysEx size and the error filter (5.1)
 
 - `MIDI_ErrFilter`: bits set are errors the node does not want. The default
   0 reports everything, as 41.1 does. Every place that sets `error` goes
@@ -386,12 +393,14 @@ it defines the behaviour, and the contract above wherever it does not.
   is unknown; when the ring fills while the message started in an empty
   ring, the message cannot fit at all: flag `CMEF_SysExTooBig` instead of
   `CMEF_SysExFull`.
+- `MCLA_SysExDropped` already counts SysEx dropped for a full buffer; count
+  the oversized ones there too.
 - Suite: an oversized SysEx to a node with a small buffer gives
   `CMEF_SysExTooBig` and no partial message, and the next message arrives;
   `MIDI_ErrFilter` with `CMEF_BufferFull` makes an overflow invisible to
   `GetMidiErr()` and `WaitMidi()`.
 
-### Step 3: participant notification (3.1), stays 41.x
+### Step 3: participant notification (3.1), done
 
 - Maintain `mcl_Participants` (links in the cluster, driver ports
   excluded) and `mcl_PublicParticipants` (the same without `MLF_PrivateLink`
@@ -408,7 +417,7 @@ it defines the behaviour, and the contract above wherever it does not.
   leaves A's cluster, not when A changes its own links, and not for a cluster
   A is not in; the participant counts follow; a hook receives the cluster.
 
-### Step 4: version 42
+### Step 4: version 42, done
 
 New functions need a new version, so programs can ask for them with
 `OpenLibrary("camd.library", 42)`; a 41.x revision cannot be asked for.
@@ -431,14 +440,22 @@ Append after `Midi2Driver()`, in one commit with the version bump:
 - Suite: a second binary, or a section that runs only on 42, checks each
   new call; the 41.1 checks must still pass on 42.
 
-### Step 5: versioned cluster notification (3.1, for watchers)
+As built: `MCLA_Connected` was left out. A driver cannot say whether a
+device is behind its port, and the structure it shares with CAMD
+(`MidiDeviceData`) must not grow; `MCLA_HasDriver` says whether a driver port
+is in the cluster. Whether a port has a device can come with virtual ports
+(step 6), or from a new optional driver call.
 
-For programs that watch every cluster without linking to it, such as
-MIDIHub.prefs: `APTR StartClusterNotifyA(struct TagItem *)` and
-`EndClusterNotifyA(APTR)`, appended in 42 or 43. A handle, a signal or a
-message port, and events that say what happened (created, removed,
-participants changed) and to which cluster, queued per handle. The 41.1
-`StartClusterNotify()` keeps signalling only clusters coming and going.
+### Step 5: cluster watches, done
+
+For programs that follow every cluster without linking to it, such as
+MIDIHub.prefs: `StartClusterWatchA()`, `GetClusterWatchEvent()` and
+`EndClusterWatch()` in 42. Each handle queues up to 32 events naming the
+cluster (`CWE_Added`, `CWE_Removed`, `CWE_Participants`) and reports
+`CWE_Lost` when it overflowed. They are not called `StartClusterNotifyA()`:
+genmodule would derive a `StartClusterNotify()` varargs macro from that name,
+clashing with the 41.1 call, which keeps signalling only clusters coming and
+going.
 
 ### Step 6: virtual ports (6.1)
 
@@ -448,7 +465,10 @@ registration API has to offer.
 
 ## Order and why
 
-1. Done: section 1 and the USB lifecycle.
-2. Steps 1 to 3 keep version 41 and only make documented behaviour real.
-3. Step 4 is the first change programs must ask for by version.
-4. Steps 5 and 6 build on 4.
+1. Done: section 1, the USB lifecycle, steps 3, 4 and 5.
+2. Next: steps 1 and 2. They make documented 41.1 behaviour real; no new
+   call.
+3. Then MIDIHub uses version 42: MIDIHub.prefs follows clusters with a
+   cluster watch and shows the counters, routes use `MIDI_PartSignal` to
+   notice a device coming back, BLE MIDI stamps with `CamdTime()`.
+4. Step 6 after that, from what those ports needed.

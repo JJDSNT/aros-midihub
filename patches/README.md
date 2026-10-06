@@ -161,7 +161,7 @@ git -C ~/AROS apply "$PWD/patches/aros-llvmpipe-link.patch"
 
 ## CAMD and USB MIDI
 
-Nine patches, applied in this order to upstream `master`. Each one is a
+Eleven patches, applied in this order to upstream `master`. Each one is a
 commit of the `camd-robustness` branch in `~/AROS`; the first two are also
 draft pull request #1483. The modified AROS sources are covered by
 [AROS-LICENSE](AROS-LICENSE).
@@ -177,11 +177,14 @@ draft pull request #1483. The modified AROS sources are covered by
 | `aros-camd-rescan.patch` | `RethinkCAMD()` loads drivers installed after CAMD started |
 | `aros-usb-midi-camd.patch` | USB MIDI receive buffers, transmit ring, failed open |
 | `aros-usb-midi-lifecycle.patch` | the USB MIDI driver never loads; ports across unplugging |
+| `aros-camd-part-notify.patch` | `MIDI_PartHook`/`MIDI_PartSignal` and the participant counts do nothing |
+| `aros-camd-v42.patch` | version 42: `GetClusterAttrsA()`, `CamdTime()`, `MIDI_SystemClock`, cluster watches |
 
 ```sh
 for p in camd-names-64bit camd-arena-segments camd-driver-scan-align \
          debugdriver-port-index camd-port-open camd-notify-lock \
-         camd-rescan usb-midi-camd usb-midi-lifecycle; do
+         camd-rescan usb-midi-camd usb-midi-lifecycle camd-part-notify \
+         camd-v42; do
     git -C ~/AROS apply "$PWD/patches/aros-$p.patch" || break
 done
 ```
@@ -232,6 +235,19 @@ ring and a null dereference on a failed open. The second one:
   they are sent while it is unplugged instead of crashing, and carry MIDI
   again when it comes back, without clients linking again.
 
+**Participant notification.** `MIDI_PartHook` and `MIDI_PartSignal` were
+stored and never used. A node is now told, once, when another node's link or
+a driver port joins or leaves a cluster it is linked to, and
+`mcl_Participants`/`mcl_PublicParticipants` are kept.
+
+**Version 42.** New calls after `Midi2Driver()`, nothing existing changed:
+`GetClusterAttrsA()` (name, participants, driver port present, drop and
+receive-error counters), `CamdTime()` (milliseconds from the E-clock) with the
+node tag `MIDI_SystemClock`, and `StartClusterWatchA()`/
+`GetClusterWatchEvent()`/`EndClusterWatch()`, which queue named events
+(added, removed, participants, lost) for programs that follow every cluster.
+`StartClusterNotify()` keeps its 41.1 meaning.
+
 ### Testing
 
 [`tools/camd-compat-qemu.sh`](../tools/camd-compat-qemu.sh) runs
@@ -239,10 +255,11 @@ ring and a null dereference on a failed open. The second one:
 on `raspi-aarch64` under QEMU. Against camd.library with the first four
 patches and with all of them:
 
-| | 41.1 contract | `RethinkCAMD()` |
-|---|---|---|
-| first four patches | 50 of 50 | 4 of 8 (not implemented) |
-| all patches | 50 of 50 | 8 of 8 |
+| | 41.1 contract | version 42 | `RethinkCAMD()` |
+|---|---|---|---|
+| first four patches | 50 of 50 | skipped | 4 of 8 (not implemented) |
+| up to `camd-part-notify` | 50 of 50 | skipped | 8 of 8 |
+| all patches | 50 of 50 | 29 of 29 | 8 of 8 |
 
 The USB MIDI patches build for `raspi-aarch64` but have not been run with a
 USB MIDI device.
