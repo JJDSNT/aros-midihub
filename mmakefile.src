@@ -108,6 +108,7 @@ BONAMI_FILES := \
 %build_prog mmake=contrib-aros-midihub-program \
     progname=MIDIHub \
     files="$(MIDIHUB_ROOT)/ports/aros/midihub/main \
+           $(MIDIHUB_ROOT)/ports/aros/midihub/camd \
            $(MIDIHUB_ROOT)/ports/aros/midihub/camd_bridge" \
     uselibs=arosmidihub \
     targetdir=$(MIDIHUB_PACKAGE)/C

@@ -9,7 +9,7 @@
 #include <midihub/session.h>
 #include <midihub/sender.h>
 #include <midihub/timing.h>
-#include "camd_bridge.h"
+#include "camd.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -115,8 +115,7 @@ struct runtime {
     uint8_t mtc_full_frame[4];
     uint8_t mtc_full_known;
     uint8_t sysex_count;
-    struct mh_camd_bridge camd;
-    int camd_opened;
+    struct mh_camd_runtime camd;
 };
 
 static void reset_channel_state(struct runtime *rt);
@@ -496,7 +495,7 @@ static void deliver_short(struct runtime *rt, const uint8_t *bytes,
     } else if (length == 3 && (status & 0xf0) == 0xe0) {
         rt->pitch[channel] = (uint16_t)(bytes[1] | (bytes[2] << 7));
     }
-    mh_camd_bridge_deliver(&rt->camd, bytes, length);
+    mh_camd_runtime_deliver(&rt->camd, bytes, length);
 }
 
 static void deliver_sysex(struct runtime *rt, const uint8_t *message,
@@ -515,7 +514,7 @@ static void deliver_sysex(struct runtime *rt, const uint8_t *message,
     } else if (length >= 2 && message[0] == 0xf0 &&
                message[length - 1] == 0xf7)
         ++rt->sysex_count;
-    mh_camd_bridge_deliver_sysex(&rt->camd, message, length);
+    mh_camd_runtime_deliver_sysex(&rt->camd, message, length);
 }
 
 static void reset_channel_state(struct runtime *rt)
@@ -1870,11 +1869,10 @@ int main(int argc, char **argv)
         fputs("MIDIHub: cannot bind UDP port pair\n", stderr);
         goto cleanup;
     }
-    if (mh_camd_bridge_open(&rt.camd) != 0) {
+    if (mh_camd_runtime_open(&rt.camd) != 0) {
         fputs("MIDIHub: camd.library unavailable\n", stderr);
         goto cleanup;
     }
-    rt.camd_opened = 1;
     now = now_ticks();
     seed = (unsigned int)(now ^ (now >> 32) ^ (unsigned int)local_port);
     srand(seed);
@@ -1919,7 +1917,8 @@ int main(int argc, char **argv)
                 timeout.tv_usec = (long)(wait_ticks * 100);
         }
 #ifdef __AROS__
-        signal_mask = SIGBREAKF_CTRL_C | (1UL << rt.camd.signal_bit);
+        signal_mask = SIGBREAKF_CTRL_C |
+                      (1UL << mh_camd_runtime_signal_bit(&rt.camd));
         ready = WaitSelect((rt.mdns > rt.control && rt.mdns > rt.data ?
                             rt.mdns : rt.control > rt.data ? rt.control :
                             rt.data) + 1,
@@ -1941,7 +1940,7 @@ int main(int argc, char **argv)
                 receive_mdns(&rt);
         }
         periodic(&rt, now_ticks());
-        mh_camd_bridge_poll(&rt.camd, send_midi, &rt);
+        mh_camd_runtime_poll(&rt.camd, send_midi, &rt);
         if (rt.initiating && rt.session.phase == MH_SESSION_IDLE)
             break;
     }
@@ -1955,12 +1954,11 @@ cleanup:
         send_mdns(&rt, NULL, 0, 0);
         mh_close(rt.mdns);
     }
-    if (rt.camd_opened) {
+    if (mh_camd_runtime_is_open(&rt.camd)) {
         mh_queue_reset(&rt.queue);
         release_active_notes(&rt);
     }
-    if (rt.camd_opened)
-        mh_camd_bridge_close(&rt.camd);
+    mh_camd_runtime_close(&rt.camd);
     if (rt.data >= 0)
         mh_close(rt.data);
     if (rt.control >= 0)
