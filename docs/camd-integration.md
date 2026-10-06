@@ -41,12 +41,18 @@ when the transport disappears. MIDIHub can then provide a unified overview and
 basic persistent routes between those endpoints without requiring applications
 or users to understand AppleMIDI, GATT, USB binding, or other transport details.
 
-During incubation, CAMD client nodes remain useful for Network MIDI testing. The native targets, however, are `applemidi.device` and
+During incubation, CAMD client nodes remain useful for Network MIDI testing.
+The native targets, however, are `applemidi.device` and
 `networkmidi2.device`: sockets, discovery, peer/session state and any internal
-tasks remain behind their respective device boundaries. Current CAMD devices have a fixed `NPorts` after initialization, so
-peer-to-port mapping must be defined explicitly unless CAMD later gains dynamic
-port registration. The portable codecs remain independent of that native
-registration mechanism.
+tasks remain behind their respective device boundaries.
+
+Current CAMD drivers have a fixed `NPorts` after initialization. The preferred
+long-term direction is an additive CAMD dynamic-endpoint extension that leaves
+legacy `NPorts` unchanged while allowing a loaded device to register endpoint
+identity, metadata and connected/disconnected lifecycle at run time. A bounded
+pool of fixed ports with internal peer-to-port mapping is a fallback for CAMD
+versions without that extension, not the target architecture. The portable
+codecs remain independent of either native registration mechanism.
 
 ## CAMD lifecycle
 
@@ -59,10 +65,13 @@ stay, and carry MIDI again when it is plugged back in
 ([the lifecycle patch](../patches/aros-usb-midi-lifecycle.patch)). See
 [CAMD improvements](camd-improvements.md) for the details and what remains.
 
-The Network MIDI device must keep its exposed CAMD ports stable while peers
-appear, disappear, and reconnect. Dynamic network identity is therefore an
-internal device-lifecycle concern rather than a reason to expose the transport
-as a standalone service.
+The Network MIDI devices must preserve endpoint identity while peers appear,
+disappear and reconnect. With a future CAMD dynamic-endpoint extension, a
+known endpoint may remain registered but disconnected/inactive while its peer
+is away, then return to connected state without changing identity. On legacy
+CAMD, the device may emulate that stability with a bounded fixed-port pool.
+Dynamic network identity remains a device-lifecycle concern rather than a
+reason to expose the transport as a standalone service.
 
 ## MIDIHub routing relationship
 
