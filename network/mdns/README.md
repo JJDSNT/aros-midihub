@@ -61,7 +61,16 @@ than a drop-in AROS component. The AROS port needs:
    engine-task Hook;
 8. client lifetime cleanup and tests with Bonjour and Avahi;
 9. Network MIDI registration and browsing for `_apple-midi._udp` and
-   `_midi2._udp`.
+   `_midi2._udp`;
+10. build and validate Bonami's optional Envoy/NIPC bridge against the
+    `nipc.library` and public `<envoy/nipc.h>` API added upstream to AROS in
+    commit `fbc2e274d880868c3fe447dffdfc9226fae0bd66`, including
+    `_nipc._tcp` publication and browsing.
+
+The AROS NIPC addition removes the former reason to disable Bonami's Envoy
+bridge merely because the platform lacked NIPC headers or a `nipc.library`.
+The bridge remains optional: the core mDNS/DNS-SD service and its MIDI clients
+must not depend on Envoy/NIPC.
 
 Changes that are useful to classic Amiga should be proposed to Bonami upstream.
 The AROS build glue and integration can then move into the AROS tree with the
