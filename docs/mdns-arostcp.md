@@ -5,7 +5,13 @@
 AROSTCP already provides the network mechanisms needed by mDNS. Its
 `bsdsocket.library` build enables IPv4 multicast, implements IGMP membership,
 accepts `IP_ADD_MEMBERSHIP`, and exposes multicast interface, TTL, and loop
-options. It also implements `SO_REUSEADDR` and `SO_REUSEPORT`.
+options. It also implements `SO_REUSEADDR` and `SO_REUSEPORT`. Current AROSTCP
+also provides the socket mechanisms needed for a multi-interface IPv6 mDNS
+implementation: scoped link-local/multicast output follows `sin6_scope_id`,
+`IPV6_PKTINFO`, or the interface owning the selected source address, and
+`SO_BINDTODEVICE` can pin a UDP socket to a particular interface. These
+capabilities are documented in upstream commit
+`28dd8854eae4ccc1325d600689790938dd0f7fba`.
 
 mDNS itself should remain above the TCP/IP stack. DNS record processing,
 probing, conflict renaming, registration leases, browsing, caching, and
@@ -98,7 +104,12 @@ active interface, along with interface address changes.
 Bonami is already much closer to this target than the embedded MIDIHub code,
 but its current tree documents important gaps: one interface, IPv4 only,
 simplified probing/conflict handling, a no-op resolve cancellation path, and
-an incomplete update operation. Its default ephemeral-port mode is a useful
+an incomplete update operation. Multi-interface and IPv6 support are therefore
+Bonami/service work rather than a missing AROSTCP transport primitive: the
+stack can scope IPv6 link-local and multicast output per interface, and can
+bind UDP explicitly to an interface. An IPv6 mDNS port can use `ff02::fb`
+with the appropriate interface scope while IPv4 continues to use
+`224.0.0.251`. Its default ephemeral-port mode is a useful
 workaround for hosted classic-Amiga socket emulation; the native AROS build
 should bind 5353 by default and keep the override only for diagnostics.
 
@@ -131,8 +142,9 @@ Migration should proceed in three steps:
 1. Keep the embedded responder for package testing; use both reuse options if
    it must coexist with another port-5353 process.
 2. Port Bonami's library and shared engine to AROS, then complete probing,
-   conflict handling, interface tracking, cancellation, and safe asynchronous
-   event delivery. The pinned source and port notes live under
+   conflict handling, interface tracking, IPv6 (`ff02::fb`) using AROSTCP's
+   scoped multicast facilities, cancellation, and safe asynchronous event
+   delivery. The pinned source and port notes live under
    [`network/mdns`](../network/mdns/README.md).
 3. Change Network MIDI to register and browse `_apple-midi._udp` and
    `_midi2._udp` through that API, then remove its ownership of UDP port 5353.
