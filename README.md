@@ -114,6 +114,8 @@ DNS-SD browse queries when the network stack has a multicast-capable interface.
 RTP-MIDI, AppleMIDI and Network MIDI 2.0 belong in AROS: one network MIDI
 service with a CAMD node per peer, a system mDNS responder, and UMP
 translated at the transport until CAMD learns UMP.
+[mDNS integration with AROSTCP](docs/mdns-arostcp.md) defines the boundary
+between that responder and the socket stack.
 
 ## Additional MIDI Transports
 

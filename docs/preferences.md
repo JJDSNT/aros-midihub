@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`MIDIHub.prefs` is the user-facing control surface for the MIDI environment exposed by AROS through CAMD. Its goal is deliberately modest: provide a clear overview of available MIDI endpoints, basic persistent routing between them, configuration of MIDIHub-managed network MIDI and software synthesis, and reusable profiles.
+`MIDIHub.prefs` is the user-facing control surface for the MIDI environment exposed by AROS through CAMD. Its goal is deliberately modest: provide a clear overview of available MIDI endpoints, basic persistent routing between them, configuration surfaces for network MIDI and software synthesis, and reusable profiles.
 
 It is not intended to become a DAW, a MIDI processor, or a sophisticated node-graph environment.
 
@@ -89,8 +89,8 @@ MIDIHub presents MIDI information without taking ownership away from the AROS su
 | Bluetooth adapter, pairing, trust and security | Bluetooth Preferences |
 | IP, Ethernet and Wi-Fi configuration | Network Preferences |
 | Audio device and mode | AHI Preferences |
-| AppleMIDI session settings | MIDIHub |
-| SoundFont and MIDI synth settings | MIDIHub |
+| AppleMIDI session settings | Network MIDI service, configured through MIDIHub.prefs |
+| SoundFont and MIDI synth settings | Synth service, configured through MIDIHub.prefs |
 | MIDI profiles | MIDIHub |
 
 Where useful, MIDIHub.prefs may show status and provide a button to open the owning Preferences application or class configuration. It must not maintain a second copy of those settings.
@@ -205,7 +205,12 @@ A graphical patchbay may be investigated later as an alternative view, but it is
 
 This page owns MIDI-specific network-session configuration, not general network configuration.
 
-The current AppleMIDI/RTP-MIDI implementation reads `ENV:MidiHub/Network` and falls back to `ENVARC:MidiHub/Network`. The UTF-8 file uses one `name=value` option per line. Empty lines and lines beginning with `#` or `;` are ignored.
+During incubation, the AppleMIDI/RTP-MIDI implementation reads
+`ENV:MidiHub/Network` and falls back to `ENVARC:MidiHub/Network`. Once it moves
+to its native AROS service, that service owns the settings contract while
+`MIDIHub.prefs` remains its user-facing configuration client. The UTF-8 file
+uses one `name=value` option per line. Empty lines and lines beginning with
+`#` or `;` are ignored.
 
 ```text
 local_port=5004

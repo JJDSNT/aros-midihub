@@ -29,10 +29,10 @@ rather than retain duplicate transport implementations.
 | Endpoint | Discovery or configuration | CAMD-facing component | Transport or output |
 | --- | --- | --- | --- |
 | USB MIDI | Poseidon class binding | Existing `DEVS:Midi` driver | Poseidon USB class |
-| RTP-MIDI / AppleMIDI | Network preferences, Bonjour, session negotiation | MIDIHub CAMD port | `bsdsocket.library` |
-| BLE MIDI | Bluetooth service discovery and binding | MIDIHub CAMD port | `bluetooth.library` GATT |
-| Serial / DIN | Configured AROS serial device and port | MIDIHub CAMD port | AROS serial API |
-| Software synthesizer | SoundFont and AHI preferences | MIDIHub CAMD receive port | TinySoundFont to AHI |
+| RTP-MIDI / AppleMIDI | MIDI Preferences, mDNS, session negotiation | Native Network MIDI service CAMD clients | `bsdsocket.library` |
+| BLE MIDI | Bluetooth service discovery and binding | `btmidi.class` CAMD clients | `bluetooth.library` GATT |
+| Serial / DIN | Configured AROS serial device and port | Native serial MIDI component | AROS serial API |
+| Software synthesizer | SoundFont and AHI preferences | Native synth service CAMD client | TinySoundFont or FluidSynth to AHI |
 
 For each endpoint, the CAMD-facing component should own a stable port name,
 handle MIDI bytes and SysEx in the directions it supports, and release resources

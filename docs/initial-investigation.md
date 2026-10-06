@@ -208,13 +208,13 @@ Git, that build also excludes the directory in its local `mmake.config`.
 Future builds are easier in a sibling directory. The initial integration
 does not copy executables to `SYS:C` or modify `camd.library`.
 
-## Later phases and dependencies
+## Remaining integration phases and dependencies
 
 | Feature | Practical prerequisite |
 | --- | --- |
-| mDNS discovery | Stable manual session and UDP networking |
-| Recovery journal | Basic interoperability, loss metrics, and test vectors |
-| Multiple peers and routing | CAMD port contract and loop prevention |
+| System mDNS discovery | Move the existing minimal advertisement/answer code behind the shared AROS register/browse service described in [mDNS and AROSTCP](mdns-arostcp.md) |
+| Recovery journal interoperability | The codec and bounded send history exist; validate loss recovery against independent peers |
+| Multiple peers in the AROS event loop | The portable peer manager exists; create one CAMD client per peer and enforce loop prevention |
 | USB MIDI | CAMD class test on targets that provide it; optional transport |
 | TinySoundFont/SF2 | Chosen and tested AROS PCM output, bank distribution policy, modulator work |
 | Serial/DIN MIDI | Available target-specific transport and hardware |

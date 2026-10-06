@@ -30,9 +30,10 @@ that loads, binds to devices and reports events. AROSTCP has nothing
 equivalent, so the natural form here is a resident service:
 
 - **Process:** one process, started when the network comes up, from
-  AROSTCP's startup the way `BTStackLoader` brings up Bluetooth. It owns the
-  UDP sockets (AppleMIDI control and data ports, Network MIDI 2.0 port) and
-  one event loop.
+  the normal system startup after a `bsdsocket.library` provider becomes
+  available. It must not be part of AROSTCP itself: the service owns the UDP
+  sockets (AppleMIDI control and data ports, Network MIDI 2.0 port) and one
+  event loop, while AROSTCP supplies sockets and multicast transport.
 - **Source location:** for example `workbench/network/midi`, with the
   portable codecs (`applemidi`, `rtpmidi`, `ump`, `netmidi2`) as a static link
   library, as `btcore` is the portable part of the Bluetooth stack.
@@ -72,11 +73,18 @@ AppleMIDI advertises `_apple-midi._udp` and Network MIDI 2.0 advertises
 AROS has no system mDNS responder, which is why MIDIHub carries a minimal
 one.
 
-The right home is a **system responder** shared by every service, for example
-an `mdns.library` or a resident responder with a register/browse API. If each
-service embeds its own, several processes compete for UDP port 5353. That
-only works if AROSTCP supports `SO_REUSEADDR` with multicast membership on a
-shared port, which should be checked and, if missing, fixed there.
+The right home is a **system responder** shared by every service: a resident
+process with a public register/browse API, optionally wrapped later by an
+`mdns.library`. If each service embeds its own, several processes compete for
+UDP port 5353 and duplicate the cache, probing, and conflict-resolution state.
+
+AROSTCP already supplies the required IPv4 multicast transport,
+`IP_ADD_MEMBERSHIP`, `SO_REUSEADDR`, and `SO_REUSEPORT`. Its multicast bind
+rules only treat `SO_REUSEADDR` like `SO_REUSEPORT` when the socket is bound
+to a multicast address. The current MIDIHub code binds `INADDR_ANY:5353`, so
+`SO_REUSEADDR` alone is insufficient for multiple embedded responders. This
+is another reason to use one system responder instead of making discovery a
+property of each transport process. See [mDNS and AROSTCP](mdns-arostcp.md).
 
 This is worth proposing upstream on its own. Printers and file sharing would
 use it too.
@@ -106,8 +114,8 @@ MIDI 2.0 Channel Voice message is 64. So, in two steps:
 1. Finish the RTP-MIDI work in progress.
 2. Connect the portable multi-peer AppleMIDI manager to the AROS event loop
    and create a CAMD node per connected peer.
-3. The AROS service: AppleMIDI and Network MIDI 2.0 on one event loop and
-   one mDNS responder, as a CAMD client per peer, started with the network.
+3. The AROS service: AppleMIDI and Network MIDI 2.0 on one event loop, as a
+   CAMD client per peer, using the system mDNS registration and browse API.
 4. Upstream proposals: the system mDNS responder; the network MIDI service in
    `workbench/network`; then the UMP-aware CAMD.
 
