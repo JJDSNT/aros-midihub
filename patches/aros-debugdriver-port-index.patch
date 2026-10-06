@@ -1,0 +1,13 @@
+diff --git a/workbench/devs/midi/debugdriver.c b/workbench/devs/midi/debugdriver.c
+index 8809c9ad82..068447402c 100644
+--- a/workbench/devs/midi/debugdriver.c
++++ b/workbench/devs/midi/debugdriver.c
+@@ -146,7 +146,7 @@ SAVEDS ASM struct MidiPortData *OpenPort(
+   /* We haven't got any receiver function, so we don't bother about storing the receiverfunc variable. */
+ 
+   TransmitFunc=transmitfunc;
+-  UserData[portnum-1]=userdata;
++  UserData[portnum]=userdata;
+   return &midiportdata;
+ }
+ 

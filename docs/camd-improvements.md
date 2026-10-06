@@ -9,9 +9,31 @@ look like. Items marked **verified** were checked against the CAMD source at
 upstream commit `37313d8aa0`; the others are design proposals.
 
 [CAMD integration](camd-integration.md) describes how MIDIHub uses CAMD now.
-Two fixes already exist as patches in this repository:
-[the CAMD rescan patch](../patches/aros-camd-rescan.patch) and
-[the USB MIDI CAMD fix](../patches/aros-usb-midi-camd.patch).
+
+## Status
+
+Section 1 and the USB MIDI driver lifecycle are implemented, as the
+`camd-robustness` branch in `~/AROS` and as patches in this repository
+([the patch guide](../patches/README.md#camd-and-usb-midi) lists them in
+order). Sections 2 to 6 are not: [Implementing the rest](#implementing-the-rest)
+gives each one a design to follow.
+
+Every change to CAMD must keep passing the compatibility suite
+(`ports/aros/camd_compat.c`, `MIDIHubCAMDCompat`). It checks the 41.1
+behaviour that programs rely on: nodes, links, clusters, message delivery
+and filters, SysEx, errors, `ParseMidi()`, cluster notification, driver
+ports, and that notification works under `LockCAMD()`.
+[`tools/camd-compat-qemu.sh`](../tools/camd-compat-qemu.sh) runs it on
+`raspi-aarch64` under QEMU:
+
+```sh
+tools/camd-compat-qemu.sh CAMD_LIBRARY MIDIHubCAMDCompat SD_DIR
+```
+
+Run it against the library before the change and after it. A check that
+passes before must pass after; a check whose result a change alters on
+purpose (for example `GetMidiLinkAttrsA does not count MLINK_Comment` once
+2.1 is done) is changed in the same commit, and the commit says why.
 
 ## Compatibility contract
 
@@ -38,7 +60,7 @@ timing or notification assumptions changed.
 
 ## 1. Correctness
 
-### 1.1 Cluster notification list is not locked (verified)
+### 1.1 Cluster notification list is not locked (verified, fixed)
 
 `StartClusterNotify()` and `EndClusterNotify()` add and remove the caller's
 `ClusterNotifyNode` with plain `AddTail()`/`Remove()` and no lock
@@ -63,7 +85,7 @@ upgrade a shared hold to an exclusive one, and a program that calls
 `StartClusterNotify()` between `LockCAMD()` and `UnlockCAMD()`, which works
 today, would deadlock.
 
-### 1.2 `RethinkCAMD()` is a stub (verified)
+### 1.2 `RethinkCAMD()` is a stub (verified, fixed)
 
 The autodoc says "Not implemented" (`rethinkcamd.c`). CAMD scans `DEVS:Midi`
 only in `InitCamd()`, so a driver installed later, such as the one Poseidon
@@ -75,8 +97,9 @@ that loads new drivers; it should be upstreamed.
 stub at its existing vector. A rescan should remain additive: load newly
 discovered drivers but do not unload an already loaded driver.
 
-The patch as it stands has two problems that only appear at run time,
-because at `InitCamd()` no client exists yet:
+The first version of the rescan patch had two problems that only appear at
+run time, because at `InitCamd()` no client exists yet. Both are fixed, and
+the suite's `--rethink` run covers them:
 
 - `LoadDriver()` builds the driver's clusters through `AllocDriverData()`,
   which calls `NewCluster()` and `AddClusterSender()`/`AddClusterReceiver()`
@@ -92,19 +115,33 @@ because at `InitCamd()` no client exists yet:
   failure `FreeDriverData()` must remove only the clusters it created. This
   path needs a runtime test.
 
-### 1.3 Drivers are never unloaded
+### 1.3 Hot-plugged devices (done differently: no unloading)
 
-A `DEVS:Midi` driver stays loaded with its clusters after its device is gone,
-and its file cannot be replaced safely. Hot-plugged hardware needs a removal
-lifecycle: mark the driver's ports as gone, detach clients' links from them
-(their clusters can stay and wait, as MIDIHub routes do), then unload once no
-port is open. This needs runtime tests with real devices.
+The first version of this item asked for drivers to be unloaded when their
+device goes away. The USB MIDI driver shows that this is not what hot-plug
+needs. `camdusbmidi.class` writes one small driver per device to
+`DEVS:Midi`; the driver only forwards to the class, so it can stay loaded
+for good. What has to survive unplugging is the port, and that belongs in
+the class, not in CAMD:
 
-**Compatibility:** requires a new, explicit lifecycle. `RethinkCAMD()` must
-not start unloading drivers as a side effect. Before `UnLoadSeg()`, CAMD must
-stop callbacks, close every port, remove every reference to the driver's
-`MidiDeviceData` and wait for its internal reference count to reach zero.
-The public cluster lifetime visible to old clients must not change.
+- a port opens whether the device is there or not, so clients can link and
+  wait;
+- while the device is away the port drops what it is sent;
+- when the device comes back the same ports carry MIDI again, without
+  clients linking again.
+
+This is implemented in `aros-usb-midi-lifecycle.patch`, together with the
+bug that kept USB MIDI from ever appearing outside m68k: the driver file was
+named after the device but the driver inside was named `poseidonusb`, and
+CAMD rejects a driver whose name is not its file name.
+
+Unloading would only matter for replacing a driver file at run time. It
+needs callbacks stopped, every port closed and every reference to the
+driver's `MidiDeviceData` gone before `UnLoadSeg()`, and nothing needs it
+yet. It is not planned.
+
+What CAMD still lacks for hot-plug is a way to tell clients whether a port
+has a device behind it right now. That is the `connected` field of 2.2.
 
 ### 1.4 Cluster names are garbage on 64-bit targets (verified, fixed)
 
@@ -132,6 +169,28 @@ structure rather than being found by scanning memory.
 
 **Compatibility:** safe. The patch adds internal bounds checks and does not
 change the driver or library interface.
+
+### 1.6 No driver loads on AArch64 (verified, fixed)
+
+Found by the compatibility suite under QEMU, after 1.5. The scan stepped
+through each hunk in `AROS_PTRALIGN` (8-byte) steps starting right after the
+12-byte hunk header, so on 64-bit targets every address it tried was 4 bytes
+off the aligned `MidiDeviceData`. No `DEVS:Midi` driver loaded on
+`raspi-aarch64`; the log said `LoadDriver - It was not a success`. The scan
+now starts at the first aligned address
+([the fix](../patches/aros-camd-driver-scan-align.patch)).
+
+Once drivers loaded, `debugdriver` itself crashed on the first message: it
+stored port 0's user data at `UserData[-1]`, over its transmit function
+pointer ([the fix](../patches/aros-debugdriver-port-index.patch)).
+
+### 1.7 A port closed under a linked receiver (verified, fixed)
+
+A driver port is opened by the first link to join its clusters, and CAMD
+recorded the link's direction only then. A receiver that linked while the
+port was already open for a sender was not recorded, and when the sender
+left CAMD closed the port under it
+([the fix](../patches/aros-camd-port-open.patch)).
 
 ## 2. Endpoint metadata
 
@@ -289,32 +348,107 @@ the same standing as USB ones without writing driver files at run time.
 application links must keep their current identity and cluster lifetime;
 only clients that call the registration API acquire the new port semantics.
 
-## Compatibility verdict
+## Implementing the rest
 
-The patches for 64-bit names and arena-loaded modules preserve the CAMD 41.1
-ABI and behaviour. The `RethinkCAMD()` patch preserves the ABI but needs the
-locking and same-name cluster fixes of 1.2 before it is upstreamed. The
-notification-list lock is safe only with its own semaphore (1.1).
-`MLINK_Comment` and the participant hook and signal can be completed without
-an ABI change, because their tags and fields already exist, provided they
-follow the original CAMD semantics.
+The items below are in the order to do them. Each one is one commit in
+`~/AROS` on top of `camd-robustness`, one patch in `patches/`, and new checks
+in `MIDIHubCAMDCompat`; the suite must pass before and after, under QEMU. The
+designs follow the original CAMD autodoc
+([camd.doc](https://wiki.amigaos.net/amiga/autodocs/camd.doc.txt)) wherever
+it defines the behaviour, and the contract above wherever it does not.
 
-Driver unload, richer cluster metadata, detailed notifications, a CAMD clock,
-scheduled delivery, streaming SysEx, counters and virtual ports are compatible
-only with the constraints above. In particular, they must use private state,
-new tags or vectors appended after the existing table. They must not enlarge
-public structures or silently change the behaviour of legacy calls.
+### Step 1: `MLINK_Comment` as the cluster comment (2.1), stays 41.x
 
-## Suggested order
+- `SetMidiLinkAttrsA()` stores the caller's string in `ml_ClusterComment`
+  (CAMD never copies or frees it, as with `MLINK_Name`).
+- `MyMidiCluster` gets a private `char comment[35]`. A helper,
+  `UpdateClusterComment(cluster)`, called with `CLSemaphore` held exclusively,
+  copies at most 34 characters from the comment of the highest-priority
+  link (nodes of type `NT_USER-MLTYPE_NTypes` are driver ports, skip them)
+  that has one; on equal priority the receiver list is searched first. It
+  runs when a link joins or leaves, when `MLINK_Priority` changes and when
+  `MLINK_Comment` is set.
+- `GetMidiLinkAttrsA(MLINK_Comment)` returns the cluster's comment for a
+  link in a cluster, `ml_ClusterComment` otherwise, and counts the tag.
+- Suite: the check `GetMidiLinkAttrsA does not count MLINK_Comment` becomes
+  `MLINK_Comment returns the cluster comment`. Add checks for the priority
+  rule, for falling back to the next link when the commenting one leaves,
+  and for the 34-character limit.
 
-1. Fix cluster names on 64-bit targets (1.4) and the driver scan of
-   arena-loaded modules (1.5): without them CAMD is unusable or crashes.
-2. Lock the cluster notification list with its own semaphore (1.1).
-3. Fix the rescan patch's locking and same-name clusters, then upstream it
-   (1.2).
-4. Implement `MLINK_Comment` as the cluster comment (2.1).
-5. Implement `MIDI_PartHook`/`MIDI_PartSignal` (3.1), then add versioned
-   notifications for programs that watch every cluster.
-6. Add an opt-in common timestamp source (4.1).
-7. SysEx and error reporting (5).
-8. Driver removal (1.3) and registered virtual ports (6.1), with hardware tests.
+### Step 2: SysEx size and the error filter (5.1), stays 41.x
+
+- `MIDI_ErrFilter`: bits set are errors the node does not want. The default
+  0 reports everything, as 41.1 does. Every place that sets `error` goes
+  through one helper that drops the filtered bits.
+- `PutSysEx()` knows the length (`GetSysXLen()`): skip a receiver whose
+  `mi_SysExQueueSize` cannot hold it and flag it `CMEF_SysExTooBig`, as the
+  autodoc says. On the byte-wise paths (`ParseMidi()`, drivers) the length
+  is unknown; when the ring fills while the message started in an empty
+  ring, the message cannot fit at all: flag `CMEF_SysExTooBig` instead of
+  `CMEF_SysExFull`.
+- Suite: an oversized SysEx to a node with a small buffer gives
+  `CMEF_SysExTooBig` and no partial message, and the next message arrives;
+  `MIDI_ErrFilter` with `CMEF_BufferFull` makes an overflow invisible to
+  `GetMidiErr()` and `WaitMidi()`.
+
+### Step 3: participant notification (3.1), stays 41.x
+
+- Maintain `mcl_Participants` (links in the cluster, driver ports
+  excluded) and `mcl_PublicParticipants` (the same without `MLF_PrivateLink`
+  links) in `AddClusterReceiver()`, `AddClusterSender()` and
+  `UnlinkMidiLink()`.
+- When they change, every other node with a link in the cluster is told:
+  `Signal(mi_SigTask, 1 << mi_ParticipantSigBit)` if the bit is not -1, and
+  `CallHookPkt(mi_ParticipantHook, node, cluster)` if there is a hook. The
+  node whose link changed is not told. As `mi_ReceiveHook` already is, the
+  hook is called in the changing task's context with `CLSemaphore` held,
+  and must not add, remove or move links; say so in the autodoc.
+- `MLF_PartChange` stays unused: its meaning is not documented anywhere.
+- Suite: node A with `MIDI_PartSignal` is signalled when node B links to or
+  leaves A's cluster, not when A changes its own links, and not for a cluster
+  A is not in; the participant counts follow; a hook receives the cluster.
+
+### Step 4: version 42
+
+New functions need a new version, so programs can ask for them with
+`OpenLibrary("camd.library", 42)`; a 41.x revision cannot be asked for.
+Append after `Midi2Driver()`, in one commit with the version bump:
+
+- `ULONG GetClusterAttrsA(struct MidiCluster *, struct TagItem *)`, read
+  under `LockCAMD()`, with new `MCLA_` tags: `MCLA_Comment` (step 1),
+  `MCLA_Participants`, `MCLA_PublicParticipants`, the error counters of 5.2
+  (`MCLA_Overflows`, `MCLA_SysExDropped`, `MCLA_ParseErrors`, kept in
+  `MyMidiCluster`), and `MCLA_Connected`: for a driver port, whether a device
+  is behind it. Drivers cannot say that today; give `MidiDeviceData` users a
+  way only through a new optional driver call, never by growing the
+  structure, or leave `MCLA_Connected` to virtual ports (step 6).
+- `ULONG CamdTime(void)`: milliseconds since CAMD started, from
+  `timer.device`, monotonic, wrapping at 2^32. With the new node tag
+  `MIDI_SystemClock` (appended to the `MIDI_` tags), CAMD stamps messages
+  for that node with `CamdTime()` instead of reading `mi_TimeStamp`. Note
+  that CAMD stamps a message with the receiving node's clock, not the
+  sender's (the suite checks this).
+- Suite: a second binary, or a section that runs only on 42, checks each
+  new call; the 41.1 checks must still pass on 42.
+
+### Step 5: versioned cluster notification (3.1, for watchers)
+
+For programs that watch every cluster without linking to it, such as
+MIDIHub.prefs: `APTR StartClusterNotifyA(struct TagItem *)` and
+`EndClusterNotifyA(APTR)`, appended in 42 or 43. A handle, a signal or a
+message port, and events that say what happened (created, removed,
+participants changed) and to which cluster, queued per handle. The 41.1
+`StartClusterNotify()` keeps signalling only clusters coming and going.
+
+### Step 6: virtual ports (6.1)
+
+Design only after steps 1 to 5 have been used by MIDIHub's BLE, network and
+synth ports for a while: what those ports needed from CAMD will say what a
+registration API has to offer.
+
+## Order and why
+
+1. Done: section 1 and the USB lifecycle.
+2. Steps 1 to 3 keep version 41 and only make documented behaviour real.
+3. Step 4 is the first change programs must ask for by version.
+4. Steps 5 and 6 build on 4.

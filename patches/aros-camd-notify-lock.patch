@@ -1,0 +1,129 @@
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+index 65923976bc..33b5328040 100644
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -223,6 +223,11 @@ struct CamdBase_intern{
+ 
+     struct SignalSemaphore *CLSemaphore;
+ 
++    /* Protects clusnotifynodes. Obtained after CLSemaphore, never before, so
++       that StartClusterNotify() and EndClusterNotify() work while the caller
++       holds LockCAMD(). */
++    struct SignalSemaphore NotifySemaphore;
++
+ };
+ 
+ #ifdef __AMIGAOS__
+@@ -373,6 +378,7 @@ void CloseDriver(struct DriverData *driverdata,struct CamdBase *CamdBase);
+ void FreeDriverData(struct Drivers *driver,
+ 	struct CamdBase *CamdBase
+ );
++void SignalClusterNotify(struct CamdBase *CamdBase);
+ void LoadDriver(char *name,
+ 	struct CamdBase *CamdBase
+ );
+diff --git a/workbench/libs/camd/clusters.c b/workbench/libs/camd/clusters.c
+index 45fe0a4937..89a063ef12 100644
+--- a/workbench/libs/camd/clusters.c
++++ b/workbench/libs/camd/clusters.c
+@@ -16,22 +16,31 @@
+ #endif
+ 
+ /*
+- *  CLSemaphore must be obtained and the clusters mutex must
+- *  not be exclusive locked.
++ *  Signal every ClusterNotifyNode. CLSemaphore must be obtained.
+  */
+-void RemoveCluster(struct MidiCluster *cluster,struct CamdBase *CamdBase){
++void SignalClusterNotify(struct CamdBase *CamdBase){
+   struct Node *node;
+   struct ClusterNotifyNode *cn;
+ 
+-  if(cluster==NULL) return;
+-  
+-  Remove(&cluster->mcl_Node);
+-
++  ObtainSemaphore(&CB(CamdBase)->NotifySemaphore);
+   for(node=CB(CamdBase)->clusnotifynodes.lh_Head; node->ln_Succ; node=node->ln_Succ)
+     {                           // notify everyone
+       cn=(struct ClusterNotifyNode *)node;
+       Signal(cn->cnn_Task, 1L << cn->cnn_SigBit);
+     }
++  ReleaseSemaphore(&CB(CamdBase)->NotifySemaphore);
++}
++
++/*
++ *  CLSemaphore must be obtained and the clusters mutex must
++ *  not be exclusive locked.
++ */
++void RemoveCluster(struct MidiCluster *cluster,struct CamdBase *CamdBase){
++  if(cluster==NULL) return;
++  
++  Remove(&cluster->mcl_Node);
++
++  SignalClusterNotify(CamdBase);
+   
+   
+   if(cluster->mcl_Node.ln_Name!=NULL){
+@@ -139,8 +148,6 @@ void LinkHasBeenRemovedFromCluster(struct MidiCluster *cluster,struct CamdBase *
+ struct MidiCluster *NewCluster(char *name,struct CamdBase *CamdBase){
+ 	struct MyMidiCluster *mymidicluster;
+ 	struct MidiCluster *midicluster;
+-	struct Node *node;
+-	struct ClusterNotifyNode *cn;
+ 
+ 
+ 	mymidicluster=AllocMem(sizeof(struct MyMidiCluster),MEMF_ANY | MEMF_CLEAR | MEMF_PUBLIC);
+@@ -168,11 +175,7 @@ struct MidiCluster *NewCluster(char *name,struct CamdBase *CamdBase){
+ #endif
+ 	AddTail(&CB(CamdBase)->midiclusters,&midicluster->mcl_Node);
+ 
+-	for(node=CB(CamdBase)->clusnotifynodes.lh_Head; node->ln_Succ; node=node->ln_Succ)
+-	  {           // notify everyone
+-	    cn=(struct ClusterNotifyNode *)node;
+-	    Signal(cn->cnn_Task,1L<<cn->cnn_SigBit);
+-	  }
++	SignalClusterNotify(CamdBase);
+ 
+ 
+ 	return midicluster;
+diff --git a/workbench/libs/camd/endclusternotify.c b/workbench/libs/camd/endclusternotify.c
+index f4ac39bbf2..e5485fa7b6 100644
+--- a/workbench/libs/camd/endclusternotify.c
++++ b/workbench/libs/camd/endclusternotify.c
+@@ -53,7 +53,9 @@
+ 
+     if(cn == NULL)   return;
+ 
++    ObtainSemaphore(&CB(CamdBase)->NotifySemaphore);
+     Remove((struct Node *)&cn->cnn_Node);
++    ReleaseSemaphore(&CB(CamdBase)->NotifySemaphore);
+ 	return;
+ 
+    AROS_LIBFUNC_EXIT
+diff --git a/workbench/libs/camd/init.c b/workbench/libs/camd/init.c
+index f091d2cd91..49b4c8a39d 100644
+--- a/workbench/libs/camd/init.c
++++ b/workbench/libs/camd/init.c
+@@ -27,6 +27,7 @@ BOOL InitCamd(struct CamdBase *CamdBase){
+ 		return FALSE;
+ 	}
+ 	InitSemaphore(CB(CamdBase)->CLSemaphore);
++	InitSemaphore(&CB(CamdBase)->NotifySemaphore);
+ #ifndef __amigaos4__
+ 	NEWLIST(&CB(CamdBase)->mymidinodes);
+ 	NEWLIST(&CB(CamdBase)->midiclusters);
+diff --git a/workbench/libs/camd/startclusternotify.c b/workbench/libs/camd/startclusternotify.c
+index 1b30f5c43d..25efb57ca5 100644
+--- a/workbench/libs/camd/startclusternotify.c
++++ b/workbench/libs/camd/startclusternotify.c
+@@ -62,7 +62,9 @@
+     AROS_LIBFUNC_INIT
+ 
+     if(cn == NULL)    return;
++    ObtainSemaphore(&CB(CamdBase)->NotifySemaphore);
+     AddTail(&CB(CamdBase)->clusnotifynodes,(struct Node *)&cn->cnn_Node);
++    ReleaseSemaphore(&CB(CamdBase)->NotifySemaphore);
+ 	return;
+ 
+    AROS_LIBFUNC_EXIT

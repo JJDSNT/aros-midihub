@@ -159,76 +159,90 @@ search order is involved. With it, `llvmpipe.hidd` links.
 git -C ~/AROS apply "$PWD/patches/aros-llvmpipe-link.patch"
 ```
 
-## USB MIDI CAMD fix
+## CAMD and USB MIDI
 
-`aros-usb-midi-camd.patch` still applies cleanly to upstream commit
-`37313d8aa0`. It fixes
-the Poseidon USB MIDI class's CAMD receive buffer format, transmit ring
-handling, and failed port-open behavior. The modified AROS source is covered
-by [AROS-LICENSE](AROS-LICENSE).
+Nine patches, applied in this order to upstream `master`. Each one is a
+commit of the `camd-robustness` branch in `~/AROS`; the first two are also
+draft pull request #1483. The modified AROS sources are covered by
+[AROS-LICENSE](AROS-LICENSE).
 
-```sh
-git -C ~/AROS apply --check "$PWD/patches/aros-usb-midi-camd.patch"
-git -C ~/AROS apply "$PWD/patches/aros-usb-midi-camd.patch"
-```
-
-The patch passed `git apply --check`. Runtime status and the hardware test
-procedure are in [USB MIDI validation](../docs/usb-midi.md).
-
-## CAMD names on 64-bit targets
-
-`aros-camd-names-64bit.patch` fixes `camd.library` on AArch64 and x86_64.
-Its internal `mysprintf()` took its arguments from `&fmt+1`, which only
-works where variadic arguments sit on the stack one after the other (m68k,
-i386). Elsewhere they are passed in registers, so every cluster name, built
-by `NewCluster()` with `mysprintf(..., "%s", name)`, came out as garbage.
-The same went for the `DEVS:Midi` driver paths (`devs:Midi/0▒▒` in the
-boot log). On a Raspberry Pi 3 running `raspi-aarch64`, MIDIHub.prefs
-showed the endpoints with garbled names, and nothing could reach `MIDIHub
-BLE In`/`Out` by name. The patch formats through `VNewRawDoFmt()` with a
-`va_list`, which is correct on every architecture and reads `%ld` as the
-`int` the callers pass.
+| patch | fixes |
+|---|---|
+| `aros-camd-names-64bit.patch` | cluster names and driver paths are garbage on AArch64 and x86_64 |
+| `aros-camd-arena-segments.patch` | the driver scan runs off the end of memory for arena-loaded modules |
+| `aros-camd-driver-scan-align.patch` | no `DEVS:Midi` driver loads on AArch64 |
+| `aros-debugdriver-port-index.patch` | `debugdriver` crashes on the first message to port 0 |
+| `aros-camd-port-open.patch` | a driver port closes under a receiver still linked to it |
+| `aros-camd-notify-lock.patch` | the cluster notification list is not locked |
+| `aros-camd-rescan.patch` | `RethinkCAMD()` loads drivers installed after CAMD started |
+| `aros-usb-midi-camd.patch` | USB MIDI receive buffers, transmit ring, failed open |
+| `aros-usb-midi-lifecycle.patch` | the USB MIDI driver never loads; ports across unplugging |
 
 ```sh
-git -C ~/AROS apply "$PWD/patches/aros-camd-names-64bit.patch"
+for p in camd-names-64bit camd-arena-segments camd-driver-scan-align \
+         debugdriver-port-index camd-port-open camd-notify-lock \
+         camd-rescan usb-midi-camd usb-midi-lifecycle; do
+    git -C ~/AROS apply "$PWD/patches/aros-$p.patch" || break
+done
 ```
 
-## CAMD driver scan of arena-loaded modules
+**Names on 64-bit targets.** `mysprintf()` took its variadic arguments from
+`&fmt+1`, which only works where they sit on the stack (m68k, i386), so every
+cluster name and `DEVS:Midi` path came out as garbage and nothing could find
+a cluster by name. It now formats through `VNewRawDoFmt()` with a `va_list`.
 
-`aros-camd-arena-segments.patch` fixes a crash in `camd.library` when it
-loads a `DEVS:Midi` driver. To find the driver's `MidiDeviceData`, CAMD
-walks the driver's segments and reads each hunk's size from the longword
-before it. The ELF loader now loads a module into one arena
-(`ELF_MODULE_ARENA`): every section's hunk then has a stored size of 0, and
-a container hunk at the end of the list has the size of the whole arena.
-CAMD subtracted the header from 0, the size wrapped to about 4 GB, and the
-scan ran to the end of memory. On a Raspberry Pi 3 this happened in the
-first task that opened `camd.library`, as a bus fault at the top of RAM.
-`lddemon` reads the same size but finds its `Resident` in the first bytes.
-The patch skips hunks no larger than their header, in the scan and in
-`isPointerInSeglist()`; the container hunk still covers their contents. It
-is not specific to 64-bit targets.
+**Arena-loaded modules.** `LoadDriver()` reads each hunk's size from the
+longword before its `BPTR`. With `ELF_MODULE_ARENA` the section hunks store
+a size of 0 and a container hunk holds the arena; subtracting the header
+from 0 wrapped, and the scan ran to the top of RAM (a bus fault on a Pi 3).
+Hunks no larger than their header are skipped; the container covers them.
 
-```sh
-git -C ~/AROS apply "$PWD/patches/aros-camd-arena-segments.patch"
-```
+**Aligned driver scan.** The scan then stepped through the container in
+`AROS_PTRALIGN` steps from the end of its 12-byte header, 4 bytes off the
+8-byte boundary where the `MidiDeviceData` is, and never found it: no driver
+loaded on AArch64. It now starts at the first aligned address.
 
-## CAMD driver rescan
+**debugdriver.** `OpenPort()` stored port N's user data at `UserData[N-1]`,
+so port 0 overwrote the transmit function pointer, and the first message
+executed data. Found once the driver loaded.
 
-`aros-camd-rescan.patch` still applies cleanly to upstream commit
-`37313d8aa0`. It makes
-the existing `RethinkCAMD()` entry rescan `DEVS:Midi` and load new driver files
-once, even when CAMD is already open. It serializes scans separately from the
-CAMD list lock so `LoadSeg` and driver initialization do not run while that
-list is locked. It does not unload a driver whose file is removed.
+**Port open state.** A port opened for a sender did not record a receiver
+that linked later; when the sender left, CAMD closed the port under the
+receiver.
 
-```sh
-git -C ~/AROS apply --check "$PWD/patches/aros-camd-rescan.patch"
-git -C ~/AROS apply "$PWD/patches/aros-camd-rescan.patch"
-```
+**Notification lock.** `StartClusterNotify()`/`EndClusterNotify()` changed
+the list the cluster code walks, unlocked. The list has its own semaphore,
+not `CLSemaphore`, so a caller holding `LockCAMD()` does not deadlock.
 
-The patch passed `git apply --check`, and its changed C files compiled with
-the AROS x64 GCC. A full CAMD build and native rescan test are pending. The
-driver lifecycle and the remaining removal issue are documented in
-[the CAMD integration design](../docs/camd-integration.md). The modified AROS
-source is covered by [AROS-LICENSE](AROS-LICENSE).
+**RethinkCAMD().** It loads drivers added to `DEVS:Midi`. Their ports join
+clusters of the same name that clients already made, and open for the links
+waiting there, under `CLSemaphore`. Drivers are never unloaded.
+
+**USB MIDI.** The first patch fixes the receive buffer format, the transmit
+ring and a null dereference on a failed open. The second one:
+
+- The class wrote `DEVS:Midi/<device>` with the name `poseidonusb` inside,
+  and CAMD only loads a driver whose name is its file name: USB MIDI never
+  appeared on any target but m68k. The driver's name is now written into it.
+- The class calls `RethinkCAMD()` after writing the driver, so a device
+  plugged in after CAMD started gets its clusters.
+- Each device has its own 16 ports; before, a second device took over the
+  first one's.
+- Ports outlive the binding: they open while the device is away, drop what
+  they are sent while it is unplugged instead of crashing, and carry MIDI
+  again when it comes back, without clients linking again.
+
+### Testing
+
+[`tools/camd-compat-qemu.sh`](../tools/camd-compat-qemu.sh) runs
+`MIDIHubCAMDCompat`, a suite of the CAMD 41.1 behaviour programs rely on,
+on `raspi-aarch64` under QEMU. Against camd.library with the first four
+patches and with all of them:
+
+| | 41.1 contract | `RethinkCAMD()` |
+|---|---|---|
+| first four patches | 50 of 50 | 4 of 8 (not implemented) |
+| all patches | 50 of 50 | 8 of 8 |
+
+The USB MIDI patches build for `raspi-aarch64` but have not been run with a
+USB MIDI device.

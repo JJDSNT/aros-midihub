@@ -46,29 +46,21 @@ or audio stream. A `DEVS:Midi` driver is appropriate when AROS needs a native
 device binding such as Poseidon's USB class. The portable codecs and synth
 remain independent of either registration mechanism.
 
-## CAMD lifecycle constraint
+## CAMD lifecycle
 
-The current AROS CAMD implementation scans `DEVS:Midi` during `InitCamd()`.
-It does not watch the directory for new drivers. Its existing public
-`RethinkCAMD()` entry is a stub. Poseidon writes a USB driver when a device
-binds, so its ports depend on CAMD being initialized after that file exists.
-This affects newly installed `DEVS:Midi` drivers, including a USB device
-bound after CAMD opens. MIDIHub's virtual ports are created through CAMD's
-normal client API when their processes start, so they do not have this
-limitation.
+CAMD scans `DEVS:Midi` when it starts. With
+[the rescan patch](../patches/aros-camd-rescan.patch) `RethinkCAMD()` loads
+drivers added later, and a new driver's ports join clusters of the same name
+that clients made while waiting for it. `camdusbmidi.class` calls it after
+writing a device's driver. Drivers are never unloaded: a USB device's ports
+stay, and carry MIDI again when it is plugged back in
+([the lifecycle patch](../patches/aros-usb-midi-lifecycle.patch)). See
+[CAMD improvements](camd-improvements.md) for the details and what remains.
 
-[The CAMD rescan patch](../patches/aros-camd-rescan.patch) implements
-`RethinkCAMD()` as a serialized scan that adds drivers absent from the loaded
-list. A service that installs a new driver can call it without reopening CAMD.
-The patch does not unload removed drivers or detach live CAMD clients; that
-requires a separate safe removal design and runtime tests.
-
-Driver removal still needs a safe lifecycle before the rescan patch can be
-used for fully dynamic hardware drivers. A transport service with virtual
-CAMD ports can instead release its links when it exits. Peer-specific virtual
-ports may be added through the same CAMD client API, with stable naming and
-clear ownership; persistent files containing stale device addresses or IP
-addresses are unnecessary.
+A transport service with virtual CAMD ports releases its links when it
+exits. Peer-specific virtual ports may be added through the same CAMD client
+API, with stable naming and clear ownership; persistent files containing
+stale device addresses or IP addresses are unnecessary.
 
 ## MIDIHub routing relationship
 

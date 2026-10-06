@@ -1,8 +1,8 @@
 diff --git a/rom/usb/classes/camdmidi/camd/poseidonusb.c b/rom/usb/classes/camdmidi/camd/poseidonusb.c
+index 650dee70b7..cc2799cf3d 100644
 --- a/rom/usb/classes/camdmidi/camd/poseidonusb.c
 +++ b/rom/usb/classes/camdmidi/camd/poseidonusb.c
-@@ -123,13 +123,15 @@ AROS_UFH3S(void, GetFromCAMD,
- 
+@@ -119,12 +119,14 @@ AROS_UFH3S(void, GetFromCAMD,
      do
      {
          pos = port->ca_TXWritePos;
@@ -20,7 +20,7 @@ diff --git a/rom/usb/classes/camdmidi/camd/poseidonusb.c b/rom/usb/classes/camdm
          port->ca_TXWritePos = pos;
          sent++;
      } while (sent < 100); // TODO: Not sure what to do here??
-@@ -159,7 +163,7 @@ AROS_UFH5(struct MidiPortData *, AROS_SLIB_ENTRY(OpenPort, PoseidonCAMDUSB, 0),
+@@ -155,7 +157,7 @@ AROS_UFH5(struct MidiPortData *, AROS_SLIB_ENTRY(OpenPort, PoseidonCAMDUSB, 0),
          CAMDPortBases[portnum]->ca_CAMDTXFunc.is_Data = CAMDPortBases[portnum];
          CAMDPortBases[portnum]->ca_IsOpen = TRUE;
      }
@@ -30,6 +30,7 @@ diff --git a/rom/usb/classes/camdmidi/camd/poseidonusb.c b/rom/usb/classes/camdm
      AROS_USERFUNC_EXIT
  }
 diff --git a/rom/usb/classes/camdmidi/camdusbmidi.class.c b/rom/usb/classes/camdmidi/camdusbmidi.class.c
+index 33a6d5b830..a00cdc2952 100644
 --- a/rom/usb/classes/camdmidi/camdusbmidi.class.c
 +++ b/rom/usb/classes/camdmidi/camdusbmidi.class.c
 @@ -739,6 +739,10 @@ void nParseMidi(struct NepClassHid *nch, UBYTE *buf, ULONG len)
@@ -43,7 +44,8 @@ diff --git a/rom/usb/classes/camdmidi/camdusbmidi.class.c b/rom/usb/classes/camd
  
      while(len > 3)
      {
-@@ -757,6 +761,7 @@ void nParseMidi(struct NepClassHid *nch, UBYTE *buf, ULONG len)
+@@ -756,14 +760,16 @@ void nParseMidi(struct NepClassHid *nch, UBYTE *buf, ULONG len)
+ 
                  case 0x5: // Single-byte System Common Message or SysEx ends with following single byte.
                  case 0xF: // Single Byte
 -                    *buf = 1;
@@ -53,7 +55,6 @@ diff --git a/rom/usb/classes/camdmidi/camdusbmidi.class.c b/rom/usb/classes/camd
 +                    CallHookA(&ca->ca_CAMDRXFunc, (Object *) &message, NULL);
                      break;
  
-@@ -763,6 +768,7 @@ void nParseMidi(struct NepClassHid *nch, UBYTE *buf, ULONG len)
                  case 0x2: // Two-byte System Common messages like MTC, SongSelect, etc.
                  case 0x6: // SysEx ends with following two bytes. *** FIXME? ***
 -                    *buf = 2;
@@ -63,7 +64,9 @@ diff --git a/rom/usb/classes/camdmidi/camdusbmidi.class.c b/rom/usb/classes/camd
 +                    CallHookA(&ca->ca_CAMDRXFunc, (Object *) &message, NULL);
                      break;
  
-@@ -775,6 +781,7 @@ void nParseMidi(struct NepClassHid *nch, UBYTE *buf, ULONG len)
+                 case 0x3: // Three-byte System Common messages like SPP, etc.
+@@ -774,14 +780,16 @@ void nParseMidi(struct NepClassHid *nch, UBYTE *buf, ULONG len)
+                 case 0xA: // Poly-KeyPress
                  case 0xB: // Control Change
                  case 0xE: // PitchBend Change
 -                    *buf = 3;
@@ -73,7 +76,6 @@ diff --git a/rom/usb/classes/camdmidi/camdusbmidi.class.c b/rom/usb/classes/camd
 +                    CallHookA(&ca->ca_CAMDRXFunc, (Object *) &message, NULL);
                      break;
  
-@@ -781,5 +788,6 @@ void nParseMidi(struct NepClassHid *nch, UBYTE *buf, ULONG len)
                  case 0xC: // Program Change
                  case 0xD: // Channel Pressure
 -                    *buf = 2;
@@ -82,3 +84,5 @@ diff --git a/rom/usb/classes/camdmidi/camdusbmidi.class.c b/rom/usb/classes/camd
 +                    CopyMem(buf + 1, message.data, 2);
 +                    CallHookA(&ca->ca_CAMDRXFunc, (Object *) &message, NULL);
                      break;
+             }
+         } else {

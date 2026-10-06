@@ -8,7 +8,10 @@
    MIDIHubCAMDProbe --monitor CLUSTER [SECONDS]
                                         print what arrives on a cluster, e.g.
                                         "BLE MIDI In" (default 60 s,
-                                        Ctrl-C stops) */
+                                        Ctrl-C stops)
+   MIDIHubCAMDProbe --rethink           have CAMD load drivers added to
+                                        DEVS:Midi, listing the clusters
+                                        before and after */
 #include <dos/dos.h>
 #include <exec/libraries.h>
 #include <midi/camd.h>
@@ -100,6 +103,28 @@ static int monitor(struct MidiNode *node, char *cluster, LONG seconds)
     return 0;
 }
 
+static void list_clusters(void)
+{
+    struct MidiCluster *cluster = NULL;
+    APTR lock = LockCAMD(CD_Linkages);
+
+    while ((cluster = NextCluster(cluster)))
+        printf("CAMDProbe:   %s\n", cluster->mcl_Node.ln_Name);
+    UnlockCAMD(lock);
+}
+
+static int rethink(void)
+{
+    LONG error;
+
+    puts("CAMDProbe: clusters before RethinkCAMD():");
+    list_clusters();
+    error = RethinkCAMD();
+    printf("CAMDProbe: RethinkCAMD() returned %ld; clusters after:\n", (long)error);
+    list_clusters();
+    return error ? 10 : 0;
+}
+
 int main(int argc, char **argv)
 {
     static char name[] = "MIDIHub CAMD Probe";
@@ -133,10 +158,11 @@ int main(int argc, char **argv)
     int synth_mode = argc == 2 && strcmp(argv[1], "--synth") == 0;
     int send_mode = argc == 3 && strcmp(argv[1], "--send") == 0;
     int monitor_mode = (argc == 3 || argc == 4) && strcmp(argv[1], "--monitor") == 0;
+    int rethink_mode = argc == 2 && strcmp(argv[1], "--rethink") == 0;
 
-    if (argc != 1 && !synth_mode && !send_mode && !monitor_mode) {
+    if (argc != 1 && !synth_mode && !send_mode && !monitor_mode && !rethink_mode) {
         puts("Usage: MIDIHubCAMDProbe [--synth | --send CLUSTER |"
-             " --monitor CLUSTER [SECONDS]]");
+             " --monitor CLUSTER [SECONDS] | --rethink]");
         return 20;
     }
     if (synth_mode)
@@ -146,6 +172,10 @@ int main(int argc, char **argv)
     if (!CamdBase) {
         puts("CAMDProbe: camd.library unavailable");
         return 20;
+    }
+    if (rethink_mode) {
+        result = rethink();
+        goto cleanup;
     }
     node = CreateMidiA(node_tags);
     if (!node) goto cleanup;

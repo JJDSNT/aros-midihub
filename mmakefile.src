@@ -10,6 +10,7 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-program \
 #MM      contrib-aros-midihub-selftest \
 #MM      contrib-aros-midihub-camdprobe \
+#MM      contrib-aros-midihub-camdcompat \
 #MM      contrib-aros-midihub-router \
 #MM      contrib-aros-midihub-prefs \
 #MM      contrib-aros-midihub-btmidi
@@ -69,6 +70,11 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
 %build_prog mmake=contrib-aros-midihub-camdprobe \
     progname=MIDIHubCAMDProbe \
     files="$(MIDIHUB_ROOT)/ports/aros/camd_probe" \
+    targetdir=$(MIDIHUB_PACKAGE)/C
+
+%build_prog mmake=contrib-aros-midihub-camdcompat \
+    progname=MIDIHubCAMDCompat \
+    files="$(MIDIHUB_ROOT)/ports/aros/camd_compat" \
     targetdir=$(MIDIHUB_PACKAGE)/C
 
 %build_prog mmake=contrib-aros-midihub-router \
