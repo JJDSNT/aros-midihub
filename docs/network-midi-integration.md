@@ -90,7 +90,12 @@ is another reason to use one system responder instead of making discovery a
 property of each transport process. See [mDNS and AROSTCP](mdns-arostcp.md).
 
 This is worth proposing upstream on its own. Printers and file sharing would
-use it too.
+use it too. AROS now also has a clean-room Envoy-compatible `nipc.library`
+(commit `fbc2e274d880868c3fe447dffdfc9226fae0bd66`). Bonami already contains
+an optional NIPC discovery bridge using `_nipc._tcp`, so the same system mDNS
+service can potentially support Envoy/NIPC discovery as well. This is another
+reason to keep Bonami generic infrastructure rather than make it MIDI-specific;
+NIPC remains optional and is not a dependency of Network MIDI.
 
 ## UMP: translate at the edge first
 
