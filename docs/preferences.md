@@ -89,7 +89,7 @@ MIDIHub presents MIDI information without taking ownership away from the AROS su
 | Bluetooth adapter, pairing, trust and security | Bluetooth Preferences |
 | IP, Ethernet and Wi-Fi configuration | Network Preferences |
 | Audio device and mode | AHI Preferences |
-| AppleMIDI session settings | Network MIDI service, configured through MIDIHub.prefs |
+| AppleMIDI session settings | Network MIDI device, configured through MIDIHub.prefs |
 | SoundFont and MIDI synth settings | Synth service, configured through MIDIHub.prefs |
 | MIDI profiles | MIDIHub |
 
@@ -207,7 +207,7 @@ This page owns MIDI-specific network-session configuration, not general network 
 
 During incubation, the AppleMIDI/RTP-MIDI implementation reads
 `ENV:MidiHub/Network` and falls back to `ENVARC:MidiHub/Network`. Once it moves
-to its native AROS service, that service owns the settings contract while
+to its native AROS device, that device owns the settings contract while
 `MIDIHub.prefs` remains its user-facing configuration client. The UTF-8 file
 uses one `name=value` option per line. Empty lines and lines beginning with
 `#` or `;` are ignored.
@@ -316,7 +316,7 @@ MIDIHub.prefs should show the resulting BLE MIDI endpoint as part of the MIDI en
 
 The GUI should follow normal AROS Preferences behavior. `Use` applies the selected MIDIHub configuration for the current environment, `Save` persists it, and `Cancel` discards unapplied changes.
 
-The runtime service must not depend on the GUI being open.
+Persistent MIDIHub routing must not depend on the GUI being open. Network MIDI lifecycle belongs to its native CAMD device runtime.
 
 ## Design summary
 
