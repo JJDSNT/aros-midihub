@@ -2,11 +2,21 @@
 
 ## Purpose
 
-MIDIHub is evolving from an incubation repository for modern MIDI capabilities into a possible native AROS role with a narrower responsibility: a **persistent CAMD routing and MIDI-environment management service**.
+MIDIHub is an incubation and integration repository for modern MIDI
+capabilities on AROS. Whether a permanent runtime called **MIDIHub** should
+remain is now deliberately an open architectural question.
 
-This does not make MIDIHub a replacement for CAMD, Poseidon, the Bluetooth stack, AROS networking, or AHI. Mature transport and device functionality should still move to the AROS subsystem where it naturally belongs. MIDIHub only remains where there is a useful cross-transport responsibility that none of those subsystems owns.
+As capabilities mature, they should move to the subsystem that naturally owns
+them. BLE MIDI is moving toward the Bluetooth stack, Network MIDI toward native
+CAMD-facing devices, and mDNS toward shared system infrastructure. Persistent
+routing may ultimately belong to CAMD itself or to a CAMD-owned resident
+facility, while software synthesis may become an independent CAMD/AHI
+component. If those responsibilities graduate, preserving a MIDIHub runtime is
+not a goal by itself.
 
-The corresponding `MIDIHub.prefs` application is the user-facing management surface for that service and for the MIDI environment exposed through CAMD.
+`MIDIHub.prefs` remains useful during incubation as the integrated management
+surface. Its eventual ownership and name should follow the final subsystem
+boundaries rather than force the continued existence of a MIDIHub service.
 
 A useful AROS analogy is Trident and Poseidon: the management application does not replace the underlying subsystem. MIDIHub differs in that its view spans several native subsystems through CAMD rather than managing a single hardware stack.
 
@@ -38,9 +48,15 @@ MIDIHub must use these facilities rather than introduce a parallel MIDI API.
 
 ### MIDIHub
 
-MIDIHub owns **persistent cross-endpoint policy**, not transport implementations.
+The current MIDIHub runtime incubates **persistent cross-endpoint policy**; this
+is not yet a claim that MIDIHub is its permanent system owner. Because CAMD
+already owns the MIDI graph, persistent routing should be evaluated as a
+possible CAMD or CAMD-owned service capability before the runtime boundary is
+frozen.
 
-Its responsibilities may include:
+During incubation its responsibilities may include:
+
+
 
 - restoring user-defined routes at startup
 - keeping routes active while Preferences is closed
@@ -201,7 +217,11 @@ native AROS transports
    MIDIHub.prefs
 ```
 
-If AROS later develops another native facility that completely absorbs this routing and policy role, MIDIHub can shrink again. Preserving the MIDIHub name or runtime is not an architectural requirement.
+If persistent routing moves into CAMD (or a CAMD-owned service) and synthesis
+moves to its own CAMD/AHI component, MIDIHub may cease to exist as a runtime.
+The repository can still serve as the incubator in which those capabilities
+are developed and validated. Preserving the MIDIHub name or runtime is not an
+architectural requirement.
 
 ## Relationship to existing documents
 
@@ -219,8 +239,8 @@ Some older wording in those documents reflects the earlier stage where network, 
 ```text
 CAMD              = MIDI infrastructure and runtime graph
 Native subsystems = transport, hardware, network, and audio implementation
-MIDIHub           = persistent cross-endpoint routing and MIDI policy
-MIDIHub.prefs     = overview, basic routing, service configuration, and profiles
+MIDIHub           = current incubator/integration runtime; long-term role open
+MIDIHub.prefs     = current integrated management surface; long-term owner open
 ```
 
 > **MIDIHub should manage relationships between MIDI endpoints without taking ownership away from the AROS subsystems that implement those endpoints.**
