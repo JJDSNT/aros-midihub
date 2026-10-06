@@ -8,8 +8,8 @@ It is not intended to become a DAW, a MIDI processor, or a sophisticated node-gr
 
 ## Current implementation
 
-The native `MIDIHubPrefs` program is installed inside the MIDIHub package,
-as `MIDIHUB:Prefs/MIDIHubPrefs` (`SYS:Extras/aros-midihub/Prefs`), rather
+The native preferences program is installed inside the MIDIHub package,
+as `MIDIHUB:Prefs/MIDIHub` (`SYS:Extras/aros-midihub/Prefs`), rather
 than in `SYS:Prefs`: whether a MIDI Preferences belongs there is for AROS to
 decide. It follows the same application structure as
 AROS Bluetooth Preferences and Poseidon Trident. The executable is a small
@@ -132,7 +132,7 @@ To add a route on the Routing page, pick the endpoint MIDI comes in from in
 the **From** list (for example `BLE MIDI In`) and the one it goes to in the
 **To** list (for example `MIDIHub Synth`), then **Add Route**. The lists show
 the endpoints CAMD has now; for one that is not connected yet, type its name
-in the From or To field. `MIDIHUB:Prefs/MIDIHubPrefs PAGE=Routing` opens the
+in the From or To field. `MIDIHUB:Prefs/MIDIHub PAGE=Routing` opens the
 window on that page (any page name, or its beginning).
 
 Adding a route only requires a source and destination. An optional **Reconnect automatically** setting may control whether MIDIHub restores the route when an endpoint reappears.

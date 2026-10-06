@@ -33,6 +33,8 @@ struct MHPrefsData {
     Object *remove_button;
     Object *router_state, *router_start, *router_stop, *router_boot;
     Object *route_from_list, *route_to_list;
+    BOOL routes_changed;    /* added or removed since the last Use/Save */
+    BOOL router_running;
     Object *synth_state, *synth_start, *synth_stop, *synth_boot;
     Object *network_session, *network_local_port;
     Object *network_peer_ip, *network_peer_port;

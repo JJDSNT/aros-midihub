@@ -46,7 +46,7 @@ below read it.
 
 ## The Diagnostics page
 
-MIDIHub.prefs (`MIDIHUB:Prefs/MIDIHubPrefs`, inside the package drawer)
+MIDIHub.prefs (`MIDIHUB:Prefs/MIDIHub`, inside the package drawer)
 has a **Diagnostics** page that shows on one screen what the tests below
 check: the CAMD endpoints, a MIDI monitor, a Send test button, the BLE MIDI
 state with the connected devices, and the latest Bluetooth log lines. Select

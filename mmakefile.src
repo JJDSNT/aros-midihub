@@ -88,14 +88,14 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
 # Inside the package for now: whether a MIDI Preferences belongs in
 # SYS:Prefs is for upstream to decide.
 %build_prog mmake=contrib-aros-midihub-prefs \
-    progname=MIDIHubPrefs \
+    progname=MIDIHub \
     files="$(MIDIHUB_ROOT)/ports/aros/prefs \
            $(MIDIHUB_ROOT)/ports/aros/MIDIHubPrefsClass" \
     uselibs="arosmidihub mui" \
     targetdir=$(MIDIHUB_PACKAGE)/Prefs
 
 %copy_files_q mmake=contrib-aros-midihub-prefs-icon \
-    src="$(MIDIHUB_ROOT)/ports/aros" files="MIDIHubPrefs.info" \
+    src="$(MIDIHUB_ROOT)/ports/aros" files="MIDIHub.info" \
     dst="$(MIDIHUB_PACKAGE)/Prefs"
 
 # Drawer icons (AROS's default drawer), so Workbench shows the package

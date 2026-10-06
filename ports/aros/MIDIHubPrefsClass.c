@@ -111,11 +111,15 @@ AROS_UFH3(IPTR, RouteDisplay,
         ULONG index = (ULONG)(route - data->routes.routes);
         *columns++ = route->source;
         *columns++ = route->destination;
+        /* Say what to do when the route is not forwarding yet. */
         *columns++ = !route->enabled ? (STRPTR)"Disabled" :
-                     index >= data->routes.count ? (STRPTR)"Pending" :
+                     data->routes_changed || index >= data->routes.count ?
+                         (STRPTR)"Not saved: press Use or Save" :
+                     !data->router_running ? (STRPTR)"Router stopped: press Start" :
                      data->route_states[index] == MH_ROUTE_STATE_ACTIVE ? (STRPTR)"Active" :
-                     data->route_states[index] == MH_ROUTE_STATE_WAITING ? (STRPTR)"Waiting" :
-                     (STRPTR)"Pending";
+                     data->route_states[index] == MH_ROUTE_STATE_WAITING ?
+                         (STRPTR)"Waiting for an endpoint" :
+                     (STRPTR)"Not saved: press Use or Save";
         *columns = route->reconnect ? (STRPTR)"Automatic" : (STRPTR)"Once";
     } else {
         *columns++ = (STRPTR)"From";
@@ -875,8 +879,10 @@ static void refresh(struct MHPrefsData *data)
     diag_refresh_bt(data);
 
     memset(data->route_states, 0, sizeof(data->route_states));
+    data->router_running = FALSE;
     if (!router_command(MH_ROUTER_STATUS, &status)) {
         char state[80];
+        data->router_running = TRUE;
         active = status.active; waiting = status.waiting;
         snprintf(state, sizeof(state), "Running: %lu active, %lu waiting",
                  (unsigned long)active, (unsigned long)waiting);
@@ -989,6 +995,7 @@ static int apply_settings(struct MHPrefsData *data, BOOL persistent)
         }
     }
     data->dirty = FALSE;
+    data->routes_changed = FALSE;
     refresh(data);
     return 0;
 }
@@ -1193,7 +1200,7 @@ static void add_route(struct MHPrefsData *data)
         --data->routes.count;
         set_status(data, "Invalid route or feedback cycle."); return;
     }
-    data->dirty = TRUE; fill_routes(data);
+    data->dirty = TRUE; data->routes_changed = TRUE; fill_routes(data);
     set_status(data, "Route added. Choose Use or Save to apply it.");
 }
 
@@ -1204,7 +1211,8 @@ static void remove_route(struct MHPrefsData *data)
     if ((LONG)active < 0 || (ULONG)active >= data->routes.count) return;
     memmove(&data->routes.routes[active], &data->routes.routes[active + 1],
             (data->routes.count - (ULONG)active - 1) * sizeof(data->routes.routes[0]));
-    --data->routes.count; data->dirty = TRUE; fill_routes(data);
+    --data->routes.count; data->dirty = TRUE; data->routes_changed = TRUE;
+    fill_routes(data);
     set_status(data, "Route removed. Choose Use or Save to apply it.");
 }
 

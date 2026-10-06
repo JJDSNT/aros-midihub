@@ -99,7 +99,7 @@ synthesizer and AROS PCM output work, evaluate GM timbres, percussion, SysEx,
 and memory use before choosing a default bank. Larger banks could be separate
 downloads or packages.
 
-Future `MIDIHubPrefs` should accept a user-selected SF2, save its path in
+Future MIDIHub preferences should accept a user-selected SF2, save its path in
 `ENVARC:`, and preview a note through the same audio engine as the CAMD port.
 Define that preference format when synthesis is integrated so it has an
 immediate effect.

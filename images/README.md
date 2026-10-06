@@ -9,7 +9,7 @@ an `icOn` chunk identifying the file as a Workbench tool and requesting a
 16 KiB stack. This is the same format used for the dedicated Bluetooth
 Preferences icon in Bellatrix.
 
-Regenerate `ports/aros/MIDIHubPrefs.info` from the repository root with:
+Regenerate `ports/aros/MIDIHub.info` from the repository root with:
 
 ```sh
 convert images/midihub-icon-states.png \
@@ -23,7 +23,7 @@ convert images/midihub-icon-states.png \
   -define png:compression-level=9 /tmp/MIDIHubPrefs-selected.png
 
 python3 tools/mkicon.py /tmp/MIDIHubPrefs.png \
-  ports/aros/MIDIHubPrefs.info /tmp/MIDIHubPrefs-selected.png
+  ports/aros/MIDIHub.info /tmp/MIDIHubPrefs-selected.png
 ```
 
 ImageMagick and Python are build-host tools only. The AROS build copies the
