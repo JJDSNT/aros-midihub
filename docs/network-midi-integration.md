@@ -19,52 +19,55 @@ it inside MIDIHub.
 The codecs and session state machines make no OS calls: the caller owns the
 sockets, the addresses and the clock. That is what lets them move.
 
-## One network MIDI service
+## Network MIDI as a CAMD device interface
 
-RTP-MIDI and AppleMIDI are one component: AppleMIDI is the session, RTP-MIDI
-the payload and journal inside it. Network MIDI 2.0 plays the same role for
-MIDI 2.0. All three belong in a single **network MIDI service**.
+The native AROS abstraction should be a CAMD MIDI device interface rather than
+a standalone system-level Network MIDI service. Applications that use CAMD
+should continue to see and open a MIDI device; the implementation behind that
+device may internally manage sockets, long-lived tasks, discovery, multiple
+peers, sessions and transports.
 
-BLE MIDI became a *class* because the Bluetooth stack has a class mechanism
-that loads, binds to devices and reports events. AROSTCP has nothing
-equivalent, so the natural form here is a resident service:
+RTP-MIDI and AppleMIDI remain one protocol family: AppleMIDI provides session
+control and RTP-MIDI carries the MIDI payload and recovery journal. Network
+MIDI 2.0/UMP is a second transport family. Whether AROS should expose both
+through one `networkmidi.device`-style interface or through separate
+`applemidi.device` and `networkmidi2.device` interfaces remains an upstream
+design choice.
 
-- **Process:** one process launched from the normal system startup once a
-  `bsdsocket.library` provider becomes available. It must not be part of
-  AROSTCP itself: the service owns the UDP
-  sockets (AppleMIDI control and data ports, Network MIDI 2.0 port) and one
-  event loop, while AROSTCP supplies sockets and multicast transport.
-- **Source location:** for example `workbench/network/midi`, with the
-  portable codecs (`applemidi`, `rtpmidi`, `ump`, `netmidi2`) as a static link
-  library, as `btcore` is the portable part of the Bluetooth stack.
-- **One CAMD node per peer, named after it:** "MacBook In/Out", "iPad (MIDI
-  2.0)". This is the model of `btmidi.class`'s central role (a node per bound
-  device), not the single `MIDIHub In/Out` of today.
-- **Settings:** session name, ports, fixed peers to invite, whether to accept
-  invitations. They are stored in `ENVARC:` and edited on the Network page of
-  a MIDI Preferences.
+The expected native source home follows the existing MIDI-driver convention
+under `workbench/devs/midi/`, rather than `workbench/network/midi`.
 
-A `DEVS:Midi` driver does not fit: its port count is fixed when it loads,
-its port names are static, and it runs in callbacks where sockets are not
-available. Peers come and go; CAMD client nodes follow them.
+### Dynamic peers versus CAMD ports
 
-### What CAMD gives it
+The current CAMD driver ABI reads `MidiDeviceData.NPorts` after the driver's
+`Init()`, stores that port count, and allocates the corresponding driver
+state and clusters. It does not currently resize the device's port set when
+network peers later appear or disappear.
 
-Running as CAMD clients, the peers are ordinary clusters. camd.library 42
-already helps:
+That means the first Network MIDI device needs an explicit peer-to-port policy,
+for example a bounded pool of ports whose backing peer/session can change.
+The existing Poseidon USB MIDI implementation provides a useful precedent: it
+exposes a fixed pool of CAMD ports while hotplug and hardware state are handled
+behind the driver boundary.
 
-- MIDIHub.prefs and routes follow peers appearing and leaving through
-  cluster watches and `MIDI_PartSignal`.
-- The service can stamp received messages with `CamdTime()` once it maps
-  RTP timestamps to that clock.
+A future CAMD enhancement could provide truly dynamic device ports, which
+would also be useful for other hotplug transports. That is a separate CAMD
+evolution question, not a reason to expose Network MIDI as a standalone
+service.
 
-Two further CAMD steps would make network peers first-class:
+### Internal runtime
 
-- `MLINK_Comment`, so applications see "Network MIDI" or "Network MIDI 2.0"
-  without knowing the transport ([CAMD improvements](camd-improvements.md),
-  step 1).
-- Registered virtual ports (step 6), so a peer's ports have an identity of
-  their own rather than looking like an application.
+The device implementation may own an internal event loop/task that handles:
+
+- AppleMIDI control and RTP-MIDI data sockets;
+- Network MIDI 2.0 traffic;
+- Bonami/system mDNS browse and registration events;
+- peer/session lifecycle and reconnection;
+- timers and clock synchronization;
+- mapping between CAMD ports and active network peers.
+
+This persistent state remains an implementation detail behind the MIDI device
+interface.
 
 ## mDNS: the missing system piece
 
@@ -73,12 +76,12 @@ AppleMIDI advertises `_apple-midi._udp` and Network MIDI 2.0 advertises
 AROS has no system mDNS responder, which is why MIDIHub carries a minimal
 one.
 
-The right home is a **system responder** shared by every service. The preferred
+The right home is a **system responder** shared by every client. The preferred
 starting point is Bonami's BSD-licensed Amiga design: `bonami.library` exposes
 register, browse, and resolve operations while one engine task owns the socket,
 cache, and timers, and is the natural owner for probing and conflict state as
 those features are completed. Library calls reach that engine through private
-Exec message-port IPC. If each service embeds its own responder, several
+Exec message-port IPC. If each client embeds its own responder, several
 processes compete for UDP port 5353 and duplicate all that state.
 
 AROSTCP already supplies the required IPv4 multicast transport,
@@ -130,10 +133,9 @@ MIDI 2.0 Channel Voice message is 64. So, in two steps:
 1. Finish the RTP-MIDI work in progress.
 2. Connect the portable multi-peer AppleMIDI manager to the AROS event loop
    and create a CAMD node per connected peer.
-3. The AROS service: AppleMIDI and Network MIDI 2.0 on one event loop, as a
-   CAMD client per peer, using the system mDNS registration and browse API.
-4. Upstream proposals: the system mDNS responder; the network MIDI service in
-   `workbench/network`; then the UMP-aware CAMD.
+3. The AROS device runtime: validate AppleMIDI and Network MIDI 2.0 behind the CAMD device boundary, using the system mDNS registration and browse API.
+4. Upstream proposals: the system mDNS responder; the Network MIDI device under
+   `workbench/devs/midi`; then the UMP-aware CAMD.
 
 Interoperability targets for step 3: macOS and iOS Network MIDI (AppleMIDI);
 rtpMIDI on Windows; for Network MIDI 2.0, Windows MIDI Services and the MIDI
