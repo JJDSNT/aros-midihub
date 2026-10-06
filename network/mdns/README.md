@@ -78,6 +78,14 @@ socket-stack uncertainty from the IPv6/multi-interface roadmap; Bonami still
 needs to enumerate interfaces, track address/link changes, join the mDNS group
 per interface, and select the correct scope for announcements and replies.
 
+AROS now goes beyond the initial NIPC addition. Upstream commit
+`06d56a768fa31bb1487e70a8dae11cd7667425ea` adds `services.library`, a
+Services Manager, `accounts.library`, and an Accounts Server, and teaches
+`nipc.library` to answer service inquiries from the configured services list.
+Bonami's `_nipc._tcp` bridge should therefore be evaluated as an optional
+DNS-SD discovery complement to native NIPC/Services inquiry, not assumed to
+replace it.
+
 The AROS NIPC addition removes the former reason to disable Bonami's Envoy
 bridge merely because the platform lacked NIPC headers or a `nipc.library`.
 The bridge remains optional: the core mDNS/DNS-SD service and its MIDI clients
