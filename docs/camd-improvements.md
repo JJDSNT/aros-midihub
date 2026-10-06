@@ -48,13 +48,20 @@ timing or notification assumptions changed.
 while another task creates or removes a cluster can corrupt the list or have
 a listener signalled after its node was removed.
 
-**Proposal:** take `CLSemaphore` in both functions. This is a small, safe fix
-and matters to every program that watches clusters, including MIDIHub.prefs
-and `MIDIHubRouter`.
+**Proposal:** protect the list with a new private semaphore that
+`StartClusterNotify()`, `EndClusterNotify()` and the two traversals in
+`clusters.c` take. The traversals already hold `CLSemaphore`, so the lock
+order is `CLSemaphore` first, then the notification semaphore. This is a
+small fix and matters to every program that watches clusters, including
+MIDIHub.prefs and `MIDIHubRouter`.
 
-**Compatibility:** safe. It changes no public layout or vector and only makes
-the existing list operation atomic. `EndClusterNotify()` must not return
-until a notification traversal that already holds `CLSemaphore` has ended.
+**Compatibility:** safe with a separate semaphore. It changes no public
+layout or vector, and `EndClusterNotify()` cannot return while a traversal
+is signalling the node. Taking `CLSemaphore` itself in the two functions
+would not be safe: `LockCAMD()` holds `CLSemaphore` shared, exec cannot
+upgrade a shared hold to an exclusive one, and a program that calls
+`StartClusterNotify()` between `LockCAMD()` and `UnlockCAMD()`, which works
+today, would deadlock.
 
 ### 1.2 `RethinkCAMD()` is a stub (verified)
 
@@ -67,6 +74,23 @@ that loads new drivers; it should be upstreamed.
 **Compatibility:** safe as an implementation of an existing, documented
 stub at its existing vector. A rescan should remain additive: load newly
 discovered drivers but do not unload an already loaded driver.
+
+The patch as it stands has two problems that only appear at run time,
+because at `InitCamd()` no client exists yet:
+
+- `LoadDriver()` builds the driver's clusters through `AllocDriverData()`,
+  which calls `NewCluster()` and `AddClusterSender()`/`AddClusterReceiver()`
+  without `CLSemaphore`. During a rescan other tasks may be walking or
+  changing the cluster list. The rescan must hold `CLSemaphore` exclusively
+  around `AllocDriverData()` (not around `LoadSeg()` or the driver's
+  `Init()`).
+- `NewCluster()` does not look for an existing cluster of the same name. If
+  a client already linked to `usbmidi.out.0`, for example a MIDIHub route
+  waiting for its device, the rescan creates a second cluster with that
+  name; `FindCluster()` returns the first one and the waiting client never
+  reaches the hardware. The driver must join the existing cluster, and on
+  failure `FreeDriverData()` must remove only the clusters it created. This
+  path needs a runtime test.
 
 ### 1.3 Drivers are never unloaded
 
@@ -122,18 +146,26 @@ Today a program cannot tell what a cluster is: MIDIHub.prefs guesses the
 transport from the cluster's name, and has to ask `bluetooth.library`
 separately to recognise BLE MIDI ports named after a device.
 
-**Proposal:** implement the existing `MLINK_Comment` as a per-link property.
+**Proposal:** implement `MLINK_Comment` as the original CAMD autodoc
+defines it: "the highest priority MidiLink in a MidiCluster has its comment
+field copied to the MidiCluster's comment field". It is a cluster comment
+supplied by links, which is what the field name `ml_ClusterComment` says.
 A short, conventional text such as
 `"USB MIDI"`, `"Bluetooth LE MIDI"`, `"AppleMIDI"` or `"Software synth"`
 would let any CAMD application label endpoints without knowing the
 transports.
 
-**Compatibility:** safe if CAMD follows the same ownership rule as
-`MLINK_Name`: store the caller-owned string pointer in the existing
-`ml_ClusterComment` field, return it through `GetMidiLinkAttrsA()`, and never
-free it. The caller must keep the string valid until the link is removed or
-the value is replaced. Despite the field's historical name, this is a link
-comment; different links in one cluster may supply different values.
+**Compatibility:** safe without an ABI change. Each link keeps its
+caller-owned pointer in `ml_ClusterComment`, with the same ownership rule as
+`MLINK_Name` (CAMD never frees it). The cluster's comment lives in private
+storage in `MyMidiCluster`, copied (up to the documented 34 characters) from
+the highest-priority link whenever a link joins, leaves or changes priority
+or comment. A driver's own clusters can carry a fixed comment. Reading it
+needs a getter: `GetMidiLinkAttrsA(MLINK_Comment)` returning the cluster's
+comment, as Amiga programs expect, plus the cluster getter of 2.2 for
+programs that have no link in the cluster. Treating it as a per-link value,
+with different values in one cluster, would contradict the original
+semantics.
 
 ### 2.2 A richer description
 
@@ -158,15 +190,25 @@ does not signal when a link joins or leaves an existing cluster, so a view of
 who sends to or receives from a cluster (MIDIHub.prefs' Direction column)
 goes stale until something else refreshes it.
 
-**Proposal:** preserve the current meaning of `StartClusterNotify()` and add
-a second, versioned notification API for cluster creation, removal and
-participant changes. It can use an opaque subscription handle or a new
-structure passed only to the new functions, and must report an event reason.
+CAMD already has a documented API for participant changes, which AROS
+accepts but never fires: `MIDI_PartHook` ("called whenever any of the
+clusters that this node is linked to either adds or removes a member") and
+`MIDI_PartSignal`, plus the `MLF_PartChange` link flag. `mcl_Participants`
+and `mcl_PublicParticipants` are never maintained either.
 
-**Compatibility:** do not add a reason field to `ClusterNotifyNode`: old
-programs allocate the 41.1 size and CAMD would write past the allocation.
-Signalling legacy listeners on participant changes would also be a behaviour
-change, even without a layout change. A new appended API avoids both breaks.
+**Proposal:** first implement `MIDI_PartHook`, `MIDI_PartSignal` and the
+participant counts as documented. That covers a program watching the
+clusters it is linked to, such as `MIDIHubRouter`. For a program that watches
+every cluster without linking to them (MIDIHub.prefs), keep the current
+meaning of `StartClusterNotify()` and add a second, versioned notification
+API for cluster creation, removal and participant changes, with an opaque
+subscription handle and an event reason.
+
+**Compatibility:** implementing the part hook and signal fulfils an existing
+contract: only nodes that set them are called, and they default to none and
+-1. Do not add a reason field to `ClusterNotifyNode`: old programs allocate
+the 41.1 size and CAMD would write past the allocation. Signalling legacy
+cluster listeners on participant changes would also be a behaviour change.
 
 ## 4. Timing
 
@@ -198,21 +240,26 @@ the 41.1 behaviour.
 
 ### 5.1 Oversized SysEx is dropped silently
 
-`PutSysEx()` skips a receiver whose SysEx buffer is too small for the message
-and sets a buffer-full error only when the buffer is large enough but full
-(`putsysex.c` autodoc). The sender is not told, and a receiver that does not
-check `GetMidiErr()` never learns of the loss. MIDIHub's bridges allocate
-4 KB; a librarian dump can exceed that.
+The autodoc (AROS and Amiga) says `PutSysEx()` does not send a message to a
+receiver whose SysEx buffer is too small, and sets `CMEF_SysExFull` only when
+the buffer is large enough but full. The code (`sysexdistr.c`) has no size
+check: an oversized message fills the ring, `CMEF_SysExFull` is set and the
+partial message is dropped. `CMEF_SysExTooBig` is never set, and
+`mi_ErrFilter` is stored but never applied. The sender is not told either
+way. MIDIHub's bridges allocate 4 KB; a librarian dump can exceed that.
 
-**Proposal:** report the existing `CMEF_SysExTooBig` error to a receiver whose
-buffer cannot hold the message, honour `MIDI_ErrFilter`, and document a
-recommended minimum `MIDI_SysExSize`. A new streaming API can remove the size
-limit altogether.
+**Proposal:** implement the documented behaviour: skip a receiver whose
+buffer cannot hold the message and flag it with `CMEF_SysExTooBig`; apply
+`MIDI_ErrFilter` when setting error bits; document a recommended minimum
+`MIDI_SysExSize`. A new streaming API can remove the size limit altogether.
 
 **Compatibility:** keep the signatures and delivery rules of `PutSysEx()` and
 `GetSysEx()`. Error reporting is observable because `WaitMidi()` returns
-`FALSE` while an error is pending, so it must use the existing error/filter
-contract and be called out as a bug fix. Streaming requires new appended
+`FALSE` while an error is pending. An oversized message already produces an
+error today (`CMEF_SysExFull`), so reporting `CMEF_SysExTooBig` instead only
+changes which bit is set. Applying `MIDI_ErrFilter` hides errors that
+programs see today, but only from programs that asked for it; both are bug
+fixes towards the documented contract and should be called out as such. Streaming requires new appended
 functions rather than changing the meaning of a partial SysEx passed to
 `PutSysEx()`.
 
@@ -244,10 +291,13 @@ only clients that call the registration API acquire the new port semantics.
 
 ## Compatibility verdict
 
-The existing patches for 64-bit names, arena-loaded modules and
-`RethinkCAMD()`, plus the notification-list lock, preserve the CAMD 41.1 ABI.
-`MLINK_Comment` can also be completed without an ABI change because both its
-tag and storage field already exist.
+The patches for 64-bit names and arena-loaded modules preserve the CAMD 41.1
+ABI and behaviour. The `RethinkCAMD()` patch preserves the ABI but needs the
+locking and same-name cluster fixes of 1.2 before it is upstreamed. The
+notification-list lock is safe only with its own semaphore (1.1).
+`MLINK_Comment` and the participant hook and signal can be completed without
+an ABI change, because their tags and fields already exist, provided they
+follow the original CAMD semantics.
 
 Driver unload, richer cluster metadata, detailed notifications, a CAMD clock,
 scheduled delivery, streaming SysEx, counters and virtual ports are compatible
@@ -259,10 +309,12 @@ public structures or silently change the behaviour of legacy calls.
 
 1. Fix cluster names on 64-bit targets (1.4) and the driver scan of
    arena-loaded modules (1.5): without them CAMD is unusable or crashes.
-2. Lock the cluster notification list (1.1): small and safe.
-3. Upstream the rescan patch (1.2).
-4. Implement the existing per-link `MLINK_Comment` (2.1).
-5. Add versioned participant notifications (3.1).
+2. Lock the cluster notification list with its own semaphore (1.1).
+3. Fix the rescan patch's locking and same-name clusters, then upstream it
+   (1.2).
+4. Implement `MLINK_Comment` as the cluster comment (2.1).
+5. Implement `MIDI_PartHook`/`MIDI_PartSignal` (3.1), then add versioned
+   notifications for programs that watch every cluster.
 6. Add an opt-in common timestamp source (4.1).
 7. SysEx and error reporting (5).
 8. Driver removal (1.3) and registered virtual ports (6.1), with hardware tests.
