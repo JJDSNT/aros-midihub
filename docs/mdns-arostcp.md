@@ -156,7 +156,7 @@ Migration should proceed in three steps:
 3. Change Network MIDI to register and browse `_apple-midi._udp` and
    `_midi2._udp` through that API, then remove its ownership of UDP port 5353.
 
-MIDIHub then consumes the CAMD endpoints created by the native Network MIDI
-service. Its Preferences application may configure sessions and show
-discovered peers, but discovery state belongs to the mDNS service and session
-state belongs to Network MIDI.
+MIDIHub then consumes the CAMD endpoints exposed by the native Network MIDI
+device. Its Preferences application may configure sessions and show discovered
+peers, but discovery state belongs to Bonami/system mDNS and session state
+belongs behind the Network MIDI device boundary.
