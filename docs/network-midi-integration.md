@@ -82,7 +82,11 @@ Exec message-port IPC. If each service embeds its own responder, several
 processes compete for UDP port 5353 and duplicate all that state.
 
 AROSTCP already supplies the required IPv4 multicast transport,
-`IP_ADD_MEMBERSHIP`, `SO_REUSEADDR`, and `SO_REUSEPORT`. Its multicast bind
+`IP_ADD_MEMBERSHIP`, `SO_REUSEADDR`, and `SO_REUSEPORT`. Its current
+multi-interface support also provides scoped IPv6 link-local/multicast output
+and `SO_BINDTODEVICE` for per-interface UDP sockets, giving the future system
+responder the transport primitives needed to add IPv6 mDNS without changing
+the Network MIDI architecture. Its multicast bind
 rules only treat `SO_REUSEADDR` like `SO_REUSEPORT` when the socket is bound
 to a multicast address. The current MIDIHub code binds `INADDR_ANY:5353`, so
 `SO_REUSEADDR` alone is insufficient for multiple embedded responders. This
