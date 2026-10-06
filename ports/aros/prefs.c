@@ -6,6 +6,7 @@
 #include <libraries/mui.h>
 
 #include <proto/camd.h>
+#include <proto/dos.h>
 #include <proto/exec.h>
 #include <proto/intuition.h>
 #include <proto/muimaster.h>
@@ -32,7 +33,9 @@ static void close_libraries(void)
 
 int main(void)
 {
-    Object *app = NULL, *win;
+    Object *app = NULL, *win, *prefs;
+    IPTR args[1] = { 0 };
+    struct RDArgs *rdargs = ReadArgs((CONST_STRPTR)"PAGE/K", args, NULL);
     ULONG signals = 0;
     IPTR return_id;
     int result = RETURN_FAIL;
@@ -59,7 +62,7 @@ int main(void)
             MUIA_Window_Title, "MIDIHub",
             MUIA_Window_ID, MAKE_ID('M','H','P','R'),
             MUIA_Window_SizeGadget, TRUE,
-            WindowContents, NewObject(MHPrefsClass->mcc_Class, NULL, TAG_END),
+            WindowContents, prefs = NewObject(MHPrefsClass->mcc_Class, NULL, TAG_END),
             End,
         End;
     if (!app)
@@ -70,6 +73,9 @@ int main(void)
              MUIV_Application_ReturnID_Quit);
 
     set(win, MUIA_Window_Open, TRUE);
+    /* PAGE=Routing, Diagnostics, ...: open on that page */
+    if (args[0])
+        DoMethod(prefs, MUIM_MHP_ShowPage, args[0]);
     for (;;) {
         return_id = DoMethod(app, MUIM_Application_NewInput, &signals);
         if (return_id == MUIV_Application_ReturnID_Quit)
@@ -86,6 +92,7 @@ int main(void)
     result = RETURN_OK;
 done:
     if (app) MUI_DisposeObject(app);
+    if (rdargs) FreeArgs(rdargs);
     close_libraries();
     return result;
 }

@@ -32,6 +32,7 @@ struct MHPrefsData {
     Object *source_string, *destination_string, *reconnect_check;
     Object *remove_button;
     Object *router_state, *router_start, *router_stop, *router_boot;
+    Object *route_from_list, *route_to_list;
     Object *synth_state, *synth_start, *synth_stop, *synth_boot;
     Object *network_session, *network_local_port;
     Object *network_peer_ip, *network_peer_port;
@@ -103,6 +104,11 @@ enum { MHPAGE_OVERVIEW, MHPAGE_ROUTING, MHPAGE_NETWORK,
 #define MUIM_MHP_RouterStop    (TAGBASE_MHP | 0x19)
 #define MUIM_MHP_SynthStart    (TAGBASE_MHP | 0x1a)
 #define MUIM_MHP_SynthStop     (TAGBASE_MHP | 0x1b)
+#define MUIM_MHP_RouteFrom     (TAGBASE_MHP | 0x1c)
+#define MUIM_MHP_RouteTo       (TAGBASE_MHP | 0x1d)
+#define MUIM_MHP_ShowPage      (TAGBASE_MHP | 0x1e)  /* (STRPTR name) */
+
+struct MUIP_MHP_ShowPage { STACKED ULONG MethodID; STACKED STRPTR name; };
 
 AROS_UFP3(IPTR, MHPrefsDispatcher,
           AROS_UFPA(struct IClass *, cl, A0),

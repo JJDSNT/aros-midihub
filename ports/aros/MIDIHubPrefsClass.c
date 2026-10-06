@@ -814,6 +814,10 @@ static void refresh(struct MHPrefsData *data)
     DoMethod(data->endpoint_list, MUIM_List_Clear);
     set(data->diag_endpoint_list, MUIA_List_Quiet, TRUE);
     DoMethod(data->diag_endpoint_list, MUIM_List_Clear);
+    set(data->route_from_list, MUIA_List_Quiet, TRUE);
+    DoMethod(data->route_from_list, MUIM_List_Clear);
+    set(data->route_to_list, MUIA_List_Quiet, TRUE);
+    DoMethod(data->route_to_list, MUIM_List_Clear);
     lock = LockCAMD(CD_Linkages);
     for (cluster = NextCluster(NULL); cluster &&
          data->endpoint_count < MH_PREFS_ENDPOINT_MAX;
@@ -854,10 +858,20 @@ static void refresh(struct MHPrefsData *data)
                  MUIV_List_Insert_Bottom);
         DoMethod(data->diag_endpoint_list, MUIM_List_InsertSingle, entry,
                  MUIV_List_Insert_Bottom);
+        /* MIDI comes in from a cluster something sends to, and goes to one
+           something receives from; an idle one can be either. */
+        if (senders || !receivers)
+            DoMethod(data->route_from_list, MUIM_List_InsertSingle, entry,
+                     MUIV_List_Insert_Bottom);
+        if (receivers || !senders)
+            DoMethod(data->route_to_list, MUIM_List_InsertSingle, entry,
+                     MUIV_List_Insert_Bottom);
     }
     UnlockCAMD(lock);
     set(data->endpoint_list, MUIA_List_Quiet, FALSE);
     set(data->diag_endpoint_list, MUIA_List_Quiet, FALSE);
+    set(data->route_from_list, MUIA_List_Quiet, FALSE);
+    set(data->route_to_list, MUIA_List_Quiet, FALSE);
     diag_refresh_bt(data);
 
     memset(data->route_states, 0, sizeof(data->route_states));
@@ -1134,15 +1148,28 @@ static void delete_profile(struct MHPrefsData *data)
     set_status(data, "Profile deleted.");
 }
 
-static void selected_endpoint(struct MHPrefsData *data, Object *target)
+static void selected_endpoint(struct MHPrefsData *data, Object *list, Object *target)
 {
     struct MHPrefsEndpoint *entry = NULL;
-    DoMethod(data->endpoint_list, MUIM_List_GetEntry,
+    DoMethod(list, MUIM_List_GetEntry,
              MUIV_List_GetEntry_Active, &entry);
     if (entry) {
         set(target, MUIA_String_Contents, (IPTR)entry->name);
         data->dirty = TRUE;
     } else set_status(data, "Select an endpoint first.");
+}
+
+/* Clicking an endpoint in the Routing page's From or To list. The lists
+   are refilled on every CAMD change, which clears the selection: only an
+   actual pick fills the field. */
+static void picked_endpoint(struct MHPrefsData *data, Object *list, Object *target)
+{
+    struct MHPrefsEndpoint *entry = NULL;
+    DoMethod(list, MUIM_List_GetEntry, MUIV_List_GetEntry_Active, &entry);
+    if (entry) {
+        set(target, MUIA_String_Contents, (IPTR)entry->name);
+        data->dirty = TRUE;
+    }
 }
 
 static void add_route(struct MHPrefsData *data)
@@ -1279,20 +1306,51 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
                             MUIA_List_DisplayHook, &data->route_hook,
                             End,
                         End,
-                    Child, ColGroup(2),
-                        Child, Label("From"),
-                        Child, data->source_string = StringObject,
-                            StringFrame, MUIA_String_MaxLen, MH_ROUTE_NAME_MAX + 1, End,
-                        Child, Label("To"),
-                        Child, data->destination_string = StringObject,
-                            StringFrame, MUIA_String_MaxLen, MH_ROUTE_NAME_MAX + 1, End,
-                        Child, Label("Reconnect automatically"),
-                        Child, data->reconnect_check = MUI_MakeObject(MUIO_Checkmark, NULL),
-                        End,
-                    Child, HGroup,
-                        Child, add_button = SimpleButton("Add Route"),
-                        Child, data->remove_button = SimpleButton("Remove Route"),
-                        Child, HSpace(0),
+                    Child, VGroup, GroupFrameT("New route"),
+                        Child, HGroup,
+                            Child, VGroup,
+                                Child, TextObject,
+                                    MUIA_Text_Contents, "From: where MIDI comes in", End,
+                                Child, ListviewObject,
+                                    MUIA_Listview_List, data->route_from_list = ListObject,
+                                        InputListFrame,
+                                        MUIA_List_Format, "BAR,",
+                                        MUIA_List_DisplayHook, &data->endpoint_hook,
+                                        End,
+                                    End,
+                                End,
+                            Child, VGroup,
+                                Child, TextObject,
+                                    MUIA_Text_Contents, "To: where it goes", End,
+                                Child, ListviewObject,
+                                    MUIA_Listview_List, data->route_to_list = ListObject,
+                                        InputListFrame,
+                                        MUIA_List_Format, "BAR,",
+                                        MUIA_List_DisplayHook, &data->endpoint_hook,
+                                        End,
+                                    End,
+                                End,
+                            End,
+                        Child, ColGroup(2),
+                            Child, Label("From"),
+                            Child, data->source_string = StringObject,
+                                StringFrame, MUIA_String_MaxLen, MH_ROUTE_NAME_MAX + 1, End,
+                            Child, Label("To"),
+                            Child, data->destination_string = StringObject,
+                                StringFrame, MUIA_String_MaxLen, MH_ROUTE_NAME_MAX + 1, End,
+                            End,
+                        /* Not in the ColGroup: a fixed-width checkmark there
+                           caps the column, and the From and To fields with it. */
+                        Child, HGroup,
+                            Child, data->reconnect_check = MUI_MakeObject(MUIO_Checkmark, NULL),
+                            Child, Label("Reconnect automatically when an endpoint comes back"),
+                            Child, HSpace(0),
+                            End,
+                        Child, HGroup,
+                            Child, add_button = SimpleButton("Add Route"),
+                            Child, data->remove_button = SimpleButton("Remove Route"),
+                            Child, HSpace(0),
+                            End,
                         End,
                     Child, VGroup, GroupFrameT("Router service"),
                         Child, HGroup,
@@ -1459,6 +1517,10 @@ static IPTR mNew(struct IClass *cl, Object *obj, struct opSet *msg)
     DoMethod(refresh_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_Refresh);
     DoMethod(source_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_Source);
     DoMethod(destination_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_Destination);
+    DoMethod(data->route_from_list, MUIM_Notify, MUIA_List_Active, MUIV_EveryTime,
+             obj, 1, MUIM_MHP_RouteFrom);
+    DoMethod(data->route_to_list, MUIM_Notify, MUIA_List_Active, MUIV_EveryTime,
+             obj, 1, MUIM_MHP_RouteTo);
     DoMethod(add_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_AddRoute);
     DoMethod(data->remove_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_RemoveRoute);
     DoMethod(preview_button, MUIM_Notify, MUIA_Pressed, FALSE, obj, 1, MUIM_MHP_Preview);
@@ -1529,8 +1591,29 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
             }
             refresh(data);
             return 0;
-        case MUIM_MHP_Source: selected_endpoint(data, data->source_string); return 0;
-        case MUIM_MHP_Destination: selected_endpoint(data, data->destination_string); return 0;
+        case MUIM_MHP_Source:
+            selected_endpoint(data, data->endpoint_list, data->source_string); return 0;
+        case MUIM_MHP_Destination:
+            selected_endpoint(data, data->endpoint_list, data->destination_string); return 0;
+        case MUIM_MHP_ShowPage: {
+            /* The page whose name starts like name, any case: PAGE=routing */
+            STRPTR name = ((struct MUIP_MHP_ShowPage *)msg)->name;
+            ULONG page, i;
+            for (page = 0; name && name[0] && page < MHPAGE_COUNT; ++page) {
+                for (i = 0; name[i] && nav_entries[page][i] &&
+                     (name[i] | 0x20) == (nav_entries[page][i] | 0x20); ++i)
+                    ;
+                if (!name[i]) {
+                    set(data->nav_list, MUIA_List_Active, page);
+                    return TRUE;
+                }
+            }
+            return FALSE;
+        }
+        case MUIM_MHP_RouteFrom:
+            picked_endpoint(data, data->route_from_list, data->source_string); return 0;
+        case MUIM_MHP_RouteTo:
+            picked_endpoint(data, data->route_to_list, data->destination_string); return 0;
         case MUIM_MHP_AddRoute: add_route(data); return 0;
         case MUIM_MHP_RemoveRoute: remove_route(data); return 0;
         case MUIM_MHP_Preview: preview_synth(data); return 0;
