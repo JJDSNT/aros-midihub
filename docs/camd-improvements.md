@@ -419,7 +419,33 @@ The structured `connected` metadata discussed in section 2.2 belongs to this
 lifecycle. It should be supplied through the new extension without growing
 `MidiDeviceData`.
 
-### 6.4 MIDI 2.0 extensibility
+### 6.4 Endpoint notification versus cluster notification
+
+The version 42 `ClusterWatch` remains deliberately scoped to the legacy CAMD
+graph: `CWE_Added`, `CWE_Removed` and `CWE_Participants` describe changes
+to clusters and their membership. Dynamic endpoint lifecycle must not broaden
+that contract into a generic `CWE_Changed` event.
+
+An endpoint can change state or metadata while its legacy CAMD clusters remain
+unchanged. For example, a known AppleMIDI peer can move from connected to
+disconnected while retaining its stable identity and cluster projection.
+Treating that as a cluster change would mix two object models and make the
+meaning of `ClusterWatch` ambiguous.
+
+If dynamic endpoints need asynchronous observation, design that notification
+with the endpoint API itself (conceptually an endpoint watch with
+added/removed/changed events). A changed event can then tell the client to
+query the endpoint's current properties without adding one event type for
+every future property. The exact API and event names remain open.
+
+This separation also leaves room for MIDI 2.0 discovery, where Endpoint and
+Function Block properties can evolve independently of the legacy port/cluster
+projection.
+
+**Decision:** do not add `CWE_Changed` to the version 42 cluster watch for
+endpoint state or metadata. Keep the existing cluster-watch ABI and semantics.
+
+### 6.5 MIDI 2.0 extensibility
 
 The initial dynamic-endpoint work does not require CAMD to carry native UMP,
 but its terminology and object model should not assume that every future
@@ -435,7 +461,7 @@ This follows the same broad compatibility pattern used by modern MIDI
 subsystems: retain the traditional port-facing contract while adding richer
 endpoint identity and topology beside it.
 
-**Compatibility:** sections 6.1-6.4 are additive. `MidiDeviceData.NPorts`
+**Compatibility:** sections 6.1-6.5 are additive. `MidiDeviceData.NPorts`
 keeps its existing meaning and no CAMD 41.1 public structure changes size or
 layout. Existing drivers continue to expose fixed ports exactly as before.
 Dynamically registered endpoints appear through compatible CAMD clusters to
@@ -548,7 +574,7 @@ genmodule would derive a `StartClusterNotify()` varargs macro from that name,
 clashing with the 41.1 call, which keeps signalling only clusters coming and
 going.
 
-### Step 6: dynamic endpoint design (6.1-6.4)
+### Step 6: dynamic endpoint design (6.1-6.5)
 
 Use AppleMIDI/Network MIDI, BLE, USB hot-plug and the software synth as
 concrete lifecycle cases. Specify identity, connected/disconnected state,
