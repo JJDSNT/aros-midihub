@@ -246,3 +246,10 @@ MIDIHub.prefs     = current integrated management surface; long-term owner open
 > **MIDIHub should manage relationships between MIDI endpoints without taking ownership away from the AROS subsystems that implement those endpoints.**
 
 This gives MIDIHub a coherent long-term role while preserving CAMD as the standard MIDI interface for AROS applications.
+
+
+## Future feature proposals (not implemented)
+
+- [System MIDI Out](system-midi-out.md): stable protocol-neutral default logical MIDI output, with destination policy owned by the Router and configured through MIDIHub.prefs. Isolated sessions are a separate possible future extension.
+- [MIDI Filters / Processing Pipeline](midi-filters.md): optional ordered event transformations attached to Router routes, with native UMP preservation and an optional future advanced editor.
+- Both proposals rely on the [CAMD native MIDI 2.0/UMP future architecture](camd-improvements.md#7-native-midi-20--ump-architecture-future-design-contract) without requiring CAMD to host the routing or filtering policy. Their design status does not change the existing implementation roadmap.
