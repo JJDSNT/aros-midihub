@@ -65,3 +65,20 @@ Processing should be nonblocking and bounded on the real-time path: specify CPU/
 - [CAMD improvements](camd-improvements.md) — native MIDI 2.0/UMP contract.
 - [System MIDI Out](system-midi-out.md) — optional default output route.
 - [MIDIHub architecture](midihub-architecture.md) — Router/prefs ownership.
+
+
+## Filter execution contract and decision gates
+
+**Proposed V1 architecture:** A Router-owned, ordered, in-process chain of **built-in** MIDI event processors, configured per route. Do not introduce a third-party plugin ABI, audio DSP engine, complex patchbay or a separate resident service in V1. The processing ABI must nonetheless be versioned internally so it can evolve without invalidating saved profiles.
+
+**Processor interface (semantic contract, C signatures TBD):** A processor has immutable configuration, optional private per-route state, capability declaration, initialization, event-processing, flush/reset and destruction operations. Input is a complete timestamped CAMD native UMP event (or an explicitly typed MIDI 1.0 legacy event at the adapter boundary); output is zero or more complete events with a bounded maximum amplification. Return explicit pass/transform/drop/error results and diagnostics. Unsupported valid UMP messages pass through unchanged by default. No unannounced lossy translation.
+
+**Execution guarantees:** Maintain deterministic order for each source and complete multiword UMP atomicity. Distinguish group-addressed from group-less messages. The real-time path must not block on allocations, I/O, user interface, property exchange or external plugins. Preallocate bounded scratch/output buffers, define overflow and failure policy, and measure worst-case processing latency. Generated messages have documented timestamp and ordering rules; scheduling filters are out of initial V1 scope.
+
+**Stateful safety:** Filters that transpose, suppress or generate notes must track matching note-offs, sustain and controller state. A parameter edit, bypass, route change, disconnect or shutdown performs explicit drain/cancel/cleanup. Never assume events already merged by CAMD identify their original application. Preserve SysEx7/8 boundaries and MIDI-CI messages unless a dedicated filter explicitly supports their semantics.
+
+**Profiles and ownership:** Persist versioned chain definitions with stable processor IDs and validated parameters. MIDIHub.prefs manages enable/bypass and chain selection; a separate editor can be considered for advanced configuration later. Router is the single execution owner; CAMD is not extended to host filters.
+
+**Implementation gates:** Freeze processor capability metadata, output amplification limits, queue/backpressure policy, timestamp propagation, error semantics, note-state cleanup, atomic hot-swap and profile migration before implementing stateful processors. Keep unimplemented scheduling, plugin hosting and audio DSP clearly marked as future work.
+
+**Completion tests:** Byte/word-perfect bypass, unknown valid UMP pass-through, 32/64/96/128-bit event preservation, 16 Groups, mixed protocol traffic, transposition across live edits with matched note-offs, bounded event generation, SysEx-in-flight route changes, failure/overflow, no CAMD deadlock and operation on routes unrelated to System MIDI Out.
