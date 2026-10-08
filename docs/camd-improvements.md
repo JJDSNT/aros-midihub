@@ -913,3 +913,8 @@ build new APIs around `MidiDeviceData.NPorts`. Existing USB MIDI
 functionality and legacy application behavior must still pass regression
 tests after migration. Review the topology/identity/lifecycle contract
 before agent-driven implementation.
+
+
+### 6.7 No throwaway transition architecture — implement the final model directly
+
+**Agent instruction:** Section 6.1–6.5 is historical design input, **not authorization** to implement an interim dynamic-port mechanism. Complete the architecture comparison and approve the target endpoint registry/provider, native UMP topology, lifecycle and legacy projection contracts **before writing a new public API**. Then implement that final architecture directly in small, tested increments. Do **not** build a fixed `NPorts` pool, a USB-only dynamic-port API, or another temporary solution intended to be replaced later. The existing USB implementation is replaceable; legacy CAMD application compatibility and functional USB MIDI support are not. Compatibility adapters are acceptable only as parts of the approved final architecture. See [endpoint architecture review](camd-endpoint-architecture-review.md).
