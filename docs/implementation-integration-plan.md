@@ -47,3 +47,8 @@ application ABI and working USB MIDI functionality are not. Compare endpoint
 provider models, choose a transport-neutral identity/topology/lifecycle
 contract, and record the decision before freezing public APIs. Do not use
 fixed `NPorts` pools as the modern architectural model.
+
+
+### Final architecture first — no interim dynamic-port implementation
+
+The pre-M0 comparison is for **choosing the final design**, not authorizing a temporary migration architecture. Do not spend implementation effort on provisional `NPorts` pools, USB-specific registration extensions or APIs expected to be discarded. Approve the endpoint registry/provider, identity, lifecycle, UMP topology and legacy-projection contracts first, then implement that architecture directly through small verifiable commits. Legacy application ABI and working USB functionality remain mandatory; old USB internals are replaceable. If unresolved, escalate rather than invent a transitional workaround.
