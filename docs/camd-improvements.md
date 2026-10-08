@@ -780,3 +780,102 @@ not an implementation or certification claim. Exact C symbols, structure
 layouts, negotiation state machines and protocol conformance vectors are to be
 frozen against the applicable specification revisions when implementation
 begins.
+
+
+### 7.11 Pre-implementation research audit (2026-10-08)
+
+This section records the remaining **implementation blockers and normative
+verification gates** so that an agent does not declare CAMD MIDI 2.0 complete
+after merely adding UMP send/receive. The architectural target in 7.1–7.10
+remains future work. **No native UMP support is claimed to be implemented.**
+
+**Normative baseline:** The MIDI Association's MIDI 2.0 Core Specification
+Collection updated 2025-12-18 includes UMP and MIDI 2.0 Protocol v1.1.2,
+MIDI-CI v1.2.1, Profiles v1.1, Property Exchange v1.2, Overview v1.1 and
+MIDI Clip File v1.0. Download and retain revision identifiers and any
+applicable errata before freezing bit fields or translation algorithms.
+The full normative PDFs may require MIDI Association login; public summaries
+and Linux source are **not substitutes** for the normative texts.
+
+#### Critical architectural decisions to freeze before coding
+
+| ID | Design gate | Required decision / artifact |
+|---|---|---|
+| U01 | ABI/API | Exact new vectors, version gates, opaque handle ownership, C header and no changed 41.1/42 layouts |
+| U02 | UMP parsing | Normative Message Type-to-length table, reserved types, validity rules, 32/64/96/128-bit round trips, stream parser boundaries |
+| U03 | Message scope | Distinguish group-addressed Channel Voice and System messages from group-less Stream messages; document Utility/JR and Flex Data handling according to specification |
+| U04 | Discovery state machine | Endpoint discovery, Function Block discovery, Stream Configuration Request/Notification, capability cache, timeouts, reconnect and fallback |
+| U05 | Function Block topology | Direction, active state, Group spans, overlapping/invalid ranges, dynamic changes, USB Group Terminal Block fallback |
+| U06 | Legacy bridge | Group-to-cluster projection and mapping, MIDI 1.0 byte stream / UMP MIDI 1.0 / MIDI 2.0 translation, loss reporting, reverse-direction behavior |
+| U07 | Stateful translation | RPN/NRPN, bank/program, per-note controls, note-on velocity zero, CC resolution, running status, SysEx segmentation, reset and disconnection behavior |
+| U08 | Data message support | SysEx7, SysEx8, Mixed Data Set, Flex Data, Stream and MIDI-CI boundaries; document transparent pass-through versus interpreted support |
+| U09 | Scheduling | Explicit monotonic clock, timestamp validity, JR Clock/JR Timestamp handling, cross-transport mapping, late events, overflow and reconnect |
+| U10 | Multi-producer | Ordering and fairness, source identity availability, atomic message delivery, no implicit per-application isolation |
+| U11 | Driver contract | UMP-aware callbacks, legacy adapters, host/transport byte order, hotplug teardown, interrupt-context rules and queue bounds |
+| U12 | Security/diagnostics | Untrusted discovery/property payloads, bounded allocations, per-endpoint counters, protocol mismatch and conversion-loss observability |
+| U13 | Conformance | Normative test vectors, interoperability with another UMP stack, QEMU + hardware matrix, regression of existing CAMD ABI |
+| U14 | Lifecycle | Startup/shutdown, disconnected but registered endpoint, unregister with outstanding references, notification delivery and watch overflow |
+
+**Important correction/precision:** Protocol selection in the UMP v1.1
+architecture is associated with Endpoint/Stream Configuration messages.
+Do not implement deprecated MIDI-CI Protocol Negotiation as the default
+path. Before writing packet constants, verify the exact message class and
+status codes against M2-104-UM v1.1.2; public explanatory material sometimes
+uses different shorthand for protocol request/notification.
+
+**Implementation-level gaps that cannot be closed by prose alone:**
+- Define concrete C prototypes, struct packing/alignment on 32-bit and
+  64-bit AROS targets, function vector ordering, version discovery and
+  safe handle release. Test binary compatibility with unmodified callers.
+- Define message routing for non-channel and group-less UMP, avoiding
+  duplication between endpoint-wide and per-Group subscriptions.
+- Specify complete normative translation tables and lossy cases, including
+  RPN/NRPN state machines and SysEx8-to-legacy behavior. Do not invent
+  scaling formulas without normative validation.
+- Define separate support levels: (a) raw UMP pass-through, (b) native
+  MIDI 2.0 Channel Voice semantics, (c) UMP Endpoint discovery, (d) MIDI-CI
+  Profiles/Property Exchange interoperability. Passing (a) is **not**
+  sufficient to claim (b)–(d).
+- Distinguish core transport support from transport-specific conformance.
+  USB MIDI 2.0 and Network UMP require separate validation; AppleMIDI and
+  BLE MIDI 1.0 do not become MIDI 2.0 merely because CAMD is UMP-capable.
+
+#### Recommended milestone / definition-of-done matrix
+
+- **M0: ABI freeze** — approved header/API sketch, compatibility test and
+  UMP object ownership rules; no native implementation claim.
+- **M1: UMP transport core** — parser/serializer and native loopback with
+  all lengths, ordering, validation, error counters and queue teardown tests.
+- **M2: Native graph** — Endpoint/Function Block/Group metadata, watches,
+  discovery state machine, reconnect and no duplicate group-less messages.
+- **M3: Legacy interop** — bidirectional translation and loss accounting,
+  all 16 Groups, legacy cluster projection and original 41.1/42 suite.
+- **M4: Hardware/transport** — one real native UMP transport, one MIDI 1.0
+  fallback transport, hotplug, stress and timing tests.
+- **M5: Feature complete** — documented capability matrix, MIDI-CI policy
+  and interoperable tests of supported Profiles/Property Exchange features
+  (or explicitly documented out-of-scope higher-layer services), with no
+  remaining unclassified failing cases.
+
+A release may claim **native UMP transport** after M1/M2, but must not claim
+**complete MIDI 2.0 CAMD support** until the defined MIDI 2.0 protocol,
+topology, interoperability and compatibility acceptance gates pass.
+The user-facing System MIDI Out and Filters proposals remain independent.
+
+#### Sources checked for this audit
+
+- MIDI Association, MIDI 2.0 Core Specification Collection (2025-12-18):
+  https://midi.org/midi-2-0-core-specification-collection
+- MIDI Association, UMP and MIDI 2.0 Protocol v1.1.2:
+  https://midi.org/universal-midi-packet-ump-and-midi-2-0-protocol-specification
+- MIDI Association, 2023 UMP revision summary and protocol-negotiation change:
+  https://midi.org/details-about-midi-2-0-midi-ci-profiles-and-property-exchange-updated-june-2023
+- Linux ALSA MIDI 2.0 design, UMP endpoint and legacy projections:
+  https://www.kernel.org/doc/html/latest/sound/designs/midi-2.0.html
+- Linux USB MIDI 2.0 implementation:
+  https://github.com/torvalds/linux/blob/master/sound/usb/midi2.c
+
+**Research limitation:** The complete normative PDFs and associated test
+vectors were not independently audited line by line in this pass. This is
+an implementation-readiness checklist, **not** a certificate of normative
+completeness. Obtain and review those texts before declaring U01–U13 closed.
