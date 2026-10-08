@@ -88,3 +88,14 @@ Document tradeoffs in complexity, memory footprint, hot-plug behavior, compatibi
 
 This document synthesizes public OS implementation documentation. It is **not** a line-by-line audit of MIDI Association normative specifications or a finalized AROS C API. Before implementation freeze, verify applicable UMP v1.1.2 and MIDI-CI v1.2.1 requirements and coordinate public API changes with AROS maintainers:
 https://midi.org/midi-2-0-core-specification-collection
+
+
+## Implementation sequencing decision — final architecture first
+
+**Binding direction for implementation agents:** Do not implement a temporary dynamic-port architecture as an intermediate milestone. Design and approve the target endpoint registry/provider model and its native MIDI 2.0 topology first; then implement that model directly in incremental, testable slices. The comparative review is a *design validation gate*, not a request to build and discard a transitional solution.
+
+- No interim `NPorts` pools, mutable legacy port arrays, USB-specific dynamic-port extensions or throwaway registration APIs.
+- Do not implement section 6's earlier provisional API sketches before the final identity, lifecycle, topology, legacy projection and provider contracts are approved.
+- Existing USB MIDI code may be replaced directly when migrating to the final provider API. Preserve working USB behavior and the legacy **application** ABI; legacy driver compatibility may be provided by an adapter if justified, not by constraining the native design.
+- Incremental commits, compatibility adapters and temporary internal scaffolding are allowed **only** when they implement the approved final architecture and are not a separate architecture intended for later removal.
+- If final API decisions are unresolved, stop and escalate the decisions; do not ship a shortcut and call it phase one.
