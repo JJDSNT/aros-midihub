@@ -54,3 +54,20 @@ Isolated sessions are **not V1**. A future client may explicitly request a priva
 - [CAMD improvements](camd-improvements.md) — native MIDI 2.0/UMP architecture and compatibility.
 - [MIDIHub architecture](midihub-architecture.md) — runtime ownership.
 - [MIDI Filters](midi-filters.md) — optional route processing.
+
+
+## Implementation contract and decision gates
+
+**Proposed ownership decision:** Reuse the resident MIDIHub Router as the default-output policy owner. CAMD owns endpoint identity and graph semantics. Do not add a separate always-running MIDIHub core unless a demonstrated requirement cannot be met by the Router. Prefer the versioned CAMD virtual endpoint API once available; until then a Router-owned stable CAMD node/cluster may serve as a *documented temporary implementation*, not a new permanent parallel endpoint framework.
+
+**Stable identity and startup:** Reserve a canonical system-owned identifier (human-readable label: `System MIDI Out`); enforce collision detection and single active owner. The logical output remains discoverable while no destination is selected, while the selected destination is offline, and while the synth is stopped. Persist the chosen destination by stable endpoint ID, not transient cluster name alone. Startup is nonblocking; endpoint state distinguishes ready, degraded, unavailable and switching.
+
+**Switching and delivery:** Route configuration changes are transactional. Validate the new target and capabilities, stop accepting new events at the cutover boundary, resolve or cancel queued events using a bounded policy, and activate the new target atomically. Prevent feedback loops. Track notes/controllers where possible; issue targeted cleanup on the old destination without affecting unrelated traffic. When source identity is unavailable, do not promise perfect per-application cleanup. Offline delivery defaults to explicit drop-with-counter rather than indefinite buffering; any bounded queue mode must be opt-in with expiration and documented note safety.
+
+**Protocol capabilities:** The endpoint is protocol-neutral, but each route advertises *effective* capabilities of the chosen destination and translation path. UMP support does not imply MIDI 2.0 Channel Voice. Native endpoint-wide messages, SysEx7/8 and MIDI-CI may need destination-specific policies; unsupported or lossy conversions must be observable. No hidden down-conversion.
+
+**API and UI boundary:** MIDIHub.prefs chooses one primary destination, shows availability and effective MIDI capabilities, and offers diagnostics; Router handles forwarding and persistent route policy. Advanced fan-out and filters remain separate Router features. Isolated sessions are explicitly out of V1.
+
+**Implementation gates:** Before coding, freeze canonical identity/namespace and collision behavior; CAMD virtual-endpoint registration/lifetime API; capability and status query/watch API; switch transaction, SysEx-in-flight, active-note cleanup, offline/drop policy and startup/shutdown tests. These are open design gates, not claims of existing implementation.
+
+**Completion tests:** Two concurrent legacy producers; native UMP producer with all packet lengths; loss reporting to a MIDI 1.0 destination; destination switch during sustained notes and SysEx; restart, offline/reconnect, loop detection, queue overflow and no dangling CAMD references.
