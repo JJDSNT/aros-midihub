@@ -879,3 +879,21 @@ The user-facing System MIDI Out and Filters proposals remain independent.
 vectors were not independently audited line by line in this pass. This is
 an implementation-readiness checklist, **not** a certificate of normative
 completeness. Obtain and review those texts before declaring U01–U13 closed.
+
+
+### 7.12 Mandatory engineering instructions for the implementation agent
+
+**Normative engineering constraints — not optional shortcuts.**
+
+1. Preserve the CAMD 41.1 ABI and behavior and the documented version 42 extensions: existing library vectors, register assignments, public structure sizes/layouts, tags, and legacy driver interfaces must remain compatible. Run `MIDIHubCAMDCompat` before and after each change.
+2. Implement **native, full-fidelity UMP** through additive versioned APIs and opaque endpoint objects. MIDI 1.0 cluster projections are compatibility adapters, **not** the internal MIDI 2.0 transport. Do not emulate MIDI 2.0 using a 16-channel MIDI 1.0 tunnel, fixed artificial port pools, SysEx wrappers or hard-coded devices.
+3. Freeze the relevant MIDI Association specifications and errata before writing constants or state machines. Verify packet layouts, discovery, protocol configuration, translation, timing and capability reporting against the normative specifications, not just another operating system's implementation.
+4. No hidden degradation: do not silently drop or truncate SysEx8, discard unsupported messages without diagnostics, fabricate negotiated capabilities, lose high-resolution information without a documented conversion policy, or return success for incomplete operations.
+5. Define correct concurrency and lifecycle semantics: bounded queues, ownership, atomic complete UMP messages, multi-producer ordering, disconnect/reconnect, reference lifetime, hot-plug, safe unregister and task/interrupt context rules. Test races and failure paths.
+6. Maintain architectural boundaries: CAMD owns protocol transport, endpoint graph, discovery/interoperability primitives; Router owns default-destination policy, routes and filters; Synth owns synthesis. System MIDI Out and MIDI Filters must not be hard-coded into CAMD.
+7. Distinguish raw UMP transport, MIDI 2.0 Channel Voice, Endpoint/Function Block discovery and MIDI-CI capabilities. Advertise only supported features and preserve MIDI 1.0-only devices through explicit adapters.
+8. Keep implementation portable across AROS targets, accounting for 32/64-bit ABI, alignment, endianness and timing. Platform-specific workarounds cannot become the general CAMD API.
+9. Follow milestones M0–M5 and audit gates U01–U14; each change includes tests and documentation. If normative texts, hardware or interoperability fixtures are unavailable, mark the gate **blocked**, not passed.
+10. Escalate irreversible public API or Group/Function Block mapping decisions for review. Prefer a documented incomplete capability over an expedient implementation that needs architectural replacement.
+
+**Definition of done:** Full native MIDI 2.0 CAMD requires full-fidelity UMP, native endpoint topology and protocol handling, explicit legacy interoperability, robust lifecycle and timing, observable errors, and applicable normative/interoperability tests. A compiling library, loopback test or successful Note On is not completion.
