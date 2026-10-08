@@ -897,3 +897,19 @@ completeness. Obtain and review those texts before declaring U01–U13 closed.
 10. Escalate irreversible public API or Group/Function Block mapping decisions for review. Prefer a documented incomplete capability over an expedient implementation that needs architectural replacement.
 
 **Definition of done:** Full native MIDI 2.0 CAMD requires full-fidelity UMP, native endpoint topology and protocol handling, explicit legacy interoperability, robust lifecycle and timing, observable errors, and applicable normative/interoperability tests. A compiling library, loopback test or successful Note On is not completion.
+
+
+### 6.6 Architecture review gate: endpoints are not dynamic USB ports
+
+**Mandatory before implementing section 6 or freezing M0.** Read
+[CAMD endpoint architecture review](camd-endpoint-architecture-review.md).
+The legacy USB implementation motivated this proposal but does **not**
+constrain the replacement architecture. Preserve the CAMD legacy
+**application ABI**, not the old USB driver's fixed-port implementation.
+Compare port resizing, central registry/providers and distributed graphs
+before choosing a public API. Prefer logical endpoint identity, asynchronous
+discovery, native UMP topology and compatible legacy projections; do not
+build new APIs around `MidiDeviceData.NPorts`. Existing USB MIDI
+functionality and legacy application behavior must still pass regression
+tests after migration. Review the topology/identity/lifecycle contract
+before agent-driven implementation.
