@@ -598,3 +598,185 @@ prevent later Endpoint, Function Block and Group metadata.
    AppleMIDI is the primary case; fixed `NPorts` pools are only a fallback.
 5. Treat persistent routing and native MIDI 2.0/UMP as subsequent CAMD design
    questions rather than requirements for the first dynamic-endpoint API.
+
+
+## 7. Native MIDI 2.0 / UMP architecture (future design contract)
+
+**Status: design proposal, not implemented.** This section completes the intended
+architecture for a future native MIDI 2.0 CAMD without changing the implementation
+order above. Section 6.5 remains the prerequisite: dynamic endpoint handles must
+be capable of representing UMP topology, but native UMP need not ship with the
+first dynamic-endpoint implementation.
+
+### 7.1 Scope and invariants
+
+- Make UMP the lossless, native message representation for new MIDI 2.0-aware
+  CAMD clients. UMP is a packet container, not a synonym for MIDI 2.0 Channel
+  Voice: it also transports MIDI 1.0 messages.
+- Preserve every existing CAMD 41.1/42 library vector, public structure,
+  tag value, cluster behavior and driver ABI. Add versioned entry points and
+  opaque handles; never reinterpret `MidiMsg` as a UMP packet.
+- Legacy MIDI 1.0 applications remain functional without recompilation.
+  Conversion is explicit in policy and observable when information is lost.
+- Keep transport (USB, BLE, AppleMIDI, network), CAMD endpoint topology,
+  MIDI protocol, synthesis and routing as separate concerns.
+- Preserve unknown but structurally valid future UMP message types as opaque
+  packets when possible; reject malformed or unsupported packets with
+  diagnostics rather than silently corrupting them.
+
+### 7.2 Native UMP event contract
+
+Introduce a versioned UMP event API (names TBD) with:
+- 1–4 32-bit words per complete UMP message, determined by its Message Type;
+  exact original words, group and message ordering are retained.
+- A separate monotonic timestamp and clock-domain identifier, plus flags for
+  timestamp validity and scheduling policy. Do not encode internal time solely
+  as JR Timestamp UMP utility messages.
+- Batch send/receive, bounded queues, backpressure/error reporting, atomic
+  delivery of complete messages and explicit ordering guarantees per sender.
+- Defined handling for 32/64/96/128-bit messages, SysEx7, SysEx8, Mixed
+  Data Set, Flex Data, Stream and Utility messages. Do not assume all messages
+  are channel-addressed or group-addressed.
+- Explicit endianness conversion at transport boundaries; native API word
+  representation is host-endian and transport serialization follows the
+  relevant transport specification.
+- Stable ownership/lifetime of buffers, callbacks and endpoint references;
+  safe teardown while messages are queued.
+
+### 7.3 Endpoint topology, discovery and protocol selection
+
+A CAMD UMP Endpoint is a persistent, opaque identity distinct from transport
+connection, legacy cluster, Function Block and Group. Model:
+- UMP version, manufacturer/model/identity where available, product instance
+  identifier, supported/current MIDI protocols, RX/TX JR capabilities,
+  endpoint direction and connection state;
+- Function Block identifier, name, active state, direction, first Group,
+  Group span, protocol/MIDI-CI capability and static/dynamic topology;
+- Group validity and direction, with explicit mapping from each exposed
+  legacy CAMD cluster to an endpoint/group/function as appropriate.
+- UMP Endpoint Discovery and Stream Configuration / Protocol Request and
+  Notification, including re-discovery after reconnect and capability changes.
+  Do not implement deprecated MIDI-CI Protocol Negotiation as the primary
+  mechanism.
+- MIDI-CI discovery, Profiles, Property Exchange and Process Inquiry are
+  distinct higher-layer capabilities, not synonyms for UMP protocol selection.
+  CAMD transports MIDI-CI messages and provides a capability hook; policy and
+  profile/property clients may live outside the CAMD core.
+- Define timeout, retry, fallback, cache invalidation and conflicting
+  capability reports. Never claim MIDI 2.0 Channel Voice support solely
+  because the transport carries UMP.
+- Retain section 6.4's separate endpoint watch; report topology, active
+  protocol and state changes without altering legacy ClusterWatch semantics.
+
+### 7.4 Legacy projection and translation
+
+- Expose compatible MIDI 1.0 cluster views of native endpoints for existing
+  applications, with stable names and configurable Group mapping.
+- Specify direction-specific MIDI 1.0 byte/message ↔ UMP MIDI 1.0 conversion
+  and MIDI 1.0 ↔ MIDI 2.0 Channel Voice translation where supported.
+- Follow normative translation/bit-scaling rules, including CC, RPN/NRPN,
+  Program Change, bank selection, pitch bend, note-on velocity zero, and
+  per-note controls. Not every MIDI 2.0 message has a faithful MIDI 1.0
+  equivalent: choose documented drop, approximation or explicit failure
+  policies and expose counters.
+- Define SysEx7 reassembly/fragmentation and SysEx8 incompatibility policy;
+  maintain boundaries, ordering and maximum sizes. Do not truncate SysEx8
+  silently into legacy SysEx.
+- Keep a legacy sender's stream state distinct when translation needs
+  context. Do not infer producer identity from a legacy `MidiMsg` received
+  on a shared cluster.
+- Prevent routing loops and duplicate deliveries between native UMP and
+  legacy projections of the same endpoint.
+
+### 7.5 Routing, multi-producer semantics and timing
+
+- Route native UMP by endpoint, Function Block and Group where meaningful;
+  preserve group-less endpoint/utility/stream messages and their scope.
+- Existing CAMD merging remains supported, but merging does **not** provide
+  per-application MIDI channel state isolation. Document concurrent producer
+  ordering, contention and controller/note-state interactions.
+- Optional isolated sessions require distinct source identity or explicit
+  session endpoints; do not promise automatic isolation of old applications.
+- Define per-source ordering, interleaving of multi-packet data streams,
+  queue fairness, priority and overflow behavior; no partial UMP messages.
+- Relate CAMD monotonic time (`CamdTime()` and future clock extensions),
+  transport timebases and optional JR Clock/JR Timestamp without conflating
+  JR timestamps with a universal scheduling clock. Specify late-event policy,
+  clock discontinuity, reconnect and wraparound behavior.
+- Keep System MIDI Out, route filters and software synthesis as consumers of
+  this API, not hard-coded special cases inside CAMD.
+
+### 7.6 Driver interface and portability
+
+- Add versioned UMP-capable driver registration and callbacks beside legacy
+  fixed-`NPorts` drivers; both may coexist.
+- Transport drivers advertise actual capabilities, normalize complete UMP
+  messages and serialize for their physical/network transport. A MIDI 1.0-only
+  driver remains usable via an adapter, with documented conversion policy.
+- Define locking and memory constraints for interrupt/task contexts, queue
+  ownership, disconnect while I/O is pending, hot-plug and restart.
+- Do not assume USB MIDI 2.0, BLE MIDI, AppleMIDI and network UMP have
+  identical framing, timing or negotiation. Test each transport separately.
+
+### 7.7 Errors, security and resource limits
+
+- Add inspectable per-endpoint and per-route counters for malformed UMP,
+  unsupported message/protocol, conversion loss, queue overflow, timeout,
+  negotiation failure and transport disconnect.
+- Bound SysEx7/SysEx8/Mixed Data Set reassembly, property payloads, pending
+  transactions and endpoint metadata; enforce validation before allocation.
+- Treat externally supplied discovery strings, MIDI-CI/Property Exchange and
+  network messages as untrusted input. Avoid blocking the real-time MIDI
+  delivery path on discovery, property queries or callbacks.
+- Specify permissions/trust policy for remote peers and property writes in
+  the relevant transport/service layer, not as an implicit CAMD side effect.
+
+### 7.8 Implementation sequence (future, after current CAMD roadmap)
+
+1. Freeze a versioned UMP API and opaque topology model with ABI review.
+2. Implement parser/serializer, validation, event queues and unit tests.
+3. Add a software loopback UMP endpoint and end-to-end native clients.
+4. Add MIDI 1.0 projections and conversion with measurable loss reporting.
+5. Add discovery, Function Block metadata, protocol selection and watches.
+6. Integrate a real UMP-capable transport; validate hot-plug and fallback.
+7. Validate MIDI-CI interoperability, performance and long-running stress.
+8. Enable System MIDI Out and optional router/filter clients to use native
+   UMP without changing the underlying CAMD contract.
+
+### 7.9 Acceptance criteria
+
+- Unmodified legacy CAMD compatibility suite still passes, including 41.1
+  behavior and version 42 additions.
+- Round-trip every defined UMP packet length and test unknown/invalid types;
+  preserve payloads and group-less addressing where applicable.
+- Exercise all 16 Groups and 16 channels per Group, multi-producer ordering,
+  complete-message queue overflow and concurrent endpoint removal.
+- Verify MIDI 1.0 conversion and explicitly test nonrepresentable MIDI 2.0
+  events, high-resolution data, SysEx7/SysEx8 and conversion diagnostics.
+- Verify UMP endpoint/function-block discovery, dynamic state changes,
+  protocol selection, MIDI-CI separation and reconnect.
+- Test timing (JR and non-JR), wraparound, late messages, and at least one
+  native UMP transport alongside a legacy-only transport.
+- Run under QEMU and supported AROS targets; document test gaps for hardware
+  not yet available. No claim of MIDI 2.0 conformance without validating the
+  applicable published MIDI Association specifications.
+
+### 7.10 Normative references and implementation precedents
+
+- MIDI Association M2-100-U (Overview), M2-101-UM (MIDI-CI),
+  M2-102-U (Profiles), M2-103-UM (Property Exchange),
+  M2-104-UM (UMP and MIDI 2.0 Protocol), and applicable updates:
+  https://midi.org/midi-2-0
+  https://midi.org/details-about-midi-2-0-midi-ci-profiles-and-property-exchange-updated-june-2023
+- Linux ALSA MIDI 2.0 design (UMP endpoints, Function Blocks and legacy
+  projections): https://www.kernel.org/doc/html/latest/sound/designs/midi-2.0.html
+- Windows MIDI Services implementation decisions:
+  https://microsoft.github.io/MIDI/kb/midi2-implementation-details/
+- Apple CoreMIDI MIDI 2.0 integration:
+  https://developer.apple.com/documentation/coremidi/incorporating-midi-2-into-your-apps
+
+**Scope boundary:** This section completes the *future architecture proposal*,
+not an implementation or certification claim. Exact C symbols, structure
+layouts, negotiation state machines and protocol conformance vectors are to be
+frozen against the applicable specification revisions when implementation
+begins.
