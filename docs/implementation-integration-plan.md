@@ -36,3 +36,14 @@ Steps 4 and 5 may prototype against the existing CAMD MIDI 1.0 interface **only 
 Read all four documents before changing CAMD or Router interfaces. Treat **open design gates** as decisions requiring explicit resolution, not invitations to use hacks. Record an architecture decision for irreversible public ABI or protocol-mapping choices. Keep changes small and independently reviewable, add tests with each implementation increment, and update status based on observed evidence only.
 
 **Do not claim full MIDI 2.0 support after a basic UMP loopback or Note On test.** Use the M0–M5 and U01–U14 gates from CAMD documentation. Do not declare System MIDI Out or Filters complete without their respective acceptance scenarios.
+
+
+## Mandatory pre-M0 endpoint architecture review
+
+Before CAMD dynamic endpoint work, read
+[CAMD endpoint architecture review](camd-endpoint-architecture-review.md).
+The old USB MIDI driver implementation is replaceable; the legacy CAMD
+application ABI and working USB MIDI functionality are not. Compare endpoint
+provider models, choose a transport-neutral identity/topology/lifecycle
+contract, and record the decision before freezing public APIs. Do not use
+fixed `NPorts` pools as the modern architectural model.
