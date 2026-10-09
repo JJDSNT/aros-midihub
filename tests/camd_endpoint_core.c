@@ -176,6 +176,118 @@ static void test_concurrency(void)
     camd_registry_destroy(registry);
 }
 
+static void expect_watch_event(struct CAMDEndpointWatch *watch,
+                               uint32_t type,
+                               const struct CAMDEndpointIDV1 *id,
+                               struct CAMDGenerationV1 *previous)
+{
+    struct CAMDEndpointWatchEventV1 event;
+
+    assert(camd_endpoint_watch_read(watch, &event) == CAMD_REGISTRY_OK);
+    assert(event.Size == sizeof(event));
+    assert(event.Version == 1);
+    assert(event.Type == type);
+    assert(event.Generation.high > previous->high ||
+           (event.Generation.high == previous->high &&
+            event.Generation.low > previous->low));
+    if (type == CAMD_ENDPOINT_EVENT_LOST) {
+        struct CAMDEndpointIDV1 zero = { { 0, 0, 0, 0 } };
+        assert(memcmp(&event.EndpointID, &zero, sizeof(zero)) == 0);
+    } else {
+        assert(id != NULL);
+        assert(memcmp(&event.EndpointID, id, sizeof(*id)) == 0);
+    }
+    *previous = event.Generation;
+}
+
+static void test_watches(void)
+{
+    struct CAMDEndpointRegistry *registry = camd_registry_create();
+    struct CAMDEndpointInfoV1 endpoint = make_endpoint(4, "Watched");
+    struct CAMDGroupInfoV1 group = make_group(&endpoint, 0);
+    struct CAMDFunctionBlockInfoV1 block = make_block(&endpoint, 0, 0, 1);
+    struct CAMDEndpointWatch *watch;
+    struct CAMDEndpointSnapshot *snapshot;
+    struct CAMDHandleV1 provider, client;
+    struct CAMDGenerationV1 generation;
+    struct CAMDEndpointWatchEventV1 event;
+
+    assert(registry != NULL);
+    assert(sizeof(struct CAMDEndpointWatchEventV1) == 36);
+    assert(camd_registry_watch_start(registry, 8, &watch, &generation) ==
+           CAMD_REGISTRY_OK);
+    assert(generation.high == 0 && generation.low == 0);
+    assert(camd_endpoint_watch_read(watch, &event) == CAMD_REGISTRY_EMPTY);
+
+    assert(camd_registry_publish(registry, &endpoint, &group, 1, &block, 1,
+                                 &provider) == CAMD_REGISTRY_OK);
+    expect_watch_event(watch, CAMD_ENDPOINT_EVENT_ADDED, &endpoint.ID,
+                       &generation);
+    strcpy(endpoint.Name, "Watched update");
+    assert(camd_registry_replace(registry, provider, &endpoint, &group, 1,
+                                 &block, 1) == CAMD_REGISTRY_OK);
+    expect_watch_event(watch, CAMD_ENDPOINT_EVENT_UPDATED, &endpoint.ID,
+                       &generation);
+    assert(camd_registry_set_state(registry, provider,
+                                   CAMD_ENDPOINT_DISCOVERING) ==
+           CAMD_REGISTRY_OK);
+    expect_watch_event(watch, CAMD_ENDPOINT_EVENT_UPDATED, &endpoint.ID,
+                       &generation);
+    assert(camd_registry_set_state(registry, provider,
+                                   CAMD_ENDPOINT_AVAILABLE) ==
+           CAMD_REGISTRY_OK);
+    expect_watch_event(watch, CAMD_ENDPOINT_EVENT_UPDATED, &endpoint.ID,
+                       &generation);
+    assert(camd_registry_set_state(registry, provider,
+                                   CAMD_ENDPOINT_OFFLINE) == CAMD_REGISTRY_OK);
+    expect_watch_event(watch, CAMD_ENDPOINT_EVENT_OFFLINE, &endpoint.ID,
+                       &generation);
+    assert(camd_registry_acquire(registry, &endpoint.ID, &client) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_registry_retire(registry, provider) == CAMD_REGISTRY_OK);
+    expect_watch_event(watch, CAMD_ENDPOINT_EVENT_RETIRED, &endpoint.ID,
+                       &generation);
+    assert(camd_registry_snapshot(registry, &snapshot) == CAMD_REGISTRY_OK);
+    assert(camd_snapshot_endpoint_count(snapshot) == 0);
+    camd_snapshot_destroy(snapshot);
+    assert(camd_registry_release(registry, provider) == CAMD_REGISTRY_OK);
+    assert(camd_registry_release(registry, client) == CAMD_REGISTRY_OK);
+    camd_endpoint_watch_end(watch);
+
+    endpoint = make_endpoint(5, "Overflow");
+    group = make_group(&endpoint, 0);
+    block = make_block(&endpoint, 0, 0, 1);
+    assert(camd_registry_watch_start(registry, 2, &watch, &generation) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_registry_publish(registry, &endpoint, &group, 1, &block, 1,
+                                 &provider) == CAMD_REGISTRY_OK);
+    assert(camd_registry_set_state(registry, provider,
+                                   CAMD_ENDPOINT_DISCOVERING) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_registry_set_state(registry, provider,
+                                   CAMD_ENDPOINT_AVAILABLE) ==
+           CAMD_REGISTRY_OK);
+    expect_watch_event(watch, CAMD_ENDPOINT_EVENT_LOST, NULL, &generation);
+    assert(camd_endpoint_watch_read(watch, &event) == CAMD_REGISTRY_EMPTY);
+    assert(camd_registry_snapshot(registry, &snapshot) == CAMD_REGISTRY_OK);
+    assert(camd_snapshot_endpoint_count(snapshot) == 1);
+    assert(camd_snapshot_generation(snapshot).high > generation.high ||
+           (camd_snapshot_generation(snapshot).high == generation.high &&
+            camd_snapshot_generation(snapshot).low >= generation.low));
+    camd_snapshot_destroy(snapshot);
+    assert(camd_registry_set_state(registry, provider,
+                                   CAMD_ENDPOINT_OFFLINE) == CAMD_REGISTRY_OK);
+    expect_watch_event(watch, CAMD_ENDPOINT_EVENT_OFFLINE, &endpoint.ID,
+                       &generation);
+    camd_endpoint_watch_end(watch);
+    assert(camd_registry_set_state(registry, provider,
+                                   CAMD_ENDPOINT_AVAILABLE) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_registry_retire(registry, provider) == CAMD_REGISTRY_OK);
+    assert(camd_registry_release(registry, provider) == CAMD_REGISTRY_OK);
+    camd_registry_destroy(registry);
+}
+
 int main(void)
 {
     struct CAMDEndpointRegistry *registry = camd_registry_create();
@@ -240,8 +352,7 @@ int main(void)
            CAMD_REGISTRY_RETIRED);
     assert(camd_registry_release(registry, provider) == CAMD_REGISTRY_OK);
     assert(camd_registry_snapshot(registry, &after) == CAMD_REGISTRY_OK);
-    assert(camd_snapshot_endpoint_count(after) == 1);
-    assert(snapshot_first(after)->State == CAMD_ENDPOINT_RETIRING);
+    assert(camd_snapshot_endpoint_count(after) == 0);
     camd_snapshot_destroy(after);
     assert(camd_registry_release(registry, client) == CAMD_REGISTRY_OK);
     assert(camd_registry_release(registry, client) == CAMD_REGISTRY_STALE);
@@ -263,6 +374,7 @@ int main(void)
     camd_snapshot_destroy(before);
     camd_registry_destroy(registry);
     test_concurrency();
+    test_watches();
     puts("CAMD private endpoint core OK");
     return 0;
 }

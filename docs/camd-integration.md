@@ -2,6 +2,13 @@
 
 ## Reference contract
 
+CAMD uses a shared endpoint control plane with path-selective payload handling.
+Existing MIDI 1.0 routes remain native; UMP-capable clients and transports use
+complete UMP events; conversion is inserted only at an incompatible boundary.
+See the
+[coexistence research](midi-protocol-coexistence-research.md) and the amended
+[endpoint architecture decision](camd-endpoint-architecture-decision.md).
+
 The AROS Poseidon `camdusbmidi.class` provides the integration model for
 MIDIHub's network, BLE, serial, virtual, and software synthesizer endpoints:
 ordinary MIDI applications see CAMD ports and exchange MIDI with them. The
@@ -104,25 +111,27 @@ itself.
    [central registry/provider architecture](camd-endpoint-architecture-decision.md):
    sized pointer-free records, identity ownership, lifecycle, topology and
    lock order. This does not freeze public symbols.
-2. Implement the private registry, generation snapshots, legacy-driver
-   adapter and software-provider lifecycle as a slice of that final
-   architecture, without changing CAMD 41/42 structures or exposing a
-   MIDI-1.0-only transition API.
-3. Close CAMD gate U01 using evidence from that private implementation:
+2. Implement the private registry, generation snapshots and watches as the
+   shared control plane, without changing CAMD 41/42 structures.
+3. Define and validate a private provider contract with separate native
+   MIDI 1.0 and UMP data callbacks, then exercise the legacy-driver adapter
+   and software-provider lifecycle. Do not require MIDI 1.0-to-MIDI 1.0
+   traffic to convert through UMP.
+4. Close CAMD gate U01 using evidence from that private implementation:
    appended client-vector order, record/version policy, 32/64-bit builds,
    ownership tests and upstream review. Keep provider registration private.
-4. Add native UMP transport/topology according
+5. Add native UMP transport/topology according
    to the M0-M3 gates in [CAMD improvements](camd-improvements.md).
-5. Keep endpoint names and directions clear to CAMD clients across network,
+6. Keep endpoint names and directions clear to CAMD clients across network,
    BLE, USB, serial, and synth.
-6. Validate the `MIDIHub Synth` receive port with a native CAMD sender and
+7. Validate the `MIDIHub Synth` receive port with a native CAMD sender and
    live AHI playback.
-7. Validate USB and BLE with physical devices, including binding, message
+8. Validate USB and BLE with physical devices, including binding, message
    transfer, SysEx, disconnection, and reconnection.
-8. Use endpoint enumeration/state in the MIDIHub overview; retain cluster
+9. Use endpoint enumeration/state in the MIDIHub overview; retain cluster
    enumeration for CAMD 41.
-9. Keep basic persistent source-to-destination routes and reconnection on the
+10. Keep basic persistent source-to-destination routes and reconnection on the
    stable endpoint identity where available.
-10. Add Profiles after route persistence and the current Network MIDI/Synth
+11. Add Profiles after route persistence and the current Network MIDI/Synth
    settings have stable storage contracts.
-11. Extend CAMD driver removal only where hardware drivers require it.
+12. Extend CAMD driver removal only where hardware drivers require it.

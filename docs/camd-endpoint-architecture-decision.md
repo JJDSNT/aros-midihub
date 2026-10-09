@@ -1,6 +1,7 @@
 # ADR: CAMD endpoint registry and provider architecture
 
-**Status:** Accepted as the target architecture; public C ABI not yet frozen.
+**Status:** Accepted as the target architecture; amended for a path-selective
+data plane; public C ABI not yet frozen.
 **Date:** 2026-10-09.
 **Scope:** CAMD endpoint/provider model, native topology and legacy projection.
 
@@ -9,14 +10,32 @@
 CAMD will use a **central logical endpoint registry with transport-neutral
 providers**. The registry is the authoritative system graph. USB, BLE,
 AppleMIDI, Network MIDI 2.0 and software providers publish endpoint state and
-topology into it. Native UMP events use that graph directly; CAMD 41.1
-clusters are projections maintained by a compatibility adapter.
+topology into it.
+
+The registry is a shared **control plane**, not a mandatory message
+representation. MIDI 1.0 and UMP use protocol/data-format-specific data paths
+with common identity, lifecycle, topology, watches, timing policy and
+diagnostics. A MIDI 1.0 source connected to a MIDI 1.0 destination stays on
+the existing native CAMD path. Native UMP sessions carry complete UMP events.
+Conversion occurs once, explicitly, only where a route, session or legacy
+projection crosses incompatible formats or protocols.
+
+CAMD 41.1 clusters remain a supported MIDI 1.0 execution path. They may also
+be projections of a native endpoint, but are not merely a temporary UMP
+compatibility shim. This path-selective amendment follows the evidence and
+rationale in the
+[MIDI protocol coexistence research](midi-protocol-coexistence-research.md).
 
 This selects option B from the architecture review. It rejects both making
 `MidiDeviceData.NPorts` dynamically resizable and making each provider's
 private graph authoritative. It does not freeze function names, vector order,
 structure packing or tag values; those remain gate U01 and require a separate
 32/64-bit ABI review and upstream coordination.
+
+That option label belongs to the earlier endpoint-ownership comparison. For
+protocol coexistence, the amended decision selects alternative C, the
+path-selective hybrid, rather than either an all-UMP or duplicated-graph data
+plane.
 
 ## Alternatives
 
@@ -121,6 +140,13 @@ the stable ID and generation. Events may coalesce. A bounded queue reports
 `lost`; after that the consumer must enumerate a fresh snapshot. ClusterWatch
 keeps its version 42 meaning and is not extended with endpoint events.
 
+The private executable core now enforces this contract. Watch registration and
+its starting generation are atomic under the registry lock. Overflow replaces
+the queued history with one `lost` observation at the latest affected
+generation; later events resume only after that marker is read. Retirement is
+reported when the endpoint stops accepting acquisitions and is omitted from
+new snapshots, independently of when its final lease releases the storage.
+
 Runtime handles use a slot plus generation (or an equivalent non-ABA token)
 and resolve under the registry lock. Public queries copy data; they do not
 return borrowed pointers into registry storage.
@@ -147,22 +173,30 @@ owned endpoints. Publication includes normalized transport-independent data;
 USB descriptors, GATT objects, sockets and discovery packets remain private to
 the provider.
 
-Provider operations cover open/close, complete UMP send/receive, start/stop,
-drain/cancel and capability/discovery updates. Calls into provider code run
-without registry or legacy-graph locks held. Reference leases keep provider
-and endpoint storage alive across calls. Provider shutdown is two-phase:
-mark retiring and detach new users, then wait for bounded in-flight work before
-release.
+Providers declare their native data formats independently of their supported
+MIDI protocols. Provider operations cover open/close, format-specific
+send/receive, start/stop, drain/cancel and capability/discovery updates. A
+session's effective data format is fixed when it opens. MIDI 1.0 providers
+must be able to exchange native MIDI 1.0 data without manufacturing UMP;
+UMP providers transfer complete 32/64/96/128-bit messages.
 
-Registration and metadata paths may allocate; the real-time UMP path uses
-bounded preallocated queues and transfers only complete 32/64/96/128-bit
-messages. Queue overflow and unsupported/lossy conversion are observable.
+Calls into provider code run without registry or legacy-graph locks held.
+Reference leases keep provider and endpoint storage alive across calls.
+Provider shutdown is two-phase: mark retiring and detach new users, then wait
+for bounded in-flight work before release.
+
+Registration and metadata paths may allocate; every real-time data path uses
+bounded preallocated queues. Shared timestamp, ordering, cancellation and
+overflow semantics apply across formats. Unsupported conversion and any lossy
+policy are explicit and observable.
 
 ## Legacy CAMD adapter
 
 The adapter preserves all CAMD 41.1/42 vectors, structures, tags and behavior.
-Legacy drivers remain supported by an adapter that publishes fixed ports into
-the native registry; they do not define the native model.
+Legacy drivers remain supported by an adapter that publishes their fixed ports
+and identity metadata into the native registry without intercepting a
+MIDI 1.0-to-MIDI 1.0 data path. They do not define the endpoint control-plane
+model, but their native message path remains first-class.
 
 For each projectable Endpoint + Group + direction, the adapter owns a stable
 cluster identity independent of mutable display names. While an endpoint is
@@ -229,13 +263,17 @@ Before adding public vectors, gate U01 must produce:
 - appended public client vectors plus a private sized provider callback table;
 - vector ordering and library version policy;
 - compatibility and concurrent-lifecycle tests;
+- a format-fixed session contract that separates data format from protocol;
+- native MIDI 1.0 and UMP provider paths, with explicit conversion policy;
 - upstream review of the ABI sketch.
 
 Private registry/provider work may precede closure of U01 because it creates
 no public compatibility promise. Its purpose is to validate the records,
 ownership and lifecycle using both the legacy-driver adapter and a software
-provider. The public client vectors are frozen only after that proof; provider
-registration remains private in the first release.
+provider. Provider data callbacks must not be frozen until that private
+contract supports native MIDI 1.0 and native UMP separately. The public client
+vectors are frozen only after that proof; provider registration remains
+private in the first release.
 
 The host-tested
 [private endpoint-core model](../prototypes/camd/README.md) begins that proof
@@ -243,8 +281,9 @@ with transactional topology, immutable snapshots, lifecycle transitions and
 generation-safe leases. Its AROS patch uses Exec allocation and initializes
 the core inside `camd.library`. The registry now owns and enforces its Exec
 semaphore, while the host model races snapshots and lease operations against
-lifecycle changes. Native AROS retirement stress, watches and a private
-software provider are still required before it becomes operational.
+lifecycle changes. Bounded watches are implemented privately. Native AROS
+retirement stress, a format-specific private provider contract and a software
+provider are still required before it becomes operational.
 
 The current proposal is documented in
 [the endpoint ABI draft](camd-endpoint-abi-draft.md). It is a review artifact,

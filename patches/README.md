@@ -277,13 +277,17 @@ exactly equal to `MIDI_SysExSize` fits.
 registry/provider architecture without exposing a version 43 ABI. It adds
 fixed-layout Endpoint, Group and Function Block records, generation-safe
 leases, validated transactional topology, immutable snapshots and explicit
-lifecycle/retirement. `CamdBase` owns the registry, whose opaque implementation
-owns and enforces a dedicated Exec semaphore; initialization failure unwinds
-the registry, timer and legacy semaphore. No
-provider, watch, UMP wire parser or legacy projection uses it yet, so existing
-CAMD behavior remains unchanged. The matching host model and tests live in
-`prototypes/camd` and `tests/camd_endpoint_core.c`; the host test also races
-snapshots and lease operations against lifecycle changes.
+lifecycle/retirement, and bounded generation-tagged endpoint watches. Watch
+overflow collapses stale queued events into one explicit `lost` marker; a
+fresh snapshot is the recovery path. Retiring endpoints disappear from new
+snapshots immediately but remain allocated through their last lease.
+`CamdBase` owns the registry, whose opaque implementation owns and enforces a
+dedicated Exec semaphore; initialization failure unwinds the registry, timer
+and legacy semaphore. No provider, public watch vector, UMP wire parser or
+legacy projection uses it yet, so existing CAMD behavior remains unchanged.
+The matching host model and tests live in `prototypes/camd` and
+`tests/camd_endpoint_core.c`; the host test also races snapshots and lease
+operations against lifecycle changes and exercises watch overflow/resync.
 
 ### Testing
 

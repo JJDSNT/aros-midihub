@@ -7,8 +7,9 @@ tag or protocol-bit values prematurely.
 
 The first executable evidence is the
 [private endpoint-core model](../prototypes/camd/README.md). It exercises the
-records, generations, snapshots and retirement rules on the host, but is not
-linked into CAMD and does not make any symbol in this draft public.
+records, generations, snapshots, retirement rules and bounded watches on the
+host. The same private core is linked into the patched CAMD build, but nothing
+in this draft is exported as a public symbol.
 
 ## ABI strategy
 
@@ -32,8 +33,10 @@ Only the stable client surface belongs in the first public ABI:
 
 - acquire/release and enumerate an immutable endpoint snapshot;
 - start/read/end a bounded endpoint watch;
-- open/close an endpoint session;
-- send/receive complete UMP events and query/drain/cancel session state.
+- open/close a format-fixed endpoint session, requesting data format and MIDI
+  protocol independently;
+- send/receive the record family appropriate to that session and
+  query/drain/cancel session state.
 
 Exact names, vector numbers and m68k registers remain unassigned until the
 prototype header and genmodule output are compiled on the supported targets.
@@ -165,7 +168,10 @@ messages use the endpoint ID/session itself. Exact MIDI-CI and SysEx8
 capability fields may be appended in a later sized version after normative
 review; they are not encoded into unverified generic flag bits now.
 
-## Native event record
+## Native event records
+
+`CAMDUMPEventV1` is the record for native UMP sessions; it is not CAMD's
+universal internal representation:
 
 ```c
 struct CAMDUMPEventV1 {
@@ -186,6 +192,14 @@ the retained UMP 1.1.2 text. Providers perform transport byte-order
 conversion; public words are host-endian, matching the native model used by
 ALSA.
 
+The existing CAMD 41/42 `MidiMsg` and SysEx path remains the native record
+family for legacy MIDI 1.0 routes. Whether v43 also exposes a new
+boundary-preserving MIDI 1.0 event/byte-stream record for new endpoint
+sessions is deliberately unresolved at U01. Provider work must prove this
+path before any public layout is frozen. A per-event format discriminator and
+large payload union are not proposed; session format is fixed at open and
+format-specific batch operations keep validation and queue sizing bounded.
+
 ## Client interface semantics
 
 The appended library vectors need operations equivalent to:
@@ -195,9 +209,20 @@ The appended library vectors need operations equivalent to:
 - resolve/open by stable endpoint ID, never by list index or display name;
 - release the snapshot;
 - create/end a bounded endpoint watch and read generation-tagged events;
-- open/close an endpoint session with direction, protocol and queue policy;
-- send/receive batches of complete `CAMDUMPEventV1` records;
+- open/close an endpoint session with direction, requested data format,
+  requested protocol, conversion/loss policy and queue policy, returning the
+  effective format and protocol;
+- send/receive format-specific batches; native UMP sessions use complete
+  `CAMDUMPEventV1` records, while native MIDI 1.0 sessions use the record
+  family selected at U01;
 - query session errors/counters and drain/cancel bounded pending work.
+
+The conversion policy must distinguish at least native-only/no-convert,
+lossless conversion permitted and lossy conversion permitted. Failure to meet
+the requested policy is stable and observable. Data format describes the
+container/path (for example MIDI 1.0 byte/message or UMP); protocol describes
+the MIDI semantic protocol carried by that path. They are never inferred from
+an endpoint name, Group or Function Block.
 
 Enumeration cursors are scoped to a snapshot and are not reusable after it is
 released. Open-by-ID may require a minimum generation; if the endpoint changed,
@@ -206,16 +231,21 @@ different topology.
 
 A watch event contains stable endpoint ID, event type and registry generation.
 On queue overflow it returns `lost`; the only supported recovery is acquiring
-a fresh snapshot. Watches never expose private endpoint handles.
+a fresh snapshot. The private model registers a watch and captures its starting
+generation under the same registry lock, so mutations cannot fall into a gap
+between those operations. A `lost` read discards stale queued events and gives
+the latest affected generation. Watches never expose private endpoint handles.
 
 ## Private provider interface semantics
 
 A provider descriptor contains `Size`, `Version`, provider stable identity,
-flags, caller context and a sized operations table. Provider callbacks cover:
+declared native data formats, protocol capabilities, flags, caller context and
+a sized operations table. Provider callbacks cover:
 
 - open/close an endpoint data path;
 - start/stop receive activity;
-- send a batch of complete UMP events;
+- send format-specific batches through distinct native MIDI 1.0 and UMP
+  callbacks; a provider exposes only the callbacks for formats it declares;
 - drain or cancel pending output;
 - begin shutdown and report completion.
 
@@ -225,7 +255,8 @@ The private registry provides operations equivalent to:
 - publish a new endpoint and obtain a runtime provider lease;
 - atomically replace endpoint metadata/topology and state;
 - mark available/offline/retiring;
-- submit received UMP event batches;
+- submit received native MIDI 1.0 or complete UMP batches through the matching
+  format-specific entry point;
 - publish bounded diagnostics and discovery completion/timeout;
 - release the endpoint after all provider work has stopped.
 
@@ -238,6 +269,12 @@ Provider callbacks execute without registry, endpoint or legacy graph locks.
 Their context remains valid until the shutdown callback has completed and the
 last lease is released. Callback reentrancy rules and task/interrupt legality
 must be explicit in the final header.
+
+No provider callback may require a MIDI 1.0-only device to encode UMP merely
+to reach a MIDI 1.0 consumer. CAMD inserts a stateful converter only at a
+declared incompatible boundary and counts format conversions, protocol
+scaling, unrepresentable drops/rejections, malformed input, SysEx overflow and
+queue overflow.
 
 ## Legacy adapter boundary
 
@@ -291,7 +328,12 @@ U01 cannot close until tests cover:
 9. unchanged CAMD 41.1/42 compatibility suite and legacy driver operation;
 10. no provider callback or notification while registry/graph locks are held;
 11. identical lifecycle behavior through the legacy-driver adapter and a
-    software provider before provider registration can become public.
+    software provider before provider registration can become public;
+12. MIDI 1.0 producer to MIDI 1.0 consumer routing with a zero conversion
+    count and byte/SysEx-equivalent output;
+13. native UMP producer to UMP consumer routing without translation;
+14. incompatible-format routing converts exactly once at the declared
+    boundary and obeys reject/drop/approximate loss policy.
 
 ## Decisions from the platform review
 
@@ -307,6 +349,9 @@ U01 cannot close until tests cover:
 - Persistent mappings use a versioned, atomically replaceable CAMD-owned
   database. Its final `ENV:`/`ENVARC:` location is packaging policy and does
   not appear in the public ABI.
+- The accepted data plane is path-selective: endpoint control state is shared,
+  while native MIDI 1.0 and UMP payload paths remain distinct. Existing CAMD
+  41/42 MIDI 1.0 traffic is not required to traverse UMP.
 
 These decisions follow the current `workbench/libs/camd/camd.conf`, where the
 ordered function list and `.version 42` boundary define the existing ABI, and
@@ -323,6 +368,11 @@ https://developers.aros.org/documentation/sys-dev/libraries.html
   `AROS_UFP`/`AROS_UFH` declarations and target builds.
 - Stable-ID database file location, upgrade/recovery policy and administrative
   tooling.
+- Exact v43 native MIDI 1.0 event/stream record and whether it is exposed in
+  the first v43 client surface or initially limited to CAMD 41/42 plus the
+  private provider adapter.
+- Exact session format negotiation, conversion-policy flags and shared
+  timestamp envelope across the MIDI 1.0 and UMP record families.
 
 Until these are reviewed, no header, vector or tag from this document is a
 public compatibility promise.

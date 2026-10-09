@@ -15,6 +15,7 @@
 #define CAMD_ENDPOINT_PRODUCT_BYTES    128u
 #define CAMD_ENDPOINT_TRANSPORT_BYTES   32u
 #define CAMD_TOPOLOGY_NAME_BYTES        64u
+#define CAMD_ENDPOINT_WATCH_MAX_EVENTS  32u
 
 struct CAMDHandleV1 {
     uint32_t slot;
@@ -77,6 +78,22 @@ struct CAMDFunctionBlockInfoV1 {
     char Name[CAMD_TOPOLOGY_NAME_BYTES];
 };
 
+enum CAMDEndpointWatchEventTypeV1 {
+    CAMD_ENDPOINT_EVENT_ADDED = 1,
+    CAMD_ENDPOINT_EVENT_UPDATED,
+    CAMD_ENDPOINT_EVENT_OFFLINE,
+    CAMD_ENDPOINT_EVENT_RETIRED,
+    CAMD_ENDPOINT_EVENT_LOST
+};
+
+struct CAMDEndpointWatchEventV1 {
+    uint32_t Size;
+    uint32_t Version;
+    struct CAMDGenerationV1 Generation;
+    struct CAMDEndpointIDV1 EndpointID;
+    uint32_t Type;
+};
+
 enum CAMDRegistryResult {
     CAMD_REGISTRY_OK = 0,
     CAMD_REGISTRY_INVALID,
@@ -85,11 +102,13 @@ enum CAMDRegistryResult {
     CAMD_REGISTRY_STALE,
     CAMD_REGISTRY_STATE,
     CAMD_REGISTRY_RETIRED,
-    CAMD_REGISTRY_RANGE
+    CAMD_REGISTRY_RANGE,
+    CAMD_REGISTRY_EMPTY
 };
 
 struct CAMDEndpointRegistry;
 struct CAMDEndpointSnapshot;
+struct CAMDEndpointWatch;
 
 /* Registry operations serialize themselves.  Destroy still requires that no
  * operation is in flight.  Snapshot access is independent after
@@ -137,6 +156,18 @@ enum CAMDRegistryResult camd_registry_release(
 enum CAMDRegistryResult camd_registry_snapshot(
     struct CAMDEndpointRegistry *registry,
     struct CAMDEndpointSnapshot **snapshot);
+
+enum CAMDRegistryResult camd_registry_watch_start(
+    struct CAMDEndpointRegistry *registry,
+    size_t capacity,
+    struct CAMDEndpointWatch **watch,
+    struct CAMDGenerationV1 *generation);
+
+enum CAMDRegistryResult camd_endpoint_watch_read(
+    struct CAMDEndpointWatch *watch,
+    struct CAMDEndpointWatchEventV1 *event);
+
+void camd_endpoint_watch_end(struct CAMDEndpointWatch *watch);
 
 void camd_snapshot_destroy(struct CAMDEndpointSnapshot *snapshot);
 struct CAMDGenerationV1 camd_snapshot_generation(

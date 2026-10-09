@@ -51,6 +51,7 @@ struct CAMDEndpointRegistry {
     struct endpoint_slot *slots;
     size_t slot_count;
     struct CAMDGenerationV1 generation;
+    struct CAMDEndpointWatch *watches;
 };
 
 #ifdef __AROS__
@@ -110,6 +111,17 @@ struct CAMDEndpointSnapshot {
     size_t endpoint_count;
 };
 
+struct CAMDEndpointWatch {
+    struct CAMDEndpointWatch *next;
+    struct CAMDEndpointRegistry *registry;
+    struct CAMDEndpointWatchEventV1 *events;
+    size_t capacity;
+    size_t head;
+    size_t count;
+    int lost;
+    struct CAMDGenerationV1 lost_generation;
+};
+
 typedef char endpoint_size_must_be_360[
     sizeof(struct CAMDEndpointInfoV1) == 360 ? 1 : -1];
 typedef char group_size_must_be_100[
@@ -118,6 +130,8 @@ typedef char block_size_must_be_104[
     sizeof(struct CAMDFunctionBlockInfoV1) == 104 ? 1 : -1];
 typedef char handle_size_must_be_8[
     sizeof(struct CAMDHandleV1) == 8 ? 1 : -1];
+typedef char watch_event_size_must_be_36[
+    sizeof(struct CAMDEndpointWatchEventV1) == 36 ? 1 : -1];
 
 static int id_is_zero(const struct CAMDEndpointIDV1 *id)
 {
@@ -140,6 +154,34 @@ static int generation_available(const struct CAMDEndpointRegistry *registry)
 {
     return registry->generation.high != UINT32_MAX ||
            registry->generation.low != UINT32_MAX;
+}
+
+/* Called only with registry->lock held. */
+static void notify_watches(struct CAMDEndpointRegistry *registry,
+                           uint32_t type,
+                           const struct CAMDEndpointIDV1 *id)
+{
+    struct CAMDEndpointWatch *watch;
+
+    for (watch = registry->watches; watch; watch = watch->next) {
+        struct CAMDEndpointWatchEventV1 *event;
+        size_t tail;
+
+        if (watch->lost || watch->count == watch->capacity) {
+            watch->lost = 1;
+            watch->lost_generation = registry->generation;
+            continue;
+        }
+        tail = (watch->head + watch->count) % watch->capacity;
+        event = &watch->events[tail];
+        memset(event, 0, sizeof(*event));
+        event->Size = sizeof(*event);
+        event->Version = 1;
+        event->Generation = registry->generation;
+        event->EndpointID = *id;
+        event->Type = type;
+        ++watch->count;
+    }
 }
 
 static void free_topology(struct endpoint_slot *slot)
@@ -274,12 +316,18 @@ struct CAMDEndpointRegistry *camd_registry_create(void)
 
 void camd_registry_destroy(struct CAMDEndpointRegistry *registry)
 {
+    struct CAMDEndpointWatch *watch, *next;
     size_t i;
 
     if (!registry)
         return;
     for (i = 0; i < registry->slot_count; ++i)
         free_topology(&registry->slots[i]);
+    for (watch = registry->watches; watch; watch = next) {
+        next = watch->next;
+        core_free(watch->events);
+        core_free(watch);
+    }
     core_free(registry->slots);
     core_lock_destroy(&registry->lock);
     core_free(registry);
@@ -359,6 +407,8 @@ enum CAMDRegistryResult camd_registry_publish(
     slot->block_count = block_count;
     advance_generation(registry);
     slot->endpoint.Generation = registry->generation;
+    notify_watches(registry, CAMD_ENDPOINT_EVENT_ADDED,
+                   &slot->endpoint.ID);
     provider_lease->slot = (uint32_t)(index + 1);
     provider_lease->generation = slot->generation;
     group_copy = NULL;
@@ -422,6 +472,8 @@ enum CAMDRegistryResult camd_registry_replace(
     slot->block_count = block_count;
     advance_generation(registry);
     slot->endpoint.Generation = registry->generation;
+    notify_watches(registry, CAMD_ENDPOINT_EVENT_UPDATED,
+                   &slot->endpoint.ID);
     group_copy = NULL;
     block_copy = NULL;
     result = CAMD_REGISTRY_OK;
@@ -451,9 +503,16 @@ enum CAMDRegistryResult camd_registry_set_state(
     else if (!generation_available(registry))
         result = CAMD_REGISTRY_RANGE;
     else {
+        uint32_t event_type = CAMD_ENDPOINT_EVENT_UPDATED;
+
         slot->endpoint.State = state;
         advance_generation(registry);
         slot->endpoint.Generation = registry->generation;
+        if (state == CAMD_ENDPOINT_OFFLINE)
+            event_type = CAMD_ENDPOINT_EVENT_OFFLINE;
+        else if (state == CAMD_ENDPOINT_RETIRING)
+            event_type = CAMD_ENDPOINT_EVENT_RETIRED;
+        notify_watches(registry, event_type, &slot->endpoint.ID);
         result = CAMD_REGISTRY_OK;
     }
     core_lock_release(&registry->lock);
@@ -514,10 +573,6 @@ enum CAMDRegistryResult camd_registry_release(
         result = CAMD_REGISTRY_STALE;
     else if (slot->references == 0)
         result = CAMD_REGISTRY_INVALID;
-    else if (slot->references == 1 &&
-             slot->endpoint.State == CAMD_ENDPOINT_RETIRING &&
-             !generation_available(registry))
-        result = CAMD_REGISTRY_RANGE;
     else {
         --slot->references;
         if (slot->references == 0 &&
@@ -525,7 +580,6 @@ enum CAMDRegistryResult camd_registry_release(
             free_topology(slot);
             memset(&slot->endpoint, 0, sizeof(slot->endpoint));
             slot->occupied = 0;
-            advance_generation(registry);
         }
         result = CAMD_REGISTRY_OK;
     }
@@ -567,7 +621,8 @@ enum CAMDRegistryResult camd_registry_snapshot(
     for (i = 0; i < registry->slot_count; ++i) {
         struct endpoint_slot *slot = &registry->slots[i];
         struct snapshot_endpoint *copy;
-        if (!slot->occupied)
+        if (!slot->occupied ||
+            slot->endpoint.State == CAMD_ENDPOINT_RETIRING)
             continue;
         copy = &snapshot->endpoints[snapshot->endpoint_count];
         copy->endpoint = slot->endpoint;
@@ -602,6 +657,93 @@ no_memory:
     core_lock_release(&registry->lock);
     camd_snapshot_destroy(snapshot);
     return CAMD_REGISTRY_NOMEM;
+}
+
+enum CAMDRegistryResult camd_registry_watch_start(
+    struct CAMDEndpointRegistry *registry,
+    size_t capacity,
+    struct CAMDEndpointWatch **watch_out,
+    struct CAMDGenerationV1 *generation)
+{
+    struct CAMDEndpointWatch *watch;
+
+    if (!registry || !watch_out || !generation || capacity == 0 ||
+        capacity > CAMD_ENDPOINT_WATCH_MAX_EVENTS ||
+        capacity > SIZE_MAX / sizeof(*watch->events))
+        return CAMD_REGISTRY_INVALID;
+    watch = core_alloc(sizeof(*watch), 1);
+    if (!watch)
+        return CAMD_REGISTRY_NOMEM;
+    watch->events = core_alloc(capacity * sizeof(*watch->events), 1);
+    if (!watch->events) {
+        core_free(watch);
+        return CAMD_REGISTRY_NOMEM;
+    }
+    watch->registry = registry;
+    watch->capacity = capacity;
+    core_lock_acquire(&registry->lock);
+    watch->next = registry->watches;
+    registry->watches = watch;
+    *generation = registry->generation;
+    *watch_out = watch;
+    core_lock_release(&registry->lock);
+    return CAMD_REGISTRY_OK;
+}
+
+enum CAMDRegistryResult camd_endpoint_watch_read(
+    struct CAMDEndpointWatch *watch,
+    struct CAMDEndpointWatchEventV1 *event)
+{
+    struct CAMDEndpointRegistry *registry;
+    enum CAMDRegistryResult result;
+
+    if (!watch || !event || !watch->registry)
+        return CAMD_REGISTRY_INVALID;
+    registry = watch->registry;
+    core_lock_acquire(&registry->lock);
+    if (watch->lost) {
+        memset(event, 0, sizeof(*event));
+        event->Size = sizeof(*event);
+        event->Version = 1;
+        event->Generation = watch->lost_generation;
+        event->Type = CAMD_ENDPOINT_EVENT_LOST;
+        watch->head = 0;
+        watch->count = 0;
+        watch->lost = 0;
+        result = CAMD_REGISTRY_OK;
+    } else if (watch->count == 0) {
+        result = CAMD_REGISTRY_EMPTY;
+    } else {
+        *event = watch->events[watch->head];
+        watch->head = (watch->head + 1) % watch->capacity;
+        --watch->count;
+        result = CAMD_REGISTRY_OK;
+    }
+    core_lock_release(&registry->lock);
+    return result;
+}
+
+void camd_endpoint_watch_end(struct CAMDEndpointWatch *watch)
+{
+    struct CAMDEndpointRegistry *registry;
+    struct CAMDEndpointWatch **link;
+
+    if (!watch || !watch->registry)
+        return;
+    registry = watch->registry;
+    core_lock_acquire(&registry->lock);
+    for (link = &registry->watches; *link; link = &(*link)->next) {
+        if (*link == watch) {
+            *link = watch->next;
+            watch->registry = NULL;
+            break;
+        }
+    }
+    core_lock_release(&registry->lock);
+    if (!watch->registry) {
+        core_free(watch->events);
+        core_free(watch);
+    }
 }
 
 void camd_snapshot_destroy(struct CAMDEndpointSnapshot *snapshot)

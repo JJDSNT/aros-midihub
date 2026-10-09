@@ -506,8 +506,10 @@ Function Blocks describe ranges and capabilities.
 
 Valid discovered Function Blocks take precedence over USB Group Terminal
 Blocks; explicit provider fallback topology is used only when neither is
-available. These sources are never blindly merged. Ordinary CAMD clusters are
-compatibility projections for legacy applications.
+available. These sources are never blindly merged. For a native UMP endpoint,
+ordinary CAMD clusters can be compatibility projections. Existing native
+MIDI 1.0 clusters remain an authoritative data path and are not reclassified
+as UMP projections.
 
 This follows the same broad compatibility pattern used by modern MIDI
 subsystems: retain the traditional port-facing contract while adding richer
@@ -542,9 +544,12 @@ The first private registry slice is now integrated without public vectors. Its
 opaque implementation owns the registry lock (an Exec semaphore on AROS), and
 every mutation, lease lookup and snapshot creation serializes internally. The
 host test races snapshots and acquire/release operations against lifecycle
-state changes. Native AROS retirement stress remains a required validation;
-watches and the first private software provider are the next implementation
-slice.
+state changes. Bounded private endpoint watches now publish generation-tagged
+added, updated, offline and retired events. Overflow becomes one explicit lost
+marker and requires a fresh snapshot; retiring endpoints are omitted from new
+snapshots while leases keep their storage alive. Native AROS retirement stress
+remains a required validation. Before the first private software provider, its
+contract must define separate native MIDI 1.0 and UMP data callbacks.
 
 ## Implemented steps
 
@@ -687,10 +692,10 @@ adapter. Public ABI remains a separate U01 gate.
    In progress: the
    [host endpoint-core model](../prototypes/camd/README.md) now validates fixed
    record sizes, transactional topology, immutable snapshots, lifecycle,
-   retirement and stale-handle rejection. The corresponding private AROS
-   patch initializes it in `CamdBase` and compiles for hosted x86-64. Enforced
-   Exec locking, watches, providers and the legacy adapter remain before U01
-   closure.
+   retirement, stale-handle rejection and bounded watch overflow/resync. The
+   corresponding private AROS patch initializes it in `CamdBase`, enforces its
+   Exec semaphore and compiles for hosted x86-64. Providers, native AROS
+   retirement stress and the legacy adapter remain before U01 closure.
 
 
 ## 7. Native MIDI 2.0 / UMP architecture (future design contract)
@@ -703,14 +708,20 @@ first dynamic-endpoint implementation.
 
 ### 7.1 Scope and invariants
 
-- Make UMP the lossless, native message representation for new MIDI 2.0-aware
-  CAMD clients. UMP is a packet container, not a synonym for MIDI 2.0 Channel
-  Voice: it also transports MIDI 1.0 messages.
+- Use the path-selective hybrid selected by the
+  [coexistence research](midi-protocol-coexistence-research.md): endpoint
+  identity, topology, lifecycle, watches, timing policy and diagnostics are
+  shared, while MIDI 1.0 and UMP payload paths remain native to their format.
+- Make UMP the lossless, native message representation for MIDI 2.0-aware UMP
+  CAMD clients and transports, not a mandatory internal representation for
+  all MIDI 1.0 traffic. UMP is a packet container, not a synonym for MIDI 2.0
+  Channel Voice: it can also transport MIDI 1.0 messages.
 - Preserve every existing CAMD 41.1/42 library vector, public structure,
   tag value, cluster behavior and driver ABI. Add versioned entry points and
   opaque handles; never reinterpret `MidiMsg` as a UMP packet.
 - Legacy MIDI 1.0 applications remain functional without recompilation.
-  Conversion is explicit in policy and observable when information is lost.
+  Direct MIDI 1.0-to-MIDI 1.0 routes do not convert through UMP. Conversion is
+  explicit in policy and observable when information is lost.
 - Keep transport (USB, BLE, AppleMIDI, network), CAMD endpoint topology,
   MIDI protocol, synthesis and routing as separate concerns.
 - Preserve unknown but structurally valid future UMP message types as opaque
@@ -801,11 +812,13 @@ connection, legacy cluster, Function Block and Group. Model:
 
 ### 7.6 Driver interface and portability
 
-- Add versioned UMP-capable driver registration and callbacks beside legacy
-  fixed-`NPorts` drivers; both may coexist.
-- Transport drivers advertise actual capabilities, normalize complete UMP
-  messages and serialize for their physical/network transport. A MIDI 1.0-only
-  driver remains usable via an adapter, with documented conversion policy.
+- Add a private, sized provider interface with declared native data formats
+  and separate MIDI 1.0 and UMP callbacks beside legacy fixed-`NPorts`
+  drivers. Freeze no provider data callback until both paths are proven.
+- Transport drivers advertise actual capabilities. UMP drivers normalize
+  complete UMP messages and serialize for their physical/network transport. A
+  MIDI 1.0-only driver uses its native path and bridges through an adapter only
+  when a route requires a different format, with documented conversion policy.
 - Define locking and memory constraints for interrupt/task contexts, queue
   ownership, disconnect while I/O is pending, hot-plug and restart.
 - Do not assume USB MIDI 2.0, BLE MIDI, AppleMIDI and network UMP have
@@ -826,9 +839,11 @@ connection, legacy cluster, Function Block and Group. Model:
 
 ### 7.8 Implementation sequence (future, after current CAMD roadmap)
 
-1. Validate the private endpoint core, topology snapshots, lifecycle and
-   complete-message queues with the legacy adapter and a synthetic software
-   provider; expose no public vectors or unverified wire constants yet.
+1. Validate the private endpoint control plane, topology snapshots, lifecycle
+   and watches. Then define the format-specific private provider contract and
+   prove native MIDI 1.0 and complete-UMP queues with the legacy adapter and a
+   synthetic software provider; expose no public vectors or unverified wire
+   constants yet.
 2. Freeze the minimal versioned client API and opaque topology model through
    U01 review and multi-target ABI builds.
 3. Implement parser/serializer, normative validation and unit tests.
@@ -844,6 +859,8 @@ connection, legacy cluster, Function Block and Group. Model:
 
 - Unmodified legacy CAMD compatibility suite still passes, including 41.1
   behavior and version 42 additions.
+- A MIDI 1.0 producer routed to a MIDI 1.0 consumer uses the native CAMD path
+  with zero format conversions, including bounded SysEx transfer.
 - Round-trip every defined UMP packet length and test unknown/invalid types;
   preserve payloads and group-less addressing where applicable.
 - Exercise all 16 Groups and 16 channels per Group, multi-producer ordering,

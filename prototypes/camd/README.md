@@ -21,14 +21,19 @@ The current slice proves:
 - retirement that rejects new acquisitions and waits for outstanding leases;
 - stale-handle rejection after slot reuse;
 - internal serialization at every registry entry point, exercised with
-  concurrent snapshots, lease churn and lifecycle state changes.
+  concurrent snapshots, lease churn and lifecycle state changes;
+- bounded endpoint watches with generation-tagged `added`, `updated`,
+  `offline` and `retired` events;
+- deterministic overflow: queued stale events collapse into one `lost` marker,
+  after which the consumer acquires a fresh snapshot;
+- retirement disappears from new snapshots immediately while storage remains
+  alive until the final lease is released.
 
 It deliberately does not yet implement:
 
 - stable-ID storage or key derivation;
 - concurrent retirement/failure-path stress on native AROS;
-- endpoint watches and overflow/resynchronization;
-- provider callbacks or UMP queues;
+- provider callbacks or native MIDI 1.0/UMP queues;
 - legacy cluster projection;
 - any public CAMD vector, tag, header or normative UMP wire constant.
 
@@ -38,6 +43,7 @@ Run it with the normal host suite:
 make test
 ```
 
-The next slice is endpoint-watch overflow/resynchronization and a private
-software provider, alongside native AROS retirement stress. Public vectors
-remain blocked until those tests and the U01 review pass.
+The next slice is the private format-specific provider contract, followed by a
+software provider and native AROS retirement stress. Public vectors remain
+blocked until native MIDI 1.0 and UMP paths are both proven and the U01 review
+passes.
