@@ -241,8 +241,10 @@ The host-tested
 [private endpoint-core model](../prototypes/camd/README.md) begins that proof
 with transactional topology, immutable snapshots, lifecycle transitions and
 generation-safe leases. Its AROS patch uses Exec allocation and initializes
-the core inside `camd.library`; semaphore enforcement and concurrent tests are
-still required before it becomes operational.
+the core inside `camd.library`. The registry now owns and enforces its Exec
+semaphore, while the host model races snapshots and lease operations against
+lifecycle changes. Native AROS retirement stress, watches and a private
+software provider are still required before it becomes operational.
 
 The current proposal is documented in
 [the endpoint ABI draft](camd-endpoint-abi-draft.md). It is a review artifact,

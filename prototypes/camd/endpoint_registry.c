@@ -4,7 +4,10 @@
 
 #ifdef __AROS__
 #include <exec/memory.h>
+#include <exec/semaphores.h>
 #include <proto/exec.h>
+
+typedef struct SignalSemaphore core_lock_t;
 
 static void *core_alloc(size_t size, int clear)
 {
@@ -16,7 +19,10 @@ static void core_free(void *memory)
     FreeVec(memory);
 }
 #else
+#include <pthread.h>
 #include <stdlib.h>
+
+typedef pthread_mutex_t core_lock_t;
 
 static void *core_alloc(size_t size, int clear)
 {
@@ -41,10 +47,54 @@ struct endpoint_slot {
 };
 
 struct CAMDEndpointRegistry {
+    core_lock_t lock;
     struct endpoint_slot *slots;
     size_t slot_count;
     struct CAMDGenerationV1 generation;
 };
+
+#ifdef __AROS__
+static int core_lock_init(core_lock_t *lock)
+{
+    InitSemaphore(lock);
+    return 1;
+}
+
+static void core_lock_destroy(core_lock_t *lock)
+{
+    (void)lock;
+}
+
+static void core_lock_acquire(core_lock_t *lock)
+{
+    ObtainSemaphore(lock);
+}
+
+static void core_lock_release(core_lock_t *lock)
+{
+    ReleaseSemaphore(lock);
+}
+#else
+static int core_lock_init(core_lock_t *lock)
+{
+    return pthread_mutex_init(lock, NULL) == 0;
+}
+
+static void core_lock_destroy(core_lock_t *lock)
+{
+    pthread_mutex_destroy(lock);
+}
+
+static void core_lock_acquire(core_lock_t *lock)
+{
+    pthread_mutex_lock(lock);
+}
+
+static void core_lock_release(core_lock_t *lock)
+{
+    pthread_mutex_unlock(lock);
+}
+#endif
 
 struct snapshot_endpoint {
     struct CAMDEndpointInfoV1 endpoint;
@@ -212,7 +262,14 @@ static int transition_allowed(uint32_t from, uint32_t to)
 
 struct CAMDEndpointRegistry *camd_registry_create(void)
 {
-    return core_alloc(sizeof(struct CAMDEndpointRegistry), 1);
+    struct CAMDEndpointRegistry *registry =
+        core_alloc(sizeof(struct CAMDEndpointRegistry), 1);
+
+    if (registry && !core_lock_init(&registry->lock)) {
+        core_free(registry);
+        registry = NULL;
+    }
+    return registry;
 }
 
 void camd_registry_destroy(struct CAMDEndpointRegistry *registry)
@@ -224,6 +281,7 @@ void camd_registry_destroy(struct CAMDEndpointRegistry *registry)
     for (i = 0; i < registry->slot_count; ++i)
         free_topology(&registry->slots[i]);
     core_free(registry->slots);
+    core_lock_destroy(&registry->lock);
     core_free(registry);
 }
 
@@ -245,15 +303,24 @@ enum CAMDRegistryResult camd_registry_publish(
 
     if (!registry || !provider_lease)
         return CAMD_REGISTRY_INVALID;
-    if (!generation_available(registry))
-        return CAMD_REGISTRY_RANGE;
     result = validate_endpoint(endpoint);
     if (result != CAMD_REGISTRY_OK)
         return result;
+    result = copy_topology(endpoint, groups, group_count, blocks, block_count,
+                           &group_copy, &block_copy);
+    if (result != CAMD_REGISTRY_OK)
+        return result;
+    core_lock_acquire(&registry->lock);
+    if (!generation_available(registry)) {
+        result = CAMD_REGISTRY_RANGE;
+        goto out;
+    }
     for (i = 0; i < registry->slot_count; ++i) {
         if (registry->slots[i].occupied &&
-            id_equal(&registry->slots[i].endpoint.ID, &endpoint->ID))
-            return CAMD_REGISTRY_DUPLICATE;
+            id_equal(&registry->slots[i].endpoint.ID, &endpoint->ID)) {
+            result = CAMD_REGISTRY_DUPLICATE;
+            goto out;
+        }
         /* A generation that reached UINT32_MAX is quarantined forever. */
         if (!slot && !registry->slots[i].occupied &&
             registry->slots[i].generation != UINT32_MAX) {
@@ -261,23 +328,17 @@ enum CAMDRegistryResult camd_registry_publish(
             index = i;
         }
     }
-    result = copy_topology(endpoint, groups, group_count, blocks, block_count,
-                           &group_copy, &block_copy);
-    if (result != CAMD_REGISTRY_OK)
-        return result;
     if (!slot) {
         if (registry->slot_count == UINT32_MAX ||
             registry->slot_count >= SIZE_MAX / sizeof(*grown)) {
-            core_free(group_copy);
-            core_free(block_copy);
-            return CAMD_REGISTRY_RANGE;
+            result = CAMD_REGISTRY_RANGE;
+            goto out;
         }
         index = registry->slot_count;
         grown = core_alloc((registry->slot_count + 1) * sizeof(*grown), 1);
         if (!grown) {
-            core_free(group_copy);
-            core_free(block_copy);
-            return CAMD_REGISTRY_NOMEM;
+            result = CAMD_REGISTRY_NOMEM;
+            goto out;
         }
         if (registry->slot_count)
             memcpy(grown, registry->slots,
@@ -300,7 +361,14 @@ enum CAMDRegistryResult camd_registry_publish(
     slot->endpoint.Generation = registry->generation;
     provider_lease->slot = (uint32_t)(index + 1);
     provider_lease->generation = slot->generation;
-    return CAMD_REGISTRY_OK;
+    group_copy = NULL;
+    block_copy = NULL;
+    result = CAMD_REGISTRY_OK;
+out:
+    core_lock_release(&registry->lock);
+    core_free(group_copy);
+    core_free(block_copy);
+    return result;
 }
 
 enum CAMDRegistryResult camd_registry_replace(
@@ -312,28 +380,40 @@ enum CAMDRegistryResult camd_registry_replace(
     const struct CAMDFunctionBlockInfoV1 *blocks,
     size_t block_count)
 {
-    struct endpoint_slot *slot = resolve(registry, provider_lease);
+    struct endpoint_slot *slot;
     struct CAMDGroupInfoV1 *group_copy;
     struct CAMDFunctionBlockInfoV1 *block_copy;
     enum CAMDRegistryResult result;
 
-    if (!slot)
-        return CAMD_REGISTRY_STALE;
-    if (slot->endpoint.State == CAMD_ENDPOINT_RETIRING)
-        return CAMD_REGISTRY_RETIRED;
-    if (!generation_available(registry))
-        return CAMD_REGISTRY_RANGE;
+    if (!registry)
+        return CAMD_REGISTRY_INVALID;
     result = validate_endpoint(endpoint);
     if (result != CAMD_REGISTRY_OK)
         return result;
-    if (!id_equal(&slot->endpoint.ID, &endpoint->ID) ||
-        !id_equal(&slot->endpoint.ProviderID, &endpoint->ProviderID) ||
-        slot->endpoint.State != endpoint->State)
-        return CAMD_REGISTRY_INVALID;
     result = copy_topology(endpoint, groups, group_count, blocks, block_count,
                            &group_copy, &block_copy);
     if (result != CAMD_REGISTRY_OK)
         return result;
+    core_lock_acquire(&registry->lock);
+    slot = resolve(registry, provider_lease);
+    if (!slot) {
+        result = CAMD_REGISTRY_STALE;
+        goto out;
+    }
+    if (slot->endpoint.State == CAMD_ENDPOINT_RETIRING) {
+        result = CAMD_REGISTRY_RETIRED;
+        goto out;
+    }
+    if (!generation_available(registry)) {
+        result = CAMD_REGISTRY_RANGE;
+        goto out;
+    }
+    if (!id_equal(&slot->endpoint.ID, &endpoint->ID) ||
+        !id_equal(&slot->endpoint.ProviderID, &endpoint->ProviderID) ||
+        slot->endpoint.State != endpoint->State) {
+        result = CAMD_REGISTRY_INVALID;
+        goto out;
+    }
     free_topology(slot);
     slot->endpoint = *endpoint;
     slot->groups = group_copy;
@@ -342,7 +422,14 @@ enum CAMDRegistryResult camd_registry_replace(
     slot->block_count = block_count;
     advance_generation(registry);
     slot->endpoint.Generation = registry->generation;
-    return CAMD_REGISTRY_OK;
+    group_copy = NULL;
+    block_copy = NULL;
+    result = CAMD_REGISTRY_OK;
+out:
+    core_lock_release(&registry->lock);
+    core_free(group_copy);
+    core_free(block_copy);
+    return result;
 }
 
 enum CAMDRegistryResult camd_registry_set_state(
@@ -350,18 +437,27 @@ enum CAMDRegistryResult camd_registry_set_state(
     struct CAMDHandleV1 provider_lease,
     uint32_t state)
 {
-    struct endpoint_slot *slot = resolve(registry, provider_lease);
+    struct endpoint_slot *slot;
+    enum CAMDRegistryResult result;
 
+    if (!registry)
+        return CAMD_REGISTRY_INVALID;
+    core_lock_acquire(&registry->lock);
+    slot = resolve(registry, provider_lease);
     if (!slot)
-        return CAMD_REGISTRY_STALE;
-    if (!transition_allowed(slot->endpoint.State, state))
-        return CAMD_REGISTRY_STATE;
-    if (!generation_available(registry))
-        return CAMD_REGISTRY_RANGE;
-    slot->endpoint.State = state;
-    advance_generation(registry);
-    slot->endpoint.Generation = registry->generation;
-    return CAMD_REGISTRY_OK;
+        result = CAMD_REGISTRY_STALE;
+    else if (!transition_allowed(slot->endpoint.State, state))
+        result = CAMD_REGISTRY_STATE;
+    else if (!generation_available(registry))
+        result = CAMD_REGISTRY_RANGE;
+    else {
+        slot->endpoint.State = state;
+        advance_generation(registry);
+        slot->endpoint.Generation = registry->generation;
+        result = CAMD_REGISTRY_OK;
+    }
+    core_lock_release(&registry->lock);
+    return result;
 }
 
 enum CAMDRegistryResult camd_registry_acquire(
@@ -370,23 +466,29 @@ enum CAMDRegistryResult camd_registry_acquire(
     struct CAMDHandleV1 *lease)
 {
     size_t i;
+    enum CAMDRegistryResult result = CAMD_REGISTRY_INVALID;
 
     if (!registry || !id || !lease || id_is_zero(id))
         return CAMD_REGISTRY_INVALID;
+    core_lock_acquire(&registry->lock);
     for (i = 0; i < registry->slot_count; ++i) {
         struct endpoint_slot *slot = &registry->slots[i];
         if (slot->occupied && id_equal(&slot->endpoint.ID, id)) {
             if (slot->endpoint.State == CAMD_ENDPOINT_RETIRING)
-                return CAMD_REGISTRY_RETIRED;
-            if (slot->references == UINT32_MAX)
-                return CAMD_REGISTRY_RANGE;
-            ++slot->references;
-            lease->slot = (uint32_t)(i + 1);
-            lease->generation = slot->generation;
-            return CAMD_REGISTRY_OK;
+                result = CAMD_REGISTRY_RETIRED;
+            else if (slot->references == UINT32_MAX)
+                result = CAMD_REGISTRY_RANGE;
+            else {
+                ++slot->references;
+                lease->slot = (uint32_t)(i + 1);
+                lease->generation = slot->generation;
+                result = CAMD_REGISTRY_OK;
+            }
+            break;
         }
     }
-    return CAMD_REGISTRY_INVALID;
+    core_lock_release(&registry->lock);
+    return result;
 }
 
 enum CAMDRegistryResult camd_registry_retire(
@@ -401,25 +503,34 @@ enum CAMDRegistryResult camd_registry_release(
     struct CAMDEndpointRegistry *registry,
     struct CAMDHandleV1 lease)
 {
-    struct endpoint_slot *slot = resolve(registry, lease);
+    struct endpoint_slot *slot;
+    enum CAMDRegistryResult result;
 
-    if (!slot)
-        return CAMD_REGISTRY_STALE;
-    if (slot->references == 0)
+    if (!registry)
         return CAMD_REGISTRY_INVALID;
-    if (slot->references == 1 &&
-        slot->endpoint.State == CAMD_ENDPOINT_RETIRING &&
-        !generation_available(registry))
-        return CAMD_REGISTRY_RANGE;
-    --slot->references;
-    if (slot->references == 0 &&
-        slot->endpoint.State == CAMD_ENDPOINT_RETIRING) {
-        free_topology(slot);
-        memset(&slot->endpoint, 0, sizeof(slot->endpoint));
-        slot->occupied = 0;
-        advance_generation(registry);
+    core_lock_acquire(&registry->lock);
+    slot = resolve(registry, lease);
+    if (!slot)
+        result = CAMD_REGISTRY_STALE;
+    else if (slot->references == 0)
+        result = CAMD_REGISTRY_INVALID;
+    else if (slot->references == 1 &&
+             slot->endpoint.State == CAMD_ENDPOINT_RETIRING &&
+             !generation_available(registry))
+        result = CAMD_REGISTRY_RANGE;
+    else {
+        --slot->references;
+        if (slot->references == 0 &&
+            slot->endpoint.State == CAMD_ENDPOINT_RETIRING) {
+            free_topology(slot);
+            memset(&slot->endpoint, 0, sizeof(slot->endpoint));
+            slot->occupied = 0;
+            advance_generation(registry);
+        }
+        result = CAMD_REGISTRY_OK;
     }
-    return CAMD_REGISTRY_OK;
+    core_lock_release(&registry->lock);
+    return result;
 }
 
 enum CAMDRegistryResult camd_registry_snapshot(
@@ -431,19 +542,24 @@ enum CAMDRegistryResult camd_registry_snapshot(
 
     if (!registry || !snapshot_out)
         return CAMD_REGISTRY_INVALID;
+    core_lock_acquire(&registry->lock);
     capacity = registry->slot_count;
     snapshot = core_alloc(sizeof(*snapshot), 1);
-    if (!snapshot)
+    if (!snapshot) {
+        core_lock_release(&registry->lock);
         return CAMD_REGISTRY_NOMEM;
+    }
     if (capacity) {
         if (capacity > SIZE_MAX / sizeof(*snapshot->endpoints)) {
             core_free(snapshot);
+            core_lock_release(&registry->lock);
             return CAMD_REGISTRY_RANGE;
         }
         snapshot->endpoints = core_alloc(
             capacity * sizeof(*snapshot->endpoints), 1);
         if (!snapshot->endpoints) {
             core_free(snapshot);
+            core_lock_release(&registry->lock);
             return CAMD_REGISTRY_NOMEM;
         }
     }
@@ -479,9 +595,11 @@ enum CAMDRegistryResult camd_registry_snapshot(
         ++snapshot->endpoint_count;
     }
     *snapshot_out = snapshot;
+    core_lock_release(&registry->lock);
     return CAMD_REGISTRY_OK;
 
 no_memory:
+    core_lock_release(&registry->lock);
     camd_snapshot_destroy(snapshot);
     return CAMD_REGISTRY_NOMEM;
 }

@@ -31,7 +31,7 @@ build/camd-endpoint-core-test: tests/camd_endpoint_core.c \
                                prototypes/camd/endpoint_registry.h
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Iprototypes/camd -o $@ \
-		tests/camd_endpoint_core.c prototypes/camd/endpoint_registry.c
+		tests/camd_endpoint_core.c prototypes/camd/endpoint_registry.c -pthread
 
 build/ump-test: tests/ump.c src/ump.c include/midihub/ump.h
 	mkdir -p build

@@ -1,6 +1,7 @@
 #include "../prototypes/camd/endpoint_registry.h"
 
 #include <assert.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -77,6 +78,102 @@ static const struct CAMDEndpointInfoV1 *snapshot_first(
     assert(groups[0].Group == 0);
     assert(blocks[0].FirstGroup == 0);
     return endpoint;
+}
+
+struct concurrent_context {
+    struct CAMDEndpointRegistry *registry;
+    struct CAMDEndpointIDV1 id;
+    struct CAMDHandleV1 provider;
+    int failed;
+};
+
+static void *concurrent_reader(void *argument)
+{
+    struct concurrent_context *context = argument;
+    unsigned int i;
+
+    for (i = 0; i < 5000 && !context->failed; ++i) {
+        struct CAMDEndpointSnapshot *snapshot = NULL;
+        struct CAMDHandleV1 lease;
+        const struct CAMDEndpointInfoV1 *endpoint;
+        const struct CAMDGroupInfoV1 *groups;
+        const struct CAMDFunctionBlockInfoV1 *blocks;
+        size_t group_count, block_count;
+
+        if (camd_registry_acquire(context->registry, &context->id, &lease) !=
+                CAMD_REGISTRY_OK ||
+            camd_registry_snapshot(context->registry, &snapshot) !=
+                CAMD_REGISTRY_OK ||
+            camd_snapshot_endpoint_count(snapshot) != 1 ||
+            camd_snapshot_endpoint(snapshot, 0, &endpoint, &groups,
+                                   &group_count, &blocks, &block_count) !=
+                CAMD_REGISTRY_OK ||
+            memcmp(&endpoint->ID, &context->id, sizeof(context->id)) != 0 ||
+            group_count != 1 ||
+            block_count != 1 || groups[0].Group != 0 ||
+            blocks[0].FirstGroup != 0 ||
+            camd_registry_release(context->registry, lease) !=
+                CAMD_REGISTRY_OK)
+            context->failed = 1;
+        camd_snapshot_destroy(snapshot);
+    }
+    return NULL;
+}
+
+static void *concurrent_writer(void *argument)
+{
+    struct concurrent_context *context = argument;
+    unsigned int i;
+
+    for (i = 0; i < 5000 && !context->failed; ++i) {
+        if (camd_registry_set_state(context->registry, context->provider,
+                                    CAMD_ENDPOINT_OFFLINE) != CAMD_REGISTRY_OK ||
+            camd_registry_set_state(context->registry, context->provider,
+                                    CAMD_ENDPOINT_AVAILABLE) != CAMD_REGISTRY_OK)
+            context->failed = 1;
+    }
+    return NULL;
+}
+
+static void test_concurrency(void)
+{
+    struct CAMDEndpointRegistry *registry = camd_registry_create();
+    struct CAMDEndpointInfoV1 endpoint = make_endpoint(3, "Concurrent");
+    struct CAMDGroupInfoV1 group = make_group(&endpoint, 0);
+    struct CAMDFunctionBlockInfoV1 block = make_block(&endpoint, 0, 0, 1);
+    struct concurrent_context contexts[5];
+    pthread_t threads[5];
+    size_t i;
+
+    assert(registry != NULL);
+    assert(camd_registry_publish(registry, &endpoint, &group, 1, &block, 1,
+                                 &contexts[0].provider) == CAMD_REGISTRY_OK);
+    assert(camd_registry_set_state(registry, contexts[0].provider,
+                                   CAMD_ENDPOINT_DISCOVERING) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_registry_set_state(registry, contexts[0].provider,
+                                   CAMD_ENDPOINT_AVAILABLE) ==
+           CAMD_REGISTRY_OK);
+    for (i = 0; i < 5; ++i) {
+        contexts[i].registry = registry;
+        contexts[i].id = endpoint.ID;
+        contexts[i].provider = contexts[0].provider;
+        contexts[i].failed = 0;
+    }
+    for (i = 0; i < 4; ++i)
+        assert(pthread_create(&threads[i], NULL, concurrent_reader,
+                              &contexts[i]) == 0);
+    assert(pthread_create(&threads[4], NULL, concurrent_writer,
+                          &contexts[4]) == 0);
+    for (i = 0; i < 5; ++i) {
+        assert(pthread_join(threads[i], NULL) == 0);
+        assert(!contexts[i].failed);
+    }
+    assert(camd_registry_retire(registry, contexts[0].provider) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_registry_release(registry, contexts[0].provider) ==
+           CAMD_REGISTRY_OK);
+    camd_registry_destroy(registry);
 }
 
 int main(void)
@@ -165,6 +262,7 @@ int main(void)
     assert(camd_registry_release(registry, replacement) == CAMD_REGISTRY_OK);
     camd_snapshot_destroy(before);
     camd_registry_destroy(registry);
+    test_concurrency();
     puts("CAMD private endpoint core OK");
     return 0;
 }

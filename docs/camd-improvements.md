@@ -538,6 +538,14 @@ endpoint registry/provider, native UMP topology, lifecycle and legacy
 projection architecture. Compatibility adapters are allowed only as parts of
 that final model. Public ABI remains blocked on U01 and upstream review.
 
+The first private registry slice is now integrated without public vectors. Its
+opaque implementation owns the registry lock (an Exec semaphore on AROS), and
+every mutation, lease lookup and snapshot creation serializes internally. The
+host test races snapshots and acquire/release operations against lifecycle
+state changes. Native AROS retirement stress remains a required validation;
+watches and the first private software provider are the next implementation
+slice.
+
 ## Implemented steps
 
 The items below are in the order to do them. Each one is one commit in

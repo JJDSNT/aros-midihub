@@ -6,9 +6,9 @@
 
 This directory converts the accepted endpoint architecture into C before any
 version 43 vectors are frozen. The same source selects `AllocVec`/`FreeVec`
-when built for AROS, while the host build uses the C allocator. The AROS patch
-adds the registry and its semaphore to `CamdBase`; it is not a MIDI 1.0
-dynamic-port implementation.
+when built for AROS, while the host build uses the C allocator. The opaque
+registry owns an Exec semaphore on AROS and a pthread mutex in the host model;
+it is not a MIDI 1.0 dynamic-port implementation.
 
 The current slice proves:
 
@@ -19,12 +19,14 @@ The current slice proves:
 - immutable copied snapshots with one registry generation;
 - explicit lifecycle transitions;
 - retirement that rejects new acquisitions and waits for outstanding leases;
-- stale-handle rejection after slot reuse.
+- stale-handle rejection after slot reuse;
+- internal serialization at every registry entry point, exercised with
+  concurrent snapshots, lease churn and lifecycle state changes.
 
 It deliberately does not yet implement:
 
 - stable-ID storage or key derivation;
-- Exec semaphore integration and concurrent race tests;
+- concurrent retirement/failure-path stress on native AROS;
 - endpoint watches and overflow/resynchronization;
 - provider callbacks or UMP queues;
 - legacy cluster projection;
@@ -36,6 +38,6 @@ Run it with the normal host suite:
 make test
 ```
 
-The next slice is to enforce the registry semaphore at every internal entry
-point and add concurrent snapshot/retirement tests, followed by watches and a
-software provider. Public vectors remain blocked until those tests pass.
+The next slice is endpoint-watch overflow/resynchronization and a private
+software provider, alongside native AROS retirement stress. Public vectors
+remain blocked until those tests and the U01 review pass.

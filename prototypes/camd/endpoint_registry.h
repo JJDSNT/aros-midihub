@@ -91,8 +91,9 @@ enum CAMDRegistryResult {
 struct CAMDEndpointRegistry;
 struct CAMDEndpointSnapshot;
 
-/* Callers serialize registry mutation/snapshot creation. Snapshot access is
- * independent after camd_registry_snapshot() returns. */
+/* Registry operations serialize themselves.  Destroy still requires that no
+ * operation is in flight.  Snapshot access is independent after
+ * camd_registry_snapshot() returns. */
 
 struct CAMDEndpointRegistry *camd_registry_create(void);
 void camd_registry_destroy(struct CAMDEndpointRegistry *registry);
