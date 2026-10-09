@@ -1,9 +1,11 @@
 workbench/libs/camd/camd_intern.h       |   6 +
- workbench/libs/camd/endpoint_registry.c | 796 ++++++++++++++++++++++++++++++++
- workbench/libs/camd/endpoint_registry.h | 186 ++++++++
+ workbench/libs/camd/endpoint_registry.c | 798 ++++++++++++++++++++++++++++++++
+ workbench/libs/camd/endpoint_registry.h | 191 ++++++++
  workbench/libs/camd/init.c              |  27 +-
- workbench/libs/camd/mmakefile.src       |   2 +-
- 5 files changed, 1014 insertions(+), 3 deletions(-)
+ workbench/libs/camd/mmakefile.src       |   3 +-
+ workbench/libs/camd/provider_contract.c | 364 +++++++++++++++
+ workbench/libs/camd/provider_contract.h | 223 +++++++++
+ 7 files changed, 1609 insertions(+), 3 deletions(-)
 
 diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
 index ac12d843db..42c7c6fd53 100644
@@ -31,10 +33,10 @@ index ac12d843db..42c7c6fd53 100644
  #ifdef __AMIGAOS__
 diff --git a/workbench/libs/camd/endpoint_registry.c b/workbench/libs/camd/endpoint_registry.c
 new file mode 100644
-index 0000000000..f8ba7302e7
+index 0000000000..7761a00334
 --- /dev/null
 +++ b/workbench/libs/camd/endpoint_registry.c
-@@ -0,0 +1,796 @@
+@@ -0,0 +1,798 @@
 +#include "endpoint_registry.h"
 +
 +#include <string.h>
@@ -237,6 +239,8 @@ index 0000000000..f8ba7302e7
 +    if (!endpoint || endpoint->Size != sizeof(*endpoint) ||
 +        endpoint->Version != 1 || id_is_zero(&endpoint->ID) ||
 +        id_is_zero(&endpoint->ProviderID) ||
++        endpoint->NativeDataFormats == 0 ||
++        (endpoint->NativeDataFormats & ~CAMD_DATA_FORMAT_ALL) != 0 ||
 +        endpoint->State < CAMD_ENDPOINT_REGISTERED ||
 +        endpoint->State > CAMD_ENDPOINT_OFFLINE)
 +        return CAMD_REGISTRY_INVALID;
@@ -833,10 +837,10 @@ index 0000000000..f8ba7302e7
 +}
 diff --git a/workbench/libs/camd/endpoint_registry.h b/workbench/libs/camd/endpoint_registry.h
 new file mode 100644
-index 0000000000..c44c4ddef6
+index 0000000000..2cce960b33
 --- /dev/null
 +++ b/workbench/libs/camd/endpoint_registry.h
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,191 @@
 +#ifndef CAMD_ENDPOINT_REGISTRY_H
 +#define CAMD_ENDPOINT_REGISTRY_H
 +
@@ -855,6 +859,11 @@ index 0000000000..c44c4ddef6
 +#define CAMD_ENDPOINT_TRANSPORT_BYTES   32u
 +#define CAMD_TOPOLOGY_NAME_BYTES        64u
 +#define CAMD_ENDPOINT_WATCH_MAX_EVENTS  32u
++
++#define CAMD_DATA_FORMAT_MIDI1           (1u << 0)
++#define CAMD_DATA_FORMAT_UMP             (1u << 1)
++#define CAMD_DATA_FORMAT_ALL             (CAMD_DATA_FORMAT_MIDI1 | \
++                                          CAMD_DATA_FORMAT_UMP)
 +
 +struct CAMDHandleV1 {
 +    uint32_t slot;
@@ -887,7 +896,7 @@ index 0000000000..c44c4ddef6
 +    uint32_t State;
 +    uint32_t Flags;
 +    uint32_t IdentityKind;
-+    uint32_t NativeDataFormat;
++    uint32_t NativeDataFormats;
 +    uint32_t ProtocolCapabilities;
 +    uint32_t CurrentProtocol;
 +    struct CAMDGenerationV1 Generation;
@@ -1083,18 +1092,618 @@ index 417dd8f81a..e8a7f12118 100644
  	if(CB(CamdBase)->CLSemaphore!=NULL)
  	  FreeMem(CB(CamdBase)->CLSemaphore,sizeof(struct SignalSemaphore));
 diff --git a/workbench/libs/camd/mmakefile.src b/workbench/libs/camd/mmakefile.src
-index bf193caead..5225d345e3 100644
+index bf193caead..82c2cede43 100644
 --- a/workbench/libs/camd/mmakefile.src
 +++ b/workbench/libs/camd/mmakefile.src
-@@ -5,7 +5,7 @@ USER_LDFLAGS := -static
+@@ -5,7 +5,8 @@ USER_LDFLAGS := -static
  
  FILES :=    drivers clusters init camdwait mididistr midifromdriver \
  	    midimsgtype2 miditodriver receiverproc strings sysexdistr \
 -	    unlinkmidilink getmidilinkfromownernode camdclock
-+	    unlinkmidilink getmidilinkfromownernode camdclock endpoint_registry
++	    unlinkmidilink getmidilinkfromownernode camdclock endpoint_registry \
++	    provider_contract
  
  FUNCS := \
      lockcamd \
+diff --git a/workbench/libs/camd/provider_contract.c b/workbench/libs/camd/provider_contract.c
+new file mode 100644
+index 0000000000..ce8e9a4960
+--- /dev/null
++++ b/workbench/libs/camd/provider_contract.c
+@@ -0,0 +1,364 @@
++#include "provider_contract.h"
++
++#include <string.h>
++
++typedef char midi1_event_size_must_be_32[
++    sizeof(struct CAMDMIDI1EventV1) == 32 ? 1 : -1];
++typedef char ump_event_size_must_be_44[
++    sizeof(struct CAMDUMPEventV1) == 44 ? 1 : -1];
++
++static int id_is_zero(const struct CAMDEndpointIDV1 *id)
++{
++    return !(id->word[0] | id->word[1] | id->word[2] | id->word[3]);
++}
++
++static uint32_t request_path(const struct CAMDProviderOpenRequestV1 *request)
++{
++    if (request->DataFormat == CAMD_PROVIDER_FORMAT_MIDI1 &&
++        request->Protocol == CAMD_PROVIDER_PROTOCOL_MIDI1)
++        return CAMD_PROVIDER_PATH_MIDI1;
++    if (request->DataFormat == CAMD_PROVIDER_FORMAT_UMP &&
++        request->Protocol == CAMD_PROVIDER_PROTOCOL_MIDI1)
++        return CAMD_PROVIDER_PATH_UMP_MIDI1;
++    if (request->DataFormat == CAMD_PROVIDER_FORMAT_UMP &&
++        request->Protocol == CAMD_PROVIDER_PROTOCOL_MIDI2)
++        return CAMD_PROVIDER_PATH_UMP_MIDI2;
++    return 0;
++}
++
++static enum CAMDProviderResult validate_midi1_events(
++    const struct CAMDMIDI1EventV1 *events, size_t event_count)
++{
++    size_t i, j;
++
++    if (!events || event_count == 0)
++        return CAMD_PROVIDER_INVALID;
++    for (i = 0; i < event_count; ++i) {
++        uint8_t status = events[i].Bytes[0];
++        uint32_t expected_length;
++
++        if (status < 0x80 || status == 0xf0 || status == 0xf4 ||
++            status == 0xf5 || status == 0xf7 || status == 0xf9 ||
++            status == 0xfd)
++            return CAMD_PROVIDER_INVALID;
++        if (status < 0xc0)
++            expected_length = 3;
++        else if (status < 0xe0)
++            expected_length = 2;
++        else if (status < 0xf0)
++            expected_length = 3;
++        else if (status == 0xf1 || status == 0xf3)
++            expected_length = 2;
++        else if (status == 0xf2)
++            expected_length = 3;
++        else
++            expected_length = 1;
++        if (events[i].Size != sizeof(events[i]) || events[i].Version != 1 ||
++            events[i].Length != expected_length)
++            return CAMD_PROVIDER_INVALID;
++        for (j = 1; j < events[i].Length; ++j)
++            if (events[i].Bytes[j] >= 0x80)
++                return CAMD_PROVIDER_INVALID;
++    }
++    return CAMD_PROVIDER_OK;
++}
++
++static enum CAMDProviderResult validate_ump_events(
++    const struct CAMDUMPEventV1 *events, size_t event_count)
++{
++    size_t i;
++
++    if (!events || event_count == 0)
++        return CAMD_PROVIDER_INVALID;
++    for (i = 0; i < event_count; ++i) {
++        if (events[i].Size != sizeof(events[i]) || events[i].Version != 1 ||
++            events[i].WordCount == 0 || events[i].WordCount > 4)
++            return CAMD_PROVIDER_INVALID;
++    }
++    return CAMD_PROVIDER_OK;
++}
++
++static enum CAMDProviderResult session_state(
++    const struct CAMDPrivateProviderSession *session)
++{
++    if (!session || !session->open || !session->provider ||
++        !session->provider->initialized)
++        return CAMD_PROVIDER_STATE;
++    if (session->provider->retiring)
++        return CAMD_PROVIDER_RETIRED;
++    return CAMD_PROVIDER_OK;
++}
++
++enum CAMDProviderResult camd_provider_init(
++    struct CAMDPrivateProvider *provider,
++    const struct CAMDProviderDescriptorV1 *descriptor)
++{
++    const struct CAMDProviderOpsV1 *ops;
++
++    if (!provider || !descriptor ||
++        descriptor->Size != sizeof(*descriptor) || descriptor->Version != 1 ||
++        id_is_zero(&descriptor->ProviderID) || !descriptor->Ops ||
++        descriptor->NativePaths == 0 ||
++        (descriptor->NativePaths & ~CAMD_PROVIDER_PATH_ALL) != 0 ||
++        descriptor->Directions == 0 ||
++        (descriptor->Directions & ~CAMD_PROVIDER_DIRECTION_ALL) != 0)
++        return CAMD_PROVIDER_INVALID;
++    ops = descriptor->Ops;
++    if (ops->Size != sizeof(*ops) || ops->Version != 1 || !ops->Open ||
++        !ops->Close || !ops->BeginShutdown || !ops->ShutdownReady)
++        return CAMD_PROVIDER_INVALID;
++    if ((descriptor->Directions & CAMD_PROVIDER_DIRECTION_OUTPUT) != 0 &&
++        (!ops->Drain || !ops->Cancel))
++        return CAMD_PROVIDER_INVALID;
++    if ((descriptor->Directions & CAMD_PROVIDER_DIRECTION_OUTPUT) != 0 &&
++        (descriptor->NativePaths & CAMD_PROVIDER_PATH_MIDI1) != 0 &&
++        (!ops->SendMIDI1 || !ops->SendMIDI1SysEx))
++        return CAMD_PROVIDER_INVALID;
++    if ((descriptor->Directions & CAMD_PROVIDER_DIRECTION_OUTPUT) != 0 &&
++        (descriptor->NativePaths & (CAMD_PROVIDER_PATH_UMP_MIDI1 |
++                                    CAMD_PROVIDER_PATH_UMP_MIDI2)) != 0 &&
++        !ops->SendUMP)
++        return CAMD_PROVIDER_INVALID;
++    if ((descriptor->Directions & CAMD_PROVIDER_DIRECTION_INPUT) != 0 &&
++        (!ops->StartReceive || !ops->StopReceive))
++        return CAMD_PROVIDER_INVALID;
++
++    memset(provider, 0, sizeof(*provider));
++    provider->descriptor = *descriptor;
++    provider->operations = *ops;
++    provider->descriptor.Ops = &provider->operations;
++    provider->initialized = 1;
++    return CAMD_PROVIDER_OK;
++}
++
++enum CAMDProviderResult camd_provider_open(
++    struct CAMDPrivateProvider *provider,
++    const struct CAMDProviderOpenRequestV1 *request,
++    struct CAMDPrivateProviderSession *session)
++{
++    enum CAMDProviderResult result;
++    void *provider_session = NULL;
++    uint32_t path;
++
++    if (!provider || !provider->initialized || !request || !session ||
++        request->Size != sizeof(*request) || request->Version != 1 ||
++        id_is_zero(&request->EndpointID) || request->QueueCapacity == 0 ||
++        request->Direction == 0 ||
++        (request->Direction & ~CAMD_PROVIDER_DIRECTION_ALL) != 0 ||
++        (request->Direction & ~provider->descriptor.Directions) != 0)
++        return CAMD_PROVIDER_INVALID;
++    if (provider->retiring)
++        return CAMD_PROVIDER_RETIRED;
++    if (provider->active_sessions == UINT32_MAX)
++        return CAMD_PROVIDER_STATE;
++    path = request_path(request);
++    if (path == 0 || (provider->descriptor.NativePaths & path) == 0)
++        return CAMD_PROVIDER_UNSUPPORTED;
++
++    result = provider->operations.Open(provider->descriptor.Context, request,
++                                       &provider_session);
++    if (result != CAMD_PROVIDER_OK)
++        return CAMD_PROVIDER_CALLBACK_FAILED;
++    memset(session, 0, sizeof(*session));
++    session->provider = provider;
++    session->provider_context = provider_session;
++    session->direction = request->Direction;
++    session->data_format = request->DataFormat;
++    session->protocol = request->Protocol;
++    session->open = 1;
++    ++provider->active_sessions;
++    return CAMD_PROVIDER_OK;
++}
++
++enum CAMDProviderResult camd_provider_send_midi1(
++    struct CAMDPrivateProviderSession *session,
++    const struct CAMDMIDI1EventV1 *events,
++    size_t event_count)
++{
++    enum CAMDProviderResult result = session_state(session);
++
++    if (result != CAMD_PROVIDER_OK)
++        return result;
++    if (session->data_format != CAMD_PROVIDER_FORMAT_MIDI1)
++        return CAMD_PROVIDER_UNSUPPORTED;
++    if ((session->direction & CAMD_PROVIDER_DIRECTION_OUTPUT) == 0)
++        return CAMD_PROVIDER_UNSUPPORTED;
++    result = validate_midi1_events(events, event_count);
++    if (result != CAMD_PROVIDER_OK)
++        return result;
++    return session->provider->operations.SendMIDI1(
++        session->provider->descriptor.Context, session->provider_context,
++        events, event_count);
++}
++
++enum CAMDProviderResult camd_provider_send_midi1_sysex(
++    struct CAMDPrivateProviderSession *session,
++    const uint8_t *bytes,
++    size_t byte_count,
++    uint32_t time_high,
++    uint32_t time_low,
++    uint32_t clock_domain,
++    uint32_t flags)
++{
++    enum CAMDProviderResult result = session_state(session);
++
++    if (result != CAMD_PROVIDER_OK)
++        return result;
++    if (session->data_format != CAMD_PROVIDER_FORMAT_MIDI1)
++        return CAMD_PROVIDER_UNSUPPORTED;
++    if ((session->direction & CAMD_PROVIDER_DIRECTION_OUTPUT) == 0)
++        return CAMD_PROVIDER_UNSUPPORTED;
++    if (!bytes || byte_count < 2 || bytes[0] != 0xf0 ||
++        bytes[byte_count - 1] != 0xf7)
++        return CAMD_PROVIDER_INVALID;
++    return session->provider->operations.SendMIDI1SysEx(
++        session->provider->descriptor.Context, session->provider_context,
++        bytes, byte_count, time_high, time_low, clock_domain, flags);
++}
++
++enum CAMDProviderResult camd_provider_send_ump(
++    struct CAMDPrivateProviderSession *session,
++    const struct CAMDUMPEventV1 *events,
++    size_t event_count)
++{
++    enum CAMDProviderResult result = session_state(session);
++
++    if (result != CAMD_PROVIDER_OK)
++        return result;
++    if (session->data_format != CAMD_PROVIDER_FORMAT_UMP)
++        return CAMD_PROVIDER_UNSUPPORTED;
++    if ((session->direction & CAMD_PROVIDER_DIRECTION_OUTPUT) == 0)
++        return CAMD_PROVIDER_UNSUPPORTED;
++    result = validate_ump_events(events, event_count);
++    if (result != CAMD_PROVIDER_OK)
++        return result;
++    return session->provider->operations.SendUMP(
++        session->provider->descriptor.Context, session->provider_context,
++        events, event_count);
++}
++
++enum CAMDProviderResult camd_provider_start_receive(
++    struct CAMDPrivateProviderSession *session,
++    const struct CAMDProviderReceiveSinkV1 *sink)
++{
++    enum CAMDProviderResult result = session_state(session);
++
++    if (result != CAMD_PROVIDER_OK)
++        return result;
++    if ((session->direction & CAMD_PROVIDER_DIRECTION_INPUT) == 0)
++        return CAMD_PROVIDER_UNSUPPORTED;
++    if (session->receive_started || !sink || sink->Size != sizeof(*sink) ||
++        sink->Version != 1)
++        return CAMD_PROVIDER_INVALID;
++    if (session->data_format == CAMD_PROVIDER_FORMAT_MIDI1) {
++        if (!sink->SubmitMIDI1 || !sink->SubmitMIDI1SysEx)
++            return CAMD_PROVIDER_INVALID;
++    } else if (session->data_format == CAMD_PROVIDER_FORMAT_UMP) {
++        if (!sink->SubmitUMP)
++            return CAMD_PROVIDER_INVALID;
++    } else {
++        return CAMD_PROVIDER_UNSUPPORTED;
++    }
++
++    session->receive_sink = *sink;
++    if (session->data_format == CAMD_PROVIDER_FORMAT_MIDI1)
++        session->receive_sink.SubmitUMP = NULL;
++    else {
++        session->receive_sink.SubmitMIDI1 = NULL;
++        session->receive_sink.SubmitMIDI1SysEx = NULL;
++    }
++    result = session->provider->operations.StartReceive(
++        session->provider->descriptor.Context, session->provider_context,
++        &session->receive_sink);
++    if (result != CAMD_PROVIDER_OK) {
++        memset(&session->receive_sink, 0, sizeof(session->receive_sink));
++        return CAMD_PROVIDER_CALLBACK_FAILED;
++    }
++    session->receive_started = 1;
++    return CAMD_PROVIDER_OK;
++}
++
++enum CAMDProviderResult camd_provider_stop_receive(
++    struct CAMDPrivateProviderSession *session)
++{
++    enum CAMDProviderResult result;
++
++    if (!session || !session->open || !session->provider ||
++        !session->receive_started)
++        return CAMD_PROVIDER_STATE;
++    result = session->provider->operations.StopReceive(
++        session->provider->descriptor.Context, session->provider_context);
++    if (result != CAMD_PROVIDER_OK)
++        return CAMD_PROVIDER_CALLBACK_FAILED;
++    session->receive_started = 0;
++    memset(&session->receive_sink, 0, sizeof(session->receive_sink));
++    return CAMD_PROVIDER_OK;
++}
++
++enum CAMDProviderResult camd_provider_drain(
++    struct CAMDPrivateProviderSession *session)
++{
++    if (!session || !session->open || !session->provider)
++        return CAMD_PROVIDER_STATE;
++    if ((session->direction & CAMD_PROVIDER_DIRECTION_OUTPUT) == 0)
++        return CAMD_PROVIDER_UNSUPPORTED;
++    return session->provider->operations.Drain(
++        session->provider->descriptor.Context, session->provider_context);
++}
++
++enum CAMDProviderResult camd_provider_cancel(
++    struct CAMDPrivateProviderSession *session)
++{
++    if (!session || !session->open || !session->provider)
++        return CAMD_PROVIDER_STATE;
++    if ((session->direction & CAMD_PROVIDER_DIRECTION_OUTPUT) == 0)
++        return CAMD_PROVIDER_UNSUPPORTED;
++    return session->provider->operations.Cancel(
++        session->provider->descriptor.Context, session->provider_context);
++}
++
++enum CAMDProviderResult camd_provider_close(
++    struct CAMDPrivateProviderSession *session)
++{
++    struct CAMDPrivateProvider *provider;
++    enum CAMDProviderResult result;
++
++    if (!session || !session->open || !session->provider)
++        return CAMD_PROVIDER_STATE;
++    if (session->receive_started)
++        return CAMD_PROVIDER_STATE;
++    provider = session->provider;
++    result = provider->operations.Close(provider->descriptor.Context,
++                                        session->provider_context);
++    if (result != CAMD_PROVIDER_OK)
++        return CAMD_PROVIDER_CALLBACK_FAILED;
++    --provider->active_sessions;
++    memset(session, 0, sizeof(*session));
++    return CAMD_PROVIDER_OK;
++}
++
++enum CAMDProviderResult camd_provider_begin_retire(
++    struct CAMDPrivateProvider *provider)
++{
++    enum CAMDProviderResult result;
++
++    if (!provider || !provider->initialized)
++        return CAMD_PROVIDER_STATE;
++    if (provider->retiring)
++        return CAMD_PROVIDER_RETIRED;
++    /* Publish retirement before the callback so callback reentry cannot open
++     * a new session after shutdown has begun. Retirement is irreversible. */
++    provider->retiring = 1;
++    result = provider->operations.BeginShutdown(provider->descriptor.Context);
++    if (result != CAMD_PROVIDER_OK)
++        return CAMD_PROVIDER_CALLBACK_FAILED;
++    return CAMD_PROVIDER_OK;
++}
++
++int camd_provider_ready_to_release(
++    const struct CAMDPrivateProvider *provider)
++{
++    return provider && provider->initialized && provider->retiring &&
++           provider->active_sessions == 0 &&
++           provider->operations.ShutdownReady(provider->descriptor.Context);
++}
+diff --git a/workbench/libs/camd/provider_contract.h b/workbench/libs/camd/provider_contract.h
+new file mode 100644
+index 0000000000..074e13c346
+--- /dev/null
++++ b/workbench/libs/camd/provider_contract.h
+@@ -0,0 +1,223 @@
++#ifndef CAMD_PROVIDER_CONTRACT_H
++#define CAMD_PROVIDER_CONTRACT_H
++
++/*
++ * Executable model of CAMD's private provider data-path contract.
++ *
++ * This header is internal evidence for the version 43 review.  It is not an
++ * installed header or a public ABI.  Sessions select one exact native path;
++ * this layer never inserts protocol or container conversion.
++ */
++
++#include "endpoint_registry.h"
++
++#include <stddef.h>
++#include <stdint.h>
++
++#define CAMD_PROVIDER_PATH_MIDI1       (1u << 0)
++#define CAMD_PROVIDER_PATH_UMP_MIDI1   (1u << 1)
++#define CAMD_PROVIDER_PATH_UMP_MIDI2   (1u << 2)
++#define CAMD_PROVIDER_PATH_ALL         (CAMD_PROVIDER_PATH_MIDI1 | \
++                                        CAMD_PROVIDER_PATH_UMP_MIDI1 | \
++                                        CAMD_PROVIDER_PATH_UMP_MIDI2)
++
++#define CAMD_PROVIDER_DIRECTION_INPUT  (1u << 0)
++#define CAMD_PROVIDER_DIRECTION_OUTPUT (1u << 1)
++#define CAMD_PROVIDER_DIRECTION_ALL    (CAMD_PROVIDER_DIRECTION_INPUT | \
++                                        CAMD_PROVIDER_DIRECTION_OUTPUT)
++
++enum CAMDProviderDataFormatV1 {
++    CAMD_PROVIDER_FORMAT_MIDI1 = CAMD_DATA_FORMAT_MIDI1,
++    CAMD_PROVIDER_FORMAT_UMP = CAMD_DATA_FORMAT_UMP
++};
++
++enum CAMDProviderProtocolV1 {
++    CAMD_PROVIDER_PROTOCOL_MIDI1 = 1,
++    CAMD_PROVIDER_PROTOCOL_MIDI2 = 2
++};
++
++enum CAMDProviderResult {
++    CAMD_PROVIDER_OK = 0,
++    CAMD_PROVIDER_INVALID,
++    CAMD_PROVIDER_UNSUPPORTED,
++    CAMD_PROVIDER_STATE,
++    CAMD_PROVIDER_RETIRED,
++    CAMD_PROVIDER_CALLBACK_FAILED
++};
++
++/* A complete non-SysEx MIDI 1.0 message. Bytes are in wire order and Length
++ * is 1..3. Running status never crosses an event boundary. */
++struct CAMDMIDI1EventV1 {
++    uint32_t Size;
++    uint32_t Version;
++    uint32_t Length;
++    uint8_t Bytes[4];
++    uint32_t Flags;
++    uint32_t TimeHigh;
++    uint32_t TimeLow;
++    uint32_t ClockDomain;
++};
++
++/* A complete host-endian Universal MIDI Packet plus CAMD timing envelope. */
++struct CAMDUMPEventV1 {
++    uint32_t Size;
++    uint32_t Version;
++    uint32_t WordCount;
++    uint32_t Flags;
++    uint32_t Words[4];
++    uint32_t TimeHigh;
++    uint32_t TimeLow;
++    uint32_t ClockDomain;
++};
++
++struct CAMDProviderOpenRequestV1 {
++    uint32_t Size;
++    uint32_t Version;
++    struct CAMDEndpointIDV1 EndpointID;
++    uint32_t Direction;
++    uint32_t DataFormat;
++    uint32_t Protocol;
++    uint32_t QueueCapacity;
++};
++
++typedef enum CAMDProviderResult (*CAMDProviderOpenFnV1)(
++    void *provider_context,
++    const struct CAMDProviderOpenRequestV1 *request,
++    void **session_context);
++typedef enum CAMDProviderResult (*CAMDProviderCloseFnV1)(
++    void *provider_context, void *session_context);
++typedef enum CAMDProviderResult (*CAMDProviderSendMIDI1FnV1)(
++    void *provider_context, void *session_context,
++    const struct CAMDMIDI1EventV1 *events, size_t event_count);
++typedef enum CAMDProviderResult (*CAMDProviderSendMIDI1SysExFnV1)(
++    void *provider_context, void *session_context,
++    const uint8_t *bytes, size_t byte_count,
++    uint32_t time_high, uint32_t time_low, uint32_t clock_domain,
++    uint32_t flags);
++typedef enum CAMDProviderResult (*CAMDProviderSendUMPFnV1)(
++    void *provider_context, void *session_context,
++    const struct CAMDUMPEventV1 *events, size_t event_count);
++typedef enum CAMDProviderResult (*CAMDProviderSessionFnV1)(
++    void *provider_context, void *session_context);
++typedef enum CAMDProviderResult (*CAMDProviderShutdownFnV1)(
++    void *provider_context);
++typedef int (*CAMDProviderShutdownReadyFnV1)(void *provider_context);
++
++typedef enum CAMDProviderResult (*CAMDReceiveMIDI1FnV1)(
++    void *camd_context, const struct CAMDMIDI1EventV1 *events,
++    size_t event_count);
++typedef enum CAMDProviderResult (*CAMDReceiveMIDI1SysExFnV1)(
++    void *camd_context, const uint8_t *bytes, size_t byte_count,
++    uint32_t time_high, uint32_t time_low, uint32_t clock_domain,
++    uint32_t flags);
++typedef enum CAMDProviderResult (*CAMDReceiveUMPFnV1)(
++    void *camd_context, const struct CAMDUMPEventV1 *events,
++    size_t event_count);
++
++struct CAMDProviderReceiveSinkV1 {
++    uint32_t Size;
++    uint32_t Version;
++    void *Context;
++    CAMDReceiveMIDI1FnV1 SubmitMIDI1;
++    CAMDReceiveMIDI1SysExFnV1 SubmitMIDI1SysEx;
++    CAMDReceiveUMPFnV1 SubmitUMP;
++};
++
++typedef enum CAMDProviderResult (*CAMDProviderStartReceiveFnV1)(
++    void *provider_context, void *session_context,
++    const struct CAMDProviderReceiveSinkV1 *sink);
++
++struct CAMDProviderOpsV1 {
++    uint32_t Size;
++    uint32_t Version;
++    CAMDProviderOpenFnV1 Open;
++    CAMDProviderCloseFnV1 Close;
++    CAMDProviderSendMIDI1FnV1 SendMIDI1;
++    CAMDProviderSendMIDI1SysExFnV1 SendMIDI1SysEx;
++    CAMDProviderSendUMPFnV1 SendUMP;
++    CAMDProviderStartReceiveFnV1 StartReceive;
++    CAMDProviderSessionFnV1 StopReceive;
++    CAMDProviderSessionFnV1 Drain;
++    CAMDProviderSessionFnV1 Cancel;
++    CAMDProviderShutdownFnV1 BeginShutdown;
++    CAMDProviderShutdownReadyFnV1 ShutdownReady;
++};
++
++struct CAMDProviderDescriptorV1 {
++    uint32_t Size;
++    uint32_t Version;
++    struct CAMDEndpointIDV1 ProviderID;
++    uint32_t NativePaths;
++    uint32_t Directions;
++    uint32_t Flags;
++    void *Context;
++    const struct CAMDProviderOpsV1 *Ops;
++};
++
++/* Private concrete objects. The registry will eventually own and serialize
++ * them; provider callbacks must be invoked without the registry lock held. */
++struct CAMDPrivateProvider {
++    struct CAMDProviderDescriptorV1 descriptor;
++    struct CAMDProviderOpsV1 operations;
++    uint32_t active_sessions;
++    int initialized;
++    int retiring;
++};
++
++struct CAMDPrivateProviderSession {
++    struct CAMDPrivateProvider *provider;
++    void *provider_context;
++    struct CAMDProviderReceiveSinkV1 receive_sink;
++    uint32_t direction;
++    uint32_t data_format;
++    uint32_t protocol;
++    int receive_started;
++    int open;
++};
++
++enum CAMDProviderResult camd_provider_init(
++    struct CAMDPrivateProvider *provider,
++    const struct CAMDProviderDescriptorV1 *descriptor);
++
++enum CAMDProviderResult camd_provider_open(
++    struct CAMDPrivateProvider *provider,
++    const struct CAMDProviderOpenRequestV1 *request,
++    struct CAMDPrivateProviderSession *session);
++
++enum CAMDProviderResult camd_provider_send_midi1(
++    struct CAMDPrivateProviderSession *session,
++    const struct CAMDMIDI1EventV1 *events,
++    size_t event_count);
++
++enum CAMDProviderResult camd_provider_send_midi1_sysex(
++    struct CAMDPrivateProviderSession *session,
++    const uint8_t *bytes,
++    size_t byte_count,
++    uint32_t time_high,
++    uint32_t time_low,
++    uint32_t clock_domain,
++    uint32_t flags);
++
++enum CAMDProviderResult camd_provider_send_ump(
++    struct CAMDPrivateProviderSession *session,
++    const struct CAMDUMPEventV1 *events,
++    size_t event_count);
++
++enum CAMDProviderResult camd_provider_start_receive(
++    struct CAMDPrivateProviderSession *session,
++    const struct CAMDProviderReceiveSinkV1 *sink);
++enum CAMDProviderResult camd_provider_stop_receive(
++    struct CAMDPrivateProviderSession *session);
++
++enum CAMDProviderResult camd_provider_drain(
++    struct CAMDPrivateProviderSession *session);
++enum CAMDProviderResult camd_provider_cancel(
++    struct CAMDPrivateProviderSession *session);
++enum CAMDProviderResult camd_provider_close(
++    struct CAMDPrivateProviderSession *session);
++enum CAMDProviderResult camd_provider_begin_retire(
++    struct CAMDPrivateProvider *provider);
++int camd_provider_ready_to_release(
++    const struct CAMDPrivateProvider *provider);
++
++#endif
 
 Changes:
 
@@ -1116,7 +1725,7 @@ workbench/libs/camd/camd_intern.h
   +6 -0
 
 workbench/libs/camd/endpoint_registry.c
-  @@ -0,0 +1,796 @@
+  @@ -0,0 +1,798 @@
   +#include "endpoint_registry.h"
   +
   +#include <string.h>
@@ -1217,11 +1826,11 @@ workbench/libs/camd/endpoint_registry.c
   +#endif
   +
   +struct snapshot_endpoint {
-  ... (696 lines truncated)
-  +796 -0
+  ... (698 lines truncated)
+  +798 -0
 
 workbench/libs/camd/endpoint_registry.h
-  @@ -0,0 +1,186 @@
+  @@ -0,0 +1,191 @@
   +#ifndef CAMD_ENDPOINT_REGISTRY_H
   +#define CAMD_ENDPOINT_REGISTRY_H
   +
@@ -1240,6 +1849,11 @@ workbench/libs/camd/endpoint_registry.h
   +#define CAMD_ENDPOINT_TRANSPORT_BYTES   32u
   +#define CAMD_TOPOLOGY_NAME_BYTES        64u
   +#define CAMD_ENDPOINT_WATCH_MAX_EVENTS  32u
+  +
+  +#define CAMD_DATA_FORMAT_MIDI1           (1u << 0)
+  +#define CAMD_DATA_FORMAT_UMP             (1u << 1)
+  +#define CAMD_DATA_FORMAT_ALL             (CAMD_DATA_FORMAT_MIDI1 | \
+  +                                          CAMD_DATA_FORMAT_UMP)
   +
   +struct CAMDHandleV1 {
   +    uint32_t slot;
@@ -1272,7 +1886,7 @@ workbench/libs/camd/endpoint_registry.h
   +    uint32_t State;
   +    uint32_t Flags;
   +    uint32_t IdentityKind;
-  +    uint32_t NativeDataFormat;
+  +    uint32_t NativeDataFormats;
   +    uint32_t ProtocolCapabilities;
   +    uint32_t CurrentProtocol;
   +    struct CAMDGenerationV1 Generation;
@@ -1317,13 +1931,8 @@ workbench/libs/camd/endpoint_registry.h
   +    struct CAMDEndpointIDV1 EndpointID;
   +    uint32_t Type;
   +};
-  +
-  +enum CAMDRegistryResult {
-  +    CAMD_REGISTRY_OK = 0,
-  +    CAMD_REGISTRY_INVALID,
-  +    CAMD_REGISTRY_NOMEM,
-  ... (86 lines truncated)
-  +186 -0
+  ... (91 lines truncated)
+  +191 -0
 
 workbench/libs/camd/init.c
   @@ -10,6 +10,7 @@
@@ -1372,11 +1981,222 @@ workbench/libs/camd/init.c
   +25 -2
 
 workbench/libs/camd/mmakefile.src
-  @@ -5,7 +5,7 @@ USER_LDFLAGS := -static
+  @@ -5,7 +5,8 @@ USER_LDFLAGS := -static
   -	    unlinkmidilink getmidilinkfromownernode camdclock
-  +	    unlinkmidilink getmidilinkfromownernode camdclock endpoint_registry
+  +	    unlinkmidilink getmidilinkfromownernode camdclock endpoint_registry \
+  +	    provider_contract
    
    FUNCS := \
        lockcamd \
-  +1 -1
+  +2 -1
+
+workbench/libs/camd/provider_contract.c
+  @@ -0,0 +1,364 @@
+  +#include "provider_contract.h"
+  +
+  +#include <string.h>
+  +
+  +typedef char midi1_event_size_must_be_32[
+  +    sizeof(struct CAMDMIDI1EventV1) == 32 ? 1 : -1];
+  +typedef char ump_event_size_must_be_44[
+  +    sizeof(struct CAMDUMPEventV1) == 44 ? 1 : -1];
+  +
+  +static int id_is_zero(const struct CAMDEndpointIDV1 *id)
+  +{
+  +    return !(id->word[0] | id->word[1] | id->word[2] | id->word[3]);
+  +}
+  +
+  +static uint32_t request_path(const struct CAMDProviderOpenRequestV1 *request)
+  +{
+  +    if (request->DataFormat == CAMD_PROVIDER_FORMAT_MIDI1 &&
+  +        request->Protocol == CAMD_PROVIDER_PROTOCOL_MIDI1)
+  +        return CAMD_PROVIDER_PATH_MIDI1;
+  +    if (request->DataFormat == CAMD_PROVIDER_FORMAT_UMP &&
+  +        request->Protocol == CAMD_PROVIDER_PROTOCOL_MIDI1)
+  +        return CAMD_PROVIDER_PATH_UMP_MIDI1;
+  +    if (request->DataFormat == CAMD_PROVIDER_FORMAT_UMP &&
+  +        request->Protocol == CAMD_PROVIDER_PROTOCOL_MIDI2)
+  +        return CAMD_PROVIDER_PATH_UMP_MIDI2;
+  +    return 0;
+  +}
+  +
+  +static enum CAMDProviderResult validate_midi1_events(
+  +    const struct CAMDMIDI1EventV1 *events, size_t event_count)
+  +{
+  +    size_t i, j;
+  +
+  +    if (!events || event_count == 0)
+  +        return CAMD_PROVIDER_INVALID;
+  +    for (i = 0; i < event_count; ++i) {
+  +        uint8_t status = events[i].Bytes[0];
+  +        uint32_t expected_length;
+  +
+  +        if (status < 0x80 || status == 0xf0 || status == 0xf4 ||
+  +            status == 0xf5 || status == 0xf7 || status == 0xf9 ||
+  +            status == 0xfd)
+  +            return CAMD_PROVIDER_INVALID;
+  +        if (status < 0xc0)
+  +            expected_length = 3;
+  +        else if (status < 0xe0)
+  +            expected_length = 2;
+  +        else if (status < 0xf0)
+  +            expected_length = 3;
+  +        else if (status == 0xf1 || status == 0xf3)
+  +            expected_length = 2;
+  +        else if (status == 0xf2)
+  +            expected_length = 3;
+  +        else
+  +            expected_length = 1;
+  +        if (events[i].Size != sizeof(events[i]) || events[i].Version != 1 ||
+  +            events[i].Length != expected_length)
+  +            return CAMD_PROVIDER_INVALID;
+  +        for (j = 1; j < events[i].Length; ++j)
+  +            if (events[i].Bytes[j] >= 0x80)
+  +                return CAMD_PROVIDER_INVALID;
+  +    }
+  +    return CAMD_PROVIDER_OK;
+  +}
+  +
+  +static enum CAMDProviderResult validate_ump_events(
+  +    const struct CAMDUMPEventV1 *events, size_t event_count)
+  +{
+  +    size_t i;
+  +
+  +    if (!events || event_count == 0)
+  +        return CAMD_PROVIDER_INVALID;
+  +    for (i = 0; i < event_count; ++i) {
+  +        if (events[i].Size != sizeof(events[i]) || events[i].Version != 1 ||
+  +            events[i].WordCount == 0 || events[i].WordCount > 4)
+  +            return CAMD_PROVIDER_INVALID;
+  +    }
+  +    return CAMD_PROVIDER_OK;
+  +}
+  +
+  +static enum CAMDProviderResult session_state(
+  +    const struct CAMDPrivateProviderSession *session)
+  +{
+  +    if (!session || !session->open || !session->provider ||
+  +        !session->provider->initialized)
+  +        return CAMD_PROVIDER_STATE;
+  +    if (session->provider->retiring)
+  +        return CAMD_PROVIDER_RETIRED;
+  +    return CAMD_PROVIDER_OK;
+  +}
+  +
+  +enum CAMDProviderResult camd_provider_init(
+  +    struct CAMDPrivateProvider *provider,
+  +    const struct CAMDProviderDescriptorV1 *descriptor)
+  +{
+  +    const struct CAMDProviderOpsV1 *ops;
+  +
+  +    if (!provider || !descriptor ||
+  +        descriptor->Size != sizeof(*descriptor) || descriptor->Version != 1 ||
+  +        id_is_zero(&descriptor->ProviderID) || !descriptor->Ops ||
+  ... (264 lines truncated)
+  +364 -0
+
+workbench/libs/camd/provider_contract.h
+  @@ -0,0 +1,223 @@
+  +#ifndef CAMD_PROVIDER_CONTRACT_H
+  +#define CAMD_PROVIDER_CONTRACT_H
+  +
+  +/*
+  + * Executable model of CAMD's private provider data-path contract.
+  + *
+  + * This header is internal evidence for the version 43 review.  It is not an
+  + * installed header or a public ABI.  Sessions select one exact native path;
+  + * this layer never inserts protocol or container conversion.
+  + */
+  +
+  +#include "endpoint_registry.h"
+  +
+  +#include <stddef.h>
+  +#include <stdint.h>
+  +
+  +#define CAMD_PROVIDER_PATH_MIDI1       (1u << 0)
+  +#define CAMD_PROVIDER_PATH_UMP_MIDI1   (1u << 1)
+  +#define CAMD_PROVIDER_PATH_UMP_MIDI2   (1u << 2)
+  +#define CAMD_PROVIDER_PATH_ALL         (CAMD_PROVIDER_PATH_MIDI1 | \
+  +                                        CAMD_PROVIDER_PATH_UMP_MIDI1 | \
+  +                                        CAMD_PROVIDER_PATH_UMP_MIDI2)
+  +
+  +#define CAMD_PROVIDER_DIRECTION_INPUT  (1u << 0)
+  +#define CAMD_PROVIDER_DIRECTION_OUTPUT (1u << 1)
+  +#define CAMD_PROVIDER_DIRECTION_ALL    (CAMD_PROVIDER_DIRECTION_INPUT | \
+  +                                        CAMD_PROVIDER_DIRECTION_OUTPUT)
+  +
+  +enum CAMDProviderDataFormatV1 {
+  +    CAMD_PROVIDER_FORMAT_MIDI1 = CAMD_DATA_FORMAT_MIDI1,
+  +    CAMD_PROVIDER_FORMAT_UMP = CAMD_DATA_FORMAT_UMP
+  +};
+  +
+  +enum CAMDProviderProtocolV1 {
+  +    CAMD_PROVIDER_PROTOCOL_MIDI1 = 1,
+  +    CAMD_PROVIDER_PROTOCOL_MIDI2 = 2
+  +};
+  +
+  +enum CAMDProviderResult {
+  +    CAMD_PROVIDER_OK = 0,
+  +    CAMD_PROVIDER_INVALID,
+  +    CAMD_PROVIDER_UNSUPPORTED,
+  +    CAMD_PROVIDER_STATE,
+  +    CAMD_PROVIDER_RETIRED,
+  +    CAMD_PROVIDER_CALLBACK_FAILED
+  +};
+  +
+  +/* A complete non-SysEx MIDI 1.0 message. Bytes are in wire order and Length
+  + * is 1..3. Running status never crosses an event boundary. */
+  +struct CAMDMIDI1EventV1 {
+  +    uint32_t Size;
+  +    uint32_t Version;
+  +    uint32_t Length;
+  +    uint8_t Bytes[4];
+  +    uint32_t Flags;
+  +    uint32_t TimeHigh;
+  +    uint32_t TimeLow;
+  +    uint32_t ClockDomain;
+  +};
+  +
+  +/* A complete host-endian Universal MIDI Packet plus CAMD timing envelope. */
+  +struct CAMDUMPEventV1 {
+  +    uint32_t Size;
+  +    uint32_t Version;
+  +    uint32_t WordCount;
+  +    uint32_t Flags;
+  +    uint32_t Words[4];
+  +    uint32_t TimeHigh;
+  +    uint32_t TimeLow;
+  +    uint32_t ClockDomain;
+  +};
+  +
+  +struct CAMDProviderOpenRequestV1 {
+  +    uint32_t Size;
+  +    uint32_t Version;
+  +    struct CAMDEndpointIDV1 EndpointID;
+  +    uint32_t Direction;
+  +    uint32_t DataFormat;
+  +    uint32_t Protocol;
+  +    uint32_t QueueCapacity;
+  +};
+  +
+  +typedef enum CAMDProviderResult (*CAMDProviderOpenFnV1)(
+  +    void *provider_context,
+  +    const struct CAMDProviderOpenRequestV1 *request,
+  +    void **session_context);
+  +typedef enum CAMDProviderResult (*CAMDProviderCloseFnV1)(
+  +    void *provider_context, void *session_context);
+  +typedef enum CAMDProviderResult (*CAMDProviderSendMIDI1FnV1)(
+  +    void *provider_context, void *session_context,
+  +    const struct CAMDMIDI1EventV1 *events, size_t event_count);
+  +typedef enum CAMDProviderResult (*CAMDProviderSendMIDI1SysExFnV1)(
+  +    void *provider_context, void *session_context,
+  +    const uint8_t *bytes, size_t byte_count,
+  +    uint32_t time_high, uint32_t time_low, uint32_t clock_domain,
+  +    uint32_t flags);
+  +typedef enum CAMDProviderResult (*CAMDProviderSendUMPFnV1)(
+  +    void *provider_context, void *session_context,
+  +    const struct CAMDUMPEventV1 *events, size_t event_count);
+  +typedef enum CAMDProviderResult (*CAMDProviderSessionFnV1)(
+  ... (123 lines truncated)
+  +223 -0
 [full diff: rtk git diff --no-compact]

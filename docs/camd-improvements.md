@@ -548,8 +548,10 @@ state changes. Bounded private endpoint watches now publish generation-tagged
 added, updated, offline and retired events. Overflow becomes one explicit lost
 marker and requires a fresh snapshot; retiring endpoints are omitted from new
 snapshots while leases keep their storage alive. Native AROS retirement stress
-remains a required validation. Before the first private software provider, its
-contract must define separate native MIDI 1.0 and UMP data callbacks.
+remains a required validation. The executable private provider contract now
+defines separate native MIDI 1.0 and UMP callbacks and proves them with a host
+software provider. Registry ownership, bounded queues and callback/retirement
+concurrency remain before this becomes an operational provider path.
 
 ## Implemented steps
 
@@ -684,18 +686,20 @@ adapter. Public ABI remains a separate U01 gate.
    notice a device coming back, BLE MIDI stamps with `CamdTime()`.
 3. Done: compare endpoint architectures and select the final central
    registry/provider model; no throwaway dynamic-port API is permitted.
-4. Next: approve the private record/lifecycle invariants, then validate them
-   with the registry, legacy-driver adapter and a software provider. Close U01
-   only afterward with appended client vectors, 32/64-bit builds, ownership
-   tests and upstream review. Provider registration stays private initially.
+4. Next: integrate the approved private record/lifecycle invariants across the
+   registry, legacy-driver adapter and provider sessions. Close U01 only
+   afterward with appended client vectors, 32/64-bit builds, ownership tests
+   and upstream review. Provider registration stays private initially.
 
    In progress: the
    [host endpoint-core model](../prototypes/camd/README.md) now validates fixed
    record sizes, transactional topology, immutable snapshots, lifecycle,
    retirement, stale-handle rejection and bounded watch overflow/resync. The
    corresponding private AROS patch initializes it in `CamdBase`, enforces its
-   Exec semaphore and compiles for hosted x86-64. Providers, native AROS
-   retirement stress and the legacy adapter remain before U01 closure.
+   Exec semaphore and compiles for hosted x86-64. The same patch compiles a
+   dormant format-specific provider contract; registry/provider integration,
+   native AROS retirement stress and the legacy adapter remain before U01
+   closure.
 
 
 ## 7. Native MIDI 2.0 / UMP architecture (future design contract)
@@ -840,8 +844,8 @@ connection, legacy cluster, Function Block and Group. Model:
 ### 7.8 Implementation sequence (future, after current CAMD roadmap)
 
 1. Validate the private endpoint control plane, topology snapshots, lifecycle
-   and watches. Then define the format-specific private provider contract and
-   prove native MIDI 1.0 and complete-UMP queues with the legacy adapter and a
+   and watches. Integrate the format-specific provider contract, then prove
+   native MIDI 1.0 and complete-UMP queues with the legacy adapter and a
    synthetic software provider; expose no public vectors or unverified wire
    constants yet.
 2. Freeze the minimal versioned client API and opaque topology model through

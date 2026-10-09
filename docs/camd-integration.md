@@ -113,10 +113,11 @@ itself.
    lock order. This does not freeze public symbols.
 2. Implement the private registry, generation snapshots and watches as the
    shared control plane, without changing CAMD 41/42 structures.
-3. Define and validate a private provider contract with separate native
-   MIDI 1.0 and UMP data callbacks, then exercise the legacy-driver adapter
-   and software-provider lifecycle. Do not require MIDI 1.0-to-MIDI 1.0
-   traffic to convert through UMP.
+3. Integrate the validated private provider contract with registry-owned
+   identity, sessions and retirement, then exercise the legacy-driver adapter
+   and bounded software-provider queues. Its host software provider already
+   proves separate native MIDI 1.0/UMP dispatch; do not require
+   MIDI 1.0-to-MIDI 1.0 traffic to convert through UMP.
 4. Close CAMD gate U01 using evidence from that private implementation:
    appended client-vector order, record/version policy, 32/64-bit builds,
    ownership tests and upstream review. Keep provider registration private.

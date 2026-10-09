@@ -200,6 +200,8 @@ static enum CAMDRegistryResult validate_endpoint(
     if (!endpoint || endpoint->Size != sizeof(*endpoint) ||
         endpoint->Version != 1 || id_is_zero(&endpoint->ID) ||
         id_is_zero(&endpoint->ProviderID) ||
+        endpoint->NativeDataFormats == 0 ||
+        (endpoint->NativeDataFormats & ~CAMD_DATA_FORMAT_ALL) != 0 ||
         endpoint->State < CAMD_ENDPOINT_REGISTERED ||
         endpoint->State > CAMD_ENDPOINT_OFFLINE)
         return CAMD_REGISTRY_INVALID;

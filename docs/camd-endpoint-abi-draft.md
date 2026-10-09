@@ -43,10 +43,13 @@ prototype header and genmodule output are compiled on the supported targets.
 All acquired objects must be released before closing `camd.library`.
 
 The provider API stays private for the first implementation. Its sized
-operations table is an internal CAMD contract exercised by the legacy-driver
-adapter and a software provider. If later made public for independently built
-drivers, it receives its own version gate, callback declarations and ABI
-review; it is not smuggled into version 43 through the client surface.
+operations table is an internal CAMD contract. The executable prototype now
+validates separate MIDI 1.0 and UMP callbacks, exact native-path selection,
+input/output capability and format-filtered receive sinks with a software
+provider. Registry ownership, queues and the legacy-driver adapter remain to
+be proven. If later made public for independently built drivers, it receives
+its own version gate, callback declarations and ABI review; it is not smuggled
+into version 43 through the client surface.
 
 ### Why this is a hybrid rather than a literal copy of either model
 
@@ -117,7 +120,7 @@ struct CAMDEndpointInfoV1 {
     ULONG State;                      /* registered/discovering/available/... */
     ULONG Flags;                      /* presence, discovery, directions */
     ULONG IdentityKind;               /* authoritative/configured/path/ephemeral */
-    ULONG NativeDataFormat;           /* byte stream or UMP */
+    ULONG NativeDataFormats;          /* supported native format bitset */
     ULONG ProtocolCapabilities;       /* semantic CAMD flags, not raw wire bits */
     ULONG CurrentProtocol;
     struct CAMDGenerationV1 Generation;
@@ -275,6 +278,13 @@ to reach a MIDI 1.0 consumer. CAMD inserts a stateful converter only at a
 declared incompatible boundary and counts format conversions, protocol
 scaling, unrepresentable drops/rejections, malformed input, SysEx overflow and
 queue overflow.
+
+The private executable contract currently identifies three exact native
+paths: MIDI 1.0 events/bytes, UMP carrying MIDI 1.0 protocol, and UMP carrying
+MIDI 2.0 protocol. A provider may declare any combination. This is private
+design evidence, not a commitment to those numeric values or to the provisional
+32-byte MIDI 1.0 event envelope. The existing public `MidiMsg`/SysEx ABI remains
+unchanged, and the exact optional v43 MIDI 1.0 record stays an open U01 choice.
 
 ## Legacy adapter boundary
 

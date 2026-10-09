@@ -18,13 +18,14 @@ HEADERS = include/midihub/applemidi.h include/midihub/rtpmidi.h \
 
 .PHONY: test test-network test-synth test-synth-fluid demo m68k synth-m68k clean
 
-test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test
+test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test
 	./build/protocol-test
 	./build/ble-midi-test
 	./build/routes-test
 	./build/ump-test
 	./build/netmidi2-test
 	./build/camd-endpoint-core-test
+	./build/camd-provider-contract-test
 
 build/camd-endpoint-core-test: tests/camd_endpoint_core.c \
                                prototypes/camd/endpoint_registry.c \
@@ -32,6 +33,14 @@ build/camd-endpoint-core-test: tests/camd_endpoint_core.c \
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Iprototypes/camd -o $@ \
 		tests/camd_endpoint_core.c prototypes/camd/endpoint_registry.c -pthread
+
+build/camd-provider-contract-test: tests/camd_provider_contract.c \
+                                   prototypes/camd/provider_contract.c \
+                                   prototypes/camd/provider_contract.h \
+                                   prototypes/camd/endpoint_registry.h
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Iprototypes/camd -o $@ \
+		tests/camd_provider_contract.c prototypes/camd/provider_contract.c
 
 build/ump-test: tests/ump.c src/ump.c include/midihub/ump.h
 	mkdir -p build

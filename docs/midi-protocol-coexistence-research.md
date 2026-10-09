@@ -257,7 +257,7 @@ native representation.
 4. The endpoint ADR correctly separates stable Endpoint, Group, Function Block
    and legacy projection objects, and protects group-less messages from being
    duplicated into every Group projection.
-5. The ABI draft records `NativeDataFormat`, protocol capabilities and current
+5. The ABI draft records `NativeDataFormats`, protocol capabilities and current
    protocol, but its only new event record is `CAMDUMPEventV1`. Client and
    provider operations send/receive only complete UMP events.
 6. The integration plan calls CAMD the owner of “native UMP event transport”
@@ -573,8 +573,9 @@ so.
    only when a UMP/legacy projection is requested?
 9. How are view IDs represented without exposing mutable cluster names as
    persistent identity?
-10. Can providers offer both native formats, and how is the preferred format
-    selected without changing during an active session?
+10. Providers may now declare both native formats and a session fixes one
+    exact format/protocol path. Still unresolved: how client preference and
+    endpoint policy select that path when more than one is available.
 11. What diagnostics are public per session, per endpoint and per route?
 12. Which normative translation vectors and licensed specification fixtures
     are available for closing U02/U06/U08/U09?

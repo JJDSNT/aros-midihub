@@ -187,7 +187,7 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-v42.patch` | version 42: `GetClusterAttrsA()`, `CamdTime()`, `MIDI_SystemClock`, cluster watches |
 | `aros-camd-link-comments.patch` | implement `MLINK_Comment` and expose the selected cluster comment through CAMD 42 |
 | `aros-camd-sysex-errors.patch` | apply `MIDI_ErrFilter` and report oversized SysEx as `CMEF_SysExTooBig` without partial messages |
-| `aros-camd-endpoint-core.patch` | add the non-public endpoint registry, fixed-layout topology records, generation-safe leases and immutable snapshots; initialize it inside CAMD without adding vectors |
+| `aros-camd-endpoint-core.patch` | add the non-public endpoint registry and format-specific provider contract; initialize the registry and compile both inside CAMD without adding vectors |
 
 ```sh
 for p in camd-names-64bit camd-arena-segments camd-driver-scan-align \
@@ -283,11 +283,24 @@ fresh snapshot is the recovery path. Retiring endpoints disappear from new
 snapshots immediately but remain allocated through their last lease.
 `CamdBase` owns the registry, whose opaque implementation owns and enforces a
 dedicated Exec semaphore; initialization failure unwinds the registry, timer
-and legacy semaphore. No provider, public watch vector, UMP wire parser or
-legacy projection uses it yet, so existing CAMD behavior remains unchanged.
-The matching host model and tests live in `prototypes/camd` and
-`tests/camd_endpoint_core.c`; the host test also races snapshots and lease
-operations against lifecycle changes and exercises watch overflow/resync.
+and legacy semaphore.
+
+The patch also compiles a dormant private provider contract. Providers declare
+MIDI 1.0, UMP-with-MIDI-1.0 and UMP-with-MIDI-2.0 native paths plus direction.
+Sessions select one exact path; MIDI 1.0 short messages/complete SysEx and UMP
+events use separate send and receive callbacks. Receive sinks expose only the
+selected format, so the core cannot accidentally route a native MIDI 1.0 batch
+through UMP. Retirement rejects new opens and sends while drain, cancel,
+receive stop and close remain available. Numeric values, pointer-bearing
+callback tables and the provisional private MIDI 1.0 envelope are not public
+ABI.
+
+No registry-owned provider session, public watch vector, UMP wire parser,
+converter or legacy projection uses it yet, so existing CAMD behavior remains
+unchanged. The matching host models and tests live in `prototypes/camd`,
+`tests/camd_endpoint_core.c` and `tests/camd_provider_contract.c`; they race
+registry snapshots/leases, exercise watch overflow/resync and use a software
+provider to prove exact-path dispatch.
 
 ### Testing
 

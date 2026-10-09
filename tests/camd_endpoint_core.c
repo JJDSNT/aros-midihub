@@ -23,7 +23,7 @@ static struct CAMDEndpointInfoV1 make_endpoint(uint32_t value,
     endpoint.ProviderID = make_id(0x1000u);
     endpoint.State = CAMD_ENDPOINT_REGISTERED;
     endpoint.IdentityKind = 1;
-    endpoint.NativeDataFormat = 2;
+    endpoint.NativeDataFormats = CAMD_DATA_FORMAT_UMP;
     strncpy(endpoint.Name, name, sizeof(endpoint.Name) - 1);
     strncpy(endpoint.ProductInstance, "test-instance",
             sizeof(endpoint.ProductInstance) - 1);
@@ -305,6 +305,10 @@ int main(void)
     assert(sizeof(struct CAMDGroupInfoV1) == 100);
     assert(sizeof(struct CAMDFunctionBlockInfoV1) == 104);
 
+    endpoint.NativeDataFormats = 0;
+    assert(camd_registry_publish(registry, &endpoint, &group, 1, &block, 1,
+                                 &provider) == CAMD_REGISTRY_INVALID);
+    endpoint.NativeDataFormats = CAMD_DATA_FORMAT_UMP;
     assert(camd_registry_publish(registry, &endpoint, &group, 1, &block, 1,
                                  &provider) == CAMD_REGISTRY_OK);
     assert(camd_registry_publish(registry, &endpoint, &group, 1, &block, 1,

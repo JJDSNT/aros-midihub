@@ -1,14 +1,20 @@
-# CAMD private endpoint-core executable model
+# CAMD private endpoint/provider executable model
 
 **Status:** Host-tested design evidence and source for
-`patches/aros-camd-endpoint-core.patch`. The patch initializes the core inside
-`camd.library`, but nothing consumes it and it exposes no public ABI.
+`patches/aros-camd-endpoint-core.patch`. The patch initializes the registry
+inside `camd.library` and compiles the private provider contract, but nothing
+consumes either data path and no public ABI is exposed.
 
 This directory converts the accepted endpoint architecture into C before any
 version 43 vectors are frozen. The same source selects `AllocVec`/`FreeVec`
 when built for AROS, while the host build uses the C allocator. The opaque
 registry owns an Exec semaphore on AROS and a pthread mutex in the host model;
 it is not a MIDI 1.0 dynamic-port implementation.
+
+`provider_contract.c` separately proves the path-selective data-plane shape.
+It is deliberately not coupled to the registry yet: that integration requires
+callback-outside-lock and concurrent teardown tests rather than an unreviewed
+shortcut.
 
 The current slice proves:
 
@@ -27,13 +33,27 @@ The current slice proves:
 - deterministic overflow: queued stale events collapse into one `lost` marker,
   after which the consumer acquires a fresh snapshot;
 - retirement disappears from new snapshots immediately while storage remains
-  alive until the final lease is released.
+  alive until the final lease is released;
+- providers declare exact native paths independently: MIDI 1.0 bytes/events,
+  UMP carrying MIDI 1.0 protocol, and UMP carrying MIDI 2.0 protocol;
+- input-only and output-only providers require only direction-relevant
+  callbacks;
+- each session fixes one data format and protocol at open time; unsupported
+  combinations fail before a provider callback runs;
+- native MIDI 1.0 short messages and complete SysEx use MIDI 1.0 callbacks,
+  while complete UMP events use a separate callback, with no implicit
+  conversion or cross-format dispatch;
+- receive sinks expose only callbacks matching the session format;
+- provider retirement rejects new opens and sends while allowing explicit
+  drain, cancel, receive stop and close before final release.
 
 It deliberately does not yet implement:
 
 - stable-ID storage or key derivation;
 - concurrent retirement/failure-path stress on native AROS;
-- provider callbacks or native MIDI 1.0/UMP queues;
+- registry-owned provider/session handles, concurrent callback lifetime or
+  native MIDI 1.0/UMP queues;
+- any format/protocol converter or lossy policy;
 - legacy cluster projection;
 - any public CAMD vector, tag, header or normative UMP wire constant.
 
@@ -43,7 +63,8 @@ Run it with the normal host suite:
 make test
 ```
 
-The next slice is the private format-specific provider contract, followed by a
-software provider and native AROS retirement stress. Public vectors remain
-blocked until native MIDI 1.0 and UMP paths are both proven and the U01 review
-passes.
+The next slice integrates provider identity, sessions and two-phase retirement
+with the registry while keeping callbacks outside its lock, then adds bounded
+native queues and native AROS retirement stress. The host test's software
+provider already proves format-specific dispatch. Public vectors remain
+blocked until the integrated lifecycle and U01 review pass.

@@ -17,6 +17,11 @@
 #define CAMD_TOPOLOGY_NAME_BYTES        64u
 #define CAMD_ENDPOINT_WATCH_MAX_EVENTS  32u
 
+#define CAMD_DATA_FORMAT_MIDI1           (1u << 0)
+#define CAMD_DATA_FORMAT_UMP             (1u << 1)
+#define CAMD_DATA_FORMAT_ALL             (CAMD_DATA_FORMAT_MIDI1 | \
+                                          CAMD_DATA_FORMAT_UMP)
+
 struct CAMDHandleV1 {
     uint32_t slot;
     uint32_t generation;
@@ -48,7 +53,7 @@ struct CAMDEndpointInfoV1 {
     uint32_t State;
     uint32_t Flags;
     uint32_t IdentityKind;
-    uint32_t NativeDataFormat;
+    uint32_t NativeDataFormats;
     uint32_t ProtocolCapabilities;
     uint32_t CurrentProtocol;
     struct CAMDGenerationV1 Generation;

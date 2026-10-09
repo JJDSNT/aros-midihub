@@ -281,9 +281,12 @@ with transactional topology, immutable snapshots, lifecycle transitions and
 generation-safe leases. Its AROS patch uses Exec allocation and initializes
 the core inside `camd.library`. The registry now owns and enforces its Exec
 semaphore, while the host model races snapshots and lease operations against
-lifecycle changes. Bounded watches are implemented privately. Native AROS
-retirement stress, a format-specific private provider contract and a software
-provider are still required before it becomes operational.
+lifecycle changes. Bounded watches and an executable format-specific provider
+contract are implemented privately. The latter proves exact native-path
+selection, direction-specific operations, format-filtered receive sinks and a
+software provider without inserting conversion. Registry/provider integration,
+bounded queues and native AROS retirement stress are still required before it
+becomes operational.
 
 The current proposal is documented in
 [the endpoint ABI draft](camd-endpoint-abi-draft.md). It is a review artifact,
