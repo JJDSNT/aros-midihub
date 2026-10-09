@@ -108,12 +108,16 @@ enum CAMDRegistryResult {
     CAMD_REGISTRY_STATE,
     CAMD_REGISTRY_RETIRED,
     CAMD_REGISTRY_RANGE,
-    CAMD_REGISTRY_EMPTY
+    CAMD_REGISTRY_EMPTY,
+    CAMD_REGISTRY_BUSY,
+    CAMD_REGISTRY_CALLBACK_FAILED,
+    CAMD_REGISTRY_UNSUPPORTED
 };
 
 struct CAMDEndpointRegistry;
 struct CAMDEndpointSnapshot;
 struct CAMDEndpointWatch;
+struct CAMDProviderDescriptorV1;
 
 /* Registry operations serialize themselves.  Destroy still requires that no
  * operation is in flight.  Snapshot access is independent after
@@ -122,8 +126,22 @@ struct CAMDEndpointWatch;
 struct CAMDEndpointRegistry *camd_registry_create(void);
 void camd_registry_destroy(struct CAMDEndpointRegistry *registry);
 
+enum CAMDRegistryResult camd_registry_provider_register(
+    struct CAMDEndpointRegistry *registry,
+    const struct CAMDProviderDescriptorV1 *descriptor,
+    struct CAMDHandleV1 *provider);
+
+enum CAMDRegistryResult camd_registry_provider_begin_retire(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 provider);
+
+enum CAMDRegistryResult camd_registry_provider_release(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 provider);
+
 enum CAMDRegistryResult camd_registry_publish(
     struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 provider,
     const struct CAMDEndpointInfoV1 *endpoint,
     const struct CAMDGroupInfoV1 *groups,
     size_t group_count,

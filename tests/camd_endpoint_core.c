@@ -1,4 +1,5 @@
 #include "../prototypes/camd/endpoint_registry.h"
+#include "../prototypes/camd/provider_contract.h"
 
 #include <assert.h>
 #include <pthread.h>
@@ -9,6 +10,125 @@ static struct CAMDEndpointIDV1 make_id(uint32_t value)
 {
     struct CAMDEndpointIDV1 id = { { 0x43414d44u, 0, 0, value } };
     return id;
+}
+
+struct registry_provider_context {
+    struct CAMDEndpointRegistry *registry;
+    unsigned int shutdown_calls;
+    unsigned int ready_calls;
+    unsigned int snapshot_reentries;
+    int ready;
+};
+
+static enum CAMDProviderResult registry_provider_open(
+    void *context, const struct CAMDProviderOpenRequestV1 *request,
+    void **session_context)
+{
+    (void)request;
+    *session_context = context;
+    return CAMD_PROVIDER_OK;
+}
+
+static enum CAMDProviderResult registry_provider_close(void *context,
+                                                        void *session_context)
+{
+    (void)context;
+    (void)session_context;
+    return CAMD_PROVIDER_OK;
+}
+
+static enum CAMDProviderResult registry_provider_send_ump(
+    void *context, void *session_context,
+    const struct CAMDUMPEventV1 *events, size_t event_count)
+{
+    (void)context;
+    (void)session_context;
+    (void)events;
+    (void)event_count;
+    return CAMD_PROVIDER_OK;
+}
+
+static enum CAMDProviderResult registry_provider_session(void *context,
+                                                          void *session_context)
+{
+    (void)context;
+    (void)session_context;
+    return CAMD_PROVIDER_OK;
+}
+
+static void provider_reenter_snapshot(struct registry_provider_context *context)
+{
+    struct CAMDEndpointSnapshot *snapshot = NULL;
+
+    assert(camd_registry_snapshot(context->registry, &snapshot) ==
+           CAMD_REGISTRY_OK);
+    camd_snapshot_destroy(snapshot);
+    ++context->snapshot_reentries;
+}
+
+static enum CAMDProviderResult registry_provider_shutdown(void *argument)
+{
+    struct registry_provider_context *context = argument;
+
+    ++context->shutdown_calls;
+    provider_reenter_snapshot(context);
+    return CAMD_PROVIDER_OK;
+}
+
+static int registry_provider_ready(void *argument)
+{
+    struct registry_provider_context *context = argument;
+
+    ++context->ready_calls;
+    provider_reenter_snapshot(context);
+    return context->ready;
+}
+
+static struct CAMDHandleV1 register_test_provider(
+    struct CAMDEndpointRegistry *registry,
+    struct registry_provider_context *context)
+{
+    struct CAMDProviderOpsV1 operations;
+    struct CAMDProviderDescriptorV1 descriptor;
+    struct CAMDHandleV1 provider;
+
+    memset(context, 0, sizeof(*context));
+    context->registry = registry;
+    context->ready = 1;
+    memset(&operations, 0, sizeof(operations));
+    operations.Size = sizeof(operations);
+    operations.Version = 1;
+    operations.Open = registry_provider_open;
+    operations.Close = registry_provider_close;
+    operations.SendUMP = registry_provider_send_ump;
+    operations.Drain = registry_provider_session;
+    operations.Cancel = registry_provider_session;
+    operations.BeginShutdown = registry_provider_shutdown;
+    operations.ShutdownReady = registry_provider_ready;
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.Size = sizeof(descriptor);
+    descriptor.Version = 1;
+    descriptor.ProviderID = make_id(0x1000u);
+    descriptor.NativePaths = CAMD_PROVIDER_PATH_UMP_MIDI2;
+    descriptor.Directions = CAMD_PROVIDER_DIRECTION_OUTPUT;
+    descriptor.Context = context;
+    descriptor.Ops = &operations;
+    assert(camd_registry_provider_register(registry, &descriptor, &provider) ==
+           CAMD_REGISTRY_OK);
+    return provider;
+}
+
+static void retire_test_provider(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 provider,
+    struct registry_provider_context *context)
+{
+    assert(camd_registry_provider_begin_retire(registry, provider) ==
+           CAMD_REGISTRY_OK);
+    assert(context->shutdown_calls == 1);
+    assert(camd_registry_provider_release(registry, provider) ==
+           CAMD_REGISTRY_OK);
+    assert(context->ready_calls == 1);
 }
 
 static struct CAMDEndpointInfoV1 make_endpoint(uint32_t value,
@@ -138,6 +258,8 @@ static void *concurrent_writer(void *argument)
 static void test_concurrency(void)
 {
     struct CAMDEndpointRegistry *registry = camd_registry_create();
+    struct registry_provider_context provider_context;
+    struct CAMDHandleV1 provider_owner;
     struct CAMDEndpointInfoV1 endpoint = make_endpoint(3, "Concurrent");
     struct CAMDGroupInfoV1 group = make_group(&endpoint, 0);
     struct CAMDFunctionBlockInfoV1 block = make_block(&endpoint, 0, 0, 1);
@@ -146,7 +268,9 @@ static void test_concurrency(void)
     size_t i;
 
     assert(registry != NULL);
-    assert(camd_registry_publish(registry, &endpoint, &group, 1, &block, 1,
+    provider_owner = register_test_provider(registry, &provider_context);
+    assert(camd_registry_publish(registry, provider_owner, &endpoint, &group,
+                                 1, &block, 1,
                                  &contexts[0].provider) == CAMD_REGISTRY_OK);
     assert(camd_registry_set_state(registry, contexts[0].provider,
                                    CAMD_ENDPOINT_DISCOVERING) ==
@@ -173,6 +297,7 @@ static void test_concurrency(void)
            CAMD_REGISTRY_OK);
     assert(camd_registry_release(registry, contexts[0].provider) ==
            CAMD_REGISTRY_OK);
+    retire_test_provider(registry, provider_owner, &provider_context);
     camd_registry_destroy(registry);
 }
 
@@ -203,23 +328,26 @@ static void expect_watch_event(struct CAMDEndpointWatch *watch,
 static void test_watches(void)
 {
     struct CAMDEndpointRegistry *registry = camd_registry_create();
+    struct registry_provider_context provider_context;
     struct CAMDEndpointInfoV1 endpoint = make_endpoint(4, "Watched");
     struct CAMDGroupInfoV1 group = make_group(&endpoint, 0);
     struct CAMDFunctionBlockInfoV1 block = make_block(&endpoint, 0, 0, 1);
     struct CAMDEndpointWatch *watch;
     struct CAMDEndpointSnapshot *snapshot;
-    struct CAMDHandleV1 provider, client;
+    struct CAMDHandleV1 provider_owner, provider, client;
     struct CAMDGenerationV1 generation;
     struct CAMDEndpointWatchEventV1 event;
 
     assert(registry != NULL);
+    provider_owner = register_test_provider(registry, &provider_context);
     assert(sizeof(struct CAMDEndpointWatchEventV1) == 36);
     assert(camd_registry_watch_start(registry, 8, &watch, &generation) ==
            CAMD_REGISTRY_OK);
     assert(generation.high == 0 && generation.low == 0);
     assert(camd_endpoint_watch_read(watch, &event) == CAMD_REGISTRY_EMPTY);
 
-    assert(camd_registry_publish(registry, &endpoint, &group, 1, &block, 1,
+    assert(camd_registry_publish(registry, provider_owner, &endpoint, &group,
+                                 1, &block, 1,
                                  &provider) == CAMD_REGISTRY_OK);
     expect_watch_event(watch, CAMD_ENDPOINT_EVENT_ADDED, &endpoint.ID,
                        &generation);
@@ -259,7 +387,8 @@ static void test_watches(void)
     block = make_block(&endpoint, 0, 0, 1);
     assert(camd_registry_watch_start(registry, 2, &watch, &generation) ==
            CAMD_REGISTRY_OK);
-    assert(camd_registry_publish(registry, &endpoint, &group, 1, &block, 1,
+    assert(camd_registry_publish(registry, provider_owner, &endpoint, &group,
+                                 1, &block, 1,
                                  &provider) == CAMD_REGISTRY_OK);
     assert(camd_registry_set_state(registry, provider,
                                    CAMD_ENDPOINT_DISCOVERING) ==
@@ -285,17 +414,71 @@ static void test_watches(void)
            CAMD_REGISTRY_OK);
     assert(camd_registry_retire(registry, provider) == CAMD_REGISTRY_OK);
     assert(camd_registry_release(registry, provider) == CAMD_REGISTRY_OK);
+    retire_test_provider(registry, provider_owner, &provider_context);
+    camd_registry_destroy(registry);
+}
+
+static void test_provider_lifecycle(void)
+{
+    struct CAMDEndpointRegistry *registry = camd_registry_create();
+    struct registry_provider_context context;
+    struct CAMDEndpointInfoV1 endpoint = make_endpoint(6, "Provider owned");
+    struct CAMDGroupInfoV1 group = make_group(&endpoint, 0);
+    struct CAMDFunctionBlockInfoV1 block = make_block(&endpoint, 0, 0, 1);
+    struct CAMDEndpointSnapshot *snapshot;
+    struct CAMDHandleV1 provider, replacement, endpoint_owner, client;
+
+    assert(registry != NULL);
+    provider = register_test_provider(registry, &context);
+    assert(camd_registry_publish(registry, provider, &endpoint, &group, 1,
+                                 &block, 1, &endpoint_owner) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_registry_acquire(registry, &endpoint.ID, &client) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_registry_provider_release(registry, provider) ==
+           CAMD_REGISTRY_STATE);
+    assert(camd_registry_provider_begin_retire(registry, provider) ==
+           CAMD_REGISTRY_OK);
+    assert(context.shutdown_calls == 1);
+    assert(context.snapshot_reentries == 1);
+    assert(camd_registry_acquire(registry, &endpoint.ID, &client) ==
+           CAMD_REGISTRY_RETIRED);
+    assert(camd_registry_snapshot(registry, &snapshot) == CAMD_REGISTRY_OK);
+    assert(camd_snapshot_endpoint_count(snapshot) == 0);
+    camd_snapshot_destroy(snapshot);
+    assert(camd_registry_provider_release(registry, provider) ==
+           CAMD_REGISTRY_BUSY);
+    assert(context.ready_calls == 0);
+    assert(camd_registry_release(registry, endpoint_owner) == CAMD_REGISTRY_OK);
+    assert(camd_registry_release(registry, client) == CAMD_REGISTRY_OK);
+
+    context.ready = 0;
+    assert(camd_registry_provider_release(registry, provider) ==
+           CAMD_REGISTRY_BUSY);
+    assert(context.ready_calls == 1);
+    context.ready = 1;
+    assert(camd_registry_provider_release(registry, provider) ==
+           CAMD_REGISTRY_OK);
+    assert(context.ready_calls == 2);
+    assert(context.snapshot_reentries == 3);
+    assert(camd_registry_provider_begin_retire(registry, provider) ==
+           CAMD_REGISTRY_STALE);
+    replacement = register_test_provider(registry, &context);
+    assert(replacement.slot == provider.slot);
+    assert(replacement.generation != provider.generation);
+    retire_test_provider(registry, replacement, &context);
     camd_registry_destroy(registry);
 }
 
 int main(void)
 {
     struct CAMDEndpointRegistry *registry = camd_registry_create();
+    struct registry_provider_context provider_context;
     struct CAMDEndpointSnapshot *before, *after;
     struct CAMDEndpointInfoV1 endpoint = make_endpoint(1, "Original");
     struct CAMDGroupInfoV1 group = make_group(&endpoint, 0);
     struct CAMDFunctionBlockInfoV1 block = make_block(&endpoint, 0, 0, 1);
-    struct CAMDHandleV1 provider, client, replacement;
+    struct CAMDHandleV1 provider_owner, provider, client, replacement;
     struct CAMDGenerationV1 generation;
     const struct CAMDEndpointInfoV1 *copy;
 
@@ -304,14 +487,31 @@ int main(void)
     assert(sizeof(struct CAMDEndpointInfoV1) == 360);
     assert(sizeof(struct CAMDGroupInfoV1) == 100);
     assert(sizeof(struct CAMDFunctionBlockInfoV1) == 104);
+    provider_owner = register_test_provider(registry, &provider_context);
 
+    replacement = provider_owner;
+    ++replacement.generation;
+    assert(camd_registry_publish(registry, replacement, &endpoint, &group, 1,
+                                 &block, 1, &provider) == CAMD_REGISTRY_STALE);
+    endpoint.ProviderID = make_id(0x1001u);
+    assert(camd_registry_publish(registry, provider_owner, &endpoint, &group,
+                                 1, &block, 1,
+                                 &provider) == CAMD_REGISTRY_INVALID);
+    endpoint.ProviderID = make_id(0x1000u);
+    endpoint.NativeDataFormats = CAMD_DATA_FORMAT_MIDI1;
+    assert(camd_registry_publish(registry, provider_owner, &endpoint, &group,
+                                 1, &block, 1,
+                                 &provider) == CAMD_REGISTRY_UNSUPPORTED);
     endpoint.NativeDataFormats = 0;
-    assert(camd_registry_publish(registry, &endpoint, &group, 1, &block, 1,
+    assert(camd_registry_publish(registry, provider_owner, &endpoint, &group,
+                                 1, &block, 1,
                                  &provider) == CAMD_REGISTRY_INVALID);
     endpoint.NativeDataFormats = CAMD_DATA_FORMAT_UMP;
-    assert(camd_registry_publish(registry, &endpoint, &group, 1, &block, 1,
+    assert(camd_registry_publish(registry, provider_owner, &endpoint, &group,
+                                 1, &block, 1,
                                  &provider) == CAMD_REGISTRY_OK);
-    assert(camd_registry_publish(registry, &endpoint, &group, 1, &block, 1,
+    assert(camd_registry_publish(registry, provider_owner, &endpoint, &group,
+                                 1, &block, 1,
                                  &replacement) == CAMD_REGISTRY_DUPLICATE);
     assert(camd_registry_snapshot(registry, &before) == CAMD_REGISTRY_OK);
     generation = camd_snapshot_generation(before);
@@ -367,7 +567,8 @@ int main(void)
     endpoint = make_endpoint(2, "Replacement");
     group = make_group(&endpoint, 0);
     block = make_block(&endpoint, 0, 0, 1);
-    assert(camd_registry_publish(registry, &endpoint, &group, 1, &block, 1,
+    assert(camd_registry_publish(registry, provider_owner, &endpoint, &group,
+                                 1, &block, 1,
                                  &replacement) == CAMD_REGISTRY_OK);
     assert(replacement.slot == provider.slot);
     assert(replacement.generation != provider.generation);
@@ -375,10 +576,12 @@ int main(void)
 
     assert(camd_registry_retire(registry, replacement) == CAMD_REGISTRY_OK);
     assert(camd_registry_release(registry, replacement) == CAMD_REGISTRY_OK);
+    retire_test_provider(registry, provider_owner, &provider_context);
     camd_snapshot_destroy(before);
     camd_registry_destroy(registry);
     test_concurrency();
     test_watches();
+    test_provider_lifecycle();
     puts("CAMD private endpoint core OK");
     return 0;
 }

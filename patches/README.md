@@ -285,7 +285,7 @@ snapshots immediately but remain allocated through their last lease.
 dedicated Exec semaphore; initialization failure unwinds the registry, timer
 and legacy semaphore.
 
-The patch also compiles a dormant private provider contract. Providers declare
+The patch also compiles a private provider contract. Providers declare
 MIDI 1.0, UMP-with-MIDI-1.0 and UMP-with-MIDI-2.0 native paths plus direction.
 Sessions select one exact path; MIDI 1.0 short messages/complete SysEx and UMP
 events use separate send and receive callbacks. Receive sinks expose only the
@@ -295,12 +295,21 @@ receive stop and close remain available. Numeric values, pointer-bearing
 callback tables and the provisional private MIDI 1.0 envelope are not public
 ABI.
 
-No registry-owned provider session, public watch vector, UMP wire parser,
-converter or legacy projection uses it yet, so existing CAMD behavior remains
-unchanged. The matching host models and tests live in `prototypes/camd`,
-`tests/camd_endpoint_core.c` and `tests/camd_provider_contract.c`; they race
-registry snapshots/leases, exercise watch overflow/resync and use a software
-provider to prove exact-path dispatch.
+The registry now copies provider descriptors into generation-safe slots and
+requires each endpoint publication to name a live, identity- and
+format-compatible owner. Provider retirement removes all its endpoints from
+new snapshots in one generation, then waits for their final leases.
+`BeginShutdown` and `ShutdownReady` run outside the registry semaphore; host
+callbacks reenter snapshot enumeration to prove that property. Provider slot
+reuse rejects stale handles.
+
+No registry-owned data session, public watch vector, UMP wire parser, converter
+or legacy projection uses the provider path yet, so existing CAMD behavior
+remains unchanged. The matching host models and tests live in
+`prototypes/camd`, `tests/camd_endpoint_core.c` and
+`tests/camd_provider_contract.c`; they race registry snapshots/leases,
+exercise watch overflow/resync and use a software provider to prove ownership,
+retirement and exact-path dispatch.
 
 ### Testing
 

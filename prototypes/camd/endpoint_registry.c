@@ -1,4 +1,5 @@
 #include "endpoint_registry.h"
+#include "provider_contract.h"
 
 #include <string.h>
 
@@ -39,6 +40,8 @@ struct endpoint_slot {
     uint32_t generation;
     uint32_t references;
     int occupied;
+    uint32_t provider_slot;
+    uint32_t provider_generation;
     struct CAMDEndpointInfoV1 endpoint;
     struct CAMDGroupInfoV1 *groups;
     size_t group_count;
@@ -46,10 +49,23 @@ struct endpoint_slot {
     size_t block_count;
 };
 
+struct provider_slot {
+    uint32_t generation;
+    uint32_t endpoint_count;
+    uint32_t callbacks_inflight;
+    int occupied;
+    int retiring;
+    int shutdown_callback_done;
+    int release_checking;
+    struct CAMDPrivateProvider provider;
+};
+
 struct CAMDEndpointRegistry {
     core_lock_t lock;
     struct endpoint_slot *slots;
     size_t slot_count;
+    struct provider_slot *providers;
+    size_t provider_count;
     struct CAMDGenerationV1 generation;
     struct CAMDEndpointWatch *watches;
 };
@@ -286,6 +302,19 @@ static struct endpoint_slot *resolve(struct CAMDEndpointRegistry *registry,
     return slot;
 }
 
+static struct provider_slot *resolve_provider(
+    struct CAMDEndpointRegistry *registry, struct CAMDHandleV1 handle)
+{
+    struct provider_slot *slot;
+
+    if (!registry || handle.slot == 0 || handle.slot > registry->provider_count)
+        return NULL;
+    slot = &registry->providers[handle.slot - 1];
+    if (!slot->occupied || slot->generation != handle.generation)
+        return NULL;
+    return slot;
+}
+
 static int transition_allowed(uint32_t from, uint32_t to)
 {
     if (to == CAMD_ENDPOINT_RETIRING)
@@ -331,12 +360,218 @@ void camd_registry_destroy(struct CAMDEndpointRegistry *registry)
         core_free(watch);
     }
     core_free(registry->slots);
+    core_free(registry->providers);
     core_lock_destroy(&registry->lock);
     core_free(registry);
 }
 
+enum CAMDRegistryResult camd_registry_provider_register(
+    struct CAMDEndpointRegistry *registry,
+    const struct CAMDProviderDescriptorV1 *descriptor,
+    struct CAMDHandleV1 *provider_handle)
+{
+    struct CAMDPrivateProvider provider;
+    struct provider_slot *slot = NULL;
+    struct provider_slot *grown;
+    enum CAMDRegistryResult result;
+    size_t i, index = 0;
+
+    if (!registry || !provider_handle ||
+        camd_provider_init(&provider, descriptor) != CAMD_PROVIDER_OK)
+        return CAMD_REGISTRY_INVALID;
+    core_lock_acquire(&registry->lock);
+    for (i = 0; i < registry->provider_count; ++i) {
+        if (registry->providers[i].occupied &&
+            id_equal(&registry->providers[i].provider.descriptor.ProviderID,
+                     &provider.descriptor.ProviderID)) {
+            result = CAMD_REGISTRY_DUPLICATE;
+            goto out;
+        }
+        if (!slot && !registry->providers[i].occupied &&
+            registry->providers[i].generation != UINT32_MAX) {
+            slot = &registry->providers[i];
+            index = i;
+        }
+    }
+    if (!slot) {
+        if (registry->provider_count == UINT32_MAX ||
+            registry->provider_count >= SIZE_MAX / sizeof(*grown)) {
+            result = CAMD_REGISTRY_RANGE;
+            goto out;
+        }
+        index = registry->provider_count;
+        grown = core_alloc((registry->provider_count + 1) * sizeof(*grown), 1);
+        if (!grown) {
+            result = CAMD_REGISTRY_NOMEM;
+            goto out;
+        }
+        if (registry->provider_count)
+            memcpy(grown, registry->providers,
+                   registry->provider_count * sizeof(*grown));
+        for (i = 0; i < registry->provider_count; ++i)
+            if (grown[i].occupied)
+                grown[i].provider.descriptor.Ops =
+                    &grown[i].provider.operations;
+        core_free(registry->providers);
+        registry->providers = grown;
+        slot = &registry->providers[index];
+        ++registry->provider_count;
+    }
+    {
+        uint32_t generation = slot->generation + 1;
+        memset(slot, 0, sizeof(*slot));
+        slot->generation = generation;
+    }
+    slot->occupied = 1;
+    slot->provider = provider;
+    slot->provider.descriptor.Ops = &slot->provider.operations;
+    provider_handle->slot = (uint32_t)(index + 1);
+    provider_handle->generation = slot->generation;
+    result = CAMD_REGISTRY_OK;
+out:
+    core_lock_release(&registry->lock);
+    return result;
+}
+
+enum CAMDRegistryResult camd_registry_provider_begin_retire(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 provider_handle)
+{
+    struct provider_slot *provider;
+    CAMDProviderShutdownFnV1 shutdown;
+    void *context;
+    enum CAMDProviderResult callback_result;
+    enum CAMDRegistryResult result;
+    size_t i;
+    int changed = 0;
+
+    if (!registry)
+        return CAMD_REGISTRY_INVALID;
+    core_lock_acquire(&registry->lock);
+    provider = resolve_provider(registry, provider_handle);
+    if (!provider) {
+        result = CAMD_REGISTRY_STALE;
+        goto out;
+    }
+    if (provider->retiring) {
+        result = CAMD_REGISTRY_RETIRED;
+        goto out;
+    }
+    for (i = 0; i < registry->slot_count; ++i) {
+        struct endpoint_slot *endpoint = &registry->slots[i];
+
+        if (endpoint->occupied &&
+            endpoint->provider_slot == provider_handle.slot &&
+            endpoint->provider_generation == provider_handle.generation &&
+            endpoint->endpoint.State != CAMD_ENDPOINT_RETIRING) {
+            changed = 1;
+            break;
+        }
+    }
+    if (changed && !generation_available(registry)) {
+        result = CAMD_REGISTRY_RANGE;
+        goto out;
+    }
+    provider->retiring = 1;
+    provider->provider.retiring = 1;
+    if (changed)
+        advance_generation(registry);
+    for (i = 0; i < registry->slot_count; ++i) {
+        struct endpoint_slot *endpoint = &registry->slots[i];
+
+        if (endpoint->occupied &&
+            endpoint->provider_slot == provider_handle.slot &&
+            endpoint->provider_generation == provider_handle.generation &&
+            endpoint->endpoint.State != CAMD_ENDPOINT_RETIRING) {
+            endpoint->endpoint.State = CAMD_ENDPOINT_RETIRING;
+            endpoint->endpoint.Generation = registry->generation;
+            notify_watches(registry, CAMD_ENDPOINT_EVENT_RETIRED,
+                           &endpoint->endpoint.ID);
+        }
+    }
+    ++provider->callbacks_inflight;
+    shutdown = provider->provider.operations.BeginShutdown;
+    context = provider->provider.descriptor.Context;
+    core_lock_release(&registry->lock);
+
+    callback_result = shutdown(context);
+
+    core_lock_acquire(&registry->lock);
+    provider = resolve_provider(registry, provider_handle);
+    if (!provider) {
+        result = CAMD_REGISTRY_STALE;
+    } else {
+        --provider->callbacks_inflight;
+        provider->shutdown_callback_done = 1;
+        result = callback_result == CAMD_PROVIDER_OK
+                     ? CAMD_REGISTRY_OK
+                     : CAMD_REGISTRY_CALLBACK_FAILED;
+    }
+out:
+    core_lock_release(&registry->lock);
+    return result;
+}
+
+enum CAMDRegistryResult camd_registry_provider_release(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 provider_handle)
+{
+    struct provider_slot *provider;
+    CAMDProviderShutdownReadyFnV1 shutdown_ready;
+    void *context;
+    enum CAMDRegistryResult result;
+    int ready;
+
+    if (!registry)
+        return CAMD_REGISTRY_INVALID;
+    core_lock_acquire(&registry->lock);
+    provider = resolve_provider(registry, provider_handle);
+    if (!provider) {
+        result = CAMD_REGISTRY_STALE;
+        goto out;
+    }
+    if (!provider->retiring || !provider->shutdown_callback_done) {
+        result = CAMD_REGISTRY_STATE;
+        goto out;
+    }
+    if (provider->endpoint_count != 0 || provider->callbacks_inflight != 0 ||
+        provider->release_checking) {
+        result = CAMD_REGISTRY_BUSY;
+        goto out;
+    }
+    provider->release_checking = 1;
+    ++provider->callbacks_inflight;
+    shutdown_ready = provider->provider.operations.ShutdownReady;
+    context = provider->provider.descriptor.Context;
+    core_lock_release(&registry->lock);
+
+    ready = shutdown_ready(context);
+
+    core_lock_acquire(&registry->lock);
+    provider = resolve_provider(registry, provider_handle);
+    if (!provider) {
+        result = CAMD_REGISTRY_STALE;
+    } else {
+        --provider->callbacks_inflight;
+        provider->release_checking = 0;
+        if (!ready) {
+            result = CAMD_REGISTRY_BUSY;
+        } else {
+            memset(&provider->provider, 0, sizeof(provider->provider));
+            provider->occupied = 0;
+            provider->retiring = 0;
+            provider->shutdown_callback_done = 0;
+            result = CAMD_REGISTRY_OK;
+        }
+    }
+out:
+    core_lock_release(&registry->lock);
+    return result;
+}
+
 enum CAMDRegistryResult camd_registry_publish(
     struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 provider_handle,
     const struct CAMDEndpointInfoV1 *endpoint,
     const struct CAMDGroupInfoV1 *groups,
     size_t group_count,
@@ -347,6 +582,7 @@ enum CAMDRegistryResult camd_registry_publish(
     struct CAMDGroupInfoV1 *group_copy;
     struct CAMDFunctionBlockInfoV1 *block_copy;
     struct endpoint_slot *slot = NULL;
+    struct provider_slot *provider;
     struct endpoint_slot *grown;
     enum CAMDRegistryResult result;
     size_t i, index = 0;
@@ -361,6 +597,34 @@ enum CAMDRegistryResult camd_registry_publish(
     if (result != CAMD_REGISTRY_OK)
         return result;
     core_lock_acquire(&registry->lock);
+    provider = resolve_provider(registry, provider_handle);
+    if (!provider) {
+        result = CAMD_REGISTRY_STALE;
+        goto out;
+    }
+    if (provider->retiring) {
+        result = CAMD_REGISTRY_RETIRED;
+        goto out;
+    }
+    if (!id_equal(&provider->provider.descriptor.ProviderID,
+                  &endpoint->ProviderID)) {
+        result = CAMD_REGISTRY_INVALID;
+        goto out;
+    }
+    if (((endpoint->NativeDataFormats & CAMD_DATA_FORMAT_MIDI1) != 0 &&
+         (provider->provider.descriptor.NativePaths &
+          CAMD_PROVIDER_PATH_MIDI1) == 0) ||
+        ((endpoint->NativeDataFormats & CAMD_DATA_FORMAT_UMP) != 0 &&
+         (provider->provider.descriptor.NativePaths &
+          (CAMD_PROVIDER_PATH_UMP_MIDI1 |
+           CAMD_PROVIDER_PATH_UMP_MIDI2)) == 0)) {
+        result = CAMD_REGISTRY_UNSUPPORTED;
+        goto out;
+    }
+    if (provider->endpoint_count == UINT32_MAX) {
+        result = CAMD_REGISTRY_RANGE;
+        goto out;
+    }
     if (!generation_available(registry)) {
         result = CAMD_REGISTRY_RANGE;
         goto out;
@@ -402,6 +666,8 @@ enum CAMDRegistryResult camd_registry_publish(
     ++slot->generation;
     slot->occupied = 1;
     slot->references = 1;
+    slot->provider_slot = provider_handle.slot;
+    slot->provider_generation = provider_handle.generation;
     slot->endpoint = *endpoint;
     slot->groups = group_copy;
     slot->group_count = group_count;
@@ -411,6 +677,7 @@ enum CAMDRegistryResult camd_registry_publish(
     slot->endpoint.Generation = registry->generation;
     notify_watches(registry, CAMD_ENDPOINT_EVENT_ADDED,
                    &slot->endpoint.ID);
+    ++provider->endpoint_count;
     provider_lease->slot = (uint32_t)(index + 1);
     provider_lease->generation = slot->generation;
     group_copy = NULL;
@@ -579,6 +846,14 @@ enum CAMDRegistryResult camd_registry_release(
         --slot->references;
         if (slot->references == 0 &&
             slot->endpoint.State == CAMD_ENDPOINT_RETIRING) {
+            struct CAMDHandleV1 owner;
+            struct provider_slot *provider;
+
+            owner.slot = slot->provider_slot;
+            owner.generation = slot->provider_generation;
+            provider = resolve_provider(registry, owner);
+            if (provider && provider->endpoint_count != 0)
+                --provider->endpoint_count;
             free_topology(slot);
             memset(&slot->endpoint, 0, sizeof(slot->endpoint));
             slot->occupied = 0;

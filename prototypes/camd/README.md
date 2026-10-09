@@ -12,9 +12,9 @@ registry owns an Exec semaphore on AROS and a pthread mutex in the host model;
 it is not a MIDI 1.0 dynamic-port implementation.
 
 `provider_contract.c` separately proves the path-selective data-plane shape.
-It is deliberately not coupled to the registry yet: that integration requires
-callback-outside-lock and concurrent teardown tests rather than an unreviewed
-shortcut.
+Provider registration and endpoint ownership are now coupled to the registry;
+session data dispatch remains separate until its callback-outside-lock and
+concurrent teardown rules are executable rather than assumed.
 
 The current slice proves:
 
@@ -45,14 +45,21 @@ The current slice proves:
   conversion or cross-format dispatch;
 - receive sinks expose only callbacks matching the session format;
 - provider retirement rejects new opens and sends while allowing explicit
-  drain, cancel, receive stop and close before final release.
+  drain, cancel, receive stop and close before final release;
+- endpoint publication requires a live owning provider with a matching stable
+  provider ID and compatible declared native formats;
+- provider handles use independent slot generations and reject stale reuse;
+- provider retirement atomically removes all owned endpoints from snapshots,
+  rejects new acquisitions, and waits for their final leases;
+- `BeginShutdown` and `ShutdownReady` execute without the registry lock held,
+  proven by callbacks that reenter snapshot enumeration.
 
 It deliberately does not yet implement:
 
 - stable-ID storage or key derivation;
 - concurrent retirement/failure-path stress on native AROS;
-- registry-owned provider/session handles, concurrent callback lifetime or
-  native MIDI 1.0/UMP queues;
+- registry-owned data sessions, concurrent data-callback lifetime or native
+  MIDI 1.0/UMP queues;
 - any format/protocol converter or lossy policy;
 - legacy cluster projection;
 - any public CAMD vector, tag, header or normative UMP wire constant.
@@ -63,8 +70,9 @@ Run it with the normal host suite:
 make test
 ```
 
-The next slice integrates provider identity, sessions and two-phase retirement
-with the registry while keeping callbacks outside its lock, then adds bounded
+The next slice integrates format-fixed data sessions with the registry while
+keeping open/send/receive/close callbacks outside its lock, then adds bounded
 native queues and native AROS retirement stress. The host test's software
-provider already proves format-specific dispatch. Public vectors remain
-blocked until the integrated lifecycle and U01 review pass.
+provider already proves format-specific dispatch and registry-owned provider
+retirement. Public vectors remain blocked until session lifecycle and U01
+review pass.

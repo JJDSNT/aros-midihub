@@ -550,8 +550,10 @@ marker and requires a fresh snapshot; retiring endpoints are omitted from new
 snapshots while leases keep their storage alive. Native AROS retirement stress
 remains a required validation. The executable private provider contract now
 defines separate native MIDI 1.0 and UMP callbacks and proves them with a host
-software provider. Registry ownership, bounded queues and callback/retirement
-concurrency remain before this becomes an operational provider path.
+software provider. The registry owns provider identity and endpoint lifetime,
+including generation-safe reuse and callbacks outside its lock. Registry-owned
+data sessions, bounded queues and callback/retirement concurrency remain before
+this becomes an operational provider path.
 
 ## Implemented steps
 
@@ -697,9 +699,9 @@ adapter. Public ABI remains a separate U01 gate.
    retirement, stale-handle rejection and bounded watch overflow/resync. The
    corresponding private AROS patch initializes it in `CamdBase`, enforces its
    Exec semaphore and compiles for hosted x86-64. The same patch compiles a
-   dormant format-specific provider contract; registry/provider integration,
-   native AROS retirement stress and the legacy adapter remain before U01
-   closure.
+   format-specific provider contract plus dormant provider registration and
+   endpoint ownership. Registry-owned data sessions, native AROS retirement
+   stress and the legacy adapter remain before U01 closure.
 
 
 ## 7. Native MIDI 2.0 / UMP architecture (future design contract)

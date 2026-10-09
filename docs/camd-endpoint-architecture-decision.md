@@ -282,11 +282,13 @@ generation-safe leases. Its AROS patch uses Exec allocation and initializes
 the core inside `camd.library`. The registry now owns and enforces its Exec
 semaphore, while the host model races snapshots and lease operations against
 lifecycle changes. Bounded watches and an executable format-specific provider
-contract are implemented privately. The latter proves exact native-path
-selection, direction-specific operations, format-filtered receive sinks and a
-software provider without inserting conversion. Registry/provider integration,
-bounded queues and native AROS retirement stress are still required before it
-becomes operational.
+contract are implemented privately. Providers now register with generation-safe
+handles, own compatible published endpoints and retire them transactionally;
+shutdown callbacks reenter the registry in tests to prove they run outside its
+lock. The separate provider contract proves exact native-path selection,
+direction-specific operations and format-filtered receive sinks without
+inserting conversion. Registry-owned data sessions, bounded queues and native
+AROS retirement stress are still required before it becomes operational.
 
 The current proposal is documented in
 [the endpoint ABI draft](camd-endpoint-abi-draft.md). It is a review artifact,

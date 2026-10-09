@@ -46,10 +46,11 @@ The provider API stays private for the first implementation. Its sized
 operations table is an internal CAMD contract. The executable prototype now
 validates separate MIDI 1.0 and UMP callbacks, exact native-path selection,
 input/output capability and format-filtered receive sinks with a software
-provider. Registry ownership, queues and the legacy-driver adapter remain to
-be proven. If later made public for independently built drivers, it receives
-its own version gate, callback declarations and ABI review; it is not smuggled
-into version 43 through the client surface.
+provider. Provider identity and endpoint ownership are now registry-managed;
+data-session ownership, queues and the legacy-driver adapter remain to be
+proven. If later made public for independently built drivers, it receives its
+own version gate, callback declarations and ABI review; it is not smuggled into
+version 43 through the client surface.
 
 ### Why this is a hybrid rather than a literal copy of either model
 
@@ -267,6 +268,15 @@ CAMD copies publication records before returning. It never retains provider
 stack memory. A publish/update transaction validates all Groups and Function
 Blocks before advancing the registry generation. A failed transaction changes
 nothing.
+
+The private registry now copies and validates provider descriptors, gives them
+generation-safe handles, and requires every endpoint publication to name its
+live owner. Provider retirement changes all owned endpoints to retiring in one
+registry generation, rejects new acquisitions and keeps provider storage until
+the last endpoint lease releases. `BeginShutdown` and `ShutdownReady` callbacks
+run outside the registry lock and may reenter snapshot queries. Data sessions
+are not registry-owned yet, so this is lifecycle evidence rather than an
+operational transport path.
 
 Provider callbacks execute without registry, endpoint or legacy graph locks.
 Their context remains valid until the shutdown callback has completed and the
