@@ -154,6 +154,15 @@ void aros_camd_bridge_poll(struct aros_camd_bridge *bridge,
     }
 }
 
+uint32_t aros_camd_bridge_time_ms(struct aros_camd_bridge *bridge,
+                                  uint32_t fallback_ms)
+{
+    if (bridge && bridge->camd_base &&
+        ((struct Library *)bridge->camd_base)->lib_Version >= 42)
+        return CamdTime();
+    return fallback_ms;
+}
+
 #else
 
 int aros_camd_bridge_open_named(struct aros_camd_bridge *bridge,
@@ -200,6 +209,13 @@ void aros_camd_bridge_poll(struct aros_camd_bridge *bridge,
     (void)bridge;
     (void)output;
     (void)context;
+}
+
+uint32_t aros_camd_bridge_time_ms(struct aros_camd_bridge *bridge,
+                                  uint32_t fallback_ms)
+{
+    (void)bridge;
+    return fallback_ms;
 }
 
 #endif

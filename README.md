@@ -285,6 +285,13 @@ endpoints and preserve simple source-to-destination routes between them. The
 CAMD opens. See [the CAMD integration design](docs/camd-integration.md),
 [MIDIHub runtime architecture](docs/midihub-architecture.md), and
 [possible CAMD improvements](docs/camd-improvements.md) proposed for upstream.
+The final endpoint direction is recorded in the
+[CAMD registry/provider architecture decision](docs/camd-endpoint-architecture-decision.md),
+with its non-frozen interface proposal in the
+[endpoint ABI draft](docs/camd-endpoint-abi-draft.md).
+Its first non-public implementation evidence is the
+[CAMD endpoint-core model](prototypes/camd/README.md); it is host-tested but
+not yet part of `camd.library`.
 
 ## Initial Implementation Sources
 

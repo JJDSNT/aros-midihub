@@ -23,6 +23,11 @@ make contrib-aros-midihub-mdnsprobe
 The resulting files are `Libs/bonami.library` and
 `Extras/aros-midihub/C/BonamiProbe` in the AROS system tree.
 
+The library and probe cross-build cleanly for 64-bit AArch64 AROS with the
+current MetaMake tree. Native execution of `BonamiProbe`, including binding
+UDP 5353 and exchanging packets with another mDNS implementation, remains the
+next validation step.
+
 AROS now provides a clean-room Envoy-compatible `nipc.library` and public
 `<envoy/nipc.h>` API. This initial port does not yet build Bonami's optional
 inquiry bridge against them: the three NIPC compatibility functions remain in

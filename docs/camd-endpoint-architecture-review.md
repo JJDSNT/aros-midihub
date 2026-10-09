@@ -1,6 +1,7 @@
 # CAMD endpoint architecture — comparative research and agent decision gate
 
-**Status:** Research-backed architecture recommendation, not implemented or a frozen ABI.
+**Status:** Reviewed. Option B is selected in
+[the architecture decision](camd-endpoint-architecture-decision.md); no public ABI is frozen.
 **Priority:** Mandatory review before CAMD dynamic endpoint API or UMP API freeze (M0).
 **Principle:** Preserve the *legacy CAMD application contract*, not the internal implementation of the legacy USB MIDI driver.
 

@@ -2,8 +2,9 @@
  * SPDX-License-Identifier: BSD-2-Clause
  * Copyright 2026 Jaime Dias
  *
- * AROS currently has no public Envoy NIPC headers. Keep Bonami's ABI slots
- * available while excluding the optional NIPC bridge from the native build.
+ * AROS now has public Envoy NIPC headers and a native nipc.library. Keep
+ * Bonami's ABI slots available while the optional discovery bridge remains
+ * deliberately separate from the core mDNS build and awaits validation.
  */
 
 #include <exec/types.h>

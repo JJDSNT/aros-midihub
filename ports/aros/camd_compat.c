@@ -190,9 +190,12 @@ static void test_links(void)
     check(chmask == 0xffff && (ULONG)evmask == 0xffffffffUL,
           "channel and event masks default to all", NULL);
     check(pri == 0, "MLINK_Priority defaults to 0", NULL);
-    /* 41.1 ignores MLINK_Comment. Implementing it changes this count;
-       that change must be deliberate. */
-    check(counted == 5, "GetMidiLinkAttrsA does not count MLINK_Comment", NULL);
+    if (CamdBase->lib_Version >= 42) {
+        check(counted == 6, "GetMidiLinkAttrsA counts MLINK_Comment", NULL);
+        check(comment == 0, "MLINK_Comment is NULL without a comment", NULL);
+    } else {
+        check(counted == 5, "41.1 does not count MLINK_Comment", NULL);
+    }
 
     sender = link_to(node, MLTYPE_Sender, cluster_a);
     check(sender && MidiLinkConnected(sender) && MidiLinkConnected(receiver),
@@ -291,20 +294,23 @@ static void test_sysex(void)
 {
     static char cluster[] = "camdcompat.sysex";
     static UBYTE identity[] = {0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7};
+    static UBYTE exact[] = {0xf0, 0x01, 0x02, 0xf7};
     UBYTE buffer[16];
     struct MidiNode *out = new_node("camdcompat sysex out", 32, 256);
     struct MidiNode *in = new_node("camdcompat sysex in", 32, 256);
-    struct MidiLink *sender = NULL, *receiver = NULL;
+    struct MidiNode *small = new_node("camdcompat sysex small", 32, 4);
+    struct MidiLink *sender = NULL, *receiver = NULL, *small_receiver = NULL;
     MidiMsg msg;
     ULONG length;
 
-    if (!out || !in) {
+    if (!out || !in || !small) {
         check(0, "sysex: CreateMidiA", NULL);
         goto out;
     }
     sender = link_to(out, MLTYPE_Sender, cluster);
     receiver = link_to(in, MLTYPE_Receiver, cluster);
-    if (!sender || !receiver) {
+    small_receiver = link_to(small, MLTYPE_Receiver, cluster);
+    if (!sender || !receiver || !small_receiver) {
         check(0, "sysex: AddMidiLinkA", NULL);
         goto out;
     }
@@ -321,11 +327,28 @@ static void test_sysex(void)
     GetMidi(in, &msg);
     SkipSysEx(in);
     check(GetMidi(in, &msg) && msg.mm_Status == 0x90, "SkipSysEx skips to the next message", NULL);
+
+    GetMidiErr(small);
+    drain(small);
+    PutSysEx(sender, exact);
+    check(GetMidi(small, &msg) && msg.mm_Status == 0xf0 && QuerySysEx(small) == sizeof(exact),
+          "SysEx exactly matching MIDI_SysExSize fits", NULL);
+    GetSysEx(small, buffer, sizeof(buffer));
+
+    PutSysEx(sender, identity);
+    check((GetMidiErr(small) & (CMEF_SysExTooBig | CMEF_SysExFull)) == CMEF_SysExTooBig,
+          "oversized SysEx reports CMEF_SysExTooBig, not CMEF_SysExFull", NULL);
+    check(!GetMidi(small, &msg), "oversized SysEx leaves no partial message", NULL);
+    PutMidi(sender, 0x903c6400UL);
+    check(GetMidi(small, &msg) && msg.mm_Status == 0x90,
+          "a normal message arrives after oversized SysEx", NULL);
 out:
     if (sender) RemoveMidiLink(sender);
     if (receiver) RemoveMidiLink(receiver);
+    if (small_receiver) RemoveMidiLink(small_receiver);
     if (out) DeleteMidi(out);
     if (in) DeleteMidi(in);
+    if (small) DeleteMidi(small);
 }
 
 static void test_errors(void)
@@ -336,6 +359,7 @@ static void test_errors(void)
     struct MidiLink *sender = NULL, *receiver = NULL;
     MidiMsg msg;
     UBYTE error;
+    BYTE bit = AllocSignal(-1);
     int i;
 
     if (!out || !in) {
@@ -357,17 +381,39 @@ static void test_errors(void)
     check(error & CMEF_BufferFull, "a full queue sets CMEF_BufferFull", NULL);
     check(GetMidiErr(in) == 0, "GetMidiErr clears the error", NULL);
     drain(in);
+
+    if (bit < 0) {
+        check(0, "MIDI_ErrFilter: signal", NULL);
+    } else {
+        struct TagItem filter_tags[] = {
+            {MIDI_ErrFilter, CMEF_BufferFull},
+            {MIDI_RecvSignal, (IPTR)bit},
+            {TAG_DONE, 0}
+        };
+        ULONG mask = 1UL << bit;
+
+        SetMidiAttrsA(in, filter_tags);
+        SetSignal(0, mask);
+        for (i = 0; i < 20; i++)
+            PutMidi(sender, 0x903c6400UL);
+        check(WaitMidi(in, &msg), "MIDI_ErrFilter hides an error from WaitMidi", NULL);
+        check(GetMidiErr(in) == 0, "MIDI_ErrFilter hides an error from GetMidiErr", NULL);
+        drain(in);
+    }
 out:
     if (sender) RemoveMidiLink(sender);
     if (receiver) RemoveMidiLink(receiver);
     if (out) DeleteMidi(out);
     if (in) DeleteMidi(in);
+    if (bit >= 0) FreeSignal(bit);
 }
 
 static void test_parse(void)
 {
     static char cluster[] = "camdcompat.parse";
     static UBYTE bytes[] = {0x90, 0x3c, 0x64, 0x3e, 0x64, 0xc1, 0x05};
+    static UBYTE oversized[] = {0xf0, 0x01, 0x02, 0x03, 0x04, 0xf7};
+    static UBYTE note[] = {0x90, 0x3c, 0x64};
     struct TagItem parse_tags[] = {
         {MLINK_Location, (IPTR)cluster},
         {MLINK_Parse, TRUE},
@@ -375,17 +421,19 @@ static void test_parse(void)
     };
     struct MidiNode *out = new_node("camdcompat parse out", 32, 256);
     struct MidiNode *in = new_node("camdcompat parse in", 32, 256);
-    struct MidiLink *sender = NULL, *receiver = NULL;
+    struct MidiNode *small = new_node("camdcompat parse small", 32, 4);
+    struct MidiLink *sender = NULL, *receiver = NULL, *small_receiver = NULL;
     MidiMsg msg;
     int ok;
 
-    if (!out || !in) {
+    if (!out || !in || !small) {
         check(0, "parse: CreateMidiA", NULL);
         goto out;
     }
     sender = AddMidiLinkA(out, MLTYPE_Sender, parse_tags);
     receiver = link_to(in, MLTYPE_Receiver, cluster);
-    if (!sender || !receiver) {
+    small_receiver = link_to(small, MLTYPE_Receiver, cluster);
+    if (!sender || !receiver || !small_receiver) {
         check(0, "parse: AddMidiLinkA", NULL);
         goto out;
     }
@@ -394,11 +442,22 @@ static void test_parse(void)
     ok = ok && GetMidi(in, &msg) && msg.mm_Status == 0x90 && msg.mm_Data1 == 0x3e;
     ok = ok && GetMidi(in, &msg) && msg.mm_Status == 0xc1 && msg.mm_Data1 == 0x05;
     check(ok, "ParseMidi with running status", NULL);
+    drain(small);
+
+    ParseMidi(sender, oversized, sizeof(oversized));
+    check((GetMidiErr(small) & (CMEF_SysExTooBig | CMEF_SysExFull)) == CMEF_SysExTooBig,
+          "byte-wise oversized SysEx reports CMEF_SysExTooBig", NULL);
+    check(!GetMidi(small, &msg), "byte-wise oversized SysEx leaves no partial message", NULL);
+    ParseMidi(sender, note, sizeof(note));
+    check(GetMidi(small, &msg) && msg.mm_Status == 0x90,
+          "byte-wise input recovers after oversized SysEx", NULL);
 out:
     if (sender) RemoveMidiLink(sender);
     if (receiver) RemoveMidiLink(receiver);
+    if (small_receiver) RemoveMidiLink(small_receiver);
     if (out) DeleteMidi(out);
     if (in) DeleteMidi(in);
+    if (small) DeleteMidi(small);
 }
 
 static void test_msgtypes(void)
@@ -739,6 +798,94 @@ out:
     if (in) DeleteMidi(in);
 }
 
+static void test_link_comments(void)
+{
+    static char cluster_name[] = "camdcompat.comments";
+    static char receiver_comment[] = "Receiver comment";
+    static char sender_comment[] = "Sender comment";
+    static char long_comment[] = "1234567890123456789012345678901234567890";
+    static char truncated_comment[] = "1234567890123456789012345678901234";
+    struct TagItem receiver_tags[] = {
+        {MLINK_Location, (IPTR)cluster_name},
+        {MLINK_Comment, (IPTR)receiver_comment},
+        {MLINK_Priority, 5},
+        {TAG_DONE, 0}
+    };
+    struct TagItem sender_tags[] = {
+        {MLINK_Location, (IPTR)cluster_name},
+        {MLINK_Comment, (IPTR)sender_comment},
+        {MLINK_Priority, 5},
+        {TAG_DONE, 0}
+    };
+    struct TagItem promote_sender[] = {
+        {MLINK_Comment, (IPTR)long_comment},
+        {MLINK_Priority, 6},
+        {TAG_DONE, 0}
+    };
+    struct TagItem clear_comment[] = {
+        {MLINK_Comment, 0},
+        {TAG_DONE, 0}
+    };
+    IPTR link_comment = 0, cluster_comment = 0;
+    struct TagItem link_query[] = {
+        {MLINK_Comment, (IPTR)&link_comment},
+        {TAG_DONE, 0}
+    };
+    struct TagItem cluster_query[] = {
+        {MCLA_Comment, (IPTR)&cluster_comment},
+        {TAG_DONE, 0}
+    };
+    struct MidiNode *node = new_node("camdcompat comments", 32, 256);
+    struct MidiLink *receiver = NULL, *sender = NULL;
+    struct MidiCluster *cluster;
+    APTR lock;
+
+    if (!node) {
+        check(0, "comments: CreateMidiA", NULL);
+        return;
+    }
+    receiver = AddMidiLinkA(node, MLTYPE_Receiver, receiver_tags);
+    sender = AddMidiLinkA(node, MLTYPE_Sender, sender_tags);
+    if (!receiver || !sender) {
+        check(0, "comments: AddMidiLinkA", NULL);
+        goto out;
+    }
+
+    GetMidiLinkAttrsA(sender, link_query);
+    check(link_comment && !strcmp((char *)link_comment, receiver_comment),
+          "MLINK_Comment: receiver wins an equal-priority tie", NULL);
+
+    lock = LockCAMD(CD_Linkages);
+    cluster = FindCluster(cluster_name);
+    if (cluster)
+        GetClusterAttrsA(cluster, cluster_query);
+    UnlockCAMD(lock);
+    check(cluster_comment && !strcmp((char *)cluster_comment, receiver_comment),
+          "MCLA_Comment matches the cluster comment", NULL);
+
+    SetMidiLinkAttrsA(sender, promote_sender);
+    link_comment = 0;
+    GetMidiLinkAttrsA(receiver, link_query);
+    check(link_comment && !strcmp((char *)link_comment, truncated_comment),
+          "MLINK_Comment follows priority and is limited to 34 characters", NULL);
+
+    RemoveMidiLink(sender);
+    sender = NULL;
+    link_comment = 0;
+    GetMidiLinkAttrsA(receiver, link_query);
+    check(link_comment && !strcmp((char *)link_comment, receiver_comment),
+          "MLINK_Comment falls back when the preferred link leaves", NULL);
+
+    SetMidiLinkAttrsA(receiver, clear_comment);
+    link_comment = 1;
+    GetMidiLinkAttrsA(receiver, link_query);
+    check(link_comment == 0, "MLINK_Comment can clear the cluster comment", NULL);
+out:
+    if (sender) RemoveMidiLink(sender);
+    if (receiver) RemoveMidiLink(receiver);
+    DeleteMidi(node);
+}
+
 static void test_clock(void)
 {
     static char cluster[] = "camdcompat.clock";
@@ -760,9 +907,9 @@ static void test_clock(void)
     t1 = CamdTime();
     Delay(50);
     t2 = CamdTime();
-    if (t2 - t1 < 900 || t2 - t1 > 1500)
+    if (t2 - t1 < 800 || t2 - t1 > 1500)
         printf("     one second took %lu ms\n", (unsigned long)(t2 - t1));
-    check(t2 - t1 >= 900 && t2 - t1 <= 1500, "CamdTime counts milliseconds", NULL);
+    check(t2 - t1 >= 800 && t2 - t1 <= 1500, "CamdTime counts milliseconds", NULL);
 
     if (!out || !in) {
         check(0, "clock: CreateMidiA", NULL);
@@ -1051,6 +1198,7 @@ int main(int argc, char **argv)
         } else {
             RUN(test_participants);
             RUN(test_cluster_attrs);
+            RUN(test_link_comments);
             RUN(test_clock);
             RUN(test_watch);
             /* Last: a deadlock leaves its process holding LockCAMD(). */

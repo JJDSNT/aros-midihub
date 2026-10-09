@@ -167,10 +167,10 @@ git -C ~/AROS apply "$PWD/patches/aros-llvmpipe-link.patch"
 
 ## CAMD and USB MIDI
 
-Eleven patches, applied in this order to upstream `master`. Each one is a
-commit of the `camd-robustness` branch in `~/AROS`; the first two are also
-draft pull request #1483. The modified AROS sources are covered by
-[AROS-LICENSE](AROS-LICENSE).
+Fourteen patches, applied in this order to upstream `master`. The first eleven
+are commits of the `camd-robustness` branch in `~/AROS`; the link-comment and
+SysEx/error patches follow that branch. The first two are also draft pull request #1483.
+The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 
 | patch | fixes |
 |---|---|
@@ -185,12 +185,16 @@ draft pull request #1483. The modified AROS sources are covered by
 | `aros-usb-midi-lifecycle.patch` | the USB MIDI driver never loads; ports across unplugging |
 | `aros-camd-part-notify.patch` | `MIDI_PartHook`/`MIDI_PartSignal` and the participant counts do nothing |
 | `aros-camd-v42.patch` | version 42: `GetClusterAttrsA()`, `CamdTime()`, `MIDI_SystemClock`, cluster watches |
+| `aros-camd-link-comments.patch` | implement `MLINK_Comment` and expose the selected cluster comment through CAMD 42 |
+| `aros-camd-sysex-errors.patch` | apply `MIDI_ErrFilter` and report oversized SysEx as `CMEF_SysExTooBig` without partial messages |
+| `aros-camd-endpoint-core.patch` | add the non-public endpoint registry, fixed-layout topology records, generation-safe leases and immutable snapshots; initialize it inside CAMD without adding vectors |
 
 ```sh
 for p in camd-names-64bit camd-arena-segments camd-driver-scan-align \
          debugdriver-port-index camd-port-open camd-notify-lock \
          camd-rescan usb-midi-camd usb-midi-lifecycle camd-part-notify \
-         camd-v42; do
+         camd-v42 camd-link-comments camd-sysex-errors \
+         camd-endpoint-core; do
     git -C ~/AROS apply "$PWD/patches/aros-$p.patch" || break
 done
 ```
@@ -254,6 +258,31 @@ node tag `MIDI_SystemClock`, and `StartClusterWatchA()`/
 (added, removed, participants, lost) for programs that follow every cluster.
 `StartClusterNotify()` keeps its 41.1 meaning.
 
+**Link comments.** `MLINK_Comment` now follows the original CAMD contract:
+the highest-priority link supplies a private, 34-character cluster comment,
+with receivers winning equal-priority ties. The value is recalculated when a
+link joins, leaves, changes priority, or changes its comment. Driver-port list
+nodes are ignored. `GetMidiLinkAttrsA(MLINK_Comment)` and CAMD 42's
+`GetClusterAttrsA(MCLA_Comment)` return the selected cluster comment.
+
+**SysEx and error filtering.** Every receive-side error now goes through the
+node's `MIDI_ErrFilter`. `PutSysEx()` checks the complete message size before
+delivery, reports `CMEF_SysExTooBig` when it cannot fit, and leaves no partial
+message behind. Byte-wise input from `ParseMidi()` and drivers distinguishes a
+message that cannot fit from a temporarily full ring and discards the rejected
+message through EOX. The allocated extra ring byte is now used, so a message
+exactly equal to `MIDI_SysExSize` fits.
+
+**Private endpoint core.** The final patch begins the accepted CAMD endpoint
+registry/provider architecture without exposing a version 43 ABI. It adds
+fixed-layout Endpoint, Group and Function Block records, generation-safe
+leases, validated transactional topology, immutable snapshots and explicit
+lifecycle/retirement. `CamdBase` owns the registry and a dedicated semaphore;
+initialization failure unwinds the registry, timer and legacy semaphore. No
+provider, watch, UMP wire parser or legacy projection uses it yet, so existing
+CAMD behavior remains unchanged. The matching host model and tests live in
+`prototypes/camd` and `tests/camd_endpoint_core.c`.
+
 ### Testing
 
 [`tools/camd-compat-qemu.sh`](../tools/camd-compat-qemu.sh) runs
@@ -265,7 +294,13 @@ patches and with all of them:
 |---|---|---|---|
 | first four patches | 50 of 50 | skipped | 4 of 8 (not implemented) |
 | up to `camd-part-notify` | 50 of 50 | skipped | 8 of 8 |
-| all patches | 50 of 50 | 29 of 29 | 8 of 8 |
+| all patches | 60 of 60 | 34 of 34 | 8 of 8 |
 
 The USB MIDI patches build for `raspi-aarch64` but have not been run with a
 USB MIDI device.
+
+The private endpoint core also compiles with the existing hosted
+`x86_64-aros-gcc` and generated AROS headers using `-Wall -Wextra -Werror`.
+The patch was generated and `git apply --check` verified against a clean
+worktree containing the preceding thirteen patches; the worktree itself is
+disposable and is not a build dependency.

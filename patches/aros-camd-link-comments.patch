@@ -1,0 +1,167 @@
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+index 5e9f12aecd..c81e73d20f 100644
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -89,6 +89,7 @@ struct MyMidiMessage2{
+ struct MyMidiCluster{
+ 	struct MidiCluster cluster;
+ 	struct SignalSemaphore semaphore;
++	char comment[35];	// Highest-priority link's MLINK_Comment, copied here.
+ 
+ 	/* Counted without locks, so approximate; read with GetClusterAttrsA(). */
+ 	ULONG overflows;	// messages dropped because a receive queue was full
+@@ -415,6 +416,7 @@ void DetachDriverData(struct Drivers *driver,
+ );
+ void SignalClusterNotify(struct CamdBase *CamdBase,ULONG event,struct MidiCluster *cluster);
+ void ClusterParticipantsChanged(struct MidiCluster *cluster,struct MidiNode *changer,struct CamdBase *CamdBase);
++void UpdateClusterComment(struct MidiCluster *cluster);
+ BOOL InitCamdClock(void);
+ void UninitCamdClock(void);
+ ULONG CamdClock(void);
+diff --git a/workbench/libs/camd/clusters.c b/workbench/libs/camd/clusters.c
+index e8d33196d8..7a09a38568 100644
+--- a/workbench/libs/camd/clusters.c
++++ b/workbench/libs/camd/clusters.c
+@@ -122,6 +122,45 @@ void ClusterParticipantsChanged(struct MidiCluster *cluster,struct MidiNode *cha
+   SignalClusterNotify(CamdBase,CWE_Participants,cluster);
+ }
+ 
++/*
++ * Copies the highest-priority link comment into the cluster's private
++ * storage. Receiver comments win ties over sender comments. Driver ports
++ * do not carry MLINK_Comment and are skipped.
++ * CLSemaphore must be exclusively obtained.
++ */
++void UpdateClusterComment(struct MidiCluster *cluster){
++  struct MyMidiCluster *mycluster=(struct MyMidiCluster *)cluster;
++  struct List *lists[2];
++  struct Node *node;
++  struct MidiLink *midilink;
++  struct MidiLink *best=NULL;
++  ULONG i;
++  int l;
++
++  lists[0]=&cluster->mcl_Receivers;
++  lists[1]=&cluster->mcl_Senders;
++
++  for(l=0;l<2;l++){
++    for(node=lists[l]->lh_Head;node->ln_Succ;node=node->ln_Succ){
++      if(node->ln_Type==NT_USER-MLTYPE_NTypes) continue;
++      midilink=(struct MidiLink *)node;
++      if(midilink->ml_ClusterComment!=NULL &&
++         (best==NULL || node->ln_Pri>best->ml_Node.ln_Pri)){
++        best=midilink;
++      }
++    }
++  }
++
++  if(best==NULL){
++    mycluster->comment[0]=0;
++    return;
++  }
++
++  for(i=0;i<sizeof(mycluster->comment)-1 && best->ml_ClusterComment[i]!=0;i++)
++    mycluster->comment[i]=best->ml_ClusterComment[i];
++  mycluster->comment[i]=0;
++}
++
+ /*
+  *  CLSemaphore must be obtained and the clusters mutex must
+  *  not be exclusive locked.
+@@ -348,6 +387,7 @@ BOOL AddClusterReceiver(
+ 
+ 	Enqueue(&cluster->mcl_Receivers,node);
+ 	ReleaseSemaphore(&mycluster->semaphore);
++	UpdateClusterComment(cluster);
+ 
+ 	ClusterParticipantsChanged(
+ 		cluster,
+@@ -387,6 +427,7 @@ BOOL AddClusterSender(
+ 	}
+ 
+ 	Enqueue(&cluster->mcl_Senders,node);
++	UpdateClusterComment(cluster);
+ 
+ 	ClusterParticipantsChanged(
+ 		cluster,
+diff --git a/workbench/libs/camd/getclusterattrsa.c b/workbench/libs/camd/getclusterattrsa.c
+index 5e308ce74d..1236aa58e0 100644
+--- a/workbench/libs/camd/getclusterattrsa.c
++++ b/workbench/libs/camd/getclusterattrsa.c
+@@ -76,7 +76,7 @@
+ 				*where=(IPTR)cluster->mcl_Node.ln_Name;
+ 				break;
+ 			case MCLA_Comment:
+-				*where=(IPTR)NULL;
++				*where=(IPTR)(mycluster->comment[0]!=0 ? mycluster->comment : NULL);
+ 				break;
+ 			case MCLA_Participants:
+ 				*where=(IPTR)(UWORD)cluster->mcl_Participants;
+diff --git a/workbench/libs/camd/getmidilinkattrsa.c b/workbench/libs/camd/getmidilinkattrsa.c
+index c615400d13..635295f908 100644
+--- a/workbench/libs/camd/getmidilinkattrsa.c
++++ b/workbench/libs/camd/getmidilinkattrsa.c
+@@ -75,7 +75,12 @@
+ 				*where=(IPTR)midilink->ml_UserData;
+ 				break;
+ 			case MLINK_Comment:
+-				ret--;
++				if(midilink->ml_Location!=NULL){
++					struct MyMidiCluster *mycluster=(struct MyMidiCluster *)midilink->ml_Location;
++					*where=(IPTR)(mycluster->comment[0]!=0 ? mycluster->comment : NULL);
++				}else{
++					*where=(IPTR)midilink->ml_ClusterComment;
++				}
+ 				break;
+ 			case MLINK_PortID:
+ 				*where=(IPTR)midilink->ml_PortID;
+diff --git a/workbench/libs/camd/setmidilinkattrsa.c b/workbench/libs/camd/setmidilinkattrsa.c
+index fd98ae5fce..ad9ed0f57a 100644
+--- a/workbench/libs/camd/setmidilinkattrsa.c
++++ b/workbench/libs/camd/setmidilinkattrsa.c
+@@ -48,6 +48,6 @@
+ 		- Warning! If another task have locked Camd and is waiting
+ 		  for you to finish, there will be a deadlock if you try
+-		  to change priority or change/set cluster.
++		  to change priority or comment, or change/set cluster.
+ 
+     EXAMPLE
+ 
+@@ -90,9 +90,14 @@
+ 				midilink->ml_UserData=(void *)tag->ti_Data;
+ 				break;
+ 			case MLINK_Comment:
+-                          // Not implemented because it's not used.
+-                          // if(midilink
+-                          break;
++				midilink->ml_ClusterComment=(char *)tag->ti_Data;
++				mycluster=(struct MyMidiCluster *)midilink->ml_Location;
++				if(mycluster!=NULL){
++					ObtainSemaphore(CB(CamdBase)->CLSemaphore);
++					UpdateClusterComment(&mycluster->cluster);
++					ReleaseSemaphore(CB(CamdBase)->CLSemaphore);
++				}
++				break;
+ 			case MLINK_PortID:
+ 				midilink->ml_PortID=tag->ti_Data;
+ 				break;
+@@ -114,6 +119,7 @@
+ 						}else{
+ 							Enqueue(&midilink->ml_Location->mcl_Senders,&midilink->ml_Node);
+ 						}
++						UpdateClusterComment(midilink->ml_Location);
+ 					if(type==NT_USER-MLTYPE_Receiver){
+ 						ReleaseSemaphore(&mycluster->semaphore);
+ 					}
+diff --git a/workbench/libs/camd/unlinkmidilink.c b/workbench/libs/camd/unlinkmidilink.c
+index e588333eb8..c3bba5ecae 100644
+--- a/workbench/libs/camd/unlinkmidilink.c
++++ b/workbench/libs/camd/unlinkmidilink.c
+@@ -37,6 +37,7 @@ void UnlinkMidiLink(
+ 		if(type==NT_USER-MLTYPE_Receiver){
+ 			ReleaseSemaphore(&mycluster->semaphore);
+ 		}
++		UpdateClusterComment(cluster);
+ 		ClusterParticipantsChanged(cluster,midilink->ml_MidiNode,CamdBase);
+ 		LinkHasBeenRemovedFromCluster(cluster,CamdBase);
+ 	}

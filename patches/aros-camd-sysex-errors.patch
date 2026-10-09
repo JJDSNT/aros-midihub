@@ -1,0 +1,165 @@
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+index dfa988f795..23d0b1dc1c 100644
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -210,6 +210,8 @@ struct MyMidiNode{
+ 	UBYTE *sysex_read;
+ 	UBYTE *sysex_laststart;
+ 	BOOL sysex_nextis0;
++	BOOL sysex_started_empty;
++	BOOL sysex_discarding;
+ 	UBYTE lastreadstatus;
+ 
+ 	BOOL systemclock;	// MIDI_SystemClock: stamp with CamdTime()
+@@ -417,6 +419,7 @@ void DetachDriverData(struct Drivers *driver,
+ void SignalClusterNotify(struct CamdBase *CamdBase,ULONG event,struct MidiCluster *cluster);
+ void ClusterParticipantsChanged(struct MidiCluster *cluster,struct MidiNode *changer,struct CamdBase *CamdBase);
+ void UpdateClusterComment(struct MidiCluster *cluster);
++void SetMidiError(struct MyMidiNode *mymidinode,ULONG errorcode);
+ BOOL InitCamdClock(void);
+ void UninitCamdClock(void);
+ ULONG CamdClock(void);
+diff --git a/workbench/libs/camd/mididistr.c b/workbench/libs/camd/mididistr.c
+index 41513f7430..46a60bf681 100644
+--- a/workbench/libs/camd/mididistr.c
++++ b/workbench/libs/camd/mididistr.c
+@@ -11,6 +11,10 @@
+ 
+ #include "camd_intern.h"
+ 
++void SetMidiError(struct MyMidiNode *mymidinode,ULONG errorcode){
++	mymidinode->error|=errorcode&~mymidinode->midinode.mi_ErrFilter;
++}
++
+ 
+ void PutMidi2Link(
+ 	struct MidiLink *midilink,
+@@ -143,7 +147,7 @@ outofhere:
+ 		}
+ 
+ 		if(mymidinode->unpicked+1==mymidinode->midinode.mi_MsgQueueSize-1){
+-			mymidinode->error |= CMEF_BufferFull;
++			SetMidiError(mymidinode,CMEF_BufferFull);
+ 			((struct MyMidiCluster *)midilink->ml_Location)->overflows++;
+ 			return;
+ 		}
+diff --git a/workbench/libs/camd/midifromdriver.c b/workbench/libs/camd/midifromdriver.c
+index 046e9d4cc4..99b972d1b4 100644
+--- a/workbench/libs/camd/midifromdriver.c
++++ b/workbench/libs/camd/midifromdriver.c
+@@ -34,7 +34,7 @@ void Receiver_SetError(
+ 				if(midilink->ml_Node.ln_Type!=NT_USER-MLTYPE_NTypes){
+ 					mymidinode=(struct MyMidiNode *)midilink->ml_MidiNode;
+ 					ObtainSemaphore(&mymidinode->receiversemaphore);
+-						mymidinode->error |= errorcode;
++						SetMidiError(mymidinode,errorcode);
+ 					ReleaseSemaphore(&mymidinode->receiversemaphore);
+ 				}
+ 				midilink=(struct MidiLink *)midilink->ml_Node.ln_Succ;
+diff --git a/workbench/libs/camd/putsysex.c b/workbench/libs/camd/putsysex.c
+index 9a48a9cc24..a18d56dd23 100644
+--- a/workbench/libs/camd/putsysex.c
++++ b/workbench/libs/camd/putsysex.c
+@@ -62,6 +62,7 @@
+ 	struct MyMidiCluster *mycluster=(struct MyMidiCluster *)midilink->ml_Location;
+ 	BOOL driversuccess=TRUE;
+ 	UBYTE *buffer2;
++	ULONG sysexlen=GetSysXLen(buffer);
+ 
+ 	ObtainSemaphoreShared(&mycluster->semaphore);
+ 
+@@ -82,9 +83,16 @@
+ 				driversuccess=SysEx2Driver(driverdata,buffer);
+ 
+ 			}else{
+-				buffer2=buffer;
+-				while(PutSysEx2Link((struct MidiLink *)node,*buffer2)==TRUE){
+-					buffer2++;
++				struct MidiLink *receiver=(struct MidiLink *)node;
++				struct MyMidiNode *mymidinode=(struct MyMidiNode *)receiver->ml_MidiNode;
++				if(sysexlen>mymidinode->midinode.mi_SysExQueueSize){
++					SetMidiError(mymidinode,CMEF_SysExTooBig);
++					mycluster->sysexdropped++;
++				}else{
++					buffer2=buffer;
++					while(PutSysEx2Link(receiver,*buffer2)==TRUE){
++						buffer2++;
++					}
+ 				}
+ 			}
+ 			node=node->ln_Succ;
+diff --git a/workbench/libs/camd/setmidiattrsa.c b/workbench/libs/camd/setmidiattrsa.c
+index 3c66d18b8e..a8290d4239 100644
+--- a/workbench/libs/camd/setmidiattrsa.c
++++ b/workbench/libs/camd/setmidiattrsa.c
+@@ -164,8 +164,13 @@
+ 				}
+ 				mymidinode->sysex_start=temp2;
+ 				mymidinode->sysex_write=mymidinode->sysex_start;
+-				mymidinode->sysex_end=mymidinode->sysex_start+midinode->mi_SysExQueueSize;
++				mymidinode->sysex_end=mymidinode->sysex_start+midinode->mi_SysExQueueSize+1;
+ 				mymidinode->sysex_read=mymidinode->sysex_start;
++				mymidinode->sysex_laststart=NULL;
++				mymidinode->sysex_started_empty=TRUE;
++				mymidinode->sysex_discarding=FALSE;
++				mymidinode->sysex_nextis0=TRUE;
++				mymidinode->lastreadstatus=0;
+ 				ReleaseSemaphore(&mymidinode->sysexsemaphore2);
+ 				ReleaseSemaphore(&mymidinode->sysexsemaphore);
+ 				ObtainSemaphore(CB(CamdBase)->CLSemaphore);
+diff --git a/workbench/libs/camd/sysexdistr.c b/workbench/libs/camd/sysexdistr.c
+index 6e8539d1ab..4f2e12264e 100644
+--- a/workbench/libs/camd/sysexdistr.c
++++ b/workbench/libs/camd/sysexdistr.c
+@@ -19,7 +19,7 @@ int GetSysXLen(UBYTE *buffer){
+ 		lokke++;
+ 	}
+ 
+-	return lokke;
++	return lokke+1;
+ }
+ 
+ BOOL PutSysEx2Link(struct MidiLink *midilink,UBYTE data){
+@@ -28,11 +28,19 @@ BOOL PutSysEx2Link(struct MidiLink *midilink,UBYTE data){
+ 
+ 	struct MyMidiNode *mymidinode=(struct MyMidiNode *)midilink->ml_MidiNode;
+ 
++	if(mymidinode->sysex_discarding){
++		if(data==0xf7 || data==0xff){
++			mymidinode->sysex_discarding=FALSE;
++			mymidinode->sysex_laststart=NULL;
++		}
++		return FALSE;
++	}
++
+ 	if(mymidinode->sysex_laststart==NULL && data!=0xf0){
+ 		return TRUE;	// This midinode was created in the middle of receiving a sysex-string.
+ 	}
+ 
+-	if(mymidinode->sysex_start!=NULL && (!(mymidinode->error&CMEF_SysExFull))){
++	if(mymidinode->sysex_start!=NULL){
+ 		if(data==0xff){	// Error in sysex-string. Sysex is cancelled.
+ 			mymidinode->sysex_write=mymidinode->sysex_laststart;
+ 			ReleaseSemaphore(&mymidinode->sysexsemaphore);
+@@ -41,6 +49,8 @@ BOOL PutSysEx2Link(struct MidiLink *midilink,UBYTE data){
+ 				if(data==0xf0){
+ 					ObtainSemaphore(&mymidinode->sysexsemaphore);
+ 					ObtainSemaphore(&mymidinode->sysexsemaphore2);
++					mymidinode->sysex_started_empty=
++						mymidinode->sysex_write==mymidinode->sysex_read;
+ 					mymidinode->sysex_laststart=mymidinode->sysex_write;
+ 				}else{
+ 					ObtainSemaphore(&mymidinode->sysexsemaphore2);
+@@ -51,9 +61,11 @@ BOOL PutSysEx2Link(struct MidiLink *midilink,UBYTE data){
+ 					mymidinode->sysex_write=mymidinode->sysex_start;
+ 				}
+ 				if(mymidinode->sysex_write==mymidinode->sysex_read){
+-					mymidinode->error |= CMEF_SysExFull;
++					SetMidiError(mymidinode,mymidinode->sysex_started_empty ?
++						CMEF_SysExTooBig : CMEF_SysExFull);
+ 					((struct MyMidiCluster *)midilink->ml_Location)->sysexdropped++;
+ 					mymidinode->sysex_write=mymidinode->sysex_laststart;
++					mymidinode->sysex_discarding=TRUE;
+ 					ReleaseSemaphore(&mymidinode->sysexsemaphore2);
+ 					ReleaseSemaphore(&mymidinode->sysexsemaphore);
+ 					return FALSE;

@@ -16,9 +16,9 @@ Implemented, as the `camd-robustness` branch in `~/AROS` and as patches in
 this repository ([the patch guide](../patches/README.md#camd-and-usb-midi)
 lists them in order): section 1, the USB MIDI driver lifecycle, participant
 notification (step 3), version 42 with `GetClusterAttrsA()`, `CamdTime()`
-and `MIDI_SystemClock` (step 4), and cluster watches (step 5). Steps 1 and 2
-(`MLINK_Comment`, SysEx size and the error filter) are not:
-[Implementing the rest](#implementing-the-rest) gives their design.
+and `MIDI_SystemClock` (step 4), cluster watches (step 5),
+`MLINK_Comment` (step 1), and SysEx size/error filtering (step 2).
+[Implemented steps](#implemented-steps) records their design.
 
 Every change to CAMD must keep passing the compatibility suite
 (`ports/aros/camd_compat.c`, `MIDIHubCAMDCompat`). It checks the 41.1
@@ -198,7 +198,7 @@ left CAMD closed the port under it
 
 ## 2. Endpoint metadata
 
-### 2.1 Link comments do nothing (verified)
+### 2.1 Link comments do nothing (verified, fixed)
 
 `MLINK_Comment` is accepted by `SetMidiLinkAttrsA()` but ignored ("Not
 implemented because it's not used"), and `GetMidiLinkAttrsA()` returns
@@ -301,7 +301,7 @@ the 41.1 behaviour.
 
 ## 5. SysEx and errors
 
-### 5.1 Oversized SysEx is dropped silently
+### 5.1 Oversized SysEx is dropped silently (verified, fixed)
 
 The autodoc (AROS and Amiga) says `PutSysEx()` does not send a message to a
 receiver whose SysEx buffer is too small, and sets `CMEF_SysExFull` only when
@@ -380,8 +380,7 @@ the number of legacy fixed ports established during driver initialization.
 Dynamic endpoints should instead use a versioned extension backed by
 CAMD-private state or opaque handles.
 
-The API names are deliberately left open. Before choosing calls such as
-`Register...()` or `Unregister...()`, the model must establish:
+The API names were deliberately left open until the model established:
 
 - stable endpoint identity independent of a transient connection;
 - direction and capabilities;
@@ -393,6 +392,21 @@ The API names are deliberately left open. Before choosing calls such as
 A fixed pool of `NPorts` with peer-to-port mapping remains a compatibility
 fallback for a transport whose target CAMD does not provide this extension;
 it should not define the long-term architecture.
+
+The architecture comparison is complete: CAMD will own a central logical
+endpoint registry and transport-neutral providers. Endpoint, Group and
+Function Block are separate native objects; legacy clusters are derived
+Endpoint + Group + direction projections. Stable system identity, advertised
+identity and physical path remain separate, with explicit confidence and
+collision policy. See the accepted
+[endpoint architecture decision](camd-endpoint-architecture-decision.md).
+
+The provider model and private registry may be implemented incrementally, but
+not as a MIDI-1.0-only transition API. Public vectors and C layouts remain
+blocked on gate U01: sized records, appended-vector versioning, handle
+ownership, 32/64-bit ABI checks and upstream review. Provider registration
+remains private during the first implementation and is not part of that
+initial client ABI.
 
 ### 6.3 Endpoint lifecycle and identity
 
@@ -418,6 +432,36 @@ retirement.
 The structured `connected` metadata discussed in section 2.2 belongs to this
 lifecycle. It should be supplied through the new extension without growing
 `MidiDeviceData`.
+
+The selected lifecycle is:
+
+```text
+registered -> discovering -> available <-> offline -> retiring -> retired
+                    \-----------> offline
+```
+
+Transport presence, discovery completeness and protocol readiness are
+orthogonal properties. Registration therefore never implies a complete or
+usable endpoint. Partial discovery publishes new immutable snapshots, and
+updates may continue after discovery completion or timeout.
+
+Going offline detaches provider-side legacy projection nodes but leaves client
+links and cluster identities in place. Reconnecting attaches to those same
+clusters, making `MidiLinkConnected()` and `MIDI_PartSignal` reflect actual
+availability without destroying persistent routes.
+
+Unregister first marks the endpoint retiring, prevents new opens and I/O,
+detaches its projections, and waits for in-flight calls to release private
+references. Only then is the opaque object freed. Existing client links are
+never freed by endpoint teardown; an otherwise empty cluster follows the
+existing cluster removal rules. Calls made with a stale endpoint handle fail
+without entering provider code.
+
+The registry publishes generation-numbered copied snapshots. Runtime handles
+must prevent ABA reuse, and reference leases keep endpoints/providers alive
+across calls. The lock order is registry, endpoint, then legacy graph when an
+operation cannot be split. Provider callbacks and notification delivery run
+with none of those locks held.
 
 ### 6.4 Endpoint notification versus cluster notification
 
@@ -445,31 +489,56 @@ projection.
 **Decision:** do not add `CWE_Changed` to the version 42 cluster watch for
 endpoint state or metadata. Keep the existing cluster-watch ABI and semantics.
 
+Endpoint enumeration and watches return copied identity/state data from the
+authoritative registry, never borrowed pointers. A bounded endpoint-watch
+queue uses added, updated, offline and retired events plus an explicit lost
+marker and registry generation. After loss, enumerate a fresh snapshot. State
+and metadata changes may coalesce; clients query the current snapshot rather
+than depending on every intermediate transition.
+
 ### 6.5 MIDI 2.0 extensibility
 
-The initial dynamic-endpoint work does not require CAMD to carry native UMP,
-but its terminology and object model should not assume that every future
-endpoint is only a MIDI 1.0 port. MIDI 2.0 distinguishes a UMP Endpoint from
-the Function Blocks and Groups it contains.
+Native UMP transport may land after the private registry machinery, but the
+registry schema is natively UMP-capable from its first implementation. It does
+not use MIDI 1.0 ports as the source of truth. MIDI 2.0 distinguishes a UMP
+Endpoint from its Groups and Function Blocks; Groups address messages while
+Function Blocks describe ranges and capabilities.
 
-The first implementation may still project an endpoint into ordinary CAMD
-clusters for legacy applications. The opaque/versioned model should leave room
-for richer Endpoint, Function Block and Group metadata later, rather than
-baking those concepts into `NPorts` or public 41.1 structures.
+Valid discovered Function Blocks take precedence over USB Group Terminal
+Blocks; explicit provider fallback topology is used only when neither is
+available. These sources are never blindly merged. Ordinary CAMD clusters are
+compatibility projections for legacy applications.
 
 This follows the same broad compatibility pattern used by modern MIDI
 subsystems: retain the traditional port-facing contract while adding richer
 endpoint identity and topology beside it.
 
-**Compatibility:** sections 6.1-6.5 are additive. `MidiDeviceData.NPorts`
+**Compatibility:** sections 6.1-6.7 are additive. `MidiDeviceData.NPorts`
 keeps its existing meaning and no CAMD 41.1 public structure changes size or
 layout. Existing drivers continue to expose fixed ports exactly as before.
-Dynamically registered endpoints appear through compatible CAMD clusters to
-legacy clients; richer identity, state and metadata require the versioned
-extension. New library vectors are appended after the existing ABI and new
-state remains private or opaque.
+Future provider endpoints appear through compatible CAMD clusters to legacy
+clients; richer identity, state and metadata require the versioned extension.
+New library vectors are appended after the existing ABI and new state remains
+private or opaque.
 
-## Implementing the rest
+### 6.6 Architecture review gate: endpoints are not dynamic USB ports
+
+The mandatory A/B/C review is complete. The accepted
+[architecture decision](camd-endpoint-architecture-decision.md) selects a
+central registry with providers. The legacy USB implementation motivated this
+proposal but does not constrain the replacement architecture. CAMD preserves
+the legacy application ABI and working USB functionality, not fixed-port
+internals or artificial `NPorts` pools.
+
+### 6.7 No throwaway transition architecture — implement the final model directly
+
+Section 6.1–6.5 is historical design input, not authorization for an interim
+dynamic-port mechanism. All implementation slices must belong to the selected
+endpoint registry/provider, native UMP topology, lifecycle and legacy
+projection architecture. Compatibility adapters are allowed only as parts of
+that final model. Public ABI remains blocked on U01 and upstream review.
+
+## Implemented steps
 
 The items below are in the order to do them. Each one is one commit in
 `~/AROS` on top of `camd-robustness`, one patch in `patches/`, and new checks
@@ -478,7 +547,7 @@ designs follow the original CAMD autodoc
 ([camd.doc](https://wiki.amigaos.net/amiga/autodocs/camd.doc.txt)) wherever
 it defines the behaviour, and the contract above wherever it does not.
 
-### Step 1: `MLINK_Comment` as the cluster comment (2.1)
+### Step 1: `MLINK_Comment` as the cluster comment (2.1), done
 
 - `SetMidiLinkAttrsA()` stores the caller's string in `ml_ClusterComment`
   (CAMD never copies or frees it, as with `MLINK_Name`).
@@ -499,7 +568,7 @@ it defines the behaviour, and the contract above wherever it does not.
   rule, for falling back to the next link when the commenting one leaves,
   and for the 34-character limit.
 
-### Step 2: SysEx size and the error filter (5.1)
+### Step 2: SysEx size and the error filter (5.1), done
 
 - `MIDI_ErrFilter`: bits set are errors the node does not want. The default
   0 reports everything, as 41.1 does. Every place that sets `error` goes
@@ -574,30 +643,46 @@ genmodule would derive a `StartClusterNotify()` varargs macro from that name,
 clashing with the 41.1 call, which keeps signalling only clusters coming and
 going.
 
-### Step 6: dynamic endpoint design (6.1-6.5)
+### MIDIHub adoption of version 42, done
 
-Use AppleMIDI/Network MIDI, BLE, USB hot-plug and the software synth as
-concrete lifecycle cases. Specify identity, connected/disconnected state,
-legacy cluster projection, ownership, locking and safe unregister semantics
-before naming the public API. Keep `NPorts` untouched. A first implementation
-can then cover virtual endpoints and dynamic driver endpoints through the same
-underlying model where practical.
+MIDIHub.prefs uses a cluster watch and reads the receive/drop counters, while
+retaining `StartClusterNotify()` as its fallback on CAMD 41. The resident
+router requests `MIDI_PartSignal`, so a route is re-evaluated as soon as a
+driver or another client joins or leaves one of its clusters; CAMD 41 retains
+the timer fallback. BLE MIDI packet timestamps use `CamdTime()` through the
+shared CAMD bridge when version 42 is present and retain their former
+`timer.device`/system-clock source on older libraries. This applies to both
+roles of `btmidi.class` and to the standalone BLE bridge.
 
-Native UMP is not a prerequisite for this step, but the opaque model must not
-prevent later Endpoint, Function Block and Group metadata.
+### Step 6: dynamic endpoint architecture decision (6.1-6.7), done
+
+The required A/B/C comparison selected the central registry/provider model.
+The accepted decision specifies identity confidence, asynchronous discovery,
+Endpoint/Group/Function Block topology, generation snapshots, watches,
+legacy projection, provider ownership, lock ordering and safe retirement.
+`NPorts` stays untouched and is supported only through the legacy-driver
+adapter. Public ABI remains a separate U01 gate.
 
 ## Order and why
 
-1. Done: section 1, the USB lifecycle, steps 3, 4 and 5.
-2. Next: steps 1 and 2. They make documented 41.1 behaviour real; no new
-   call.
-3. Then MIDIHub uses version 42: MIDIHub.prefs follows clusters with a
+1. Done: section 1, the USB lifecycle, and steps 1 through 5.
+2. Done: MIDIHub uses version 42: MIDIHub.prefs follows clusters with a
    cluster watch and shows the counters, routes use `MIDI_PartSignal` to
    notice a device coming back, BLE MIDI stamps with `CamdTime()`.
-4. Then design step 6 from the now-concrete dynamic endpoint requirements.
-   AppleMIDI is the primary case; fixed `NPorts` pools are only a fallback.
-5. Treat persistent routing and native MIDI 2.0/UMP as subsequent CAMD design
-   questions rather than requirements for the first dynamic-endpoint API.
+3. Done: compare endpoint architectures and select the final central
+   registry/provider model; no throwaway dynamic-port API is permitted.
+4. Next: approve the private record/lifecycle invariants, then validate them
+   with the registry, legacy-driver adapter and a software provider. Close U01
+   only afterward with appended client vectors, 32/64-bit builds, ownership
+   tests and upstream review. Provider registration stays private initially.
+
+   In progress: the
+   [host endpoint-core model](../prototypes/camd/README.md) now validates fixed
+   record sizes, transactional topology, immutable snapshots, lifecycle,
+   retirement and stale-handle rejection. The corresponding private AROS
+   patch initializes it in `CamdBase` and compiles for hosted x86-64. Enforced
+   Exec locking, watches, providers and the legacy adapter remain before U01
+   closure.
 
 
 ## 7. Native MIDI 2.0 / UMP architecture (future design contract)
@@ -733,14 +818,18 @@ connection, legacy cluster, Function Block and Group. Model:
 
 ### 7.8 Implementation sequence (future, after current CAMD roadmap)
 
-1. Freeze a versioned UMP API and opaque topology model with ABI review.
-2. Implement parser/serializer, validation, event queues and unit tests.
-3. Add a software loopback UMP endpoint and end-to-end native clients.
-4. Add MIDI 1.0 projections and conversion with measurable loss reporting.
-5. Add discovery, Function Block metadata, protocol selection and watches.
-6. Integrate a real UMP-capable transport; validate hot-plug and fallback.
-7. Validate MIDI-CI interoperability, performance and long-running stress.
-8. Enable System MIDI Out and optional router/filter clients to use native
+1. Validate the private endpoint core, topology snapshots, lifecycle and
+   complete-message queues with the legacy adapter and a synthetic software
+   provider; expose no public vectors or unverified wire constants yet.
+2. Freeze the minimal versioned client API and opaque topology model through
+   U01 review and multi-target ABI builds.
+3. Implement parser/serializer, normative validation and unit tests.
+4. Add a software loopback UMP endpoint and end-to-end native clients.
+5. Add MIDI 1.0 projections and conversion with measurable loss reporting.
+6. Add discovery, Function Block metadata, protocol selection and watches.
+7. Integrate a real UMP-capable transport; validate hot-plug and fallback.
+8. Validate MIDI-CI interoperability, performance and long-running stress.
+9. Enable System MIDI Out and optional router/filter clients to use native
    UMP without changing the underlying CAMD contract.
 
 ### 7.9 Acceptance criteria
@@ -797,7 +886,11 @@ applicable errata before freezing bit fields or translation algorithms.
 The full normative PDFs may require MIDI Association login; public summaries
 and Linux source are **not substitutes** for the normative texts.
 
-#### Critical architectural decisions to freeze before coding
+#### Critical gates before public ABI or normative protocol coding
+
+Private registry/lifecycle scaffolding may be used to prove U01 assumptions,
+provided it publishes no new vectors, tags or headers and encodes no
+specification constants that have not passed the corresponding gate.
 
 | ID | Design gate | Required decision / artifact |
 |---|---|---|
@@ -897,24 +990,3 @@ completeness. Obtain and review those texts before declaring U01–U13 closed.
 10. Escalate irreversible public API or Group/Function Block mapping decisions for review. Prefer a documented incomplete capability over an expedient implementation that needs architectural replacement.
 
 **Definition of done:** Full native MIDI 2.0 CAMD requires full-fidelity UMP, native endpoint topology and protocol handling, explicit legacy interoperability, robust lifecycle and timing, observable errors, and applicable normative/interoperability tests. A compiling library, loopback test or successful Note On is not completion.
-
-
-### 6.6 Architecture review gate: endpoints are not dynamic USB ports
-
-**Mandatory before implementing section 6 or freezing M0.** Read
-[CAMD endpoint architecture review](camd-endpoint-architecture-review.md).
-The legacy USB implementation motivated this proposal but does **not**
-constrain the replacement architecture. Preserve the CAMD legacy
-**application ABI**, not the old USB driver's fixed-port implementation.
-Compare port resizing, central registry/providers and distributed graphs
-before choosing a public API. Prefer logical endpoint identity, asynchronous
-discovery, native UMP topology and compatible legacy projections; do not
-build new APIs around `MidiDeviceData.NPorts`. Existing USB MIDI
-functionality and legacy application behavior must still pass regression
-tests after migration. Review the topology/identity/lifecycle contract
-before agent-driven implementation.
-
-
-### 6.7 No throwaway transition architecture — implement the final model directly
-
-**Agent instruction:** Section 6.1–6.5 is historical design input, **not authorization** to implement an interim dynamic-port mechanism. Complete the architecture comparison and approve the target endpoint registry/provider, native UMP topology, lifecycle and legacy projection contracts **before writing a new public API**. Then implement that final architecture directly in small, tested increments. Do **not** build a fixed `NPorts` pool, a USB-only dynamic-port API, or another temporary solution intended to be replaced later. The existing USB implementation is replaceable; legacy CAMD application compatibility and functional USB MIDI support are not. Compatibility adapters are acceptable only as parts of the approved final architecture. See [endpoint architecture review](camd-endpoint-architecture-review.md).

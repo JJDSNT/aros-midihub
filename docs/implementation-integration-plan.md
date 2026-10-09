@@ -33,7 +33,14 @@ Steps 4 and 5 may prototype against the existing CAMD MIDI 1.0 interface **only 
 
 ## Agent handoff rules
 
-Read all four documents before changing CAMD or Router interfaces. Treat **open design gates** as decisions requiring explicit resolution, not invitations to use hacks. Record an architecture decision for irreversible public ABI or protocol-mapping choices. Keep changes small and independently reviewable, add tests with each implementation increment, and update status based on observed evidence only.
+Before changing CAMD or Router interfaces, read the CAMD improvements and
+integration documents, the endpoint review, the accepted endpoint decision,
+the endpoint ABI draft, and the System MIDI Out and MIDI Filters designs.
+Treat **open design gates** as decisions requiring explicit resolution, not
+invitations to use hacks. Record an architecture decision for irreversible
+public ABI or protocol-mapping choices. Keep changes small and independently
+reviewable, add tests with each implementation increment, and update status
+based on observed evidence only.
 
 **Do not claim full MIDI 2.0 support after a basic UMP loopback or Note On test.** Use the M0–M5 and U01–U14 gates from CAMD documentation. Do not declare System MIDI Out or Filters complete without their respective acceptance scenarios.
 
@@ -48,6 +55,12 @@ provider models, choose a transport-neutral identity/topology/lifecycle
 contract, and record the decision before freezing public APIs. Do not use
 fixed `NPorts` pools as the modern architectural model.
 
+The comparison is complete and option B is selected in
+[the CAMD endpoint architecture decision](camd-endpoint-architecture-decision.md).
+Implementation must follow that central registry/provider model. Gate U01
+still blocks public function names, layouts and library vectors pending ABI
+and upstream review. The concrete review artifact is the
+[CAMD endpoint ABI draft](camd-endpoint-abi-draft.md).
 
 ### Final architecture first — no interim dynamic-port implementation
 

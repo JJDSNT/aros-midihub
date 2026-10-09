@@ -43,23 +43,25 @@ struct btmidi_runtime {
     struct btmidi_peer *peers[BTMIDI_MAX_PEERS];
     ULONG use_counter;
     ULONG tx_payload;         /* what every connected central receives whole */
-    struct timerequest timer_io;  /* only opened, for its base: the clock */
+    struct timerequest timer_io;  /* fallback clock before CAMD 42 */
     struct Device *timer;
 };
 
-/* The BLE MIDI timestamp: milliseconds, 13 bits. timer is an opened
-   timer.device's base; without one every packet says 0. */
-UWORD btmidi_now_ms(struct Device *timer)
+/* The BLE MIDI timestamp: CAMD's milliseconds on 42, otherwise the opened
+   timer.device base, reduced to the protocol's 13-bit clock. */
+UWORD btmidi_now_ms(struct aros_camd_bridge *camd, struct Device *timer)
 {
 #define TimerBase timer
     struct timeval now;
+    ULONG fallback = 0;
 
-    if (!timer)
-        return 0;
-    GetSysTime(&now);
+    if (timer) {
+        GetSysTime(&now);
+        fallback = (ULONG)((unsigned long long)now.tv_sec * 1000ULL +
+                           (unsigned long long)now.tv_usec / 1000ULL);
+    }
 #undef TimerBase
-    return (UWORD)(((unsigned long long)now.tv_sec * 1000ULL +
-                    (unsigned long long)now.tv_usec / 1000ULL) & 0x1fff);
+    return (UWORD)(aros_camd_bridge_time_ms(camd, fallback) & 0x1fff);
 }
 
 static void deliver(void *context, const uint8_t *message, size_t length)
@@ -90,7 +92,7 @@ static int send_to_ble(void *context, const uint8_t *message, size_t length)
     struct btmidi_runtime *runtime = context;
     UBYTE packet[BTMIDI_TX_PACKET_MAX];
     size_t written;
-    UWORD timestamp = btmidi_now_ms(runtime->timer);
+    UWORD timestamp = btmidi_now_ms(&runtime->camd, runtime->timer);
 
     runtime->base->stats.ms_TxMessages++;
 

@@ -87,9 +87,11 @@ Advanced transformation such as transpose, velocity mapping, keyboard splits,
 channel remapping, scripting, or processing graphs is outside this design and
 belongs in specialized CAMD applications.
 
-`StartClusterNotify()` can be used to react when clusters are added or removed.
-A saved route can therefore remain in a waiting state while an endpoint is
-absent and become active when that endpoint appears.
+On CAMD 42, `StartClusterWatchA()` reports cluster additions, removals and
+participant changes. The router also requests `MIDI_PartSignal`, so a saved
+route can remain in a waiting state while an endpoint is absent and become
+active immediately when its provider rejoins the existing cluster. CAMD 41
+uses `StartClusterNotify()` plus a bounded polling fallback.
 
 See [midihub-architecture.md](midihub-architecture.md) for runtime ownership,
 [preferences.md](preferences.md) for the user-facing model, and
@@ -98,14 +100,29 @@ itself.
 
 ## Implementation sequence
 
-1. Keep endpoint names and directions clear to CAMD clients across network,
+1. Approve the private invariants for the accepted
+   [central registry/provider architecture](camd-endpoint-architecture-decision.md):
+   sized pointer-free records, identity ownership, lifecycle, topology and
+   lock order. This does not freeze public symbols.
+2. Implement the private registry, generation snapshots, legacy-driver
+   adapter and software-provider lifecycle as a slice of that final
+   architecture, without changing CAMD 41/42 structures or exposing a
+   MIDI-1.0-only transition API.
+3. Close CAMD gate U01 using evidence from that private implementation:
+   appended client-vector order, record/version policy, 32/64-bit builds,
+   ownership tests and upstream review. Keep provider registration private.
+4. Add native UMP transport/topology according
+   to the M0-M3 gates in [CAMD improvements](camd-improvements.md).
+5. Keep endpoint names and directions clear to CAMD clients across network,
    BLE, USB, serial, and synth.
-2. Validate the `MIDIHub Synth` receive port with a native CAMD sender and
+6. Validate the `MIDIHub Synth` receive port with a native CAMD sender and
    live AHI playback.
-3. Validate USB and BLE with physical devices, including binding, message
+7. Validate USB and BLE with physical devices, including binding, message
    transfer, SysEx, disconnection, and reconnection.
-4. Implement enumeration of CAMD-visible endpoints for the MIDIHub overview.
-5. Implement basic persistent source-to-destination routes and reconnection.
-6. Add Profiles after route persistence and the current Network MIDI/Synth
+8. Use endpoint enumeration/state in the MIDIHub overview; retain cluster
+   enumeration for CAMD 41.
+9. Keep basic persistent source-to-destination routes and reconnection on the
+   stable endpoint identity where available.
+10. Add Profiles after route persistence and the current Network MIDI/Synth
    settings have stable storage contracts.
-7. Extend CAMD driver removal only where hardware drivers require it.
+11. Extend CAMD driver removal only where hardware drivers require it.

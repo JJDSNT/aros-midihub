@@ -162,7 +162,7 @@ static int send_to_device(void *context, const uint8_t *message, size_t length)
     struct btmidi_binding *binding = context;
     UBYTE packet[sizeof(binding->notify_buf)];
     size_t written;
-    UWORD timestamp = btmidi_now_ms(binding->timer_open ?
+    UWORD timestamp = btmidi_now_ms(&binding->camd, binding->timer_open ?
                                     binding->timer_req->tr_node.io_Device : NULL);
 
     if (!binding->primed)

@@ -65,11 +65,10 @@ mdnsNetOpen(struct MDNSEngineToken *tok)
 #endif
 
     /*
-     * et_UdpPort is the *bind* (source) port.  Default 0 means "ephemeral":
-     * the stack picks a free port so we never collide with the host's mDNS
-     * responder on 5353, and our queries become legacy-unicast queries that
-     * are answered directly to this port.  A non-zero value (env override to
-     * 5353) selects full multicast/server mode.
+     * et_UdpPort is the *bind* (source) port.  AROS normally uses 5353 for
+     * full multicast/responder mode.  The BONAMI_MDNS_PORT test override may
+     * select 0, letting the stack choose an ephemeral source port for
+     * legacy-unicast queries when a host-side responder owns 5353.
      */
     memset(&sin, 0, sizeof(sin));
     sin.sin_family = AF_INET;

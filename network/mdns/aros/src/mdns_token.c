@@ -469,7 +469,7 @@ mdnsEngineNextHandle(struct MDNSEngineToken *tok)
 {
     APTR h;
 
-    h = (APTR)(ULONG)tok->et_NextHandle;
+    h = (APTR)(IPTR)tok->et_NextHandle;
     tok->et_NextHandle++;
     return h;
 }

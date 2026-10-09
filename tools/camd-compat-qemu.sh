@@ -19,6 +19,7 @@ suite=$(realpath "$2")
 sd=$(realpath "$3")
 work=$(realpath "${4:-$(mktemp -d)}")
 seconds=${CAMDCOMPAT_SECONDS:-200}
+image_size=${CAMDCOMPAT_IMAGE_SIZE:-1G}
 mkdir -p "$work"
 img="$work/camdcompat.img"
 
@@ -29,7 +30,7 @@ test -f "$sd/Devs/Midi/debugdriver"
 
 make_image() {
     rm -f "$img"
-    truncate -s 512M "$img"
+    truncate -s "$image_size" "$img"
     printf 'label: dos\nstart=2048, type=c, bootable\n' | sfdisk -q --no-reread --no-tell-kernel "$img" >/dev/null 2>&1 || true
     sfdisk -d "$img" | grep -q "start=.*2048"
     mformat -i "$img@@1M" -F -v AROS ::

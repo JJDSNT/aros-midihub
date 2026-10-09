@@ -72,6 +72,12 @@ BONAMI_FILES := \
             -Wno-unused-parameter -Wno-missing-field-initializers \
             -Wno-pointer-sign"
 
+# build_module's generic clean rule removes the generated ABI headers but not
+# the stamp that says they exist.  Remove that stamp too, otherwise the first
+# build after -clean tries to copy headers that were never regenerated.
+contrib-aros-midihub-bonami-clean ::
+	$(Q)$(RM) $(contrib-aros-midihub-bonami-includes_GENINCFLAG)
+
 #MM- contrib-aros-midihub-bonami-includes : \
 #MM      contrib-aros-midihub-bonami-include-api \
 #MM      contrib-aros-midihub-bonami-include-base

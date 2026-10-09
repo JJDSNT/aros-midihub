@@ -24,12 +24,13 @@ struct ble_runtime {
     size_t packet_limit;
 };
 
-static uint16_t now_milliseconds(void)
+static uint16_t now_milliseconds(struct aros_camd_bridge *camd)
 {
     struct timeval now;
     gettimeofday(&now, NULL);
-    return (uint16_t)(((uint64_t)now.tv_sec * 1000 +
-                       (uint64_t)now.tv_usec / 1000) & 0x1fff);
+    return (uint16_t)(aros_camd_bridge_time_ms(
+        camd, (uint32_t)((uint64_t)now.tv_sec * 1000 +
+                         (uint64_t)now.tv_usec / 1000)) & 0x1fff);
 }
 
 static void deliver(void *context, const uint8_t *message, size_t length)
@@ -47,7 +48,7 @@ static int send_to_ble(void *context, const uint8_t *message, size_t length)
     struct ble_runtime *runtime = context;
     uint8_t packet[512];
     size_t written;
-    uint16_t timestamp = now_milliseconds();
+    uint16_t timestamp = now_milliseconds(&runtime->camd);
     if (length >= 2 && message[0] == 0xf0 &&
         message[length - 1] == 0xf7) {
         size_t offset = 0;

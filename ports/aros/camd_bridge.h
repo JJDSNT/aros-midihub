@@ -27,5 +27,9 @@ void aros_camd_bridge_deliver_sysex(struct aros_camd_bridge *bridge,
                                     const uint8_t *message, size_t length);
 void aros_camd_bridge_poll(struct aros_camd_bridge *bridge,
                            aros_camd_output output, void *context);
+/* Use CAMD's monotonic millisecond clock when version 42 is available.
+   Older libraries keep the caller-provided clock for compatibility. */
+uint32_t aros_camd_bridge_time_ms(struct aros_camd_bridge *bridge,
+                                  uint32_t fallback_ms);
 
 #endif
