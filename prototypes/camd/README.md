@@ -20,6 +20,10 @@ publishes legacy driver ports as native MIDI 1.0 endpoints for new clients,
 while existing CAMD 41/42 applications continue to use their original cluster
 and `DriverData` path without passing through the adapter.
 
+`native_event_queue.c` is the bounded provider-queue primitive. Queue storage
+is fully allocated at creation, is fixed to MIDI 1.0 or UMP, and counts native
+records rather than bytes or converted packets.
+
 The current slice proves:
 
 - the proposed pointer-free record sizes on the host compiler;
@@ -68,12 +72,21 @@ The current slice proves:
   complete SysEx without manufacturing UMP;
 - adapter retirement is two-phase and remains retryable while sessions pin a
   legacy endpoint; direct legacy cluster traffic remains independent.
+- format-fixed preallocated queues preserve complete MIDI 1.0 events, SysEx
+  messages and 32/64/96/128-bit UMP records without conversion;
+- multi-record enqueue is atomic, full and oversized operations change no
+  queue content, and explicit saturating counters retain accepted, dequeued,
+  cancelled, full-rejection and oversize-rejection history;
+- concurrent producers are serialized with a task-context lock and receive
+  deterministic bounded backpressure rather than unbounded allocation.
 
 It deliberately does not yet implement:
 
 - stable-ID storage or key derivation;
 - concurrent retirement/failure-path stress on native AROS;
-- native MIDI 1.0/UMP queues, scheduling or backpressure;
+- session/provider queue negotiation, scheduling or timestamp dispatch;
+- an interrupt-safe ingress handoff; the current queue lock is task-context
+  only;
 - any format/protocol converter or lossy policy;
 - the AROS `DriverData` backend shim and its open/reference integration;
 - projection of native UMP endpoints back into legacy clusters;
@@ -85,7 +98,8 @@ Run it with the normal host suite:
 make test
 ```
 
-The next slice connects the adapter backend to AROS `DriverData` without
-intercepting existing cluster traffic, then adds bounded native queues and
-native AROS retirement stress. Public vectors remain blocked until queue
-semantics, the AROS shim, legacy projection policy and U01 review pass.
+The next slice integrates the queue primitive with a software provider and
+defines effective-capacity negotiation, then connects the adapter backend to
+AROS `DriverData` without intercepting existing cluster traffic. Public
+vectors remain blocked until native AROS retirement stress, the AROS shim,
+legacy projection policy and U01 review pass.

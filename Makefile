@@ -18,7 +18,7 @@ HEADERS = include/midihub/applemidi.h include/midihub/rtpmidi.h \
 
 .PHONY: test test-network test-synth test-synth-fluid demo m68k synth-m68k clean
 
-test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test
+test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-native-event-queue-test
 	./build/protocol-test
 	./build/ble-midi-test
 	./build/routes-test
@@ -27,6 +27,7 @@ test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test b
 	./build/camd-endpoint-core-test
 	./build/camd-provider-contract-test
 	./build/camd-legacy-driver-adapter-test
+	./build/camd-native-event-queue-test
 
 build/camd-endpoint-core-test: tests/camd_endpoint_core.c \
                                prototypes/camd/endpoint_registry.c \
@@ -58,6 +59,18 @@ build/camd-legacy-driver-adapter-test: tests/camd_legacy_driver_adapter.c \
 		tests/camd_legacy_driver_adapter.c \
 		prototypes/camd/legacy_driver_adapter.c \
 		prototypes/camd/endpoint_registry.c \
+		prototypes/camd/provider_contract.c -pthread
+
+build/camd-native-event-queue-test: tests/camd_native_event_queue.c \
+                                    prototypes/camd/native_event_queue.c \
+                                    prototypes/camd/native_event_queue.h \
+                                    prototypes/camd/provider_contract.c \
+                                    prototypes/camd/provider_contract.h \
+                                    prototypes/camd/endpoint_registry.h
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Iprototypes/camd -o $@ \
+		tests/camd_native_event_queue.c \
+		prototypes/camd/native_event_queue.c \
 		prototypes/camd/provider_contract.c -pthread
 
 build/ump-test: tests/ump.c src/ump.c include/midihub/ump.h

@@ -115,7 +115,8 @@ itself.
    shared control plane, without changing CAMD 41/42 structures.
 3. Connect the host-tested fixed-port adapter to AROS `DriverData` so endpoint
    sessions share physical-port opens with the unchanged cluster path. Then
-   add bounded software-provider queues and the reverse cluster projection.
+   integrate the bounded queue primitive with provider capacity negotiation,
+   then add the reverse cluster projection.
    The host model already proves endpoint/session ownership, asynchronous
    receive teardown and separate native MIDI 1.0/UMP dispatch; do not require
    MIDI 1.0-to-MIDI 1.0 traffic to convert through UMP.

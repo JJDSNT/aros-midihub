@@ -555,9 +555,16 @@ format-fixed sessions, including generation-safe reuse and callbacks outside
 its lock. The receive bridge pins asynchronous callbacks through concurrent
 stop and retirement. A private fixed-port legacy-driver adapter now publishes
 MIDI 1.0-only endpoints and proves exact event/SysEx forwarding without
-intercepting the original cluster path. Bounded queues, its AROS `DriverData`
-shim, native AROS retirement stress and reverse legacy projection remain
-before this becomes an operational provider path.
+intercepting the original cluster path. Queue/session integration, its AROS
+`DriverData` shim, native AROS retirement stress and reverse legacy projection
+remain before this becomes an operational provider path.
+
+The private native queue primitive is also host-tested. It preallocates a
+format-fixed MIDI 1.0 or UMP ring, preserves batch boundaries and complete
+SysEx, returns explicit full/oversize results, supports cancel and exposes
+saturating counters. It is provider-facing rather than an obligatory second
+registry queue. Effective-capacity negotiation, scheduling and interrupt
+handoff remain open integration work.
 
 ## Implemented steps
 
@@ -692,9 +699,9 @@ adapter. Public ABI remains a separate U01 gate.
    notice a device coming back, BLE MIDI stamps with `CamdTime()`.
 3. Done: compare endpoint architectures and select the final central
    registry/provider model; no throwaway dynamic-port API is permitted.
-4. Next: connect the fixed-port adapter to AROS `DriverData`, then integrate
-   the approved invariants across bounded data queues and reverse legacy
-   projection. Close U01 only
+4. Next: integrate effective capacity and scheduling around the bounded native
+   queue, connect the fixed-port adapter to AROS `DriverData`, then implement
+   reverse legacy projection. Close U01 only
    afterward with appended client vectors, 32/64-bit builds, ownership tests
    and upstream review. Provider registration stays private initially.
 
@@ -706,8 +713,9 @@ adapter. Public ABI remains a separate U01 gate.
    Exec semaphore and compiles for hosted x86-64. The same patch compiles a
    format-specific provider contract, provider registration, endpoint
    ownership, registry-owned data sessions and a host-tested fixed-port legacy
-   adapter. Bounded queues, the AROS backend shim, native AROS retirement
-   stress and reverse legacy projection remain before U01 closure.
+   adapter plus format-fixed bounded queue primitive. Queue/session
+   integration, the AROS backend shim, native AROS retirement stress and
+   reverse legacy projection remain before U01 closure.
 
 
 ## 7. Native MIDI 2.0 / UMP architecture (future design contract)

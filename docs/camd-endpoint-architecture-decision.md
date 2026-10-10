@@ -190,6 +190,14 @@ bounded preallocated queues. Shared timestamp, ordering, cancellation and
 overflow semantics apply across formats. Unsupported conversion and any lossy
 policy are explicit and observable.
 
+There is exactly one required transport-facing queue, owned by the provider or
+by its CAMD adapter; the registry does not impose a redundant second queue.
+An existing legacy driver buffer may satisfy this role only when its shim maps
+full, oversize, drain and cancel behavior to the common contract. The private
+queue model now proves preallocation, format separation, atomic batches,
+bounded SysEx, saturating counters and explicit backpressure. It uses a
+task-context lock; interrupt ingress still requires a reviewed handoff.
+
 ## Legacy CAMD adapter
 
 The adapter preserves all CAMD 41.1/42 vectors, structures, tags and behavior.
@@ -298,9 +306,9 @@ inserting conversion. Registry-owned format-fixed sessions now pin provider
 and endpoint lifetime, invoke provider code outside registry locks and drain
 asynchronous receive callbacks safely. The fixed-port legacy-driver ingress
 adapter now proves MIDI 1.0-only publication and forwarding without UMP.
-Bounded queues, the AROS `DriverData` shim, native AROS retirement stress and
-the reverse legacy-cluster projection are still required before this becomes
-an operational public path.
+Queue integration/effective-capacity negotiation, the AROS `DriverData` shim,
+native AROS retirement stress and the reverse legacy-cluster projection are
+still required before this becomes an operational public path.
 
 The current proposal is documented in
 [the endpoint ABI draft](camd-endpoint-abi-draft.md). It is a review artifact,

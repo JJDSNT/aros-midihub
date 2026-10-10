@@ -48,11 +48,18 @@ validates separate MIDI 1.0 and UMP callbacks, exact native-path selection,
 input/output capability and format-filtered receive sinks with a software
 provider. Provider identity, endpoint ownership and format-fixed data-session
 lifetime are now registry-managed. A private fixed-port adapter proves native
-MIDI 1.0 forwarding for legacy drivers; bounded queues, its AROS `DriverData`
-shim and reverse cluster projection remain to be proven. If later made public
-for independently built drivers, it receives its own version gate, callback
+MIDI 1.0 forwarding for legacy drivers; queue/session integration, its AROS
+`DriverData` shim and reverse cluster projection remain to be proven. If later
+made public for independently built drivers, it receives its own version gate, callback
 declarations and ABI review; it is not smuggled into version 43 through the
 client surface.
+
+The private bounded-queue primitive is now executable, but is not itself a
+public ABI. It allocates all storage before use, fixes one queue to MIDI 1.0 or
+UMP, commits multi-record batches atomically, bounds complete SysEx messages
+and reports full/oversize rejection with saturating counters. The remaining
+session work must define how requested `QueueCapacity` becomes an observable
+effective capacity; no provider may silently substitute an unbounded queue.
 
 ### Why this is a hybrid rather than a literal copy of either model
 
@@ -281,7 +288,8 @@ queries. Format-fixed sessions use independent generation-safe handles and pin
 their endpoint and provider. Their receive bridge remains stable across
 asynchronous callbacks and is released only after stop plus callback drain.
 This proves lifetime and dispatch, but not the bounded transport queues still
-required for an operational public path.
+required for an operational public path. The queue primitive now exists, but
+provider/session integration and capacity negotiation are not yet complete.
 
 Provider callbacks execute without registry, endpoint or legacy graph locks.
 Their context remains valid until the shutdown callback has completed and the

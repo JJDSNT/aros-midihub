@@ -321,6 +321,14 @@ tests live in
 exercise watch overflow/resync and use a software provider to prove ownership,
 retirement, exact-path dispatch and asynchronous receive teardown.
 
+The patch also compiles a private format-fixed queue primitive. It preallocates
+all MIDI 1.0 or UMP ring storage, commits batches atomically, bounds complete
+SysEx messages, returns explicit full/oversize backpressure and exposes
+saturating accepted/dequeued/cancelled/rejection counters. It is intended as
+the provider's single transport-facing queue, not a mandatory second queue in
+the registry. Provider capacity negotiation, scheduling and interrupt ingress
+remain deliberately unconnected.
+
 ### Testing
 
 [`tools/camd-compat-qemu.sh`](../tools/camd-compat-qemu.sh) runs
