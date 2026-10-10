@@ -332,7 +332,10 @@ closed and rejected. The host software provider uses the queue to prove full,
 oversize, drain and cancel behavior. Scheduling and interrupt ingress remain
 deliberately unconnected. Transactional checkout/commit/release plus a
 bounded-work pump now call the downstream unlocked and retain the exact head
-item on backpressure or callback failure. Native task wakeup and timestamp
+item on backpressure or callback failure. A private bounded-work worker now
+supplies the task/signal mechanism: AROS uses `CreateNewProcTags()` and an
+Exec signal, wakes coalesce, counters expose progress/block/failure, and stop
+waits for the active pump call. Actual `DriverData` notifications and timestamp
 eligibility are still deliberately unconnected.
 
 ### Testing

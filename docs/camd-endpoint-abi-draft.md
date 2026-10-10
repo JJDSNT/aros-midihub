@@ -298,6 +298,9 @@ now also has transactional checkout/commit/release and a bounded-work pump:
 downstream callbacks run unlocked, acceptance commits exactly once, and
 backpressure leaves the native item queued. These are implementation details,
 not additional public v43 operations.
+A private bounded-work worker now runs the pump from a host thread or AROS
+process/Exec signal, coalesces wakes and synchronously stops after active work.
+Its lifecycle and counters likewise remain provider implementation details.
 
 Provider callbacks execute without registry, endpoint or legacy graph locks.
 Their context remains valid until the shutdown callback has completed and the

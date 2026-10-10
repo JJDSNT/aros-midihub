@@ -29,6 +29,11 @@ complete head item, invokes the downstream without holding the queue lock and
 commits only after acceptance. Backpressure or callback failure releases the
 checkout and leaves the identical native item queued for retry.
 
+`native_event_worker.c` runs that pump in a private task. The AROS build uses a
+`CreateNewProcTags()` process plus an allocated Exec signal; the host model
+uses a condition variable. Wake requests coalesce, each pump run has a fixed
+item budget, and synchronous stop waits until no callback is active.
+
 The current slice proves:
 
 - the proposed pointer-free record sizes on the host compiler;
@@ -90,6 +95,9 @@ The current slice proves:
 - a bounded-work pump delivers MIDI 1.0 batches, complete SysEx or UMP without
   conversion, stops deterministically on downstream backpressure and exposes
   callback failures separately from a full destination;
+- a task/signal worker resumes the pump on explicit producer or downstream
+  capacity notifications, records work/block/failure counters and stops after
+  at most the current bounded pump run;
 - sessions are unidirectional; `QueueCapacity` is a minimum reserved native
   record count, and successful opens expose effective capacity and the native
   MIDI 1.0 SysEx limit through registry-owned session information;
@@ -101,7 +109,8 @@ It deliberately does not yet implement:
 
 - stable-ID storage or key derivation;
 - concurrent retirement/failure-path stress on native AROS;
-- wakeup integration and timestamp-based dispatch from a queued provider;
+- wiring the worker wakeups to actual `DriverData` producer/transmitter events;
+- timestamp-based eligibility and delayed dispatch;
 - an interrupt-safe ingress handoff; the current queue lock is task-context
   only;
 - any format/protocol converter or lossy policy;
@@ -115,7 +124,7 @@ Run it with the normal host suite:
 make test
 ```
 
-The next slice gives the AROS adapter backend a task/signal wakeup around this
-pump, then connects it to `DriverData` without intercepting existing cluster
+The next slice connects this worker to `DriverData` open references, producer
+enqueue and transmitter-capacity wakeups without intercepting existing cluster
 traffic. Public vectors remain blocked until the AROS shim, timestamp policy,
 legacy projection policy and U01 review pass.
