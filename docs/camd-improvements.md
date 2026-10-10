@@ -568,7 +568,10 @@ helpers, native AROS retirement stress and reverse legacy projection remain.
 The private native queue primitive is also host-tested. It preallocates a
 format-fixed MIDI 1.0 or UMP ring, preserves batch boundaries and complete
 SysEx, returns explicit full/oversize results, supports cancel and exposes
-saturating counters. It is provider-facing rather than an obligatory second
+saturating counters. A legacy-output mode atomically admits a caller's complete
+short-message batch but dispatches and commits each message separately, so a
+partially full driver cannot cause an accepted prefix to be sent twice on
+retry. It is provider-facing rather than an obligatory second
 registry queue. The private session contract now makes sessions
 unidirectional, treats requested capacity as a minimum reserved native-record
 count, exposes effective capacity/SysEx limit and rejects an inconsistent

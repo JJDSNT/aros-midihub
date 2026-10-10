@@ -197,6 +197,10 @@ full, oversize, drain and cancel behavior to the common contract. The private
 queue model now proves preallocation, format separation, atomic batches,
 bounded SysEx, saturating counters and explicit backpressure. It uses a
 task-context lock; interrupt ingress still requires a reviewed handoff.
+For legacy output, one atomic producer call may be stored as independently
+committable short-message items. Admission remains all-or-nothing, while a
+full driver buffer retains only the first message not yet accepted and never
+replays an earlier one.
 Its transactional single-consumer pump copies a complete head item, calls the
 downstream with no queue or registry lock held, and commits only after
 acceptance. A full or failing downstream leaves the item queued, which avoids

@@ -221,10 +221,11 @@ static void commit_records(struct CAMDNativeEventQueue *queue,
         queue->high_water = queue->used;
 }
 
-enum CAMDNativeQueueResult camd_native_queue_enqueue_midi1(
+static enum CAMDNativeQueueResult enqueue_midi1(
     struct CAMDNativeEventQueue *queue,
     const struct CAMDMIDI1EventV1 *events,
-    size_t event_count)
+    size_t event_count,
+    int split_items)
 {
     enum CAMDNativeQueueResult result;
     size_t i;
@@ -245,13 +246,30 @@ enum CAMDNativeQueueResult camd_native_queue_enqueue_midi1(
                 &queue->slots[queue_index(queue, queue->tail, i)];
 
             slot->kind = CAMD_NATIVE_QUEUE_ITEM_MIDI1;
-            slot->batch_count = i == 0 ? (uint32_t)event_count : 0;
+            slot->batch_count = split_items ? 1 :
+                (i == 0 ? (uint32_t)event_count : 0);
             slot->midi1 = events[i];
         }
         commit_records(queue, event_count);
     }
     queue_lock_release(&queue->lock);
     return result;
+}
+
+enum CAMDNativeQueueResult camd_native_queue_enqueue_midi1(
+    struct CAMDNativeEventQueue *queue,
+    const struct CAMDMIDI1EventV1 *events,
+    size_t event_count)
+{
+    return enqueue_midi1(queue, events, event_count, 0);
+}
+
+enum CAMDNativeQueueResult camd_native_queue_enqueue_midi1_items(
+    struct CAMDNativeEventQueue *queue,
+    const struct CAMDMIDI1EventV1 *events,
+    size_t event_count)
+{
+    return enqueue_midi1(queue, events, event_count, 1);
 }
 
 enum CAMDNativeQueueResult camd_native_queue_enqueue_midi1_sysex(

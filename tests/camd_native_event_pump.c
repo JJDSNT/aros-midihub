@@ -137,6 +137,20 @@ static void test_midi1_retry_and_budget(void)
     assert(camd_native_pump_run(pump, 1, &items, &records, &downstream) ==
            CAMD_NATIVE_PUMP_EMPTY);
 
+    assert(camd_native_queue_enqueue_midi1_items(queue, events, 2) ==
+           CAMD_NATIVE_QUEUE_OK);
+    assert(camd_native_pump_run(pump, 1, &items, &records, &downstream) ==
+           CAMD_NATIVE_PUMP_OK);
+    assert(items == 1 && records == 1);
+    memset(&stats, 0, sizeof(stats));
+    stats.Size = sizeof(stats);
+    stats.Version = 1;
+    assert(camd_native_queue_stats(queue, &stats) == CAMD_NATIVE_QUEUE_OK);
+    assert(stats.PendingRecords == 1);
+    assert(camd_native_pump_run(pump, 1, &items, &records, &downstream) ==
+           CAMD_NATIVE_PUMP_OK);
+    assert(items == 1 && records == 1);
+
     assert(camd_native_queue_enqueue_midi1(queue, events, 2) ==
            CAMD_NATIVE_QUEUE_OK);
     context.next_result = CAMD_PROVIDER_CALLBACK_FAILED;

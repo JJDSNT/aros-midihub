@@ -94,6 +94,13 @@ enum CAMDNativeQueueResult camd_native_queue_enqueue_midi1(
     struct CAMDNativeEventQueue *queue,
     const struct CAMDMIDI1EventV1 *events,
     size_t event_count);
+/* Atomically accepts all records, but stores each short message as a separate
+ * dispatch item.  This is used when a downstream can accept only one legacy
+ * driver message at a time: retry never repeats an earlier accepted item. */
+enum CAMDNativeQueueResult camd_native_queue_enqueue_midi1_items(
+    struct CAMDNativeEventQueue *queue,
+    const struct CAMDMIDI1EventV1 *events,
+    size_t event_count);
 enum CAMDNativeQueueResult camd_native_queue_enqueue_midi1_sysex(
     struct CAMDNativeEventQueue *queue,
     const uint8_t *bytes,

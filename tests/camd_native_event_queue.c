@@ -133,6 +133,21 @@ static void test_midi1_queue(void)
     assert(camd_native_queue_dequeue_midi1(queue, output, 2, &count) ==
            CAMD_NATIVE_QUEUE_OK);
     assert(count == 2 && memcmp(input, output, sizeof(input)) == 0);
+
+    /* Admission is all-or-nothing, while dispatch can retry one legacy
+       message without replaying the preceding message from the same call. */
+    assert(camd_native_queue_enqueue_midi1_items(queue, input, 2) ==
+           CAMD_NATIVE_QUEUE_OK);
+    assert(camd_native_queue_peek(queue, &head) == CAMD_NATIVE_QUEUE_OK);
+    assert(head.RecordCount == 1);
+    assert(camd_native_queue_dequeue_midi1(queue, output, 1, &count) ==
+           CAMD_NATIVE_QUEUE_OK);
+    assert(count == 1 && output[0].Bytes[1] == 60);
+    assert(camd_native_queue_peek(queue, &head) == CAMD_NATIVE_QUEUE_OK);
+    assert(head.RecordCount == 1);
+    assert(camd_native_queue_dequeue_midi1(queue, output, 1, &count) ==
+           CAMD_NATIVE_QUEUE_OK);
+    assert(count == 1 && output[0].Bytes[1] == 61);
     camd_native_queue_destroy(queue);
 }
 

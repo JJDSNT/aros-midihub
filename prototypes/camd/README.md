@@ -95,6 +95,9 @@ The current slice proves:
 - multi-record enqueue is atomic, full and oversized operations change no
   queue content, and explicit saturating counters retain accepted, dequeued,
   cancelled, full-rejection and oversize-rejection history;
+- a legacy-output enqueue mode keeps that all-or-nothing admission while
+  making each short MIDI 1.0 message an independent dispatch item, so partial
+  driver capacity never forces replay of an earlier message from the call;
 - concurrent producers are serialized with a task-context lock and receive
   deterministic bounded backpressure rather than unbounded allocation.
 - transactional checkout prevents drain/cancel from removing an item while a

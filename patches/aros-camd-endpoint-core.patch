@@ -3690,7 +3690,7 @@ new file mode 100644
 index 0000000000..98071b99c0
 --- /dev/null
 +++ b/workbench/libs/camd/native_event_queue.c
-@@ -0,0 +1,717 @@
+@@ -0,0 +1,735 @@
 +#include "native_event_queue.h"
 +
 +#include <limits.h>
@@ -3914,10 +3914,11 @@ index 0000000000..98071b99c0
 +        queue->high_water = queue->used;
 +}
 +
-+enum CAMDNativeQueueResult camd_native_queue_enqueue_midi1(
++static enum CAMDNativeQueueResult enqueue_midi1(
 +    struct CAMDNativeEventQueue *queue,
 +    const struct CAMDMIDI1EventV1 *events,
-+    size_t event_count)
++    size_t event_count,
++    int split_items)
 +{
 +    enum CAMDNativeQueueResult result;
 +    size_t i;
@@ -3938,13 +3939,30 @@ index 0000000000..98071b99c0
 +                &queue->slots[queue_index(queue, queue->tail, i)];
 +
 +            slot->kind = CAMD_NATIVE_QUEUE_ITEM_MIDI1;
-+            slot->batch_count = i == 0 ? (uint32_t)event_count : 0;
++            slot->batch_count = split_items ? 1 :
++                (i == 0 ? (uint32_t)event_count : 0);
 +            slot->midi1 = events[i];
 +        }
 +        commit_records(queue, event_count);
 +    }
 +    queue_lock_release(&queue->lock);
 +    return result;
++}
++
++enum CAMDNativeQueueResult camd_native_queue_enqueue_midi1(
++    struct CAMDNativeEventQueue *queue,
++    const struct CAMDMIDI1EventV1 *events,
++    size_t event_count)
++{
++    return enqueue_midi1(queue, events, event_count, 0);
++}
++
++enum CAMDNativeQueueResult camd_native_queue_enqueue_midi1_items(
++    struct CAMDNativeEventQueue *queue,
++    const struct CAMDMIDI1EventV1 *events,
++    size_t event_count)
++{
++    return enqueue_midi1(queue, events, event_count, 1);
 +}
 +
 +enum CAMDNativeQueueResult camd_native_queue_enqueue_midi1_sysex(
@@ -4413,7 +4431,7 @@ new file mode 100644
 index 0000000000..f471c3c2dc
 --- /dev/null
 +++ b/workbench/libs/camd/native_event_queue.h
-@@ -0,0 +1,161 @@
+@@ -0,0 +1,168 @@
 +#ifndef CAMD_NATIVE_EVENT_QUEUE_H
 +#define CAMD_NATIVE_EVENT_QUEUE_H
 +
@@ -4507,6 +4525,13 @@ index 0000000000..f471c3c2dc
 +void camd_native_queue_destroy(struct CAMDNativeEventQueue *queue);
 +
 +enum CAMDNativeQueueResult camd_native_queue_enqueue_midi1(
++    struct CAMDNativeEventQueue *queue,
++    const struct CAMDMIDI1EventV1 *events,
++    size_t event_count);
++/* Atomically accepts all records, but stores each short message as a separate
++ * dispatch item.  This is used when a downstream can accept only one legacy
++ * driver message at a time: retry never repeats an earlier accepted item. */
++enum CAMDNativeQueueResult camd_native_queue_enqueue_midi1_items(
 +    struct CAMDNativeEventQueue *queue,
 +    const struct CAMDMIDI1EventV1 *events,
 +    size_t event_count);
