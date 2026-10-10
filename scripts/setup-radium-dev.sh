@@ -72,8 +72,8 @@ if [[ -n "$AROS_TREE" ]]; then
     ln -s "$target" "$link"
     echo "Linked: $link -> $target"
   }
-  # MIDIHub's existing mmakefile.src explicitly expects contrib/extras/aros-midihub.
-  link_safely "$ROOT" "$AROS_TREE/contrib/extras/aros-midihub"
+  # Source-tree contrib path; Extras is a distribution destination, not a source directory.
+  link_safely "$ROOT" "$AROS_TREE/contrib/aros-midihub"
   # Radium retains its original contrib/MultiMedia/radium MetaMake location.
   link_safely "$RADIUM" "$AROS_TREE/contrib/MultiMedia/radium"
 fi

@@ -19,8 +19,7 @@ with `--workspace /path/to/workspace`), enables sparse checkout for
 `MultiMedia/radium`, and checks out the pinned contrib commit
 `a13eda718af94f383c6ec35bfc7d5a88704ba775`. It creates symlinks:
 
-- `AROS/contrib/extras/aros-midihub` → the MIDIHub checkout (its current
-  MetaMake file explicitly expects this source path).
+- `AROS/contrib/aros-midihub` → the MIDIHub checkout.
 - `AROS/contrib/MultiMedia/radium` → the Radium source directory within
   the sparse contrib checkout (its original MetaMake path).
 

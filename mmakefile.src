@@ -1,5 +1,5 @@
 # Native AROS MetaMake integration. Place this checkout at
-# contrib/extras/aros-midihub in the AROS source tree.
+# contrib/aros-midihub in the AROS source tree.
 
 include $(SRCDIR)/config/aros.cfg
 
