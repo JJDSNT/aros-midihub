@@ -114,10 +114,11 @@ itself.
 2. Implement the private registry, generation snapshots and watches as the
    shared control plane, without changing CAMD 41/42 structures.
 3. Connect the fixed-port adapter to the implemented `DriverData` shared-open
-   helpers and bounded-work AROS executor: attach/detach each session worker
-   to the `DriverData` fan-out and wake it after producer enqueue. Transmitter
-   capacity already reaches the fan-out through the stable per-port receiver
-   task. The unchanged cluster path already participates in the same
+   helpers and native transmitter. The host-tested output backend already owns
+   each session's bounded queue/pump/worker, performs transactional
+   attach/detach against the port fan-out and wakes after producer enqueue.
+   Transmitter capacity already reaches the fan-out through the stable per-port
+   receiver task. The unchanged cluster path already participates in the same
    first-open/last-close state. Add timestamp eligibility and reverse cluster
    projection after this path is operational.
    The host model already proves endpoint/session ownership, asynchronous

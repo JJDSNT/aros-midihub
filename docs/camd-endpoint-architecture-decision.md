@@ -246,11 +246,13 @@ shared logical-owner state for legacy directions and endpoint reference counts;
 the first owner opens the physical port and the last closes it, with failed
 opens rolled back. Callback validation follows the union of published
 directions, allowing output and input integration as separate reviewed steps
-without claiming absent operations. The remaining backend must invoke those
-endpoint helpers, attach/detach its workers to the `DriverData` relay and wire
-producer notifications. Capacity notifications already reach the relay task
-from the transmitter. It must not redirect legacy cluster traffic through
-endpoint sessions.
+without claiming absent operations. A host-tested output backend now owns each
+session's native MIDI 1.0 queue, pump and worker, acquires/releases its physical
+port, attaches/detaches the worker transactionally and wakes it after producer
+enqueue. The remaining AROS shim must bind those physical-port callbacks to
+the `DriverData` endpoint helpers and transmitter. Capacity notifications
+already reach the relay task from the transmitter. It must not redirect legacy
+cluster traffic through endpoint sessions.
 
 For each projectable Endpoint + Group + direction, the adapter owns a stable
 cluster identity independent of mutable display names. While an endpoint is

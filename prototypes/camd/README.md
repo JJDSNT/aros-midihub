@@ -34,6 +34,12 @@ checkout and leaves the identical native item queued for retry.
 uses a condition variable. Wake requests coalesce, each pump run has a fixed
 item budget, and synchronous stop waits until no callback is active.
 
+`legacy_output_backend.c` composes those primitives into the output half of a
+legacy-driver provider. Each session owns a bounded native MIDI 1.0 queue,
+pump and worker; open acquires the physical port and attaches the worker to its
+capacity fan-out transactionally, while close detaches before stopping the
+worker and releasing the port. Producer enqueue wakes the worker directly.
+
 `legacy_port_refs.c` models the logical owners of one fixed legacy port. The
 AROS `DriverData` path now uses it instead of two isolated booleans: legacy
 input/output presence and endpoint input/output reference counts produce one
@@ -121,21 +127,23 @@ The current slice proves:
   MIDI 1.0 SysEx limit through registry-owned session information;
 - the software provider uses the real queue primitive and proves observable
   `QUEUE_FULL`/`TOO_LARGE`, drain, cancel and cleanup when a provider reports
-  an invalid reservation.
+  an invalid reservation;
+- the legacy output backend connects the adapter to per-session native queues
+  and workers, preserves atomic producer admission, retries a blocked physical
+  port through its fan-out without replay, and rolls back failed attach/open
+  or retryable close paths.
 
 It deliberately does not yet implement:
 
 - stable-ID storage or key derivation;
 - concurrent retirement/failure-path stress on native AROS;
-- attaching adapter-session workers to the fan-out now embedded in
-  `DriverData`, or waking them after producer enqueue;
+- binding the host-tested output backend callbacks to AROS `DriverData` and
+  invoking its endpoint-reference helpers;
 - timestamp-based eligibility and delayed dispatch;
 - an interrupt-safe ingress handoff; the current queue lock is task-context
   only (the AROS worker now has a lock-free `Signal()`-only capacity wake for
   an already-quiesced lifetime, but no interrupt producer may enqueue);
 - any format/protocol converter or lossy policy;
-- the adapter backend that invokes the new `DriverData` endpoint-reference
-  helpers and connects producer wakeups to session workers;
 - projection of native UMP endpoints back into legacy clusters;
 - any public CAMD vector, tag, header or normative UMP wire constant.
 
@@ -148,8 +156,9 @@ make test
 The AROS runtime now embeds the bounded fan-out in `DriverData`. A transmitter
 capacity change signals only the stable receiver process; that task performs
 the fan-out, and shutdown frees its relay signal before destroying the fan-out.
-The next slice makes the adapter backend invoke the implemented `DriverData`
-endpoint references, attach/detach its workers and wake them after producer
-enqueue. Existing cluster traffic remains untouched. Public vectors remain
-blocked until the data shim, timestamp policy, legacy projection policy and
-U01 review pass.
+The host-tested output backend now performs transactional acquire, worker
+attach/detach, bounded enqueue and producer wake. The next slice binds its four
+physical-port callbacks to the implemented AROS `DriverData` helpers and
+native MIDI 1.0 transmitter. Existing cluster traffic remains untouched.
+Public vectors remain blocked until the data shim, timestamp policy, legacy
+projection policy and U01 review pass.
