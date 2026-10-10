@@ -167,7 +167,7 @@ git -C ~/AROS apply "$PWD/patches/aros-llvmpipe-link.patch"
 
 ## CAMD and USB MIDI
 
-Fourteen patches, applied in this order to upstream `master`. The first eleven
+Fifteen patches, applied in this order to upstream `master`. The first eleven
 are commits of the `camd-robustness` branch in `~/AROS`; the link-comment and
 SysEx/error patches follow that branch. The first two are also draft pull request #1483.
 The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
@@ -188,13 +188,14 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-link-comments.patch` | implement `MLINK_Comment` and expose the selected cluster comment through CAMD 42 |
 | `aros-camd-sysex-errors.patch` | apply `MIDI_ErrFilter` and report oversized SysEx as `CMEF_SysExTooBig` without partial messages |
 | `aros-camd-endpoint-core.patch` | add the non-public endpoint registry and format-specific provider contract; initialize the registry and compile both inside CAMD without adding vectors |
+| `aros-camd-endpoint-runtime.patch` | embed the bounded worker fan-out in each `DriverData`, relay transmitter capacity through its stable receiver task and compile the relay without changing the public ABI |
 
 ```sh
 for p in camd-names-64bit camd-arena-segments camd-driver-scan-align \
          debugdriver-port-index camd-port-open camd-notify-lock \
          camd-rescan usb-midi-camd usb-midi-lifecycle camd-part-notify \
          camd-v42 camd-link-comments camd-sysex-errors \
-         camd-endpoint-core; do
+         camd-endpoint-core camd-endpoint-runtime; do
     git -C ~/AROS apply "$PWD/patches/aros-$p.patch" || break
 done
 ```
@@ -331,14 +332,17 @@ the provider's single transport-facing queue, not a mandatory second queue in
 the registry. Sessions now request a minimum reservation and expose effective
 capacity plus the MIDI 1.0 SysEx limit; inconsistent provider results are
 closed and rejected. The host software provider uses the queue to prove full,
-oversize, drain and cancel behavior. Scheduling and interrupt ingress remain
-deliberately unconnected. Transactional checkout/commit/release plus a
-bounded-work pump now call the downstream unlocked and retain the exact head
-item on backpressure or callback failure. A private bounded-work worker now
-supplies the task/signal mechanism: AROS uses `CreateNewProcTags()` and an
-Exec signal, wakes coalesce, counters expose progress/block/failure, and stop
-waits for the active pump call. Actual `DriverData` notifications and timestamp
-eligibility are still deliberately unconnected.
+oversize, drain and cancel behavior. Interrupt ingress remains deliberately
+unconnected. Transactional checkout/commit/release plus a bounded-work pump
+call the downstream unlocked and retain the exact head item on backpressure or
+callback failure. A private bounded-work worker supplies the task/signal
+mechanism: AROS uses `CreateNewProcTags()` and Exec signals, wakes coalesce,
+counters expose progress/block/failure, and stop waits for the active pump
+call. Each `DriverData` now owns a bounded worker fan-out. The transmitter
+signals the stable per-port receiver process only when it frees output
+capacity; that task then wakes attached workers outside interrupt context.
+Adapter-session attachment and timestamp eligibility remain deliberately
+unconnected.
 
 ### Testing
 

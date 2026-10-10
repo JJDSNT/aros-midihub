@@ -218,7 +218,10 @@ task context, a bounded generation-checked fan-out wakes the attached session
 workers. Detach is synchronous with fan-out traversal. Consequently, the
 interrupt never dereferences a session-owned worker and session close can
 detach before stopping and freeing it. The host model implements and tests the
-fan-out; its `DriverData` relay wiring remains the next AROS step.
+fan-out. The AROS runtime now embeds it in each `DriverData`: the transmitter
+signals the stable receiver process when capacity is actually released, and
+that task performs the bounded fan-out. Adapter sessions do not attach workers
+to it yet.
 
 Endpoint sessions are unidirectional. Their requested `QueueCapacity` is a
 minimum reservation of native records, not a hint and not shared unreserved
@@ -244,8 +247,10 @@ the first owner opens the physical port and the last closes it, with failed
 opens rolled back. Callback validation follows the union of published
 directions, allowing output and input integration as separate reviewed steps
 without claiming absent operations. The remaining backend must invoke those
-endpoint helpers and wire producer/capacity notifications. It must not redirect
-legacy cluster traffic through endpoint sessions.
+endpoint helpers, attach/detach its workers to the `DriverData` relay and wire
+producer notifications. Capacity notifications already reach the relay task
+from the transmitter. It must not redirect legacy cluster traffic through
+endpoint sessions.
 
 For each projectable Endpoint + Group + direction, the adapter owns a stable
 cluster identity independent of mutable display names. While an endpoint is

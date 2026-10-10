@@ -127,15 +127,15 @@ It deliberately does not yet implement:
 
 - stable-ID storage or key derivation;
 - concurrent retirement/failure-path stress on native AROS;
-- wiring the host-tested worker fan-out to the stable `DriverData` receiver
-  process and its producer/transmitter events;
+- attaching adapter-session workers to the fan-out now embedded in
+  `DriverData`, or waking them after producer enqueue;
 - timestamp-based eligibility and delayed dispatch;
 - an interrupt-safe ingress handoff; the current queue lock is task-context
   only (the AROS worker now has a lock-free `Signal()`-only capacity wake for
   an already-quiesced lifetime, but no interrupt producer may enqueue);
 - any format/protocol converter or lossy policy;
 - the adapter backend that invokes the new `DriverData` endpoint-reference
-  helpers and connects worker wakeups to producer/transmitter events;
+  helpers and connects producer wakeups to session workers;
 - projection of native UMP endpoints back into legacy clusters;
 - any public CAMD vector, tag, header or normative UMP wire constant.
 
@@ -145,9 +145,11 @@ Run it with the normal host suite:
 make test
 ```
 
+The AROS runtime now embeds the bounded fan-out in `DriverData`. A transmitter
+capacity change signals only the stable receiver process; that task performs
+the fan-out, and shutdown frees its relay signal before destroying the fan-out.
 The next slice makes the adapter backend invoke the implemented `DriverData`
-endpoint references and producer enqueue, then installs the worker's
-interrupt-safe capacity wake only after the physical driver's close contract
-has quiesced callbacks. Existing cluster traffic remains untouched. Public
-vectors remain blocked until the data shim, timestamp policy, legacy
-projection policy and U01 review pass.
+endpoint references, attach/detach its workers and wake them after producer
+enqueue. Existing cluster traffic remains untouched. Public vectors remain
+blocked until the data shim, timestamp policy, legacy projection policy and
+U01 review pass.

@@ -576,20 +576,24 @@ registry queue. The private session contract now makes sessions
 unidirectional, treats requested capacity as a minimum reserved native-record
 count, exposes effective capacity/SysEx limit and rejects an inconsistent
 successful open. The software provider uses this queue and proves full,
-oversize, drain and cancel behavior. Scheduling and interrupt handoff remain
-open; the pump supplies lossless retry and its worker supplies native task
-wakeup. On AROS the worker also exposes a `Signal()`-only interrupt-safe wake;
-the backend must quiesce the driver's callbacks before stopping or freeing its
-worker. The legacy cluster path now uses the shared `DriverData` reference
-state, but the adapter does not yet invoke the endpoint side, connect wakeups
-or decide timestamp eligibility.
+oversize, drain and cancel behavior. The pump supplies lossless retry and its
+worker supplies native task wakeup. On AROS the worker also exposes a
+`Signal()`-only interrupt-safe wake; the backend must quiesce the driver's
+callbacks before stopping or freeing its worker. The legacy cluster path now
+uses the shared `DriverData` reference state. Each `DriverData` also owns a
+stable relay signal and bounded worker fan-out: transmitter capacity release
+signals its receiver task, which wakes attached session workers in task
+context. The adapter does not yet invoke the endpoint side, attach those
+workers, wake them after producer enqueue or decide timestamp eligibility.
 
 A bounded host-tested fan-out now defines the multi-session capacity handoff.
-The driver interrupt will signal a stable per-port task, which wakes attached
+The driver interrupt signals a stable per-port task, which wakes attached
 session workers from task context. Generation-checked handles reject stale
 detach, and detach synchronizes with traversal before a session worker may be
-stopped. This avoids an interrupt-visible mutable session list; the remaining
-work is to embed the relay in `DriverData` and invoke it from the transmitter.
+stopped. The AROS runtime now embeds this relay in `DriverData` and invokes it
+only when the transmitter actually releases capacity. This avoids an
+interrupt-visible mutable session list; attaching adapter-owned workers is the
+remaining backend step.
 
 ## Implemented steps
 
