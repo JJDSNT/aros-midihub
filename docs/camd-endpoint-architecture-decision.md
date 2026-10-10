@@ -198,6 +198,13 @@ queue model now proves preallocation, format separation, atomic batches,
 bounded SysEx, saturating counters and explicit backpressure. It uses a
 task-context lock; interrupt ingress still requires a reviewed handoff.
 
+Endpoint sessions are unidirectional. Their requested `QueueCapacity` is a
+minimum reservation of native records, not a hint and not shared unreserved
+space. A successful open reports effective capacity at least as large as the
+request and separately reports the native MIDI 1.0 SysEx limit. CAMD rejects
+and closes a provider session that returns an inconsistent result. The host software provider now
+exercises the real queue through registry sends, drain and cancel.
+
 ## Legacy CAMD adapter
 
 The adapter preserves all CAMD 41.1/42 vectors, structures, tags and behavior.
@@ -306,9 +313,9 @@ inserting conversion. Registry-owned format-fixed sessions now pin provider
 and endpoint lifetime, invoke provider code outside registry locks and drain
 asynchronous receive callbacks safely. The fixed-port legacy-driver ingress
 adapter now proves MIDI 1.0-only publication and forwarding without UMP.
-Queue integration/effective-capacity negotiation, the AROS `DriverData` shim,
-native AROS retirement stress and the reverse legacy-cluster projection are
-still required before this becomes an operational public path.
+The AROS `DriverData` shim, scheduling policy, native AROS retirement stress
+and the reverse legacy-cluster projection are still required before this
+becomes an operational public path.
 
 The current proposal is documented in
 [the endpoint ABI draft](camd-endpoint-abi-draft.md). It is a review artifact,

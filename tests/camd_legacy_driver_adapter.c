@@ -28,14 +28,16 @@ static struct CAMDEndpointIDV1 make_id(uint32_t value)
 
 static enum CAMDProviderResult backend_open(
     void *context, const struct CAMDProviderOpenRequestV1 *request,
-    void **session_context)
+    struct CAMDProviderOpenResultV1 *result)
 {
     struct legacy_backend *backend = context;
 
     assert(request->DataFormat == CAMD_PROVIDER_FORMAT_MIDI1);
     assert(request->Protocol == CAMD_PROVIDER_PROTOCOL_MIDI1);
     ++backend->opens;
-    *session_context = backend;
+    result->SessionContext = backend;
+    result->EffectiveQueueCapacity = request->QueueCapacity;
+    result->MaxSysExBytes = 1024;
     return CAMD_PROVIDER_OK;
 }
 

@@ -78,6 +78,9 @@ struct session_slot {
     uint32_t direction;
     uint32_t data_format;
     uint32_t protocol;
+    uint32_t requested_queue_capacity;
+    uint32_t effective_queue_capacity;
+    uint32_t max_sysex_bytes;
     void *provider_context;
     struct receive_bridge *receive_bridge;
     uint32_t receive_inflight;
@@ -374,6 +377,10 @@ static enum CAMDRegistryResult provider_result(
         return CAMD_REGISTRY_STATE;
     case CAMD_PROVIDER_RETIRED:
         return CAMD_REGISTRY_RETIRED;
+    case CAMD_PROVIDER_QUEUE_FULL:
+        return CAMD_REGISTRY_QUEUE_FULL;
+    case CAMD_PROVIDER_TOO_LARGE:
+        return CAMD_REGISTRY_TOO_LARGE;
     default:
         return CAMD_REGISTRY_CALLBACK_FAILED;
     }
@@ -739,17 +746,19 @@ enum CAMDRegistryResult camd_registry_session_open(
     struct CAMDHandleV1 owner, reserved;
     CAMDProviderOpenFnV1 open_callback;
     CAMDProviderCloseFnV1 close_callback;
-    void *provider_context, *provider_session = NULL;
+    void *provider_context;
+    struct CAMDProviderOpenResultV1 open_result;
     enum CAMDProviderResult callback_result, close_result;
     enum CAMDRegistryResult result;
     uint32_t path;
     size_t i, index;
+    int invalid_open_result;
 
     if (!registry || !request || !session_handle ||
         request->Size != sizeof(*request) || request->Version != 1 ||
         id_is_zero(&request->EndpointID) || request->QueueCapacity == 0 ||
-        request->Direction == 0 ||
-        (request->Direction & ~CAMD_PROVIDER_DIRECTION_ALL) != 0)
+        (request->Direction != CAMD_PROVIDER_DIRECTION_INPUT &&
+         request->Direction != CAMD_PROVIDER_DIRECTION_OUTPUT))
         return CAMD_REGISTRY_INVALID;
     path = camd_provider_native_path(request->DataFormat, request->Protocol);
     if (path == 0)
@@ -811,6 +820,7 @@ enum CAMDRegistryResult camd_registry_session_open(
     session->direction = request->Direction;
     session->data_format = request->DataFormat;
     session->protocol = request->Protocol;
+    session->requested_queue_capacity = request->QueueCapacity;
     ++endpoint->references;
     ++provider->session_count;
     ++provider->callbacks_inflight;
@@ -821,8 +831,10 @@ enum CAMDRegistryResult camd_registry_session_open(
     provider_context = provider->provider.descriptor.Context;
     core_lock_release(&registry->lock);
 
-    callback_result = open_callback(provider_context, request,
-                                    &provider_session);
+    memset(&open_result, 0, sizeof(open_result));
+    open_result.Size = sizeof(open_result);
+    open_result.Version = 1;
+    callback_result = open_callback(provider_context, request, &open_result);
 
     core_lock_acquire(&registry->lock);
     session = resolve_session(registry, reserved);
@@ -841,11 +853,16 @@ enum CAMDRegistryResult camd_registry_session_open(
         result = provider_result(callback_result);
         goto out;
     }
-    session->provider_context = provider_session;
-    if (!endpoint || endpoint->endpoint.State == CAMD_ENDPOINT_RETIRING) {
+    session->provider_context = open_result.SessionContext;
+    invalid_open_result =
+        camd_provider_validate_open_result(request, &open_result) !=
+        CAMD_PROVIDER_OK;
+    if (invalid_open_result ||
+        !endpoint || endpoint->endpoint.State == CAMD_ENDPOINT_RETIRING) {
         session->closing = 1;
         core_lock_release(&registry->lock);
-        close_result = close_callback(provider_context, provider_session);
+        close_result = close_callback(provider_context,
+                                      open_result.SessionContext);
         core_lock_acquire(&registry->lock);
         session = resolve_session(registry, reserved);
         provider = resolve_provider(registry, owner);
@@ -856,15 +873,50 @@ enum CAMDRegistryResult camd_registry_session_open(
         --session->callbacks_inflight;
         --provider->callbacks_inflight;
         release_session(registry, session);
-        result = close_result == CAMD_PROVIDER_OK
-                     ? CAMD_REGISTRY_RETIRED
-                     : CAMD_REGISTRY_CALLBACK_FAILED;
+        result = close_result != CAMD_PROVIDER_OK || invalid_open_result
+                     ? CAMD_REGISTRY_CALLBACK_FAILED
+                     : CAMD_REGISTRY_RETIRED;
         goto out;
     }
+    session->effective_queue_capacity = open_result.EffectiveQueueCapacity;
+    session->max_sysex_bytes = open_result.MaxSysExBytes;
     --session->callbacks_inflight;
     --provider->callbacks_inflight;
     session->opening = 0;
     *session_handle = reserved;
+    result = CAMD_REGISTRY_OK;
+out:
+    core_lock_release(&registry->lock);
+    return result;
+}
+
+enum CAMDRegistryResult camd_registry_session_info(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 session_handle,
+    struct CAMDRegistrySessionInfoV1 *info)
+{
+    struct session_slot *session;
+    enum CAMDRegistryResult result;
+
+    if (!registry || !info || info->Size != sizeof(*info) ||
+        info->Version != 1)
+        return CAMD_REGISTRY_INVALID;
+    core_lock_acquire(&registry->lock);
+    session = resolve_session(registry, session_handle);
+    if (!session) {
+        result = CAMD_REGISTRY_STALE;
+        goto out;
+    }
+    if (session->opening) {
+        result = CAMD_REGISTRY_BUSY;
+        goto out;
+    }
+    info->Direction = session->direction;
+    info->DataFormat = session->data_format;
+    info->Protocol = session->protocol;
+    info->RequestedQueueCapacity = session->requested_queue_capacity;
+    info->EffectiveQueueCapacity = session->effective_queue_capacity;
+    info->MaxSysExBytes = session->max_sysex_bytes;
     result = CAMD_REGISTRY_OK;
 out:
     core_lock_release(&registry->lock);
@@ -1003,6 +1055,12 @@ enum CAMDRegistryResult camd_registry_session_send_midi1_sysex(
         &session, &provider);
     if (result != CAMD_REGISTRY_OK)
         goto out;
+    if (byte_count > session->max_sysex_bytes) {
+        --session->callbacks_inflight;
+        --provider->callbacks_inflight;
+        result = CAMD_REGISTRY_TOO_LARGE;
+        goto out;
+    }
     callback = provider->provider.operations.SendMIDI1SysEx;
     context = provider->provider.descriptor.Context;
     provider_session = session->provider_context;

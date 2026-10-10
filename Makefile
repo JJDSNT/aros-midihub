@@ -32,12 +32,15 @@ test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test b
 build/camd-endpoint-core-test: tests/camd_endpoint_core.c \
                                prototypes/camd/endpoint_registry.c \
                                prototypes/camd/endpoint_registry.h \
+                               prototypes/camd/native_event_queue.c \
+                               prototypes/camd/native_event_queue.h \
                                prototypes/camd/provider_contract.c \
                                prototypes/camd/provider_contract.h
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Iprototypes/camd -o $@ \
 		tests/camd_endpoint_core.c prototypes/camd/endpoint_registry.c \
-		prototypes/camd/provider_contract.c -pthread
+		prototypes/camd/provider_contract.c \
+		prototypes/camd/native_event_queue.c -pthread
 
 build/camd-provider-contract-test: tests/camd_provider_contract.c \
                                    prototypes/camd/provider_contract.c \

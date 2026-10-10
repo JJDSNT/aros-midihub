@@ -42,7 +42,9 @@ enum CAMDProviderResult {
     CAMD_PROVIDER_UNSUPPORTED,
     CAMD_PROVIDER_STATE,
     CAMD_PROVIDER_RETIRED,
-    CAMD_PROVIDER_CALLBACK_FAILED
+    CAMD_PROVIDER_CALLBACK_FAILED,
+    CAMD_PROVIDER_QUEUE_FULL,
+    CAMD_PROVIDER_TOO_LARGE
 };
 
 /* A complete non-SysEx MIDI 1.0 message. Bytes are in wire order and Length
@@ -80,10 +82,21 @@ struct CAMDProviderOpenRequestV1 {
     uint32_t QueueCapacity;
 };
 
+/* Sessions are unidirectional. QueueCapacity is a minimum reservation; a
+ * successful provider reports the actual reserved native-record capacity.
+ * MaxSysExBytes is zero for UMP and at least two for native MIDI 1.0. */
+struct CAMDProviderOpenResultV1 {
+    uint32_t Size;
+    uint32_t Version;
+    void *SessionContext;
+    uint32_t EffectiveQueueCapacity;
+    uint32_t MaxSysExBytes;
+};
+
 typedef enum CAMDProviderResult (*CAMDProviderOpenFnV1)(
     void *provider_context,
     const struct CAMDProviderOpenRequestV1 *request,
-    void **session_context);
+    struct CAMDProviderOpenResultV1 *result);
 typedef enum CAMDProviderResult (*CAMDProviderCloseFnV1)(
     void *provider_context, void *session_context);
 typedef enum CAMDProviderResult (*CAMDProviderSendMIDI1FnV1)(
@@ -171,6 +184,9 @@ struct CAMDPrivateProviderSession {
     uint32_t direction;
     uint32_t data_format;
     uint32_t protocol;
+    uint32_t requested_queue_capacity;
+    uint32_t effective_queue_capacity;
+    uint32_t max_sysex_bytes;
     int receive_started;
     int open;
 };
@@ -182,6 +198,9 @@ enum CAMDProviderResult camd_provider_validate_midi1_sysex(
     const uint8_t *bytes, size_t byte_count);
 enum CAMDProviderResult camd_provider_validate_ump(
     const struct CAMDUMPEventV1 *events, size_t event_count);
+enum CAMDProviderResult camd_provider_validate_open_result(
+    const struct CAMDProviderOpenRequestV1 *request,
+    const struct CAMDProviderOpenResultV1 *result);
 
 enum CAMDProviderResult camd_provider_init(
     struct CAMDPrivateProvider *provider,

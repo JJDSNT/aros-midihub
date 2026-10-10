@@ -48,18 +48,20 @@ validates separate MIDI 1.0 and UMP callbacks, exact native-path selection,
 input/output capability and format-filtered receive sinks with a software
 provider. Provider identity, endpoint ownership and format-fixed data-session
 lifetime are now registry-managed. A private fixed-port adapter proves native
-MIDI 1.0 forwarding for legacy drivers; queue/session integration, its AROS
-`DriverData` shim and reverse cluster projection remain to be proven. If later
-made public for independently built drivers, it receives its own version gate, callback
-declarations and ABI review; it is not smuggled into version 43 through the
-client surface.
+MIDI 1.0 forwarding for legacy drivers; its AROS `DriverData` shim and reverse
+cluster projection remain to be proven. If later made public for independently
+built drivers, it receives its own version gate, callback declarations and ABI
+review; it is not smuggled into version 43 through the client surface.
 
 The private bounded-queue primitive is now executable, but is not itself a
 public ABI. It allocates all storage before use, fixes one queue to MIDI 1.0 or
 UMP, commits multi-record batches atomically, bounds complete SysEx messages
-and reports full/oversize rejection with saturating counters. The remaining
-session work must define how requested `QueueCapacity` becomes an observable
-effective capacity; no provider may silently substitute an unbounded queue.
+and reports full/oversize rejection with saturating counters. Sessions are
+unidirectional. Requested `QueueCapacity` is the minimum number of native
+records reserved for that session; successful open returns the effective
+capacity and native MIDI 1.0 SysEx limit, both queryable from the registry.
+CAMD closes an open whose result is inconsistent. No provider may silently
+substitute shared unreserved space or an unbounded queue.
 
 ### Why this is a hybrid rather than a literal copy of either model
 
@@ -222,9 +224,10 @@ The appended library vectors need operations equivalent to:
 - resolve/open by stable endpoint ID, never by list index or display name;
 - release the snapshot;
 - create/end a bounded endpoint watch and read generation-tagged events;
-- open/close an endpoint session with direction, requested data format,
-  requested protocol, conversion/loss policy and queue policy, returning the
-  effective format and protocol;
+- open/close a unidirectional endpoint session with requested data format,
+  protocol, conversion/loss policy and minimum native-record queue capacity,
+  returning the effective format, protocol, reserved capacity and MIDI 1.0
+  SysEx limit;
 - send/receive format-specific batches; native UMP sessions use complete
   `CAMDUMPEventV1` records, while native MIDI 1.0 sessions use the record
   family selected at U01;
@@ -287,9 +290,10 @@ and data-path callbacks run outside the registry lock and may reenter snapshot
 queries. Format-fixed sessions use independent generation-safe handles and pin
 their endpoint and provider. Their receive bridge remains stable across
 asynchronous callbacks and is released only after stop plus callback drain.
-This proves lifetime and dispatch, but not the bounded transport queues still
-required for an operational public path. The queue primitive now exists, but
-provider/session integration and capacity negotiation are not yet complete.
+This proves lifetime, dispatch and capacity negotiation. The software provider
+uses the bounded primitive through registry send/drain/cancel operations and
+returns explicit queue-full and oversized-message results. Scheduling and the
+native AROS driver/runtime integration are not yet complete.
 
 Provider callbacks execute without registry, endpoint or legacy graph locks.
 Their context remains valid until the shutdown callback has completed and the

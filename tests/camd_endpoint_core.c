@@ -1,9 +1,11 @@
 #include "../prototypes/camd/endpoint_registry.h"
+#include "../prototypes/camd/native_event_queue.h"
 #include "../prototypes/camd/provider_contract.h"
 
 #include <assert.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static struct CAMDEndpointIDV1 make_id(uint32_t value)
@@ -30,7 +32,19 @@ struct registry_provider_context {
     enum CAMDRegistryResult reentrant_retire_result;
     const struct CAMDProviderReceiveSinkV1 *active_sink;
     int reenter_retire_on_send;
+    int short_capacity;
     int ready;
+};
+
+struct registry_provider_session {
+    struct registry_provider_context *provider;
+    struct CAMDNativeEventQueue *queue;
+    struct CAMDMIDI1EventV1 *midi1_scratch;
+    struct CAMDUMPEventV1 *ump_scratch;
+    uint8_t *sysex_scratch;
+    uint32_t capacity;
+    uint32_t max_sysex_bytes;
+    uint32_t format;
 };
 
 static pthread_mutex_t receive_test_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -44,26 +58,88 @@ static void provider_reenter_snapshot(
 
 static enum CAMDProviderResult registry_provider_open(
     void *context, const struct CAMDProviderOpenRequestV1 *request,
-    void **session_context)
+    struct CAMDProviderOpenResultV1 *result)
 {
     struct registry_provider_context *provider = context;
+    struct registry_provider_session *session;
+    struct CAMDNativeQueueConfigV1 config;
 
     assert(request != NULL);
+    session = calloc(1, sizeof(*session));
+    if (!session)
+        return CAMD_PROVIDER_CALLBACK_FAILED;
+    session->provider = provider;
+    session->capacity = request->QueueCapacity;
+    session->format = request->DataFormat;
+    session->max_sysex_bytes = request->DataFormat == CAMD_PROVIDER_FORMAT_MIDI1
+                                   ? 64
+                                   : 0;
+    memset(&config, 0, sizeof(config));
+    config.Size = sizeof(config);
+    config.Version = 1;
+    config.DataFormat = request->DataFormat;
+    config.Capacity = request->QueueCapacity;
+    config.MaxSysExBytes = session->max_sysex_bytes;
+    if (camd_native_queue_create(&config, &session->queue) !=
+        CAMD_NATIVE_QUEUE_OK)
+        goto fail;
+    if (request->DataFormat == CAMD_PROVIDER_FORMAT_MIDI1) {
+        session->midi1_scratch = calloc(request->QueueCapacity,
+                                         sizeof(*session->midi1_scratch));
+        session->sysex_scratch = malloc(session->max_sysex_bytes);
+        if (!session->midi1_scratch || !session->sysex_scratch)
+            goto fail;
+    } else {
+        session->ump_scratch = calloc(request->QueueCapacity,
+                                      sizeof(*session->ump_scratch));
+        if (!session->ump_scratch)
+            goto fail;
+    }
     ++provider->opens;
     provider_reenter_snapshot(provider);
-    *session_context = context;
+    result->SessionContext = session;
+    result->EffectiveQueueCapacity = provider->short_capacity
+                                         ? request->QueueCapacity - 1
+                                         : request->QueueCapacity;
+    result->MaxSysExBytes = session->max_sysex_bytes;
     return CAMD_PROVIDER_OK;
+
+fail:
+    camd_native_queue_destroy(session->queue);
+    free(session->midi1_scratch);
+    free(session->ump_scratch);
+    free(session->sysex_scratch);
+    free(session);
+    return CAMD_PROVIDER_CALLBACK_FAILED;
 }
 
 static enum CAMDProviderResult registry_provider_close(void *context,
                                                         void *session_context)
 {
     struct registry_provider_context *provider = context;
+    struct registry_provider_session *session = session_context;
 
-    assert(session_context == context);
+    assert(session != NULL && session->provider == provider);
     ++provider->closes;
     provider_reenter_snapshot(provider);
+    camd_native_queue_destroy(session->queue);
+    free(session->midi1_scratch);
+    free(session->ump_scratch);
+    free(session->sysex_scratch);
+    free(session);
     return CAMD_PROVIDER_OK;
+}
+
+static enum CAMDProviderResult queue_provider_result(
+    enum CAMDNativeQueueResult result)
+{
+    if (result == CAMD_NATIVE_QUEUE_OK)
+        return CAMD_PROVIDER_OK;
+    if (result == CAMD_NATIVE_QUEUE_FULL)
+        return CAMD_PROVIDER_QUEUE_FULL;
+    if (result == CAMD_NATIVE_QUEUE_TOO_LARGE)
+        return CAMD_PROVIDER_TOO_LARGE;
+    return CAMD_PROVIDER_CALLBACK_FAILED;
 }
 
 static enum CAMDProviderResult registry_provider_send_ump(
@@ -71,8 +147,10 @@ static enum CAMDProviderResult registry_provider_send_ump(
     const struct CAMDUMPEventV1 *events, size_t event_count)
 {
     struct registry_provider_context *provider = context;
+    struct registry_provider_session *session = session_context;
+    enum CAMDNativeQueueResult queue_result;
 
-    assert(session_context == context);
+    assert(session != NULL && session->provider == provider);
     assert(events != NULL && event_count == 1);
     ++provider->ump_sends;
     provider_reenter_snapshot(provider);
@@ -80,7 +158,9 @@ static enum CAMDProviderResult registry_provider_send_ump(
         provider->reentrant_retire_result =
             camd_registry_provider_begin_retire(provider->registry,
                                                 provider->provider);
-    return CAMD_PROVIDER_OK;
+    queue_result = camd_native_queue_enqueue_ump(session->queue, events,
+                                                  event_count);
+    return queue_provider_result(queue_result);
 }
 
 static enum CAMDProviderResult registry_provider_send_midi1(
@@ -88,12 +168,14 @@ static enum CAMDProviderResult registry_provider_send_midi1(
     const struct CAMDMIDI1EventV1 *events, size_t event_count)
 {
     struct registry_provider_context *provider = context;
+    struct registry_provider_session *session = session_context;
 
-    assert(session_context == context);
+    assert(session != NULL && session->provider == provider);
     assert(events != NULL && event_count == 1);
     ++provider->midi1_sends;
     provider_reenter_snapshot(provider);
-    return CAMD_PROVIDER_OK;
+    return queue_provider_result(camd_native_queue_enqueue_midi1(
+        session->queue, events, event_count));
 }
 
 static enum CAMDProviderResult registry_provider_send_sysex(
@@ -102,8 +184,9 @@ static enum CAMDProviderResult registry_provider_send_sysex(
     uint32_t clock_domain, uint32_t flags)
 {
     struct registry_provider_context *provider = context;
+    struct registry_provider_session *session = session_context;
 
-    assert(session_context == context);
+    assert(session != NULL && session->provider == provider);
     assert(bytes != NULL && byte_count >= 2);
     (void)time_high;
     (void)time_low;
@@ -111,17 +194,64 @@ static enum CAMDProviderResult registry_provider_send_sysex(
     (void)flags;
     ++provider->sysex_sends;
     provider_reenter_snapshot(provider);
+    return queue_provider_result(camd_native_queue_enqueue_midi1_sysex(
+        session->queue, bytes, byte_count, time_high, time_low, clock_domain,
+        flags));
+}
+
+static enum CAMDProviderResult registry_provider_drain(void *context,
+                                                        void *session_context)
+{
+    struct registry_provider_context *provider = context;
+    struct registry_provider_session *session = session_context;
+    struct CAMDNativeQueueHeadV1 head;
+
+    assert(session != NULL && session->provider == provider);
+    ++provider->controls;
+    provider_reenter_snapshot(provider);
+    memset(&head, 0, sizeof(head));
+    head.Size = sizeof(head);
+    head.Version = 1;
+    while (camd_native_queue_peek(session->queue, &head) ==
+           CAMD_NATIVE_QUEUE_OK) {
+        size_t count = 0;
+
+        if (head.Kind == CAMD_NATIVE_QUEUE_ITEM_MIDI1) {
+            assert(camd_native_queue_dequeue_midi1(
+                       session->queue, session->midi1_scratch,
+                       session->capacity, &count) == CAMD_NATIVE_QUEUE_OK);
+        } else if (head.Kind == CAMD_NATIVE_QUEUE_ITEM_MIDI1_SYSEX) {
+            struct CAMDNativeQueueSysExInfoV1 info;
+
+            memset(&info, 0, sizeof(info));
+            info.Size = sizeof(info);
+            info.Version = 1;
+            assert(camd_native_queue_dequeue_midi1_sysex(
+                       session->queue, session->sysex_scratch,
+                       session->max_sysex_bytes, &info) ==
+                   CAMD_NATIVE_QUEUE_OK);
+        } else {
+            assert(head.Kind == CAMD_NATIVE_QUEUE_ITEM_UMP);
+            assert(camd_native_queue_dequeue_ump(
+                       session->queue, session->ump_scratch,
+                       session->capacity, &count) == CAMD_NATIVE_QUEUE_OK);
+        }
+    }
     return CAMD_PROVIDER_OK;
 }
 
-static enum CAMDProviderResult registry_provider_session(void *context,
-                                                          void *session_context)
+static enum CAMDProviderResult registry_provider_cancel(void *context,
+                                                         void *session_context)
 {
     struct registry_provider_context *provider = context;
+    struct registry_provider_session *session = session_context;
+    size_t cancelled;
 
-    assert(session_context == context);
+    assert(session != NULL && session->provider == provider);
     ++provider->controls;
     provider_reenter_snapshot(provider);
+    assert(camd_native_queue_cancel(session->queue, &cancelled) ==
+           CAMD_NATIVE_QUEUE_OK);
     return CAMD_PROVIDER_OK;
 }
 
@@ -148,9 +278,11 @@ static enum CAMDProviderResult registry_provider_start_receive(
     const struct CAMDProviderReceiveSinkV1 *sink)
 {
     struct registry_provider_context *context = argument;
-    struct CAMDUMPEventV1 event;
+    struct registry_provider_session *session = session_context;
+    struct CAMDUMPEventV1 event, delivered;
+    size_t count;
 
-    assert(session_context == argument);
+    assert(session != NULL && session->provider == context);
     assert(sink != NULL && sink->SubmitUMP != NULL);
     assert(sink->SubmitMIDI1 == NULL && sink->SubmitMIDI1SysEx == NULL);
     ++context->receive_starts;
@@ -161,15 +293,21 @@ static enum CAMDProviderResult registry_provider_start_receive(
     event.Version = 1;
     event.WordCount = 1;
     event.Words[0] = 0x20903c64u;
-    return sink->SubmitUMP(sink->Context, &event, 1);
+    assert(camd_native_queue_enqueue_ump(session->queue, &event, 1) ==
+           CAMD_NATIVE_QUEUE_OK);
+    assert(camd_native_queue_dequeue_ump(session->queue, &delivered, 1,
+                                         &count) == CAMD_NATIVE_QUEUE_OK);
+    assert(count == 1);
+    return sink->SubmitUMP(sink->Context, &delivered, 1);
 }
 
 static enum CAMDProviderResult registry_provider_stop_receive(
     void *argument, void *session_context)
 {
     struct registry_provider_context *context = argument;
+    struct registry_provider_session *session = session_context;
 
-    assert(session_context == argument);
+    assert(session != NULL && session->provider == context);
     ++context->receive_stops;
     context->active_sink = NULL;
     provider_reenter_snapshot(context);
@@ -245,8 +383,8 @@ static struct CAMDHandleV1 register_test_provider(
     operations.SendUMP = registry_provider_send_ump;
     operations.StartReceive = registry_provider_start_receive;
     operations.StopReceive = registry_provider_stop_receive;
-    operations.Drain = registry_provider_session;
-    operations.Cancel = registry_provider_session;
+    operations.Drain = registry_provider_drain;
+    operations.Cancel = registry_provider_cancel;
     operations.BeginShutdown = registry_provider_shutdown;
     operations.ShutdownReady = registry_provider_ready;
     memset(&descriptor, 0, sizeof(descriptor));
@@ -624,12 +762,15 @@ static void test_registry_sessions(void)
     struct CAMDGroupInfoV1 group = make_group(&endpoint, 0);
     struct CAMDFunctionBlockInfoV1 block = make_block(&endpoint, 0, 0, 1);
     struct CAMDProviderOpenRequestV1 request;
+    struct CAMDRegistrySessionInfoV1 session_info;
     struct CAMDProviderReceiveSinkV1 sink;
     struct CAMDMIDI1EventV1 midi1_event;
     struct CAMDUMPEventV1 event;
     struct CAMDHandleV1 provider, endpoint_owner, output, input, midi1;
     struct receive_thread_context receive_thread;
     pthread_t thread;
+    uint8_t oversized_sysex[65];
+    unsigned int i;
 
     assert(registry != NULL);
     endpoint.NativeDataFormats = CAMD_DATA_FORMAT_ALL;
@@ -652,14 +793,35 @@ static void test_registry_sessions(void)
     request.DataFormat = CAMD_PROVIDER_FORMAT_UMP;
     request.Protocol = CAMD_PROVIDER_PROTOCOL_MIDI2;
     request.QueueCapacity = 8;
+    context.short_capacity = 1;
+    assert(camd_registry_session_open(registry, &request, &output) ==
+           CAMD_REGISTRY_CALLBACK_FAILED);
+    assert(context.opens == 1 && context.closes == 1);
+    context.short_capacity = 0;
     assert(camd_registry_session_open(registry, &request, &output) ==
            CAMD_REGISTRY_OK);
-    assert(context.opens == 1);
+    assert(context.opens == 2);
+    memset(&session_info, 0, sizeof(session_info));
+    session_info.Size = sizeof(session_info);
+    session_info.Version = 1;
+    assert(camd_registry_session_info(registry, output, &session_info) ==
+           CAMD_REGISTRY_OK);
+    assert(session_info.Direction == CAMD_PROVIDER_DIRECTION_OUTPUT);
+    assert(session_info.DataFormat == CAMD_PROVIDER_FORMAT_UMP);
+    assert(session_info.Protocol == CAMD_PROVIDER_PROTOCOL_MIDI2);
+    assert(session_info.RequestedQueueCapacity == 8);
+    assert(session_info.EffectiveQueueCapacity == 8);
+    assert(session_info.MaxSysExBytes == 0);
 
     request.DataFormat = CAMD_PROVIDER_FORMAT_MIDI1;
     request.Protocol = CAMD_PROVIDER_PROTOCOL_MIDI1;
     assert(camd_registry_session_open(registry, &request, &midi1) ==
            CAMD_REGISTRY_OK);
+    assert(camd_registry_session_info(registry, midi1, &session_info) ==
+           CAMD_REGISTRY_OK);
+    assert(session_info.DataFormat == CAMD_PROVIDER_FORMAT_MIDI1);
+    assert(session_info.EffectiveQueueCapacity == 8);
+    assert(session_info.MaxSysExBytes == 64);
     memset(&midi1_event, 0, sizeof(midi1_event));
     midi1_event.Size = sizeof(midi1_event);
     midi1_event.Version = 1;
@@ -673,6 +835,12 @@ static void test_registry_sessions(void)
                registry, midi1, sysex, sizeof(sysex), 0, 1, 2, 0) ==
            CAMD_REGISTRY_OK);
     assert(context.midi1_sends == 1 && context.sysex_sends == 1);
+    memset(oversized_sysex, 0x01, sizeof(oversized_sysex));
+    oversized_sysex[0] = 0xf0;
+    oversized_sysex[sizeof(oversized_sysex) - 1] = 0xf7;
+    assert(camd_registry_session_send_midi1_sysex(
+               registry, midi1, oversized_sysex, sizeof(oversized_sysex),
+               0, 1, 2, 0) == CAMD_REGISTRY_TOO_LARGE);
 
     memset(&event, 0, sizeof(event));
     event.Size = sizeof(event);
@@ -691,7 +859,14 @@ static void test_registry_sessions(void)
     assert(context.ump_sends == 1);
     assert(context.reentrant_retire_result == CAMD_REGISTRY_BUSY);
     context.reenter_retire_on_send = 0;
+    for (i = 1; i < request.QueueCapacity; ++i)
+        assert(camd_registry_session_send_ump(registry, output, &event, 1) ==
+               CAMD_REGISTRY_OK);
+    assert(camd_registry_session_send_ump(registry, output, &event, 1) ==
+           CAMD_REGISTRY_QUEUE_FULL);
     assert(camd_registry_session_drain(registry, output) == CAMD_REGISTRY_OK);
+    assert(camd_registry_session_send_ump(registry, output, &event, 1) ==
+           CAMD_REGISTRY_OK);
     assert(camd_registry_session_cancel(registry, output) == CAMD_REGISTRY_OK);
     assert(context.controls == 2);
 
@@ -750,7 +925,7 @@ static void test_registry_sessions(void)
     assert(camd_registry_session_cancel(registry, output) == CAMD_REGISTRY_OK);
     assert(camd_registry_session_close(registry, output) == CAMD_REGISTRY_OK);
     assert(camd_registry_session_close(registry, output) == CAMD_REGISTRY_STALE);
-    assert(context.closes == 3);
+    assert(context.closes == 4);
     assert(camd_registry_release(registry, endpoint_owner) == CAMD_REGISTRY_OK);
     assert(camd_registry_provider_release(registry, provider) ==
            CAMD_REGISTRY_OK);

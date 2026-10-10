@@ -77,12 +77,12 @@ static const struct CAMDLegacyPortDescriptorV1 *find_port(
 
 static enum CAMDProviderResult adapter_open(
     void *context, const struct CAMDProviderOpenRequestV1 *request,
-    void **session_context)
+    struct CAMDProviderOpenResultV1 *result)
 {
     struct CAMDLegacyDriverAdapter *adapter = context;
     const struct CAMDLegacyPortDescriptorV1 *port;
 
-    if (!adapter || !request || !session_context)
+    if (!adapter || !request || !result)
         return CAMD_PROVIDER_INVALID;
     port = find_port(adapter, &request->EndpointID);
     if (!port)
@@ -93,7 +93,7 @@ static enum CAMDProviderResult adapter_open(
         (request->Direction & ~port->Directions) != 0)
         return CAMD_PROVIDER_UNSUPPORTED;
     return adapter->backend_ops.Open(adapter->descriptor.BackendContext,
-                                     request, session_context);
+                                     request, result);
 }
 
 static enum CAMDProviderResult adapter_close(void *context,

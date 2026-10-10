@@ -79,12 +79,18 @@ The current slice proves:
   cancelled, full-rejection and oversize-rejection history;
 - concurrent producers are serialized with a task-context lock and receive
   deterministic bounded backpressure rather than unbounded allocation.
+- sessions are unidirectional; `QueueCapacity` is a minimum reserved native
+  record count, and successful opens expose effective capacity and the native
+  MIDI 1.0 SysEx limit through registry-owned session information;
+- the software provider uses the real queue primitive and proves observable
+  `QUEUE_FULL`/`TOO_LARGE`, drain, cancel and cleanup when a provider reports
+  an invalid reservation.
 
 It deliberately does not yet implement:
 
 - stable-ID storage or key derivation;
 - concurrent retirement/failure-path stress on native AROS;
-- session/provider queue negotiation, scheduling or timestamp dispatch;
+- scheduling or timestamp-based dispatch from a queued provider;
 - an interrupt-safe ingress handoff; the current queue lock is task-context
   only;
 - any format/protocol converter or lossy policy;
@@ -98,8 +104,7 @@ Run it with the normal host suite:
 make test
 ```
 
-The next slice integrates the queue primitive with a software provider and
-defines effective-capacity negotiation, then connects the adapter backend to
-AROS `DriverData` without intercepting existing cluster traffic. Public
-vectors remain blocked until native AROS retirement stress, the AROS shim,
-legacy projection policy and U01 review pass.
+The next slice connects the adapter backend to AROS `DriverData` without
+intercepting existing cluster traffic, then exercises retirement and queue
+backpressure in the native runtime. Public vectors remain blocked until the
+AROS shim, scheduling policy, legacy projection policy and U01 review pass.

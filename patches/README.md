@@ -326,8 +326,11 @@ all MIDI 1.0 or UMP ring storage, commits batches atomically, bounds complete
 SysEx messages, returns explicit full/oversize backpressure and exposes
 saturating accepted/dequeued/cancelled/rejection counters. It is intended as
 the provider's single transport-facing queue, not a mandatory second queue in
-the registry. Provider capacity negotiation, scheduling and interrupt ingress
-remain deliberately unconnected.
+the registry. Sessions now request a minimum reservation and expose effective
+capacity plus the MIDI 1.0 SysEx limit; inconsistent provider results are
+closed and rejected. The host software provider uses the queue to prove full,
+oversize, drain and cancel behavior. Scheduling and interrupt ingress remain
+deliberately unconnected.
 
 ### Testing
 

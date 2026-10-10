@@ -87,6 +87,22 @@ enum CAMDProviderResult camd_provider_validate_ump(
     return CAMD_PROVIDER_OK;
 }
 
+enum CAMDProviderResult camd_provider_validate_open_result(
+    const struct CAMDProviderOpenRequestV1 *request,
+    const struct CAMDProviderOpenResultV1 *result)
+{
+    if (!request || !result || result->Size != sizeof(*result) ||
+        result->Version != 1 ||
+        result->EffectiveQueueCapacity < request->QueueCapacity)
+        return CAMD_PROVIDER_CALLBACK_FAILED;
+    if ((request->DataFormat == CAMD_PROVIDER_FORMAT_MIDI1 &&
+         result->MaxSysExBytes < 2) ||
+        (request->DataFormat == CAMD_PROVIDER_FORMAT_UMP &&
+         result->MaxSysExBytes != 0))
+        return CAMD_PROVIDER_CALLBACK_FAILED;
+    return CAMD_PROVIDER_OK;
+}
+
 static enum CAMDProviderResult session_state(
     const struct CAMDPrivateProviderSession *session)
 {
@@ -146,14 +162,14 @@ enum CAMDProviderResult camd_provider_open(
     struct CAMDPrivateProviderSession *session)
 {
     enum CAMDProviderResult result;
-    void *provider_session = NULL;
+    struct CAMDProviderOpenResultV1 open_result;
     uint32_t path;
 
     if (!provider || !provider->initialized || !request || !session ||
         request->Size != sizeof(*request) || request->Version != 1 ||
         id_is_zero(&request->EndpointID) || request->QueueCapacity == 0 ||
-        request->Direction == 0 ||
-        (request->Direction & ~CAMD_PROVIDER_DIRECTION_ALL) != 0 ||
+        (request->Direction != CAMD_PROVIDER_DIRECTION_INPUT &&
+         request->Direction != CAMD_PROVIDER_DIRECTION_OUTPUT) ||
         (request->Direction & ~provider->descriptor.Directions) != 0)
         return CAMD_PROVIDER_INVALID;
     if (provider->retiring)
@@ -164,16 +180,28 @@ enum CAMDProviderResult camd_provider_open(
     if (path == 0 || (provider->descriptor.NativePaths & path) == 0)
         return CAMD_PROVIDER_UNSUPPORTED;
 
+    memset(&open_result, 0, sizeof(open_result));
+    open_result.Size = sizeof(open_result);
+    open_result.Version = 1;
     result = provider->operations.Open(provider->descriptor.Context, request,
-                                       &provider_session);
+                                       &open_result);
     if (result != CAMD_PROVIDER_OK)
-        return CAMD_PROVIDER_CALLBACK_FAILED;
+        return result;
+    result = camd_provider_validate_open_result(request, &open_result);
+    if (result != CAMD_PROVIDER_OK) {
+        provider->operations.Close(provider->descriptor.Context,
+                                   open_result.SessionContext);
+        return result;
+    }
     memset(session, 0, sizeof(*session));
     session->provider = provider;
-    session->provider_context = provider_session;
+    session->provider_context = open_result.SessionContext;
     session->direction = request->Direction;
     session->data_format = request->DataFormat;
     session->protocol = request->Protocol;
+    session->requested_queue_capacity = request->QueueCapacity;
+    session->effective_queue_capacity = open_result.EffectiveQueueCapacity;
+    session->max_sysex_bytes = open_result.MaxSysExBytes;
     session->open = 1;
     ++provider->active_sessions;
     return CAMD_PROVIDER_OK;
@@ -220,6 +248,8 @@ enum CAMDProviderResult camd_provider_send_midi1_sysex(
     result = camd_provider_validate_midi1_sysex(bytes, byte_count);
     if (result != CAMD_PROVIDER_OK)
         return result;
+    if (byte_count > session->max_sysex_bytes)
+        return CAMD_PROVIDER_TOO_LARGE;
     return session->provider->operations.SendMIDI1SysEx(
         session->provider->descriptor.Context, session->provider_context,
         bytes, byte_count, time_high, time_low, clock_domain, flags);

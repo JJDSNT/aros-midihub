@@ -24,10 +24,10 @@ index ac12d843db..42c7c6fd53 100644
  #ifdef __AMIGAOS__
 diff --git a/workbench/libs/camd/endpoint_registry.c b/workbench/libs/camd/endpoint_registry.c
 new file mode 100644
-index 0000000000..15be145403
+index 0000000000..1958b8531c
 --- /dev/null
 +++ b/workbench/libs/camd/endpoint_registry.c
-@@ -0,0 +1,2035 @@
+@@ -0,0 +1,2093 @@
 +#include "endpoint_registry.h"
 +#include "provider_contract.h"
 +
@@ -108,6 +108,9 @@ index 0000000000..15be145403
 +    uint32_t direction;
 +    uint32_t data_format;
 +    uint32_t protocol;
++    uint32_t requested_queue_capacity;
++    uint32_t effective_queue_capacity;
++    uint32_t max_sysex_bytes;
 +    void *provider_context;
 +    struct receive_bridge *receive_bridge;
 +    uint32_t receive_inflight;
@@ -404,6 +407,10 @@ index 0000000000..15be145403
 +        return CAMD_REGISTRY_STATE;
 +    case CAMD_PROVIDER_RETIRED:
 +        return CAMD_REGISTRY_RETIRED;
++    case CAMD_PROVIDER_QUEUE_FULL:
++        return CAMD_REGISTRY_QUEUE_FULL;
++    case CAMD_PROVIDER_TOO_LARGE:
++        return CAMD_REGISTRY_TOO_LARGE;
 +    default:
 +        return CAMD_REGISTRY_CALLBACK_FAILED;
 +    }
@@ -769,17 +776,19 @@ index 0000000000..15be145403
 +    struct CAMDHandleV1 owner, reserved;
 +    CAMDProviderOpenFnV1 open_callback;
 +    CAMDProviderCloseFnV1 close_callback;
-+    void *provider_context, *provider_session = NULL;
++    void *provider_context;
++    struct CAMDProviderOpenResultV1 open_result;
 +    enum CAMDProviderResult callback_result, close_result;
 +    enum CAMDRegistryResult result;
 +    uint32_t path;
 +    size_t i, index;
++    int invalid_open_result;
 +
 +    if (!registry || !request || !session_handle ||
 +        request->Size != sizeof(*request) || request->Version != 1 ||
 +        id_is_zero(&request->EndpointID) || request->QueueCapacity == 0 ||
-+        request->Direction == 0 ||
-+        (request->Direction & ~CAMD_PROVIDER_DIRECTION_ALL) != 0)
++        (request->Direction != CAMD_PROVIDER_DIRECTION_INPUT &&
++         request->Direction != CAMD_PROVIDER_DIRECTION_OUTPUT))
 +        return CAMD_REGISTRY_INVALID;
 +    path = camd_provider_native_path(request->DataFormat, request->Protocol);
 +    if (path == 0)
@@ -841,6 +850,7 @@ index 0000000000..15be145403
 +    session->direction = request->Direction;
 +    session->data_format = request->DataFormat;
 +    session->protocol = request->Protocol;
++    session->requested_queue_capacity = request->QueueCapacity;
 +    ++endpoint->references;
 +    ++provider->session_count;
 +    ++provider->callbacks_inflight;
@@ -851,8 +861,10 @@ index 0000000000..15be145403
 +    provider_context = provider->provider.descriptor.Context;
 +    core_lock_release(&registry->lock);
 +
-+    callback_result = open_callback(provider_context, request,
-+                                    &provider_session);
++    memset(&open_result, 0, sizeof(open_result));
++    open_result.Size = sizeof(open_result);
++    open_result.Version = 1;
++    callback_result = open_callback(provider_context, request, &open_result);
 +
 +    core_lock_acquire(&registry->lock);
 +    session = resolve_session(registry, reserved);
@@ -871,11 +883,16 @@ index 0000000000..15be145403
 +        result = provider_result(callback_result);
 +        goto out;
 +    }
-+    session->provider_context = provider_session;
-+    if (!endpoint || endpoint->endpoint.State == CAMD_ENDPOINT_RETIRING) {
++    session->provider_context = open_result.SessionContext;
++    invalid_open_result =
++        camd_provider_validate_open_result(request, &open_result) !=
++        CAMD_PROVIDER_OK;
++    if (invalid_open_result ||
++        !endpoint || endpoint->endpoint.State == CAMD_ENDPOINT_RETIRING) {
 +        session->closing = 1;
 +        core_lock_release(&registry->lock);
-+        close_result = close_callback(provider_context, provider_session);
++        close_result = close_callback(provider_context,
++                                      open_result.SessionContext);
 +        core_lock_acquire(&registry->lock);
 +        session = resolve_session(registry, reserved);
 +        provider = resolve_provider(registry, owner);
@@ -886,15 +903,50 @@ index 0000000000..15be145403
 +        --session->callbacks_inflight;
 +        --provider->callbacks_inflight;
 +        release_session(registry, session);
-+        result = close_result == CAMD_PROVIDER_OK
-+                     ? CAMD_REGISTRY_RETIRED
-+                     : CAMD_REGISTRY_CALLBACK_FAILED;
++        result = close_result != CAMD_PROVIDER_OK || invalid_open_result
++                     ? CAMD_REGISTRY_CALLBACK_FAILED
++                     : CAMD_REGISTRY_RETIRED;
 +        goto out;
 +    }
++    session->effective_queue_capacity = open_result.EffectiveQueueCapacity;
++    session->max_sysex_bytes = open_result.MaxSysExBytes;
 +    --session->callbacks_inflight;
 +    --provider->callbacks_inflight;
 +    session->opening = 0;
 +    *session_handle = reserved;
++    result = CAMD_REGISTRY_OK;
++out:
++    core_lock_release(&registry->lock);
++    return result;
++}
++
++enum CAMDRegistryResult camd_registry_session_info(
++    struct CAMDEndpointRegistry *registry,
++    struct CAMDHandleV1 session_handle,
++    struct CAMDRegistrySessionInfoV1 *info)
++{
++    struct session_slot *session;
++    enum CAMDRegistryResult result;
++
++    if (!registry || !info || info->Size != sizeof(*info) ||
++        info->Version != 1)
++        return CAMD_REGISTRY_INVALID;
++    core_lock_acquire(&registry->lock);
++    session = resolve_session(registry, session_handle);
++    if (!session) {
++        result = CAMD_REGISTRY_STALE;
++        goto out;
++    }
++    if (session->opening) {
++        result = CAMD_REGISTRY_BUSY;
++        goto out;
++    }
++    info->Direction = session->direction;
++    info->DataFormat = session->data_format;
++    info->Protocol = session->protocol;
++    info->RequestedQueueCapacity = session->requested_queue_capacity;
++    info->EffectiveQueueCapacity = session->effective_queue_capacity;
++    info->MaxSysExBytes = session->max_sysex_bytes;
 +    result = CAMD_REGISTRY_OK;
 +out:
 +    core_lock_release(&registry->lock);
@@ -1033,6 +1085,12 @@ index 0000000000..15be145403
 +        &session, &provider);
 +    if (result != CAMD_REGISTRY_OK)
 +        goto out;
++    if (byte_count > session->max_sysex_bytes) {
++        --session->callbacks_inflight;
++        --provider->callbacks_inflight;
++        result = CAMD_REGISTRY_TOO_LARGE;
++        goto out;
++    }
 +    callback = provider->provider.operations.SendMIDI1SysEx;
 +    context = provider->provider.descriptor.Context;
 +    provider_session = session->provider_context;
@@ -2065,10 +2123,10 @@ index 0000000000..15be145403
 +}
 diff --git a/workbench/libs/camd/endpoint_registry.h b/workbench/libs/camd/endpoint_registry.h
 new file mode 100644
-index 0000000000..a2f05df156
+index 0000000000..ce3311e4fc
 --- /dev/null
 +++ b/workbench/libs/camd/endpoint_registry.h
-@@ -0,0 +1,261 @@
+@@ -0,0 +1,279 @@
 +#ifndef CAMD_ENDPOINT_REGISTRY_H
 +#define CAMD_ENDPOINT_REGISTRY_H
 +
@@ -2182,7 +2240,9 @@ index 0000000000..a2f05df156
 +    CAMD_REGISTRY_EMPTY,
 +    CAMD_REGISTRY_BUSY,
 +    CAMD_REGISTRY_CALLBACK_FAILED,
-+    CAMD_REGISTRY_UNSUPPORTED
++    CAMD_REGISTRY_UNSUPPORTED,
++    CAMD_REGISTRY_QUEUE_FULL,
++    CAMD_REGISTRY_TOO_LARGE
 +};
 +
 +struct CAMDEndpointRegistry;
@@ -2193,6 +2253,17 @@ index 0000000000..a2f05df156
 +struct CAMDProviderReceiveSinkV1;
 +struct CAMDMIDI1EventV1;
 +struct CAMDUMPEventV1;
++
++struct CAMDRegistrySessionInfoV1 {
++    uint32_t Size;
++    uint32_t Version;
++    uint32_t Direction;
++    uint32_t DataFormat;
++    uint32_t Protocol;
++    uint32_t RequestedQueueCapacity;
++    uint32_t EffectiveQueueCapacity;
++    uint32_t MaxSysExBytes;
++};
 +
 +/* Registry operations serialize themselves.  Destroy still requires that no
 + * operation is in flight.  Snapshot access is independent after
@@ -2218,6 +2289,11 @@ index 0000000000..a2f05df156
 +    struct CAMDEndpointRegistry *registry,
 +    const struct CAMDProviderOpenRequestV1 *request,
 +    struct CAMDHandleV1 *session);
++
++enum CAMDRegistryResult camd_registry_session_info(
++    struct CAMDEndpointRegistry *registry,
++    struct CAMDHandleV1 session,
++    struct CAMDRegistrySessionInfoV1 *info);
 +
 +enum CAMDRegistryResult camd_registry_session_send_midi1(
 +    struct CAMDEndpointRegistry *registry,
@@ -2391,7 +2467,7 @@ index 417dd8f81a..e8a7f12118 100644
  	  FreeMem(CB(CamdBase)->CLSemaphore,sizeof(struct SignalSemaphore));
 diff --git a/workbench/libs/camd/legacy_driver_adapter.c b/workbench/libs/camd/legacy_driver_adapter.c
 new file mode 100644
-index 0000000000..3939ad0916
+index 0000000000..2a154d5c39
 --- /dev/null
 +++ b/workbench/libs/camd/legacy_driver_adapter.c
 @@ -0,0 +1,403 @@
@@ -2474,12 +2550,12 @@ index 0000000000..3939ad0916
 +
 +static enum CAMDProviderResult adapter_open(
 +    void *context, const struct CAMDProviderOpenRequestV1 *request,
-+    void **session_context)
++    struct CAMDProviderOpenResultV1 *result)
 +{
 +    struct CAMDLegacyDriverAdapter *adapter = context;
 +    const struct CAMDLegacyPortDescriptorV1 *port;
 +
-+    if (!adapter || !request || !session_context)
++    if (!adapter || !request || !result)
 +        return CAMD_PROVIDER_INVALID;
 +    port = find_port(adapter, &request->EndpointID);
 +    if (!port)
@@ -2490,7 +2566,7 @@ index 0000000000..3939ad0916
 +        (request->Direction & ~port->Directions) != 0)
 +        return CAMD_PROVIDER_UNSUPPORTED;
 +    return adapter->backend_ops.Open(adapter->descriptor.BackendContext,
-+                                     request, session_context);
++                                     request, result);
 +}
 +
 +static enum CAMDProviderResult adapter_close(void *context,
@@ -3537,10 +3613,10 @@ index 0000000000..8c1d1fcb13
 +#endif
 diff --git a/workbench/libs/camd/provider_contract.c b/workbench/libs/camd/provider_contract.c
 new file mode 100644
-index 0000000000..4224df936c
+index 0000000000..506170c587
 --- /dev/null
 +++ b/workbench/libs/camd/provider_contract.c
-@@ -0,0 +1,373 @@
+@@ -0,0 +1,403 @@
 +#include "provider_contract.h"
 +
 +#include <string.h>
@@ -3630,6 +3706,22 @@ index 0000000000..4224df936c
 +    return CAMD_PROVIDER_OK;
 +}
 +
++enum CAMDProviderResult camd_provider_validate_open_result(
++    const struct CAMDProviderOpenRequestV1 *request,
++    const struct CAMDProviderOpenResultV1 *result)
++{
++    if (!request || !result || result->Size != sizeof(*result) ||
++        result->Version != 1 ||
++        result->EffectiveQueueCapacity < request->QueueCapacity)
++        return CAMD_PROVIDER_CALLBACK_FAILED;
++    if ((request->DataFormat == CAMD_PROVIDER_FORMAT_MIDI1 &&
++         result->MaxSysExBytes < 2) ||
++        (request->DataFormat == CAMD_PROVIDER_FORMAT_UMP &&
++         result->MaxSysExBytes != 0))
++        return CAMD_PROVIDER_CALLBACK_FAILED;
++    return CAMD_PROVIDER_OK;
++}
++
 +static enum CAMDProviderResult session_state(
 +    const struct CAMDPrivateProviderSession *session)
 +{
@@ -3689,14 +3781,14 @@ index 0000000000..4224df936c
 +    struct CAMDPrivateProviderSession *session)
 +{
 +    enum CAMDProviderResult result;
-+    void *provider_session = NULL;
++    struct CAMDProviderOpenResultV1 open_result;
 +    uint32_t path;
 +
 +    if (!provider || !provider->initialized || !request || !session ||
 +        request->Size != sizeof(*request) || request->Version != 1 ||
 +        id_is_zero(&request->EndpointID) || request->QueueCapacity == 0 ||
-+        request->Direction == 0 ||
-+        (request->Direction & ~CAMD_PROVIDER_DIRECTION_ALL) != 0 ||
++        (request->Direction != CAMD_PROVIDER_DIRECTION_INPUT &&
++         request->Direction != CAMD_PROVIDER_DIRECTION_OUTPUT) ||
 +        (request->Direction & ~provider->descriptor.Directions) != 0)
 +        return CAMD_PROVIDER_INVALID;
 +    if (provider->retiring)
@@ -3707,16 +3799,28 @@ index 0000000000..4224df936c
 +    if (path == 0 || (provider->descriptor.NativePaths & path) == 0)
 +        return CAMD_PROVIDER_UNSUPPORTED;
 +
++    memset(&open_result, 0, sizeof(open_result));
++    open_result.Size = sizeof(open_result);
++    open_result.Version = 1;
 +    result = provider->operations.Open(provider->descriptor.Context, request,
-+                                       &provider_session);
++                                       &open_result);
 +    if (result != CAMD_PROVIDER_OK)
-+        return CAMD_PROVIDER_CALLBACK_FAILED;
++        return result;
++    result = camd_provider_validate_open_result(request, &open_result);
++    if (result != CAMD_PROVIDER_OK) {
++        provider->operations.Close(provider->descriptor.Context,
++                                   open_result.SessionContext);
++        return result;
++    }
 +    memset(session, 0, sizeof(*session));
 +    session->provider = provider;
-+    session->provider_context = provider_session;
++    session->provider_context = open_result.SessionContext;
 +    session->direction = request->Direction;
 +    session->data_format = request->DataFormat;
 +    session->protocol = request->Protocol;
++    session->requested_queue_capacity = request->QueueCapacity;
++    session->effective_queue_capacity = open_result.EffectiveQueueCapacity;
++    session->max_sysex_bytes = open_result.MaxSysExBytes;
 +    session->open = 1;
 +    ++provider->active_sessions;
 +    return CAMD_PROVIDER_OK;
@@ -3763,6 +3867,8 @@ index 0000000000..4224df936c
 +    result = camd_provider_validate_midi1_sysex(bytes, byte_count);
 +    if (result != CAMD_PROVIDER_OK)
 +        return result;
++    if (byte_count > session->max_sysex_bytes)
++        return CAMD_PROVIDER_TOO_LARGE;
 +    return session->provider->operations.SendMIDI1SysEx(
 +        session->provider->descriptor.Context, session->provider_context,
 +        bytes, byte_count, time_high, time_low, clock_domain, flags);
@@ -3916,10 +4022,10 @@ index 0000000000..4224df936c
 +}
 diff --git a/workbench/libs/camd/provider_contract.h b/workbench/libs/camd/provider_contract.h
 new file mode 100644
-index 0000000000..0e5a804d42
+index 0000000000..fae4c4e64d
 --- /dev/null
 +++ b/workbench/libs/camd/provider_contract.h
-@@ -0,0 +1,231 @@
+@@ -0,0 +1,250 @@
 +#ifndef CAMD_PROVIDER_CONTRACT_H
 +#define CAMD_PROVIDER_CONTRACT_H
 +
@@ -3964,7 +4070,9 @@ index 0000000000..0e5a804d42
 +    CAMD_PROVIDER_UNSUPPORTED,
 +    CAMD_PROVIDER_STATE,
 +    CAMD_PROVIDER_RETIRED,
-+    CAMD_PROVIDER_CALLBACK_FAILED
++    CAMD_PROVIDER_CALLBACK_FAILED,
++    CAMD_PROVIDER_QUEUE_FULL,
++    CAMD_PROVIDER_TOO_LARGE
 +};
 +
 +/* A complete non-SysEx MIDI 1.0 message. Bytes are in wire order and Length
@@ -4002,10 +4110,21 @@ index 0000000000..0e5a804d42
 +    uint32_t QueueCapacity;
 +};
 +
++/* Sessions are unidirectional. QueueCapacity is a minimum reservation; a
++ * successful provider reports the actual reserved native-record capacity.
++ * MaxSysExBytes is zero for UMP and at least two for native MIDI 1.0. */
++struct CAMDProviderOpenResultV1 {
++    uint32_t Size;
++    uint32_t Version;
++    void *SessionContext;
++    uint32_t EffectiveQueueCapacity;
++    uint32_t MaxSysExBytes;
++};
++
 +typedef enum CAMDProviderResult (*CAMDProviderOpenFnV1)(
 +    void *provider_context,
 +    const struct CAMDProviderOpenRequestV1 *request,
-+    void **session_context);
++    struct CAMDProviderOpenResultV1 *result);
 +typedef enum CAMDProviderResult (*CAMDProviderCloseFnV1)(
 +    void *provider_context, void *session_context);
 +typedef enum CAMDProviderResult (*CAMDProviderSendMIDI1FnV1)(
@@ -4093,6 +4212,9 @@ index 0000000000..0e5a804d42
 +    uint32_t direction;
 +    uint32_t data_format;
 +    uint32_t protocol;
++    uint32_t requested_queue_capacity;
++    uint32_t effective_queue_capacity;
++    uint32_t max_sysex_bytes;
 +    int receive_started;
 +    int open;
 +};
@@ -4104,6 +4226,9 @@ index 0000000000..0e5a804d42
 +    const uint8_t *bytes, size_t byte_count);
 +enum CAMDProviderResult camd_provider_validate_ump(
 +    const struct CAMDUMPEventV1 *events, size_t event_count);
++enum CAMDProviderResult camd_provider_validate_open_result(
++    const struct CAMDProviderOpenRequestV1 *request,
++    const struct CAMDProviderOpenResultV1 *result);
 +
 +enum CAMDProviderResult camd_provider_init(
 +    struct CAMDPrivateProvider *provider,

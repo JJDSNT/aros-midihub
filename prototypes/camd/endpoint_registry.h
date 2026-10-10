@@ -111,7 +111,9 @@ enum CAMDRegistryResult {
     CAMD_REGISTRY_EMPTY,
     CAMD_REGISTRY_BUSY,
     CAMD_REGISTRY_CALLBACK_FAILED,
-    CAMD_REGISTRY_UNSUPPORTED
+    CAMD_REGISTRY_UNSUPPORTED,
+    CAMD_REGISTRY_QUEUE_FULL,
+    CAMD_REGISTRY_TOO_LARGE
 };
 
 struct CAMDEndpointRegistry;
@@ -122,6 +124,17 @@ struct CAMDProviderOpenRequestV1;
 struct CAMDProviderReceiveSinkV1;
 struct CAMDMIDI1EventV1;
 struct CAMDUMPEventV1;
+
+struct CAMDRegistrySessionInfoV1 {
+    uint32_t Size;
+    uint32_t Version;
+    uint32_t Direction;
+    uint32_t DataFormat;
+    uint32_t Protocol;
+    uint32_t RequestedQueueCapacity;
+    uint32_t EffectiveQueueCapacity;
+    uint32_t MaxSysExBytes;
+};
 
 /* Registry operations serialize themselves.  Destroy still requires that no
  * operation is in flight.  Snapshot access is independent after
@@ -147,6 +160,11 @@ enum CAMDRegistryResult camd_registry_session_open(
     struct CAMDEndpointRegistry *registry,
     const struct CAMDProviderOpenRequestV1 *request,
     struct CAMDHandleV1 *session);
+
+enum CAMDRegistryResult camd_registry_session_info(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 session,
+    struct CAMDRegistrySessionInfoV1 *info);
 
 enum CAMDRegistryResult camd_registry_session_send_midi1(
     struct CAMDEndpointRegistry *registry,

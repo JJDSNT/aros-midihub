@@ -18,6 +18,7 @@ struct software_provider {
     unsigned int drains;
     unsigned int cancels;
     unsigned int shutdowns;
+    int short_capacity;
     struct CAMDMIDI1EventV1 last_midi1;
     struct CAMDUMPEventV1 last_ump;
     uint8_t last_sysex[16];
@@ -33,13 +34,19 @@ static struct CAMDEndpointIDV1 make_id(uint32_t value)
 
 static enum CAMDProviderResult software_open(
     void *context, const struct CAMDProviderOpenRequestV1 *request,
-    void **session_context)
+    struct CAMDProviderOpenResultV1 *result)
 {
     struct software_provider *provider = context;
 
     ++provider->opens;
     assert(request != NULL);
-    *session_context = context;
+    result->SessionContext = context;
+    result->EffectiveQueueCapacity = provider->short_capacity
+                                         ? request->QueueCapacity - 1
+                                         : request->QueueCapacity;
+    result->MaxSysExBytes = request->DataFormat == CAMD_PROVIDER_FORMAT_MIDI1
+                                ? sizeof(provider->last_sysex)
+                                : 0;
     return CAMD_PROVIDER_OK;
 }
 
@@ -446,6 +453,14 @@ static void test_unsupported_combinations(void)
     assert(camd_provider_open(&provider, &request, &session) ==
            CAMD_PROVIDER_UNSUPPORTED);
     assert(context.opens == 0);
+
+    request = make_request(CAMD_PROVIDER_FORMAT_MIDI1,
+                           CAMD_PROVIDER_PROTOCOL_MIDI1);
+    context.short_capacity = 1;
+    assert(camd_provider_open(&provider, &request, &session) ==
+           CAMD_PROVIDER_CALLBACK_FAILED);
+    assert(context.opens == 1 && context.closes == 1);
+    assert(provider.active_sessions == 0);
 }
 
 int main(void)
