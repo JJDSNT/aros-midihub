@@ -308,10 +308,16 @@ snapshot enumeration and retirement to prove those properties; reused slots
 reject stale handles.
 
 No bounded data queue, public watch/session vector, UMP wire parser, converter
-or legacy projection uses the provider path yet, so existing CAMD behavior
-remains unchanged. The matching host models and tests live in
+or reverse legacy projection uses the provider path yet, so existing CAMD
+behavior remains unchanged. A private fixed-port adapter now publishes
+caller-identified legacy driver ports as MIDI 1.0-only endpoints, checks
+direction per port and forwards native events/SysEx without UMP. It is not yet
+connected to AROS `DriverData`, so sharing physical-port opens with the legacy
+cluster path remains the next integration step. The matching host models and
+tests live in
 `prototypes/camd`, `tests/camd_endpoint_core.c` and
-`tests/camd_provider_contract.c`; they race registry snapshots/leases,
+`tests/camd_provider_contract.c` plus
+`tests/camd_legacy_driver_adapter.c`; they race registry snapshots/leases,
 exercise watch overflow/resync and use a software provider to prove ownership,
 retirement, exact-path dispatch and asynchronous receive teardown.
 

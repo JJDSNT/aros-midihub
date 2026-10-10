@@ -47,10 +47,12 @@ operations table is an internal CAMD contract. The executable prototype now
 validates separate MIDI 1.0 and UMP callbacks, exact native-path selection,
 input/output capability and format-filtered receive sinks with a software
 provider. Provider identity, endpoint ownership and format-fixed data-session
-lifetime are now registry-managed; bounded queues and the legacy-driver
-adapter remain to be proven. If later made public for independently built
-drivers, it receives its own version gate, callback declarations and ABI
-review; it is not smuggled into version 43 through the client surface.
+lifetime are now registry-managed. A private fixed-port adapter proves native
+MIDI 1.0 forwarding for legacy drivers; bounded queues, its AROS `DriverData`
+shim and reverse cluster projection remain to be proven. If later made public
+for independently built drivers, it receives its own version gate, callback
+declarations and ABI review; it is not smuggled into version 43 through the
+client surface.
 
 ### Why this is a hybrid rather than a literal copy of either model
 
@@ -300,6 +302,18 @@ design evidence, not a commitment to those numeric values or to the provisional
 unchanged, and the exact optional v43 MIDI 1.0 record stays an open U01 choice.
 
 ## Legacy adapter boundary
+
+There are two distinct adapter directions. The fixed-port ingress adapter
+publishes an existing CAMD driver into the endpoint registry. Existing CAMD
+41/42 applications still reach that driver through the original clusters and
+MIDI 1.0 queues; endpoint clients use the private MIDI 1.0 provider callbacks.
+The executable model requires stable IDs as input, rejects UMP, checks each
+port's direction and forwards complete native messages without conversion.
+The AROS shim that shares physical-port opens with `DriverData` is not yet
+connected.
+
+The reverse projection described below exposes suitable native endpoints to
+legacy applications and is a separate component.
 
 The legacy adapter consumes the same immutable snapshots as native clients.
 It creates stable cluster projections only for projectable Endpoint + Group +

@@ -113,11 +113,12 @@ itself.
    lock order. This does not freeze public symbols.
 2. Implement the private registry, generation snapshots and watches as the
    shared control plane, without changing CAMD 41/42 structures.
-3. Add bounded software-provider queues and exercise the legacy-driver adapter
-   around the registry-owned format-fixed sessions. The host model already
-   proves endpoint and session ownership, callbacks outside the registry lock,
-   asynchronous receive teardown and separate native MIDI 1.0/UMP dispatch;
-   do not require MIDI 1.0-to-MIDI 1.0 traffic to convert through UMP.
+3. Connect the host-tested fixed-port adapter to AROS `DriverData` so endpoint
+   sessions share physical-port opens with the unchanged cluster path. Then
+   add bounded software-provider queues and the reverse cluster projection.
+   The host model already proves endpoint/session ownership, asynchronous
+   receive teardown and separate native MIDI 1.0/UMP dispatch; do not require
+   MIDI 1.0-to-MIDI 1.0 traffic to convert through UMP.
 4. Close CAMD gate U01 using evidence from that private implementation:
    appended client-vector order, record/version policy, 32/64-bit builds,
    ownership tests and upstream review. Keep provider registration private.

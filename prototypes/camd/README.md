@@ -15,6 +15,11 @@ it is not a MIDI 1.0 dynamic-port implementation.
 Provider registration, endpoint ownership and format-fixed data sessions are
 now coupled to the registry.
 
+`legacy_driver_adapter.c` is the private fixed-port ingress adapter. It
+publishes legacy driver ports as native MIDI 1.0 endpoints for new clients,
+while existing CAMD 41/42 applications continue to use their original cluster
+and `DriverData` path without passing through the adapter.
+
 The current slice proves:
 
 - the proposed pointer-free record sizes on the host compiler;
@@ -58,6 +63,11 @@ The current slice proves:
   rejects new acquisitions, and waits for their final leases;
 - `BeginShutdown` and `ShutdownReady` execute without the registry lock held,
   proven by callbacks that reenter snapshot enumeration.
+- fixed legacy ports publish as MIDI 1.0-only endpoints using caller-supplied
+  stable IDs, enforce direction per port and forward exact MIDI 1.0 events and
+  complete SysEx without manufacturing UMP;
+- adapter retirement is two-phase and remains retryable while sessions pin a
+  legacy endpoint; direct legacy cluster traffic remains independent.
 
 It deliberately does not yet implement:
 
@@ -65,7 +75,8 @@ It deliberately does not yet implement:
 - concurrent retirement/failure-path stress on native AROS;
 - native MIDI 1.0/UMP queues, scheduling or backpressure;
 - any format/protocol converter or lossy policy;
-- legacy cluster projection;
+- the AROS `DriverData` backend shim and its open/reference integration;
+- projection of native UMP endpoints back into legacy clusters;
 - any public CAMD vector, tag, header or normative UMP wire constant.
 
 Run it with the normal host suite:
@@ -74,8 +85,7 @@ Run it with the normal host suite:
 make test
 ```
 
-The next slice adds bounded native queues and native AROS retirement stress,
-then exercises the legacy-driver adapter. The host test's software provider
-already proves format-specific dispatch, registry-owned session lifetime and
-retirement during synchronous and asynchronous callbacks. Public vectors
-remain blocked until queue semantics, the adapter and U01 review pass.
+The next slice connects the adapter backend to AROS `DriverData` without
+intercepting existing cluster traffic, then adds bounded native queues and
+native AROS retirement stress. Public vectors remain blocked until queue
+semantics, the AROS shim, legacy projection policy and U01 review pass.

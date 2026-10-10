@@ -198,6 +198,13 @@ and identity metadata into the native registry without intercepting a
 MIDI 1.0-to-MIDI 1.0 data path. They do not define the endpoint control-plane
 model, but their native message path remains first-class.
 
+The executable private model now proves the ingress half of this boundary:
+caller-supplied stable IDs, fixed-port publication, per-port direction checks,
+native MIDI 1.0 event/SysEx forwarding and two-phase retirement. The remaining
+AROS shim must share `DriverData` open/reference state with the existing
+cluster path. It must not open the same hardware port twice or redirect legacy
+cluster traffic through endpoint sessions.
+
 For each projectable Endpoint + Group + direction, the adapter owns a stable
 cluster identity independent of mutable display names. While an endpoint is
 offline, client links and saved cluster names remain, but the provider-side
@@ -289,9 +296,11 @@ lock. The separate provider contract proves exact native-path selection,
 direction-specific operations and format-filtered receive sinks without
 inserting conversion. Registry-owned format-fixed sessions now pin provider
 and endpoint lifetime, invoke provider code outside registry locks and drain
-asynchronous receive callbacks safely. Bounded queues, native AROS retirement
-stress and the legacy-driver adapter are still required before it becomes an
-operational public path.
+asynchronous receive callbacks safely. The fixed-port legacy-driver ingress
+adapter now proves MIDI 1.0-only publication and forwarding without UMP.
+Bounded queues, the AROS `DriverData` shim, native AROS retirement stress and
+the reverse legacy-cluster projection are still required before this becomes
+an operational public path.
 
 The current proposal is documented in
 [the endpoint ABI draft](camd-endpoint-abi-draft.md). It is a review artifact,
