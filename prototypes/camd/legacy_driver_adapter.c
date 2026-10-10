@@ -189,6 +189,7 @@ static int validate_descriptor(
     const struct CAMDLegacyDriverDescriptorV1 *descriptor)
 {
     const struct CAMDProviderOpsV1 *ops;
+    uint32_t directions = 0;
     size_t i, j;
 
     if (!descriptor || descriptor->Size != sizeof(*descriptor) ||
@@ -199,9 +200,7 @@ static int validate_descriptor(
         return 0;
     ops = descriptor->BackendOps;
     if (ops->Size != sizeof(*ops) || ops->Version != 1 || !ops->Open ||
-        !ops->Close || !ops->SendMIDI1 || !ops->SendMIDI1SysEx ||
-        !ops->StartReceive || !ops->StopReceive || !ops->Drain ||
-        !ops->Cancel)
+        !ops->Close)
         return 0;
     for (i = 0; i < descriptor->PortCount; ++i) {
         const struct CAMDLegacyPortDescriptorV1 *port = &descriptor->Ports[i];
@@ -213,12 +212,20 @@ static int validate_descriptor(
             !memchr(port->ProductInstance, '\0',
                     sizeof(port->ProductInstance)))
             return 0;
+        directions |= port->Directions;
         for (j = 0; j < i; ++j) {
             if (id_equal(&port->EndpointID,
                          &descriptor->Ports[j].EndpointID))
                 return 0;
         }
     }
+    if ((directions & CAMD_PROVIDER_DIRECTION_OUTPUT) != 0 &&
+        (!ops->SendMIDI1 || !ops->SendMIDI1SysEx || !ops->Drain ||
+         !ops->Cancel))
+        return 0;
+    if ((directions & CAMD_PROVIDER_DIRECTION_INPUT) != 0 &&
+        (!ops->StartReceive || !ops->StopReceive))
+        return 0;
     return 1;
 }
 

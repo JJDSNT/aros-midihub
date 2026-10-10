@@ -173,6 +173,69 @@ static enum CAMDProviderResult consumer_sysex(
     return CAMD_PROVIDER_OK;
 }
 
+static void test_direction_specific_callbacks(
+    struct CAMDEndpointRegistry *registry,
+    const struct CAMDProviderOpsV1 *complete_ops,
+    struct legacy_backend *backend)
+{
+    struct CAMDLegacyDriverAdapter *adapter = NULL;
+    struct CAMDLegacyPortDescriptorV1 port;
+    struct CAMDLegacyDriverDescriptorV1 descriptor;
+    struct CAMDProviderOpsV1 ops = *complete_ops;
+
+    memset(&port, 0, sizeof(port));
+    port.Size = sizeof(port);
+    port.Version = 1;
+    port.EndpointID = make_id(20);
+    port.Directions = CAMD_PROVIDER_DIRECTION_OUTPUT;
+    strcpy(port.Name, "Output-only legacy port");
+    strcpy(port.ProductInstance, "Legacy Driver:output-only");
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.Size = sizeof(descriptor);
+    descriptor.Version = 1;
+    descriptor.ProviderID = make_id(120);
+    descriptor.IdentityKind = 2;
+    descriptor.ProtocolCapabilities = 1;
+    descriptor.BackendContext = backend;
+    descriptor.BackendOps = &ops;
+    descriptor.Ports = &port;
+    descriptor.PortCount = 1;
+
+    ops.StartReceive = NULL;
+    ops.StopReceive = NULL;
+    assert(camd_legacy_driver_adapter_create(registry, &descriptor, &adapter) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_legacy_driver_adapter_begin_retire(adapter) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_legacy_driver_adapter_release(adapter) == CAMD_REGISTRY_OK);
+
+    adapter = NULL;
+    ops.SendMIDI1 = NULL;
+    assert(camd_legacy_driver_adapter_create(registry, &descriptor, &adapter) ==
+           CAMD_REGISTRY_INVALID);
+    assert(adapter == NULL);
+
+    ops = *complete_ops;
+    ops.SendMIDI1 = NULL;
+    ops.SendMIDI1SysEx = NULL;
+    ops.Drain = NULL;
+    ops.Cancel = NULL;
+    port.EndpointID = make_id(21);
+    port.Directions = CAMD_PROVIDER_DIRECTION_INPUT;
+    descriptor.ProviderID = make_id(121);
+    assert(camd_legacy_driver_adapter_create(registry, &descriptor, &adapter) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_legacy_driver_adapter_begin_retire(adapter) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_legacy_driver_adapter_release(adapter) == CAMD_REGISTRY_OK);
+
+    adapter = NULL;
+    ops.StartReceive = NULL;
+    assert(camd_legacy_driver_adapter_create(registry, &descriptor, &adapter) ==
+           CAMD_REGISTRY_INVALID);
+    assert(adapter == NULL);
+}
+
 int main(void)
 {
     struct CAMDEndpointRegistry *registry = camd_registry_create();
@@ -209,6 +272,8 @@ int main(void)
     backend_ops.Cancel = backend_cancel;
     backend_ops.BeginShutdown = backend_shutdown;
     backend_ops.ShutdownReady = backend_shutdown_ready;
+
+    test_direction_specific_callbacks(registry, &backend_ops, &backend);
 
     memset(ports, 0, sizeof(ports));
     ports[0].Size = ports[1].Size = sizeof(ports[0]);
@@ -311,7 +376,7 @@ int main(void)
 
     assert(camd_legacy_driver_adapter_begin_retire(adapter) ==
            CAMD_REGISTRY_OK);
-    assert(backend.shutdowns == 1);
+    assert(backend.shutdowns == 3);
     assert(camd_legacy_driver_adapter_release(adapter) == CAMD_REGISTRY_BUSY);
     assert(camd_registry_session_stop_receive(registry, input) ==
            CAMD_REGISTRY_OK);
@@ -321,6 +386,7 @@ int main(void)
     assert(backend.opens == 2 && backend.closes == 2);
     assert(backend.receive_starts == 1 && backend.receive_stops == 1);
     assert(backend.drains == 1 && backend.cancels == 1);
+    assert(backend.shutdowns == 3);
     camd_registry_destroy(registry);
     puts("CAMD legacy driver adapter OK");
     return 0;

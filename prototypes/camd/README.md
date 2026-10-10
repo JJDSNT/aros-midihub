@@ -85,6 +85,9 @@ The current slice proves:
 - fixed legacy ports publish as MIDI 1.0-only endpoints using caller-supplied
   stable IDs, enforce direction per port and forward exact MIDI 1.0 events and
   complete SysEx without manufacturing UMP;
+- adapter callback validation follows the union of published directions, so
+  output and input backends can land as separate reviewed steps without
+  advertising callbacks they do not implement;
 - adapter retirement is two-phase and remains retryable while sessions pin a
   legacy endpoint; direct legacy cluster traffic remains independent.
 - format-fixed preallocated queues preserve complete MIDI 1.0 events, SysEx

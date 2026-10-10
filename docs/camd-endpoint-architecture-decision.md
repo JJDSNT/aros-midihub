@@ -229,9 +229,11 @@ native MIDI 1.0 event/SysEx forwarding, retryable queue pumping, a private
 AROS task/signal executor and two-phase retirement. `DriverData` now keeps one
 shared logical-owner state for legacy directions and endpoint reference counts;
 the first owner opens the physical port and the last closes it, with failed
-opens rolled back. The remaining backend must invoke those endpoint helpers
-and wire producer/capacity notifications. It must not redirect legacy cluster
-traffic through endpoint sessions.
+opens rolled back. Callback validation follows the union of published
+directions, allowing output and input integration as separate reviewed steps
+without claiming absent operations. The remaining backend must invoke those
+endpoint helpers and wire producer/capacity notifications. It must not redirect
+legacy cluster traffic through endpoint sessions.
 
 For each projectable Endpoint + Group + direction, the adapter owns a stable
 cluster identity independent of mutable display names. While an endpoint is
