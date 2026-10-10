@@ -297,19 +297,23 @@ ABI.
 
 The registry now copies provider descriptors into generation-safe slots and
 requires each endpoint publication to name a live, identity- and
-format-compatible owner. Provider retirement removes all its endpoints from
-new snapshots in one generation, then waits for their final leases.
-`BeginShutdown` and `ShutdownReady` run outside the registry semaphore; host
-callbacks reenter snapshot enumeration to prove that property. Provider slot
-reuse rejects stale handles.
+format-compatible owner. Format-fixed data sessions independently pin their
+provider and endpoint, and dispatch only the matching MIDI 1.0 or UMP record
+family. All provider callbacks run outside the registry semaphore. A stable
+receive bridge filters asynchronous delivery and survives until receive stop
+and every entered callback complete. Provider retirement removes all its
+endpoints from new snapshots in one generation, rejects new data work and
+waits for endpoint, session and callback leases. Host callbacks reenter
+snapshot enumeration and retirement to prove those properties; reused slots
+reject stale handles.
 
-No registry-owned data session, public watch vector, UMP wire parser, converter
+No bounded data queue, public watch/session vector, UMP wire parser, converter
 or legacy projection uses the provider path yet, so existing CAMD behavior
 remains unchanged. The matching host models and tests live in
 `prototypes/camd`, `tests/camd_endpoint_core.c` and
 `tests/camd_provider_contract.c`; they race registry snapshots/leases,
 exercise watch overflow/resync and use a software provider to prove ownership,
-retirement and exact-path dispatch.
+retirement, exact-path dispatch and asynchronous receive teardown.
 
 ### Testing
 

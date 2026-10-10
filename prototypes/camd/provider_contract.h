@@ -175,6 +175,14 @@ struct CAMDPrivateProviderSession {
     int open;
 };
 
+uint32_t camd_provider_native_path(uint32_t data_format, uint32_t protocol);
+enum CAMDProviderResult camd_provider_validate_midi1(
+    const struct CAMDMIDI1EventV1 *events, size_t event_count);
+enum CAMDProviderResult camd_provider_validate_midi1_sysex(
+    const uint8_t *bytes, size_t byte_count);
+enum CAMDProviderResult camd_provider_validate_ump(
+    const struct CAMDUMPEventV1 *events, size_t event_count);
+
 enum CAMDProviderResult camd_provider_init(
     struct CAMDPrivateProvider *provider,
     const struct CAMDProviderDescriptorV1 *descriptor);

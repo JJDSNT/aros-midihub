@@ -12,21 +12,21 @@ static int id_is_zero(const struct CAMDEndpointIDV1 *id)
     return !(id->word[0] | id->word[1] | id->word[2] | id->word[3]);
 }
 
-static uint32_t request_path(const struct CAMDProviderOpenRequestV1 *request)
+uint32_t camd_provider_native_path(uint32_t data_format, uint32_t protocol)
 {
-    if (request->DataFormat == CAMD_PROVIDER_FORMAT_MIDI1 &&
-        request->Protocol == CAMD_PROVIDER_PROTOCOL_MIDI1)
+    if (data_format == CAMD_PROVIDER_FORMAT_MIDI1 &&
+        protocol == CAMD_PROVIDER_PROTOCOL_MIDI1)
         return CAMD_PROVIDER_PATH_MIDI1;
-    if (request->DataFormat == CAMD_PROVIDER_FORMAT_UMP &&
-        request->Protocol == CAMD_PROVIDER_PROTOCOL_MIDI1)
+    if (data_format == CAMD_PROVIDER_FORMAT_UMP &&
+        protocol == CAMD_PROVIDER_PROTOCOL_MIDI1)
         return CAMD_PROVIDER_PATH_UMP_MIDI1;
-    if (request->DataFormat == CAMD_PROVIDER_FORMAT_UMP &&
-        request->Protocol == CAMD_PROVIDER_PROTOCOL_MIDI2)
+    if (data_format == CAMD_PROVIDER_FORMAT_UMP &&
+        protocol == CAMD_PROVIDER_PROTOCOL_MIDI2)
         return CAMD_PROVIDER_PATH_UMP_MIDI2;
     return 0;
 }
 
-static enum CAMDProviderResult validate_midi1_events(
+enum CAMDProviderResult camd_provider_validate_midi1(
     const struct CAMDMIDI1EventV1 *events, size_t event_count)
 {
     size_t i, j;
@@ -63,7 +63,16 @@ static enum CAMDProviderResult validate_midi1_events(
     return CAMD_PROVIDER_OK;
 }
 
-static enum CAMDProviderResult validate_ump_events(
+enum CAMDProviderResult camd_provider_validate_midi1_sysex(
+    const uint8_t *bytes, size_t byte_count)
+{
+    if (!bytes || byte_count < 2 || bytes[0] != 0xf0 ||
+        bytes[byte_count - 1] != 0xf7)
+        return CAMD_PROVIDER_INVALID;
+    return CAMD_PROVIDER_OK;
+}
+
+enum CAMDProviderResult camd_provider_validate_ump(
     const struct CAMDUMPEventV1 *events, size_t event_count)
 {
     size_t i;
@@ -151,7 +160,7 @@ enum CAMDProviderResult camd_provider_open(
         return CAMD_PROVIDER_RETIRED;
     if (provider->active_sessions == UINT32_MAX)
         return CAMD_PROVIDER_STATE;
-    path = request_path(request);
+    path = camd_provider_native_path(request->DataFormat, request->Protocol);
     if (path == 0 || (provider->descriptor.NativePaths & path) == 0)
         return CAMD_PROVIDER_UNSUPPORTED;
 
@@ -183,7 +192,7 @@ enum CAMDProviderResult camd_provider_send_midi1(
         return CAMD_PROVIDER_UNSUPPORTED;
     if ((session->direction & CAMD_PROVIDER_DIRECTION_OUTPUT) == 0)
         return CAMD_PROVIDER_UNSUPPORTED;
-    result = validate_midi1_events(events, event_count);
+    result = camd_provider_validate_midi1(events, event_count);
     if (result != CAMD_PROVIDER_OK)
         return result;
     return session->provider->operations.SendMIDI1(
@@ -208,9 +217,9 @@ enum CAMDProviderResult camd_provider_send_midi1_sysex(
         return CAMD_PROVIDER_UNSUPPORTED;
     if ((session->direction & CAMD_PROVIDER_DIRECTION_OUTPUT) == 0)
         return CAMD_PROVIDER_UNSUPPORTED;
-    if (!bytes || byte_count < 2 || bytes[0] != 0xf0 ||
-        bytes[byte_count - 1] != 0xf7)
-        return CAMD_PROVIDER_INVALID;
+    result = camd_provider_validate_midi1_sysex(bytes, byte_count);
+    if (result != CAMD_PROVIDER_OK)
+        return result;
     return session->provider->operations.SendMIDI1SysEx(
         session->provider->descriptor.Context, session->provider_context,
         bytes, byte_count, time_high, time_low, clock_domain, flags);
@@ -229,7 +238,7 @@ enum CAMDProviderResult camd_provider_send_ump(
         return CAMD_PROVIDER_UNSUPPORTED;
     if ((session->direction & CAMD_PROVIDER_DIRECTION_OUTPUT) == 0)
         return CAMD_PROVIDER_UNSUPPORTED;
-    result = validate_ump_events(events, event_count);
+    result = camd_provider_validate_ump(events, event_count);
     if (result != CAMD_PROVIDER_OK)
         return result;
     return session->provider->operations.SendUMP(

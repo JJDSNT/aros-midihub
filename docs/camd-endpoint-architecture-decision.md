@@ -287,8 +287,11 @@ handles, own compatible published endpoints and retire them transactionally;
 shutdown callbacks reenter the registry in tests to prove they run outside its
 lock. The separate provider contract proves exact native-path selection,
 direction-specific operations and format-filtered receive sinks without
-inserting conversion. Registry-owned data sessions, bounded queues and native
-AROS retirement stress are still required before it becomes operational.
+inserting conversion. Registry-owned format-fixed sessions now pin provider
+and endpoint lifetime, invoke provider code outside registry locks and drain
+asynchronous receive callbacks safely. Bounded queues, native AROS retirement
+stress and the legacy-driver adapter are still required before it becomes an
+operational public path.
 
 The current proposal is documented in
 [the endpoint ABI draft](camd-endpoint-abi-draft.md). It is a review artifact,

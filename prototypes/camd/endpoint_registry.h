@@ -118,6 +118,10 @@ struct CAMDEndpointRegistry;
 struct CAMDEndpointSnapshot;
 struct CAMDEndpointWatch;
 struct CAMDProviderDescriptorV1;
+struct CAMDProviderOpenRequestV1;
+struct CAMDProviderReceiveSinkV1;
+struct CAMDMIDI1EventV1;
+struct CAMDUMPEventV1;
 
 /* Registry operations serialize themselves.  Destroy still requires that no
  * operation is in flight.  Snapshot access is independent after
@@ -138,6 +142,54 @@ enum CAMDRegistryResult camd_registry_provider_begin_retire(
 enum CAMDRegistryResult camd_registry_provider_release(
     struct CAMDEndpointRegistry *registry,
     struct CAMDHandleV1 provider);
+
+enum CAMDRegistryResult camd_registry_session_open(
+    struct CAMDEndpointRegistry *registry,
+    const struct CAMDProviderOpenRequestV1 *request,
+    struct CAMDHandleV1 *session);
+
+enum CAMDRegistryResult camd_registry_session_send_midi1(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 session,
+    const struct CAMDMIDI1EventV1 *events,
+    size_t event_count);
+
+enum CAMDRegistryResult camd_registry_session_send_midi1_sysex(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 session,
+    const uint8_t *bytes,
+    size_t byte_count,
+    uint32_t time_high,
+    uint32_t time_low,
+    uint32_t clock_domain,
+    uint32_t flags);
+
+enum CAMDRegistryResult camd_registry_session_send_ump(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 session,
+    const struct CAMDUMPEventV1 *events,
+    size_t event_count);
+
+enum CAMDRegistryResult camd_registry_session_start_receive(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 session,
+    const struct CAMDProviderReceiveSinkV1 *sink);
+
+enum CAMDRegistryResult camd_registry_session_stop_receive(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 session);
+
+enum CAMDRegistryResult camd_registry_session_drain(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 session);
+
+enum CAMDRegistryResult camd_registry_session_cancel(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 session);
+
+enum CAMDRegistryResult camd_registry_session_close(
+    struct CAMDEndpointRegistry *registry,
+    struct CAMDHandleV1 session);
 
 enum CAMDRegistryResult camd_registry_publish(
     struct CAMDEndpointRegistry *registry,

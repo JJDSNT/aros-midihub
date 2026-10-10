@@ -11,10 +11,9 @@ when built for AROS, while the host build uses the C allocator. The opaque
 registry owns an Exec semaphore on AROS and a pthread mutex in the host model;
 it is not a MIDI 1.0 dynamic-port implementation.
 
-`provider_contract.c` separately proves the path-selective data-plane shape.
-Provider registration and endpoint ownership are now coupled to the registry;
-session data dispatch remains separate until its callback-outside-lock and
-concurrent teardown rules are executable rather than assumed.
+`provider_contract.c` separately defines the path-selective data-plane shape.
+Provider registration, endpoint ownership and format-fixed data sessions are
+now coupled to the registry.
 
 The current slice proves:
 
@@ -44,6 +43,12 @@ The current slice proves:
   while complete UMP events use a separate callback, with no implicit
   conversion or cross-format dispatch;
 - receive sinks expose only callbacks matching the session format;
+- generation-safe sessions pin both endpoint and provider storage, and all
+  open/send/receive/drain/cancel/close provider callbacks run outside the
+  registry lock;
+- asynchronous receive uses a stable registry bridge that filters by session
+  format and keeps callback storage alive until stop and in-flight delivery
+  have both completed;
 - provider retirement rejects new opens and sends while allowing explicit
   drain, cancel, receive stop and close before final release;
 - endpoint publication requires a live owning provider with a matching stable
@@ -58,8 +63,7 @@ It deliberately does not yet implement:
 
 - stable-ID storage or key derivation;
 - concurrent retirement/failure-path stress on native AROS;
-- registry-owned data sessions, concurrent data-callback lifetime or native
-  MIDI 1.0/UMP queues;
+- native MIDI 1.0/UMP queues, scheduling or backpressure;
 - any format/protocol converter or lossy policy;
 - legacy cluster projection;
 - any public CAMD vector, tag, header or normative UMP wire constant.
@@ -70,9 +74,8 @@ Run it with the normal host suite:
 make test
 ```
 
-The next slice integrates format-fixed data sessions with the registry while
-keeping open/send/receive/close callbacks outside its lock, then adds bounded
-native queues and native AROS retirement stress. The host test's software
-provider already proves format-specific dispatch and registry-owned provider
-retirement. Public vectors remain blocked until session lifecycle and U01
-review pass.
+The next slice adds bounded native queues and native AROS retirement stress,
+then exercises the legacy-driver adapter. The host test's software provider
+already proves format-specific dispatch, registry-owned session lifetime and
+retirement during synchronous and asynchronous callbacks. Public vectors
+remain blocked until queue semantics, the adapter and U01 review pass.
