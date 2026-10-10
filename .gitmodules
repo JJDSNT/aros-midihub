@@ -7,3 +7,6 @@
 [submodule "network/mdns/bonami"]
 	path = network/mdns/bonami
 	url = https://github.com/amigazen/Bonami.git
+[submodule "third_party/aros-contrib"]
+	path = third_party/aros-contrib
+	url = https://github.com/aros-development-team/contrib.git
