@@ -599,8 +599,10 @@ compiles into `camd.library`: it uses time-based `uuid.library` IDs and a
 portable, CRC-checked, bounded IFF `FORM CAMD` snapshot, recovering interrupted
 replacement through main, `.new` and `.bak` files. Failure is non-fatal to
 legacy CAMD.
-Recovery fault injection, adapter instantiation and active duplicate-evidence
-diagnostics remain to be implemented.
+The same rotation/recovery state machine is exhaustively fault-injected through
+a host storage model and compiled into AROS; native DOS/filesystem fault
+injection, adapter instantiation and active duplicate-evidence diagnostics
+remain.
 
 A bounded host-tested fan-out now defines the multi-session capacity handoff.
 The driver interrupt signals a stable per-port task, which wakes attached

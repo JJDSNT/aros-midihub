@@ -114,9 +114,11 @@ itself.
 2. Implement the private registry, generation snapshots and watches as the
    shared control plane, without changing CAMD 41/42 structures.
 3. Use the compiled private AROS identity store to instantiate the fixed-port
-   output adapter from loaded drivers, after recovery fault-injection tests. The
-   store uses `uuid.library` and recoverable checked IFF main/`.new`/`.bak`
-   snapshot; initialization failure leaves legacy CAMD operational. The
+   output adapter from loaded drivers, after native DOS/filesystem recovery
+   fault injection. The host fault model already exercises the same compiled
+   state machine. The store uses `uuid.library` and recoverable checked IFF
+   main/`.new`/`.bak` snapshot; initialization failure leaves legacy CAMD
+   operational. The
    versioned legacy evidence key is the
    case-folded `DEVS:Midi` module leaf plus port index; it is explicitly
    path-bound and excludes direction. Its compiled AROS backend

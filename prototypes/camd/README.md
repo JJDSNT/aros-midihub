@@ -64,6 +64,12 @@ IFF was preferred to plain text because it retains inspectable chunk identity
 and extension points without defining escaping, Unicode normalization and
 partial-record recovery rules for identity keys.
 
+`identity_store_recovery.c` is the storage-API-independent transaction used by
+the AROS binding. A callback model exhaustively fails combinations of remove,
+move and rollback operations and then simulates restart, proving that the main,
+`.new` or `.bak` set still contains a recoverable complete snapshot. Startup
+prefers a valid main file, then a complete `.new`, then `.bak`.
+
 `legacy_identity_key.c` defines the evidence available from fixed legacy
 drivers. Provider keys use the ASCII-case-folded module leaf from the fixed
 `DEVS:Midi` directory; endpoint keys add the port index and deliberately omit
@@ -168,11 +174,14 @@ The current slice proves:
   independent of mutable display names and port direction;
 - the identity file round-trips independent of host layout and rejects every
   truncated prefix, header/payload corruption, insufficient output capacity
-  and duplicate key or ID.
+  and duplicate key or ID;
+- the same recovery/install state machine compiled into AROS survives every
+  tested combination of rotation and rollback mutation failures in the host
+  storage model.
 
 It deliberately does not yet implement:
 
-- runtime fault injection for every AROS identity-file recovery/rename point;
+- filesystem-level fault injection against native AROS DOS operations;
 - active duplicate-evidence ambiguity handling in the endpoint registry;
 - concurrent retirement/failure-path stress on native AROS;
 - instantiating the AROS output binding for loaded drivers after the identity

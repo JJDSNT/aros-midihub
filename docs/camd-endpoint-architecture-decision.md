@@ -285,9 +285,10 @@ are copied into the legacy ring; SysEx keeps the pump checkout buffer borrowed
 until the driver transmits its final F7. Capacity notifications already reach
 the relay task from the transmitter. A host-tested private map and legacy-key
 model can now supply the required IDs through the compiled AROS identity store.
-Loaded drivers do not instantiate the adapter yet, and recovery fault injection
-is still host/AROS test work. Instantiation must not redirect legacy cluster
-traffic through endpoint sessions.
+Loaded drivers do not instantiate the adapter yet. The recovery state machine
+is exhaustively fault-injected through its host storage model and compiled into
+AROS; native DOS/filesystem fault injection remains. Instantiation must not
+redirect legacy cluster traffic through endpoint sessions.
 
 For each projectable Endpoint + Group + direction, the adapter owns a stable
 cluster identity independent of mutable display names. While an endpoint is

@@ -36,7 +36,7 @@ an explicit decision or external validation is required.
 | Native MIDI 1.0 new-session path | Prototype plus partially wired AROS output backend | `legacy_driver_adapter.[ch]`, `legacy_output_backend.[ch]`, `legacy_driver_output_backend.[ch]`; tests `camd_legacy_driver_adapter.c` and `camd_legacy_output_backend.c`; commits `dcf8908`, `6ad1dc1`, `ce9521e` | Instantiate from `LoadDriver()`, add the input-side interrupt-to-task bridge, and prove MIDI 1.0→MIDI 1.0 event/SysEx equivalence with a zero conversion count |
 | Native UMP path | Prototype only | Separate UMP provider/session callbacks in `provider_contract.[ch]`; complete 32/64/96/128-bit records in `native_event_queue.[ch]`; provider/queue tests | No AROS transport is registered and no end-to-end native UMP runtime test exists; normative UMP/topology work remains behind U02–U14 |
 | Bounded queues and backpressure | Implemented as private AROS-capable primitives; host-tested | `native_event_queue`, `native_event_pump`, `native_event_worker`, `native_worker_fanout`; commits `907e9f8` through `8b4258a` | Exercise real loaded sessions under queue-full, SysEx, concurrent clients and shutdown; input enqueue is still not interrupt-safe |
-| Stable identity | Host-tested model and codec; private store compiled into patched AROS | `identity_map.[ch]`, `identity_file.[ch]`, `legacy_identity_key.[ch]`, their tests, commit `92b7100`, and `patches/aros-camd-identity-store.patch` | Add recovery fault injection and loaded-driver key resolution, then handle simultaneous active duplicate evidence in the registry |
+| Stable identity | Host-tested map, codec and recovery transaction; private store compiled into patched AROS | `identity_map.[ch]`, `identity_file.[ch]`, `identity_store_recovery.[ch]`, `legacy_identity_key.[ch]`, their tests, and the identity store/recovery patches | Add native DOS/filesystem fault injection and loaded-driver key resolution, then handle simultaneous active duplicate evidence in the registry |
 | Loaded legacy-driver publication | Planned; supporting pieces compile in patched AROS | Registry initialization plus fixed-port adapter, shared `DriverData` port references, capacity relay and AROS output binding | Identity storage is the immediate dependency; adapter/backend ownership must be added to `Drivers`, with transactional rollback in `LoadDriver()`/`FreeDriverData()` |
 | Reverse legacy cluster projection | Planned | Contract in `camd-endpoint-architecture-decision.md` and `camd-endpoint-abi-draft.md`; no implementation file or test exists | Define collision-safe persisted projection names, atomic topology replacement, offline participant behavior and explicit unrepresentable/loss diagnostics |
 | Timestamp eligibility and delayed dispatch | Planned | Existing v42 `CamdTime()`/`MIDI_SystemClock` work is documented in `camd-improvements.md`; native records already carry timestamp fields | Decide validity/immediate encoding and clock domain at U01, then implement deadline ordering, late policy, cancellation and bounded wake/timer behavior without changing legacy default timing |
@@ -46,10 +46,10 @@ an explicit decision or external validation is required.
 
 These are ordered dependencies, not a new subsystem:
 
-1. Complete fault injection for the bounded identity codec and the compiled
-   AROS `uuid.library` plus main/`.new`/`.bak` recovery transaction. Identity
-   failure already leaves legacy CAMD initialized; automatic publication must
-   remain disabled when the private store is unavailable.
+1. Complete native DOS/filesystem fault injection for the host-proven and
+   AROS-compiled `uuid.library` plus main/`.new`/`.bak` recovery transaction.
+   Identity failure already leaves legacy CAMD initialized; automatic
+   publication must remain disabled when the private store is unavailable.
 2. Give each loaded `Drivers` object private ownership of its identity,
    fixed-port adapter and output binding. Resolve provider plus per-port keys,
    publish only after all required objects exist, and unwind in reverse order
