@@ -52,6 +52,18 @@ ephemeral until an atomic full-snapshot commit succeeds; a later retry promotes
 it without changing the in-memory ID. Generator and commit callbacks execute
 under the map lock and must not reenter the map.
 
+`identity_file.c` defines its architecture-independent persistent format as
+IFF `FORM CAMD`. Its versioned `IDMP` chunk uses explicit big-endian fields,
+fixed records and an internal CRC-32; unknown well-formed chunks are skipped
+for forward extension. Decode requires exact FORM/chunk bounds and rejects
+invalid, duplicate-key and duplicate-ID records before they reach the map.
+Big-endian is only the canonical on-disk byte order required by IFF: the codec
+reads and writes individual bytes and never casts file data to native structs,
+so the same snapshot is portable across little- and big-endian AROS targets.
+IFF was preferred to plain text because it retains inspectable chunk identity
+and extension points without defining escaping, Unicode normalization and
+partial-record recovery rules for identity keys.
+
 `legacy_identity_key.c` defines the evidence available from fixed legacy
 drivers. Provider keys use the ASCII-case-folded module leaf from the fixed
 `DEVS:Midi` directory; endpoint keys add the port index and deliberately omit
@@ -153,11 +165,14 @@ The current slice proves:
   confidence, while a later successful atomic snapshot commit promotes all
   in-memory mappings without changing their IDs;
 - legacy provider and endpoint keys are versioned, bounded, path-bound and
-  independent of mutable display names and port direction.
+  independent of mutable display names and port direction;
+- the identity file round-trips independent of host layout and rejects every
+  truncated prefix, header/payload corruption, insufficient output capacity
+  and duplicate key or ID.
 
 It deliberately does not yet implement:
 
-- the AROS random-ID generator and atomic persistent storage binding;
+- runtime fault injection for every AROS identity-file recovery/rename point;
 - active duplicate-evidence ambiguity handling in the endpoint registry;
 - concurrent retirement/failure-path stress on native AROS;
 - instantiating the AROS output binding for loaded drivers after the identity
@@ -183,7 +198,10 @@ The output backend now has an AROS binding for its four physical-port
 callbacks. It invokes the implemented `DriverData` reference helpers, submits
 short messages directly to the native MIDI 1.0 ring and holds the legacy SysEx
 borrowed buffer until final transmission. The next slice instantiates this
-binding from loaded drivers after binding the host-proven identity model to an
-AROS random-ID source and atomically replaced persistent file. Existing cluster
-traffic remains untouched. Public vectors remain blocked until the data shim,
-timestamp policy, legacy projection policy and U01 review pass.
+binding from loaded drivers using the private identity store now compiled into
+AROS CAMD. That store generates time-based IDs through `uuid.library`, encodes
+at most 256 mappings in checked IFF, and recovers a complete main, `.new` or
+`.bak` snapshot in `ENVARC:Sys`. Failure is non-fatal to legacy
+CAMD. Existing cluster traffic remains untouched. Public vectors remain blocked
+until the data shim, timestamp policy, legacy projection policy and U01 review
+pass.

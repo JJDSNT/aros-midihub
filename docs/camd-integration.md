@@ -113,9 +113,11 @@ itself.
    lock order. This does not freeze public symbols.
 2. Implement the private registry, generation snapshots and watches as the
    shared control plane, without changing CAMD 41/42 structures.
-3. Bind the host-tested private identity map to an AROS random-ID generator and
-   atomically replaced persistent store, then instantiate the fixed-port output
-   adapter from loaded drivers. The versioned legacy evidence key is the
+3. Use the compiled private AROS identity store to instantiate the fixed-port
+   output adapter from loaded drivers, after recovery fault-injection tests. The
+   store uses `uuid.library` and recoverable checked IFF main/`.new`/`.bak`
+   snapshot; initialization failure leaves legacy CAMD operational. The
+   versioned legacy evidence key is the
    case-folded `DEVS:Midi` module leaf plus port index; it is explicitly
    path-bound and excludes direction. Its compiled AROS backend
    already owns each session's bounded queue/pump/worker, calls the `DriverData`

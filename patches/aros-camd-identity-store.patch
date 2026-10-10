@@ -1,0 +1,1024 @@
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+index 7956f5a..739a560 100644
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -239,6 +239,7 @@ struct ClusterWatch{
+ };
+ 
+ struct CAMDEndpointRegistry;
++struct CAMDIdentityStoreAROS;
+ 
+ struct CamdBase_intern{
+ #ifndef __amigaos4__
+@@ -272,6 +273,9 @@ struct CamdBase_intern{
+     /* Private endpoint core. Its opaque registry owns its semaphore. */
+     struct CAMDEndpointRegistry *EndpointRegistry;
+ 
++    /* Private stable-ID map. Failure is non-fatal for legacy CAMD. */
++    struct CAMDIdentityStoreAROS *EndpointIdentity;
++
+ 
+ };
+ 
+diff --git a/workbench/libs/camd/endclusternotify.c b/workbench/libs/camd/endclusternotify.c
+index e5485fa..711aee1 100644
+--- a/workbench/libs/camd/endclusternotify.c
++++ b/workbench/libs/camd/endclusternotify.c
+@@ -1,7 +1,7 @@
+ /*
+     Copyright (C) 1995-2007, The AROS Development Team. All rights reserved.
+ 
+-    Desc: 
++    Desc:
+ */
+ 
+ 
+diff --git a/workbench/libs/camd/identity_file.c b/workbench/libs/camd/identity_file.c
+new file mode 100644
+index 0000000..f3bc37f
+--- /dev/null
++++ b/workbench/libs/camd/identity_file.c
+@@ -0,0 +1,238 @@
++#include "identity_file.h"
++
++#include <limits.h>
++#include <string.h>
++
++#define FORM_SIZE_OFFSET 4u
++#define FORM_TYPE_OFFSET 8u
++#define IDMP_CHUNK_OFFSET 12u
++#define IDMP_SIZE_OFFSET 16u
++#define IDMP_DATA_OFFSET 20u
++#define IDMP_VERSION_OFFSET 20u
++#define IDMP_RECORD_SIZE_OFFSET 24u
++#define IDMP_COUNT_OFFSET 28u
++#define IDMP_RECORDS_OFFSET 32u
++
++static const uint8_t form_magic[4] = { 'F', 'O', 'R', 'M' };
++static const uint8_t camd_type[4] = { 'C', 'A', 'M', 'D' };
++static const uint8_t idmp_chunk[4] = { 'I', 'D', 'M', 'P' };
++
++static uint32_t read_u32(const uint8_t *bytes)
++{
++    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
++           ((uint32_t)bytes[2] << 8) | (uint32_t)bytes[3];
++}
++
++static void write_u32(uint8_t *bytes, uint32_t value)
++{
++    bytes[0] = (uint8_t)(value >> 24);
++    bytes[1] = (uint8_t)(value >> 16);
++    bytes[2] = (uint8_t)(value >> 8);
++    bytes[3] = (uint8_t)value;
++}
++
++static uint32_t crc32(const uint8_t *bytes, size_t byte_count)
++{
++    uint32_t crc = UINT32_C(0xffffffff);
++    size_t i;
++    unsigned int bit;
++
++    for (i = 0; i < byte_count; ++i) {
++        crc ^= bytes[i];
++        for (bit = 0; bit < 8; ++bit)
++            crc = (crc >> 1) ^
++                  (UINT32_C(0xedb88320) & (uint32_t)-(int32_t)(crc & 1u));
++    }
++    return ~crc;
++}
++
++static int id_is_zero(const struct CAMDEndpointIDV1 *id)
++{
++    return id->word[0] == 0 && id->word[1] == 0 &&
++           id->word[2] == 0 && id->word[3] == 0;
++}
++
++static int id_equal(const struct CAMDEndpointIDV1 *left,
++                    const struct CAMDEndpointIDV1 *right)
++{
++    return memcmp(left, right, sizeof(*left)) == 0;
++}
++
++static int valid_record(const struct CAMDIdentityRecordV1 *record)
++{
++    static const uint32_t zero[4] = { 0, 0, 0, 0 };
++
++    return record && record->Size == sizeof(*record) &&
++           record->Version == 1 && record->Namespace != 0 &&
++           record->KeyByteCount != 0 &&
++           record->KeyByteCount <= sizeof(record->Key) &&
++           !id_is_zero(&record->ID) &&
++           memcmp(record->Reserved, zero, sizeof(zero)) == 0;
++}
++
++static int same_key(const struct CAMDIdentityRecordV1 *left,
++                    const struct CAMDIdentityRecordV1 *right)
++{
++    return left->Namespace == right->Namespace &&
++           left->KeyByteCount == right->KeyByteCount &&
++           memcmp(left->Key, right->Key, left->KeyByteCount) == 0;
++}
++
++static int records_collide(const struct CAMDIdentityRecordV1 *records,
++                           size_t record_count)
++{
++    size_t i, j;
++
++    for (i = 0; i < record_count; ++i) {
++        for (j = 0; j < i; ++j) {
++            if (same_key(&records[i], &records[j]) ||
++                id_equal(&records[i].ID, &records[j].ID))
++                return 1;
++        }
++    }
++    return 0;
++}
++
++size_t camd_identity_file_size(size_t record_count)
++{
++    size_t size;
++
++    if (record_count > UINT32_MAX ||
++        record_count > (SIZE_MAX - CAMD_IDENTITY_FILE_HEADER_BYTES) /
++                           CAMD_IDENTITY_FILE_RECORD_BYTES)
++        return 0;
++    size = CAMD_IDENTITY_FILE_HEADER_BYTES +
++           record_count * CAMD_IDENTITY_FILE_RECORD_BYTES;
++    if (size - 8 > UINT32_MAX)
++        return 0;
++    return size;
++}
++
++enum CAMDIdentityFileResult camd_identity_file_encode(
++    const struct CAMDIdentityRecordV1 *records, size_t record_count,
++    uint8_t *bytes, size_t byte_capacity, size_t *byte_count)
++{
++    size_t required, i, offset;
++
++    if (!byte_count)
++        return CAMD_IDENTITY_FILE_INVALID;
++    *byte_count = 0;
++    required = camd_identity_file_size(record_count);
++    if (required == 0 || !bytes ||
++        (record_count != 0 && !records))
++        return CAMD_IDENTITY_FILE_INVALID;
++    if (byte_capacity < required)
++        return CAMD_IDENTITY_FILE_CAPACITY;
++    for (i = 0; i < record_count; ++i) {
++        if (!valid_record(&records[i]))
++            return CAMD_IDENTITY_FILE_INVALID;
++    }
++    if (records_collide(records, record_count))
++        return CAMD_IDENTITY_FILE_COLLISION;
++
++    memset(bytes, 0, required);
++    memcpy(bytes, form_magic, sizeof(form_magic));
++    write_u32(bytes + FORM_SIZE_OFFSET, (uint32_t)(required - 8));
++    memcpy(bytes + FORM_TYPE_OFFSET, camd_type, sizeof(camd_type));
++    memcpy(bytes + IDMP_CHUNK_OFFSET, idmp_chunk, sizeof(idmp_chunk));
++    write_u32(bytes + IDMP_SIZE_OFFSET, (uint32_t)(required - 20));
++    write_u32(bytes + IDMP_VERSION_OFFSET, 1);
++    write_u32(bytes + IDMP_RECORD_SIZE_OFFSET,
++              CAMD_IDENTITY_FILE_RECORD_BYTES);
++    write_u32(bytes + IDMP_COUNT_OFFSET, (uint32_t)record_count);
++    for (i = 0; i < record_count; ++i) {
++        offset = IDMP_RECORDS_OFFSET +
++                 i * CAMD_IDENTITY_FILE_RECORD_BYTES;
++        write_u32(bytes + offset, records[i].Namespace);
++        write_u32(bytes + offset + 4, records[i].KeyByteCount);
++        memcpy(bytes + offset + 8, records[i].Key, sizeof(records[i].Key));
++        write_u32(bytes + offset + 264, records[i].ID.word[0]);
++        write_u32(bytes + offset + 268, records[i].ID.word[1]);
++        write_u32(bytes + offset + 272, records[i].ID.word[2]);
++        write_u32(bytes + offset + 276, records[i].ID.word[3]);
++    }
++    offset = IDMP_RECORDS_OFFSET +
++             record_count * CAMD_IDENTITY_FILE_RECORD_BYTES;
++    write_u32(bytes + offset,
++              crc32(bytes + IDMP_DATA_OFFSET, offset - IDMP_DATA_OFFSET));
++    *byte_count = required;
++    return CAMD_IDENTITY_FILE_OK;
++}
++
++enum CAMDIdentityFileResult camd_identity_file_decode(
++    const uint8_t *bytes, size_t byte_count,
++    struct CAMDIdentityRecordV1 *records, size_t record_capacity,
++    size_t *record_count)
++{
++    size_t count = 0, required, i, offset, data_offset;
++    size_t chunk_size, padded_size, idmp_data = 0;
++    int found = 0;
++
++    if (!record_count)
++        return CAMD_IDENTITY_FILE_INVALID;
++    *record_count = 0;
++    if (!bytes || byte_count < 12 || byte_count - 8 > UINT32_MAX ||
++        memcmp(bytes, form_magic, sizeof(form_magic)) != 0 ||
++        read_u32(bytes + FORM_SIZE_OFFSET) != byte_count - 8 ||
++        memcmp(bytes + FORM_TYPE_OFFSET, camd_type, sizeof(camd_type)) != 0)
++        return CAMD_IDENTITY_FILE_INVALID;
++
++    offset = 12;
++    while (offset < byte_count) {
++        if (byte_count - offset < 8)
++            return CAMD_IDENTITY_FILE_INVALID;
++        chunk_size = read_u32(bytes + offset + 4);
++        data_offset = offset + 8;
++        padded_size = chunk_size + (chunk_size & 1u);
++        if (padded_size < chunk_size || padded_size > byte_count - data_offset)
++            return CAMD_IDENTITY_FILE_INVALID;
++        if (memcmp(bytes + offset, idmp_chunk, sizeof(idmp_chunk)) == 0) {
++            if (found || chunk_size < 16 ||
++                read_u32(bytes + data_offset) != 1 ||
++                read_u32(bytes + data_offset + 4) !=
++                    CAMD_IDENTITY_FILE_RECORD_BYTES)
++                return CAMD_IDENTITY_FILE_INVALID;
++            count = read_u32(bytes + data_offset + 8);
++            if (count > (SIZE_MAX - 16) / CAMD_IDENTITY_FILE_RECORD_BYTES)
++                return CAMD_IDENTITY_FILE_INVALID;
++            required = 16 + count * CAMD_IDENTITY_FILE_RECORD_BYTES;
++            if (required != chunk_size ||
++                read_u32(bytes + data_offset + required - 4) !=
++                    crc32(bytes + data_offset, required - 4))
++                return CAMD_IDENTITY_FILE_INVALID;
++            if (count > record_capacity)
++                return CAMD_IDENTITY_FILE_CAPACITY;
++            if (count != 0 && !records)
++                return CAMD_IDENTITY_FILE_INVALID;
++            idmp_data = data_offset;
++            found = 1;
++        }
++        offset = data_offset + padded_size;
++    }
++    if (!found || offset != byte_count)
++        return CAMD_IDENTITY_FILE_INVALID;
++
++    for (i = 0; i < count; ++i) {
++        offset = idmp_data + 12 + i * CAMD_IDENTITY_FILE_RECORD_BYTES;
++        memset(&records[i], 0, sizeof(records[i]));
++        records[i].Size = sizeof(records[i]);
++        records[i].Version = 1;
++        records[i].Namespace = read_u32(bytes + offset);
++        records[i].KeyByteCount = read_u32(bytes + offset + 4);
++        memcpy(records[i].Key, bytes + offset + 8, sizeof(records[i].Key));
++        records[i].ID.word[0] = read_u32(bytes + offset + 264);
++        records[i].ID.word[1] = read_u32(bytes + offset + 268);
++        records[i].ID.word[2] = read_u32(bytes + offset + 272);
++        records[i].ID.word[3] = read_u32(bytes + offset + 276);
++        if (!valid_record(&records[i])) {
++            memset(records, 0, count * sizeof(*records));
++            return CAMD_IDENTITY_FILE_INVALID;
++        }
++    }
++    if (records_collide(records, count)) {
++        memset(records, 0, count * sizeof(*records));
++        return CAMD_IDENTITY_FILE_COLLISION;
++    }
++    *record_count = count;
++    return CAMD_IDENTITY_FILE_OK;
++}
+diff --git a/workbench/libs/camd/identity_file.h b/workbench/libs/camd/identity_file.h
+new file mode 100644
+index 0000000..ef8388c
+--- /dev/null
++++ b/workbench/libs/camd/identity_file.h
+@@ -0,0 +1,32 @@
++#ifndef CAMD_IDENTITY_FILE_H
++#define CAMD_IDENTITY_FILE_H
++
++/* Architecture-independent on-disk encoding for the private identity map. */
++
++#include "identity_map.h"
++
++#include <stddef.h>
++#include <stdint.h>
++
++/* Bytes in an empty FORM CAMD containing its required IDMP chunk. */
++#define CAMD_IDENTITY_FILE_HEADER_BYTES 36u
++#define CAMD_IDENTITY_FILE_RECORD_BYTES 280u
++
++enum CAMDIdentityFileResult {
++    CAMD_IDENTITY_FILE_OK = 0,
++    CAMD_IDENTITY_FILE_INVALID,
++    CAMD_IDENTITY_FILE_CAPACITY,
++    CAMD_IDENTITY_FILE_COLLISION
++};
++
++/* Returns zero when record_count cannot be represented by format version 1. */
++size_t camd_identity_file_size(size_t record_count);
++
++enum CAMDIdentityFileResult camd_identity_file_encode(
++    const struct CAMDIdentityRecordV1 *records, size_t record_count,
++    uint8_t *bytes, size_t byte_capacity, size_t *byte_count);
++
++enum CAMDIdentityFileResult camd_identity_file_decode(
++    const uint8_t *bytes, size_t byte_count,
++    struct CAMDIdentityRecordV1 *records, size_t record_capacity,
++    size_t *record_count);
++#endif
+diff --git a/workbench/libs/camd/identity_map.c b/workbench/libs/camd/identity_map.c
+new file mode 100644
+index 0000000..3aff08e
+--- /dev/null
++++ b/workbench/libs/camd/identity_map.c
+@@ -0,0 +1,239 @@
++#include "identity_map.h"
++
++#include <limits.h>
++#include <string.h>
++#include <exec/memory.h>
++#include <exec/semaphores.h>
++#include <proto/exec.h>
++
++#define GENERATE_ATTEMPTS 16
++
++struct identity_entry {
++    struct CAMDIdentityRecordV1 record;
++    int persistent;
++};
++
++struct CAMDIdentityMap {
++    struct SignalSemaphore lock;
++    struct identity_entry *entries;
++    struct CAMDIdentityRecordV1 *commit_records;
++    uint32_t capacity;
++    uint32_t count;
++    void *callback_context;
++    CAMDIdentityGenerateFnV1 generate;
++    CAMDIdentityCommitFnV1 commit;
++};
++
++static int id_is_zero(const struct CAMDEndpointIDV1 *id)
++{
++    return id->word[0] == 0 && id->word[1] == 0 &&
++           id->word[2] == 0 && id->word[3] == 0;
++}
++
++static int id_equal(const struct CAMDEndpointIDV1 *left,
++                    const struct CAMDEndpointIDV1 *right)
++{
++    return memcmp(left, right, sizeof(*left)) == 0;
++}
++
++static int valid_confidence(uint32_t confidence)
++{
++    return confidence >= CAMD_IDENTITY_AUTHORITATIVE &&
++           confidence <= CAMD_IDENTITY_EPHEMERAL;
++}
++
++static int valid_key(const struct CAMDIdentityKeyV1 *key)
++{
++    return key && key->Size == sizeof(*key) && key->Version == 1 &&
++           key->Namespace != 0 && valid_confidence(key->Confidence) &&
++           key->ByteCount != 0 && key->ByteCount <= sizeof(key->Bytes);
++}
++
++static int valid_record(const struct CAMDIdentityRecordV1 *record)
++{
++    static const uint32_t zero[4] = { 0, 0, 0, 0 };
++
++    return record && record->Size == sizeof(*record) &&
++           record->Version == 1 && record->Namespace != 0 &&
++           record->KeyByteCount != 0 &&
++           record->KeyByteCount <= sizeof(record->Key) &&
++           !id_is_zero(&record->ID) &&
++           memcmp(record->Reserved, zero, sizeof(zero)) == 0;
++}
++
++static int same_key(const struct CAMDIdentityRecordV1 *record,
++                    const struct CAMDIdentityKeyV1 *key)
++{
++    return record->Namespace == key->Namespace &&
++           record->KeyByteCount == key->ByteCount &&
++           memcmp(record->Key, key->Bytes, key->ByteCount) == 0;
++}
++
++static int record_key_equal(const struct CAMDIdentityRecordV1 *left,
++                            const struct CAMDIdentityRecordV1 *right)
++{
++    return left->Namespace == right->Namespace &&
++           left->KeyByteCount == right->KeyByteCount &&
++           memcmp(left->Key, right->Key, left->KeyByteCount) == 0;
++}
++
++static int id_exists(const struct CAMDIdentityMap *map,
++                     const struct CAMDEndpointIDV1 *id)
++{
++    uint32_t i;
++
++    for (i = 0; i < map->count; ++i) {
++        if (id_equal(&map->entries[i].record.ID, id))
++            return 1;
++    }
++    return 0;
++}
++
++static int commit_all(struct CAMDIdentityMap *map)
++{
++    uint32_t i;
++
++    if (!map->commit)
++        return 0;
++    for (i = 0; i < map->count; ++i)
++        map->commit_records[i] = map->entries[i].record;
++    if (!map->commit(map->callback_context, map->commit_records, map->count))
++        return 0;
++    for (i = 0; i < map->count; ++i)
++        map->entries[i].persistent = 1;
++    return 1;
++}
++
++enum CAMDIdentityMapResult camd_identity_map_create(
++    const struct CAMDIdentityMapConfigV1 *config,
++    struct CAMDIdentityMap **map_out)
++{
++    struct CAMDIdentityMap *map;
++    size_t entry_bytes, record_bytes;
++    uint32_t i, j;
++
++    if (!map_out)
++        return CAMD_IDENTITY_MAP_INVALID;
++    *map_out = NULL;
++    if (!config || config->Size != sizeof(*config) ||
++        config->Version != 1 || config->Capacity == 0 || !config->Generate ||
++        config->InitialRecordCount > config->Capacity ||
++        (config->InitialRecordCount != 0 && !config->InitialRecords))
++        return CAMD_IDENTITY_MAP_INVALID;
++#if SIZE_MAX <= UINT32_MAX
++    if (config->Capacity > SIZE_MAX / sizeof(struct identity_entry) ||
++        config->Capacity > SIZE_MAX / sizeof(struct CAMDIdentityRecordV1))
++        return CAMD_IDENTITY_MAP_INVALID;
++#endif
++    for (i = 0; i < config->InitialRecordCount; ++i) {
++        if (!valid_record(&config->InitialRecords[i]))
++            return CAMD_IDENTITY_MAP_INVALID;
++        for (j = 0; j < i; ++j) {
++            if (record_key_equal(&config->InitialRecords[i],
++                                 &config->InitialRecords[j]) ||
++                id_equal(&config->InitialRecords[i].ID,
++                         &config->InitialRecords[j].ID))
++                return CAMD_IDENTITY_MAP_COLLISION;
++        }
++    }
++    map = AllocVec(sizeof(*map), MEMF_ANY | MEMF_CLEAR);
++    if (!map)
++        return CAMD_IDENTITY_MAP_NOMEM;
++    InitSemaphore(&map->lock);
++    entry_bytes = (size_t)config->Capacity * sizeof(*map->entries);
++    record_bytes = (size_t)config->Capacity * sizeof(*map->commit_records);
++    if (entry_bytes > ULONG_MAX || record_bytes > ULONG_MAX) {
++        FreeVec(map);
++        return CAMD_IDENTITY_MAP_INVALID;
++    }
++    map->entries = AllocVec((ULONG)entry_bytes, MEMF_ANY | MEMF_CLEAR);
++    map->commit_records = AllocVec((ULONG)record_bytes, MEMF_ANY | MEMF_CLEAR);
++    if (!map->entries || !map->commit_records) {
++        if (map->commit_records)
++            FreeVec(map->commit_records);
++        if (map->entries)
++            FreeVec(map->entries);
++        FreeVec(map);
++        return CAMD_IDENTITY_MAP_NOMEM;
++    }
++    map->capacity = config->Capacity;
++    map->count = (uint32_t)config->InitialRecordCount;
++    map->callback_context = config->CallbackContext;
++    map->generate = config->Generate;
++    map->commit = config->Commit;
++    for (i = 0; i < map->count; ++i) {
++        map->entries[i].record = config->InitialRecords[i];
++        map->entries[i].persistent = 1;
++    }
++    *map_out = map;
++    return CAMD_IDENTITY_MAP_OK;
++}
++
++void camd_identity_map_destroy(struct CAMDIdentityMap *map)
++{
++    if (!map)
++        return;
++    if (map->commit_records)
++        FreeVec(map->commit_records);
++    if (map->entries)
++        FreeVec(map->entries);
++    FreeVec(map);
++}
++
++enum CAMDIdentityMapResult camd_identity_map_resolve(
++    struct CAMDIdentityMap *map, const struct CAMDIdentityKeyV1 *key,
++    struct CAMDIdentityResolutionV1 *resolution)
++{
++    struct identity_entry *entry = NULL;
++    struct CAMDEndpointIDV1 id;
++    uint32_t i, attempt;
++    int existing = 0;
++
++    if (!map || !valid_key(key) || !resolution ||
++        resolution->Size != sizeof(*resolution) || resolution->Version != 1)
++        return CAMD_IDENTITY_MAP_INVALID;
++    ObtainSemaphore(&map->lock);
++    for (i = 0; i < map->count; ++i) {
++        if (same_key(&map->entries[i].record, key)) {
++            entry = &map->entries[i];
++            existing = 1;
++            break;
++        }
++    }
++    if (!entry) {
++        if (map->count == map->capacity) {
++            ReleaseSemaphore(&map->lock);
++            return CAMD_IDENTITY_MAP_FULL;
++        }
++        memset(&id, 0, sizeof(id));
++        for (attempt = 0; attempt < GENERATE_ATTEMPTS; ++attempt) {
++            if (!map->generate(map->callback_context, &id)) {
++                ReleaseSemaphore(&map->lock);
++                return CAMD_IDENTITY_MAP_GENERATOR;
++            }
++            if (!id_is_zero(&id) && !id_exists(map, &id))
++                break;
++        }
++        if (attempt == GENERATE_ATTEMPTS) {
++            ReleaseSemaphore(&map->lock);
++            return CAMD_IDENTITY_MAP_COLLISION;
++        }
++        entry = &map->entries[map->count++];
++        entry->record.Size = sizeof(entry->record);
++        entry->record.Version = 1;
++        entry->record.Namespace = key->Namespace;
++        entry->record.KeyByteCount = key->ByteCount;
++        memcpy(entry->record.Key, key->Bytes, key->ByteCount);
++        entry->record.ID = id;
++    }
++    if (!entry->persistent)
++        commit_all(map);
++    resolution->ID = entry->record.ID;
++    resolution->Persistent = entry->persistent ? 1u : 0u;
++    resolution->EffectiveConfidence = entry->persistent
++                                          ? key->Confidence
++                                          : CAMD_IDENTITY_EPHEMERAL;
++    resolution->Existing = existing ? 1u : 0u;
++    ReleaseSemaphore(&map->lock);
++    return CAMD_IDENTITY_MAP_OK;
++}
+diff --git a/workbench/libs/camd/identity_map.h b/workbench/libs/camd/identity_map.h
+new file mode 100644
+index 0000000..31027b1
+--- /dev/null
++++ b/workbench/libs/camd/identity_map.h
+@@ -0,0 +1,82 @@
++#ifndef CAMD_IDENTITY_MAP_H
++#define CAMD_IDENTITY_MAP_H
++
++#include "endpoint_registry.h"
++
++#include <stddef.h>
++#include <stdint.h>
++
++#define CAMD_IDENTITY_KEY_BYTES 256
++
++enum CAMDIdentityMapResult {
++    CAMD_IDENTITY_MAP_OK = 0,
++    CAMD_IDENTITY_MAP_INVALID,
++    CAMD_IDENTITY_MAP_NOMEM,
++    CAMD_IDENTITY_MAP_FULL,
++    CAMD_IDENTITY_MAP_COLLISION,
++    CAMD_IDENTITY_MAP_GENERATOR
++};
++
++enum CAMDIdentityConfidenceV1 {
++    CAMD_IDENTITY_AUTHORITATIVE = 1,
++    CAMD_IDENTITY_CONFIGURED,
++    CAMD_IDENTITY_PATH_BOUND,
++    CAMD_IDENTITY_EPHEMERAL
++};
++
++struct CAMDIdentityKeyV1 {
++    uint32_t Size;
++    uint32_t Version;
++    uint32_t Namespace;
++    uint32_t Confidence;
++    uint32_t ByteCount;
++    uint8_t Bytes[CAMD_IDENTITY_KEY_BYTES];
++};
++
++struct CAMDIdentityRecordV1 {
++    uint32_t Size;
++    uint32_t Version;
++    uint32_t Namespace;
++    uint32_t KeyByteCount;
++    uint8_t Key[CAMD_IDENTITY_KEY_BYTES];
++    struct CAMDEndpointIDV1 ID;
++    uint32_t Reserved[4];
++};
++
++struct CAMDIdentityResolutionV1 {
++    uint32_t Size;
++    uint32_t Version;
++    struct CAMDEndpointIDV1 ID;
++    uint32_t EffectiveConfidence;
++    uint32_t Persistent;
++    uint32_t Existing;
++};
++
++typedef int (*CAMDIdentityGenerateFnV1)(
++    void *context, struct CAMDEndpointIDV1 *id);
++typedef int (*CAMDIdentityCommitFnV1)(
++    void *context, const struct CAMDIdentityRecordV1 *records,
++    size_t record_count);
++
++struct CAMDIdentityMapConfigV1 {
++    uint32_t Size;
++    uint32_t Version;
++    uint32_t Capacity;
++    const struct CAMDIdentityRecordV1 *InitialRecords;
++    size_t InitialRecordCount;
++    void *CallbackContext;
++    CAMDIdentityGenerateFnV1 Generate;
++    CAMDIdentityCommitFnV1 Commit;
++};
++
++struct CAMDIdentityMap;
++
++enum CAMDIdentityMapResult camd_identity_map_create(
++    const struct CAMDIdentityMapConfigV1 *config,
++    struct CAMDIdentityMap **map);
++void camd_identity_map_destroy(struct CAMDIdentityMap *map);
++enum CAMDIdentityMapResult camd_identity_map_resolve(
++    struct CAMDIdentityMap *map, const struct CAMDIdentityKeyV1 *key,
++    struct CAMDIdentityResolutionV1 *resolution);
++
++#endif
+diff --git a/workbench/libs/camd/identity_store_aros.c b/workbench/libs/camd/identity_store_aros.c
+new file mode 100644
+index 0000000..28efd1b
+--- /dev/null
++++ b/workbench/libs/camd/identity_store_aros.c
+@@ -0,0 +1,249 @@
++#include "identity_store_aros.h"
++
++#include "identity_file.h"
++#include "identity_map.h"
++
++#include <dos/dos.h>
++#include <exec/libraries.h>
++#include <exec/memory.h>
++#include <libraries/uuid.h>
++#include <proto/dos.h>
++#include <proto/exec.h>
++#include <proto/uuid.h>
++
++#include <limits.h>
++#include <string.h>
++
++#define IDENTITY_CAPACITY 256u
++#define IDENTITY_PATH "ENVARC:Sys/camd-identities.iff"
++#define IDENTITY_NEW_PATH "ENVARC:Sys/camd-identities.iff.new"
++#define IDENTITY_BACKUP_PATH "ENVARC:Sys/camd-identities.iff.bak"
++
++enum load_state {
++    LOAD_MISSING = 0,
++    LOAD_VALID,
++    LOAD_INVALID
++};
++
++struct CAMDIdentityStoreAROS {
++    struct CAMDIdentityMap *map;
++    struct Library *uuid_base;
++    UBYTE *file_bytes;
++    ULONG file_capacity;
++};
++
++static int path_exists(CONST_STRPTR path)
++{
++    BPTR lock = Lock(path, ACCESS_READ);
++
++    if (!lock)
++        return 0;
++    UnLock(lock);
++    return 1;
++}
++
++static enum load_state load_path(
++    CONST_STRPTR path, UBYTE *bytes, ULONG byte_capacity,
++    struct CAMDIdentityRecordV1 *records, size_t record_capacity,
++    size_t *record_count)
++{
++    BPTR file;
++    LONG got, extra;
++    UBYTE trailing;
++
++    *record_count = 0;
++    file = Open(path, MODE_OLDFILE);
++    if (!file)
++        return IoErr() == ERROR_OBJECT_NOT_FOUND ? LOAD_MISSING : LOAD_INVALID;
++    got = Read(file, bytes, (LONG)byte_capacity);
++    extra = got >= 0 ? Read(file, &trailing, 1) : -1;
++    Close(file);
++    if (got < 0 || extra != 0)
++        return LOAD_INVALID;
++    if (camd_identity_file_decode(bytes, (size_t)got, records,
++                                  record_capacity, record_count) !=
++        CAMD_IDENTITY_FILE_OK)
++        return LOAD_INVALID;
++    return LOAD_VALID;
++}
++
++static int replace_invalid_main(CONST_STRPTR candidate,
++                                enum load_state main_state)
++{
++    if (main_state == LOAD_INVALID && !DeleteFile(IDENTITY_PATH))
++        return 0;
++    if (!Rename(candidate, IDENTITY_PATH))
++        return 0;
++    DeleteFile(IDENTITY_BACKUP_PATH);
++    return 1;
++}
++
++static int load_recoverable(struct CAMDIdentityStoreAROS *store,
++                            struct CAMDIdentityRecordV1 *records,
++                            size_t *record_count)
++{
++    enum load_state main_state, new_state, backup_state;
++
++    main_state = load_path(IDENTITY_PATH, store->file_bytes,
++                           store->file_capacity, records, IDENTITY_CAPACITY,
++                           record_count);
++    if (main_state == LOAD_VALID)
++        return 1;
++    new_state = load_path(IDENTITY_NEW_PATH, store->file_bytes,
++                          store->file_capacity, records, IDENTITY_CAPACITY,
++                          record_count);
++    if (new_state == LOAD_VALID)
++        return replace_invalid_main(IDENTITY_NEW_PATH, main_state);
++    backup_state = load_path(IDENTITY_BACKUP_PATH, store->file_bytes,
++                             store->file_capacity, records,
++                             IDENTITY_CAPACITY, record_count);
++    if (backup_state == LOAD_VALID)
++        return replace_invalid_main(IDENTITY_BACKUP_PATH, main_state);
++    if (main_state == LOAD_MISSING && new_state == LOAD_MISSING &&
++        backup_state == LOAD_MISSING) {
++        *record_count = 0;
++        return 1;
++    }
++    return 0;
++}
++
++static uint32_t packed_word(const uint8_t *bytes)
++{
++    return ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
++           ((uint32_t)bytes[2] << 8) | (uint32_t)bytes[3];
++}
++
++static int generate_id(void *context, struct CAMDEndpointIDV1 *id)
++{
++    struct CAMDIdentityStoreAROS *store = context;
++    struct Library *UUIDBase = store->uuid_base;
++    uuid_t uuid;
++    uint8_t packed[16];
++    unsigned int i;
++
++    UUID_Generate(UUID_TYPE_DCE_TIME, &uuid);
++    UUID_Pack(&uuid, packed);
++    for (i = 0; i < 4; ++i)
++        id->word[i] = packed_word(packed + i * 4);
++    return 1;
++}
++
++static int write_new(struct CAMDIdentityStoreAROS *store, ULONG byte_count)
++{
++    BPTR file = Open(IDENTITY_NEW_PATH, MODE_NEWFILE);
++    LONG written;
++    int ok;
++
++    if (!file)
++        return 0;
++    written = Write(file, store->file_bytes, (LONG)byte_count);
++    ok = written == (LONG)byte_count && Flush(file);
++    if (!Close(file))
++        ok = 0;
++    if (!ok)
++        DeleteFile(IDENTITY_NEW_PATH);
++    return ok;
++}
++
++static int install_new(void)
++{
++    int had_main = path_exists(IDENTITY_PATH);
++
++    if (had_main) {
++        if (path_exists(IDENTITY_BACKUP_PATH) &&
++            !DeleteFile(IDENTITY_BACKUP_PATH))
++            return 0;
++        if (!Rename(IDENTITY_PATH, IDENTITY_BACKUP_PATH))
++            return 0;
++    }
++    if (!Rename(IDENTITY_NEW_PATH, IDENTITY_PATH)) {
++        if (had_main)
++            Rename(IDENTITY_BACKUP_PATH, IDENTITY_PATH);
++        return 0;
++    }
++    if (had_main)
++        DeleteFile(IDENTITY_BACKUP_PATH);
++    return 1;
++}
++
++static int commit_records(void *context,
++                          const struct CAMDIdentityRecordV1 *records,
++                          size_t record_count)
++{
++    struct CAMDIdentityStoreAROS *store = context;
++    size_t byte_count;
++
++    if (camd_identity_file_encode(records, record_count, store->file_bytes,
++                                  store->file_capacity, &byte_count) !=
++        CAMD_IDENTITY_FILE_OK)
++        return 0;
++    if (byte_count > (size_t)LONG_MAX ||
++        !write_new(store, (ULONG)byte_count))
++        return 0;
++    return install_new();
++}
++
++struct CAMDIdentityStoreAROS *camd_identity_store_aros_create(void)
++{
++    struct CAMDIdentityStoreAROS *store;
++    struct CAMDIdentityRecordV1 *records;
++    struct CAMDIdentityMapConfigV1 config;
++    size_t file_capacity, record_count = 0;
++
++    file_capacity = camd_identity_file_size(IDENTITY_CAPACITY);
++    if (file_capacity == 0 || file_capacity > ULONG_MAX)
++        return NULL;
++    store = AllocVec(sizeof(*store), MEMF_ANY | MEMF_CLEAR);
++    records = AllocVec(sizeof(*records) * IDENTITY_CAPACITY,
++                       MEMF_ANY | MEMF_CLEAR);
++    if (!store || !records)
++        goto fail;
++    store->file_capacity = (ULONG)file_capacity;
++    store->file_bytes = AllocVec(store->file_capacity, MEMF_ANY | MEMF_CLEAR);
++    store->uuid_base = OpenLibrary("uuid.library", 1);
++    if (!store->file_bytes || !store->uuid_base ||
++        !load_recoverable(store, records, &record_count))
++        goto fail;
++    memset(&config, 0, sizeof(config));
++    config.Size = sizeof(config);
++    config.Version = 1;
++    config.Capacity = IDENTITY_CAPACITY;
++    config.InitialRecords = records;
++    config.InitialRecordCount = record_count;
++    config.CallbackContext = store;
++    config.Generate = generate_id;
++    config.Commit = commit_records;
++    if (camd_identity_map_create(&config, &store->map) !=
++        CAMD_IDENTITY_MAP_OK)
++        goto fail;
++    FreeVec(records);
++    return store;
++
++fail:
++    if (store) {
++        if (store->uuid_base)
++            CloseLibrary(store->uuid_base);
++        if (store->file_bytes)
++            FreeVec(store->file_bytes);
++        FreeVec(store);
++    }
++    if (records)
++        FreeVec(records);
++    return NULL;
++}
++
++void camd_identity_store_aros_destroy(struct CAMDIdentityStoreAROS *store)
++{
++    if (!store)
++        return;
++    camd_identity_map_destroy(store->map);
++    CloseLibrary(store->uuid_base);
++    FreeVec(store->file_bytes);
++    FreeVec(store);
++}
++
++struct CAMDIdentityMap *camd_identity_store_aros_map(
++    struct CAMDIdentityStoreAROS *store)
++{
++    return store ? store->map : NULL;
++}
+diff --git a/workbench/libs/camd/identity_store_aros.h b/workbench/libs/camd/identity_store_aros.h
+new file mode 100644
+index 0000000..32dcf89
+--- /dev/null
++++ b/workbench/libs/camd/identity_store_aros.h
+@@ -0,0 +1,12 @@
++#ifndef CAMD_IDENTITY_STORE_AROS_H
++#define CAMD_IDENTITY_STORE_AROS_H
++
++struct CAMDIdentityMap;
++struct CAMDIdentityStoreAROS;
++
++struct CAMDIdentityStoreAROS *camd_identity_store_aros_create(void);
++void camd_identity_store_aros_destroy(struct CAMDIdentityStoreAROS *store);
++struct CAMDIdentityMap *camd_identity_store_aros_map(
++    struct CAMDIdentityStoreAROS *store);
++
++#endif
+diff --git a/workbench/libs/camd/init.c b/workbench/libs/camd/init.c
+index b066d11..f1bfc6d 100644
+--- a/workbench/libs/camd/init.c
++++ b/workbench/libs/camd/init.c
+@@ -1,7 +1,7 @@
+ /*
+     Copyright (C) 1995-2007, The AROS Development Team. All rights reserved.
+ 
+-    Desc: 
++    Desc:
+ */
+ 
+ #include <proto/dos.h>
+@@ -11,6 +11,7 @@
+ 
+ #include "camd_intern.h"
+ #include "endpoint_registry.h"
++#include "identity_store_aros.h"
+ 
+ 
+ #ifdef __amigaos4__
+@@ -36,6 +37,7 @@ BOOL InitCamd(struct CamdBase *CamdBase){
+ 		CB(CamdBase)->CLSemaphore=NULL;
+ 		return FALSE;
+ 	}
++	CB(CamdBase)->EndpointIdentity=camd_identity_store_aros_create();
+ #ifndef __amigaos4__
+ 	NEWLIST(&CB(CamdBase)->mymidinodes);
+ 	NEWLIST(&CB(CamdBase)->midiclusters);
+@@ -47,6 +49,8 @@ BOOL InitCamd(struct CamdBase *CamdBase){
+ 	NEWLIST(CB(CamdBase)->clusnotifynodes);
+ #endif
+ 	if(InitCamdTimer()==FALSE){
++		camd_identity_store_aros_destroy(CB(CamdBase)->EndpointIdentity);
++		CB(CamdBase)->EndpointIdentity=NULL;
+ 		camd_registry_destroy(CB(CamdBase)->EndpointRegistry);
+ 		CB(CamdBase)->EndpointRegistry=NULL;
+ 		FreeMem(CB(CamdBase)->CLSemaphore,sizeof(struct SignalSemaphore));
+@@ -55,6 +59,8 @@ BOOL InitCamd(struct CamdBase *CamdBase){
+ 	}
+ 	if(InitCamdClock()==FALSE){
+ 		UninitCamdTimer();
++		camd_identity_store_aros_destroy(CB(CamdBase)->EndpointIdentity);
++		CB(CamdBase)->EndpointIdentity=NULL;
+ 		camd_registry_destroy(CB(CamdBase)->EndpointRegistry);
+ 		CB(CamdBase)->EndpointRegistry=NULL;
+ 		FreeMem(CB(CamdBase)->CLSemaphore,sizeof(struct SignalSemaphore));
+@@ -120,6 +126,8 @@ void UninitCamd(struct CamdBase *CamdBase){
+ 		CloseMidiDevice(driver->mididevicedata);
+ 		driver=temp2;
+ 	}
++	camd_identity_store_aros_destroy(CB(CamdBase)->EndpointIdentity);
++	CB(CamdBase)->EndpointIdentity=NULL;
+ 	camd_registry_destroy(CB(CamdBase)->EndpointRegistry);
+ 	CB(CamdBase)->EndpointRegistry=NULL;
+ 
+diff --git a/workbench/libs/camd/mmakefile.src b/workbench/libs/camd/mmakefile.src
+index 017d0f8..a8caf3d 100644
+--- a/workbench/libs/camd/mmakefile.src
++++ b/workbench/libs/camd/mmakefile.src
+@@ -9,7 +9,8 @@ FILES :=    drivers clusters init camdwait mididistr midifromdriver \
+ 	    provider_contract legacy_driver_adapter native_event_queue \
+ 	    native_event_pump native_event_worker legacy_port_refs \
+ 	    native_worker_fanout legacy_output_backend \
+-	    legacy_driver_output_backend
++	    legacy_driver_output_backend identity_map identity_file \
++	    identity_store_aros
+ 
+ FUNCS := \
+     lockcamd \
+diff --git a/workbench/libs/camd/startclusternotify.c b/workbench/libs/camd/startclusternotify.c
+index 25efb57..2a7301e 100644
+--- a/workbench/libs/camd/startclusternotify.c
++++ b/workbench/libs/camd/startclusternotify.c
+@@ -1,7 +1,7 @@
+ /*
+     Copyright (C) 1995-2007, The AROS Development Team. All rights reserved.
+ 
+-    Desc: 
++    Desc:
+ */
+ 
+ #include <proto/exec.h>
+@@ -35,13 +35,13 @@
+ 
+     EXAMPLE
+         struct ClusterNotifyNode cnn;
+-        
++
+         cnn.cnn_Task=IExec->FindTask(NULL);
+         cnn.cnn_SigBit=IExec->AllocSignal(-1);
+         StartClusterNotify(&cnn);
+-        
++
+                     somewhere down the line...
+-        
++
+         Wait(1L<<cnn.cnn_SigBit)
+             printf("Cluster Changes have happened\n");
+ 

@@ -167,7 +167,7 @@ git -C ~/AROS apply "$PWD/patches/aros-llvmpipe-link.patch"
 
 ## CAMD and USB MIDI
 
-Sixteen patches, applied in this order to upstream `master`. The first eleven
+Seventeen patches, applied in this order to upstream `master`. The first eleven
 are commits of the `camd-robustness` branch in `~/AROS`; the link-comment and
 SysEx/error patches follow that branch. The first two are also draft pull request #1483.
 The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
@@ -190,6 +190,7 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-endpoint-core.patch` | add the non-public endpoint registry and format-specific provider contract; initialize the registry and compile both inside CAMD without adding vectors |
 | `aros-camd-endpoint-runtime.patch` | embed the bounded worker fan-out in each `DriverData`, relay transmitter capacity through its stable receiver task and compile the relay without changing the public ABI |
 | `aros-camd-legacy-output-backend.patch` | add bounded native MIDI 1.0 output sessions and bind their physical callbacks to shared `DriverData` ownership and the legacy transmitter, without publishing endpoints or changing the public ABI |
+| `aros-camd-identity-store.patch` | add the private bounded identity map, architecture-independent checked IFF format and recoverable `ENVARC:` storage backed by `uuid.library`; failure leaves legacy CAMD operational |
 
 ```sh
 for p in camd-names-64bit camd-arena-segments camd-driver-scan-align \
@@ -197,7 +198,7 @@ for p in camd-names-64bit camd-arena-segments camd-driver-scan-align \
          camd-rescan usb-midi-camd usb-midi-lifecycle camd-part-notify \
          camd-v42 camd-link-comments camd-sysex-errors \
          camd-endpoint-core camd-endpoint-runtime \
-         camd-legacy-output-backend; do
+         camd-legacy-output-backend camd-identity-store; do
     git -C ~/AROS apply "$PWD/patches/aros-$p.patch" || break
 done
 ```

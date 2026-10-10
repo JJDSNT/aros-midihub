@@ -594,9 +594,13 @@ and retries atomic full-snapshot persistence. Until commit succeeds the same
 in-memory ID is explicitly ephemeral; successful retry promotes it without an
 ID change. Fixed `DEVS:Midi` drivers use a versioned path-bound key derived from
 the ASCII-case-folded module leaf and port index, with separate provider and
-endpoint namespaces and no direction component. The AROS random-ID generator,
-atomic persistent file and active duplicate-evidence diagnostics remain to be
-implemented.
+endpoint namespaces and no direction component. The private AROS binding now
+compiles into `camd.library`: it uses time-based `uuid.library` IDs and a
+portable, CRC-checked, bounded IFF `FORM CAMD` snapshot, recovering interrupted
+replacement through main, `.new` and `.bak` files. Failure is non-fatal to
+legacy CAMD.
+Recovery fault injection, adapter instantiation and active duplicate-evidence
+diagnostics remain to be implemented.
 
 A bounded host-tested fan-out now defines the multi-session capacity handoff.
 The driver interrupt signals a stable per-port task, which wakes attached

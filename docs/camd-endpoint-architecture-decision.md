@@ -113,7 +113,18 @@ for the same evidence key receive one ID and only one new mapping is generated.
 A failed commit leaves that same in-memory mapping usable but explicitly
 ephemeral; a later successful commit promotes it without changing the ID.
 Generator and commit callbacks run under the identity-map lock and must not
-reenter it. The AROS generator and persistent-file binding remain to be added.
+reenter it. The compiled private AROS binding uses time-based `uuid.library`
+IDs and a checked architecture-independent IFF `FORM CAMD` snapshot in
+`ENVARC:Sys/camd-identities.iff`. Replacement rotates `.new`, main and `.bak`;
+startup accepts only a complete CRC-valid snapshot and repairs an interrupted
+rotation. Store initialization failure is non-fatal to legacy CAMD and prevents
+automatic endpoint publication rather than inventing a persistent identity.
+IFF's big-endian integers are a canonical file encoding, not a host-endian
+assumption: the codec performs byte-wise conversion and does not persist C
+struct layout. This permits one file format on m68k, x86, ARM and other AROS
+targets. Plain text would simplify manual viewing but would require additional
+canonical escaping, key-encoding and partial-write rules without improving the
+runtime contract, so it is not the persistence format.
 
 For fixed drivers loaded from `DEVS:Midi`, the best evidence actually present
 is path-bound. The private key model uses a versioned, ASCII-case-folded module
@@ -273,9 +284,10 @@ enqueue. The compiled AROS shim now binds those physical-port callbacks to the
 are copied into the legacy ring; SysEx keeps the pump checkout buffer borrowed
 until the driver transmits its final F7. Capacity notifications already reach
 the relay task from the transmitter. A host-tested private map and legacy-key
-model can now supply the required IDs, but their random generator and atomic
-persistent store are not yet bound on AROS. Instantiation must not redirect
-legacy cluster traffic through endpoint sessions.
+model can now supply the required IDs through the compiled AROS identity store.
+Loaded drivers do not instantiate the adapter yet, and recovery fault injection
+is still host/AROS test work. Instantiation must not redirect legacy cluster
+traffic through endpoint sessions.
 
 For each projectable Endpoint + Group + direction, the adapter owns a stable
 cluster identity independent of mutable display names. While an endpoint is
