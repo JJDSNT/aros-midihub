@@ -224,10 +224,12 @@ model, but their native message path remains first-class.
 The executable private model now proves the ingress half of this boundary:
 caller-supplied stable IDs, fixed-port publication, per-port direction checks,
 native MIDI 1.0 event/SysEx forwarding, retryable queue pumping, a private
-AROS task/signal executor and two-phase retirement. The remaining AROS shim
-must wire producer/capacity notifications and share `DriverData` open/reference
-state with the existing cluster path. It must not open the same hardware port
-twice or redirect legacy cluster traffic through endpoint sessions.
+AROS task/signal executor and two-phase retirement. `DriverData` now keeps one
+shared logical-owner state for legacy directions and endpoint reference counts;
+the first owner opens the physical port and the last closes it, with failed
+opens rolled back. The remaining backend must invoke those endpoint helpers
+and wire producer/capacity notifications. It must not redirect legacy cluster
+traffic through endpoint sessions.
 
 For each projectable Endpoint + Group + direction, the adapter owns a stable
 cluster identity independent of mutable display names. While an endpoint is

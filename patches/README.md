@@ -312,8 +312,10 @@ projection uses the provider path yet, so existing CAMD behavior remains
 unchanged. A private fixed-port adapter now publishes
 caller-identified legacy driver ports as MIDI 1.0-only endpoints, checks
 direction per port and forwards native events/SysEx without UMP. It is not yet
-connected to AROS `DriverData`, so sharing physical-port opens with the legacy
-cluster path remains the next integration step. The matching host models and
+connected as an AROS data backend. `DriverData` does now replace its independent
+open booleans with shared legacy-direction and endpoint-reference ownership:
+the first owner opens the port, the last closes it and a failed open rolls back.
+The matching host models and
 tests live in
 `prototypes/camd`, `tests/camd_endpoint_core.c` and
 `tests/camd_provider_contract.c` plus

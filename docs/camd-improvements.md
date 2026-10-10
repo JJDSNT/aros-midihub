@@ -560,9 +560,10 @@ transactional consumer: checkout copies an item without removal, downstream
 delivery runs unlocked, commit removes an accepted item exactly once, and
 release retains it for retry. A bounded-work pump proves this across MIDI 1.0,
 SysEx and UMP. A private host/AROS worker now gives the pump coalesced wakeups,
-fixed work budgets, synchronous stop and observable counters. Wiring it to
-`DriverData`, native AROS retirement stress and reverse legacy projection
-remain before this becomes operational.
+fixed work budgets, synchronous stop and observable counters. `DriverData` now
+uses one shared first-open/last-close state for legacy directions and endpoint
+references. Connecting the adapter sessions and worker notifications to those
+helpers, native AROS retirement stress and reverse legacy projection remain.
 
 The private native queue primitive is also host-tested. It preallocates a
 format-fixed MIDI 1.0 or UMP ring, preserves batch boundaries and complete
@@ -574,8 +575,9 @@ count, exposes effective capacity/SysEx limit and rejects an inconsistent
 successful open. The software provider uses this queue and proves full,
 oversize, drain and cancel behavior. Scheduling and interrupt handoff remain
 open; the pump supplies lossless retry and its worker supplies native task
-wakeup, but the adapter does not yet connect those wakes to `DriverData` and
-does not decide timestamp eligibility.
+wakeup. The legacy cluster path now uses the shared `DriverData` reference
+state, but the adapter does not yet invoke the endpoint side, connect wakeups
+or decide timestamp eligibility.
 
 ## Implemented steps
 
@@ -710,8 +712,9 @@ adapter. Public ABI remains a separate U01 gate.
    notice a device coming back, BLE MIDI stamps with `CamdTime()`.
 3. Done: compare endpoint architectures and select the final central
    registry/provider model; no throwaway dynamic-port API is permitted.
-4. Next: connect the fixed-port adapter and its implemented task/signal worker
-   to `DriverData`, exercise native retirement and then
+4. Next: connect fixed-port adapter sessions and their implemented task/signal
+   worker to the new `DriverData` endpoint-reference helpers, exercise native
+   retirement and then
    define timestamp scheduling and reverse legacy
    projection. Close U01 only
    afterward with appended client vectors, 32/64-bit builds, ownership tests
@@ -727,9 +730,9 @@ adapter. Public ABI remains a separate U01 gate.
    ownership, registry-owned data sessions and a host-tested fixed-port legacy
    adapter plus format-fixed bounded queues, effective-capacity negotiation and
    lossless transactional pumping and a bounded-work AROS executor. The
-   `DriverData` notification/open-reference wiring, native AROS retirement
-   stress, timestamp scheduling and reverse legacy projection remain before
-   U01 closure.
+   shared `DriverData` open-reference state. Adapter session/notification
+   wiring, native AROS retirement stress, timestamp scheduling and reverse
+   legacy projection remain before U01 closure.
 
 
 ## 7. Native MIDI 2.0 / UMP architecture (future design contract)

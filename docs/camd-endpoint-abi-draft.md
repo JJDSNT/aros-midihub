@@ -328,8 +328,9 @@ publishes an existing CAMD driver into the endpoint registry. Existing CAMD
 MIDI 1.0 queues; endpoint clients use the private MIDI 1.0 provider callbacks.
 The executable model requires stable IDs as input, rejects UMP, checks each
 port's direction and forwards complete native messages without conversion.
-The AROS shim that shares physical-port opens with `DriverData` is not yet
-connected.
+The private AROS `DriverData` state now combines legacy direction presence and
+endpoint direction reference counts into one first-open/last-close lifecycle.
+The adapter backend is not yet connected to those endpoint helpers.
 
 The reverse projection described below exposes suitable native endpoints to
 legacy applications and is a separate component.

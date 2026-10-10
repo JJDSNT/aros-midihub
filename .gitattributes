@@ -1,0 +1,3 @@
+# Patch payloads preserve upstream context verbatim, including historical
+# whitespace that is not introduced into MIDIHub's own source files.
+patches/*.patch -whitespace

@@ -34,6 +34,11 @@ checkout and leaves the identical native item queued for retry.
 uses a condition variable. Wake requests coalesce, each pump run has a fixed
 item budget, and synchronous stop waits until no callback is active.
 
+`legacy_port_refs.c` models the logical owners of one fixed legacy port. The
+AROS `DriverData` path now uses it instead of two isolated booleans: legacy
+input/output presence and endpoint input/output reference counts produce one
+physical open transition on the first owner and one close on the last.
+
 The current slice proves:
 
 - the proposed pointer-free record sizes on the host compiler;
@@ -98,6 +103,9 @@ The current slice proves:
 - a task/signal worker resumes the pump on explicit producer or downstream
   capacity notifications, records work/block/failure counters and stops after
   at most the current bounded pump run;
+- existing cluster attachment/removal uses the shared port-reference state,
+  while private endpoint acquire/release helpers can join the same physical
+  open without a second driver `OpenPort()`; failed opens roll back ownership;
 - sessions are unidirectional; `QueueCapacity` is a minimum reserved native
   record count, and successful opens expose effective capacity and the native
   MIDI 1.0 SysEx limit through registry-owned session information;
@@ -114,7 +122,8 @@ It deliberately does not yet implement:
 - an interrupt-safe ingress handoff; the current queue lock is task-context
   only;
 - any format/protocol converter or lossy policy;
-- the AROS `DriverData` backend shim and its open/reference integration;
+- the adapter backend that invokes the new `DriverData` endpoint-reference
+  helpers and connects worker wakeups to producer/transmitter events;
 - projection of native UMP endpoints back into legacy clusters;
 - any public CAMD vector, tag, header or normative UMP wire constant.
 
@@ -124,7 +133,7 @@ Run it with the normal host suite:
 make test
 ```
 
-The next slice connects this worker to `DriverData` open references, producer
-enqueue and transmitter-capacity wakeups without intercepting existing cluster
-traffic. Public vectors remain blocked until the AROS shim, timestamp policy,
-legacy projection policy and U01 review pass.
+The next slice makes the adapter backend invoke the implemented `DriverData`
+endpoint references, producer enqueue and transmitter-capacity wakeups without
+intercepting existing cluster traffic. Public vectors remain blocked until the
+data shim, timestamp policy, legacy projection policy and U01 review pass.

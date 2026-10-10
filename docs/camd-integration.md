@@ -113,11 +113,11 @@ itself.
    lock order. This does not freeze public symbols.
 2. Implement the private registry, generation snapshots and watches as the
    shared control plane, without changing CAMD 41/42 structures.
-3. Use the implemented bounded-work AROS task/signal executor to connect the
-   fixed-port adapter to `DriverData`: endpoint sessions share physical-port
-   opens with the unchanged cluster path, producer enqueue wakes the worker and
-   transmitter capacity wakes a blocked pump. Add timestamp eligibility and
-   reverse cluster projection after this lossless path is operational.
+3. Connect the fixed-port adapter to the implemented `DriverData` shared-open
+   helpers and bounded-work AROS executor: producer enqueue wakes the worker
+   and transmitter capacity wakes a blocked pump. The unchanged cluster path
+   already participates in the same first-open/last-close state. Add timestamp
+   eligibility and reverse cluster projection after this path is operational.
    The host model already proves endpoint/session ownership, asynchronous
    receive teardown and separate native MIDI 1.0/UMP dispatch; do not require
    MIDI 1.0-to-MIDI 1.0 traffic to convert through UMP.
