@@ -4573,7 +4573,7 @@ new file mode 100644
 index 0000000000..8f264a8fc1
 --- /dev/null
 +++ b/workbench/libs/camd/native_event_worker.c
-@@ -0,0 +1,390 @@
+@@ -0,0 +1,401 @@
 +#include "native_event_worker.h"
 +
 +#include <limits.h>
@@ -4886,6 +4886,17 @@ index 0000000000..8f264a8fc1
 +    return CAMD_NATIVE_WORKER_OK;
 +}
 +
++#ifdef __AROS__
++enum CAMDNativeWorkerResult camd_native_worker_wake_from_interrupt(
++    struct CAMDNativeEventWorker *worker)
++{
++    if (!worker || !worker->process || worker->wake_signal < 0)
++        return CAMD_NATIVE_WORKER_INVALID;
++    Signal(&worker->process->pr_Task, 1UL << worker->wake_signal);
++    return CAMD_NATIVE_WORKER_OK;
++}
++#endif
++
 +enum CAMDNativeWorkerResult camd_native_worker_stop(
 +    struct CAMDNativeEventWorker *worker)
 +{
@@ -4969,7 +4980,7 @@ new file mode 100644
 index 0000000000..34efe6b69d
 --- /dev/null
 +++ b/workbench/libs/camd/native_event_worker.h
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,75 @@
 +#ifndef CAMD_NATIVE_EVENT_WORKER_H
 +#define CAMD_NATIVE_EVENT_WORKER_H
 +
@@ -5022,6 +5033,15 @@ index 0000000000..34efe6b69d
 + * downstream-capacity notification explicitly wakes it again. */
 +enum CAMDNativeWorkerResult camd_native_worker_wake(
 +    struct CAMDNativeEventWorker *worker);
++
++#ifdef __AROS__
++/* Interrupt-safe AROS capacity notification.  Unlike the task-context wake,
++ * this only calls Exec Signal() and does not acquire a semaphore or update
++ * statistics.  The caller must prevent concurrent stop/destroy and keep the
++ * worker alive until every interrupt source that can call this has quiesced. */
++enum CAMDNativeWorkerResult camd_native_worker_wake_from_interrupt(
++    struct CAMDNativeEventWorker *worker);
++#endif
 +
 +/* Synchronous and idempotent. No callback is active when it returns. */
 +enum CAMDNativeWorkerResult camd_native_worker_stop(

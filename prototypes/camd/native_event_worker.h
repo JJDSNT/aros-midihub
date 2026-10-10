@@ -51,6 +51,15 @@ enum CAMDNativeWorkerResult camd_native_worker_create(
 enum CAMDNativeWorkerResult camd_native_worker_wake(
     struct CAMDNativeEventWorker *worker);
 
+#ifdef __AROS__
+/* Interrupt-safe AROS capacity notification.  Unlike the task-context wake,
+ * this only calls Exec Signal() and does not acquire a semaphore or update
+ * statistics.  The caller must prevent concurrent stop/destroy and keep the
+ * worker alive until every interrupt source that can call this has quiesced. */
+enum CAMDNativeWorkerResult camd_native_worker_wake_from_interrupt(
+    struct CAMDNativeEventWorker *worker);
+#endif
+
 /* Synchronous and idempotent. No callback is active when it returns. */
 enum CAMDNativeWorkerResult camd_native_worker_stop(
     struct CAMDNativeEventWorker *worker);

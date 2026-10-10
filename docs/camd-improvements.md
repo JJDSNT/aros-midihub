@@ -575,7 +575,9 @@ count, exposes effective capacity/SysEx limit and rejects an inconsistent
 successful open. The software provider uses this queue and proves full,
 oversize, drain and cancel behavior. Scheduling and interrupt handoff remain
 open; the pump supplies lossless retry and its worker supplies native task
-wakeup. The legacy cluster path now uses the shared `DriverData` reference
+wakeup. On AROS the worker also exposes a `Signal()`-only interrupt-safe wake;
+the backend must quiesce the driver's callbacks before stopping or freeing its
+worker. The legacy cluster path now uses the shared `DriverData` reference
 state, but the adapter does not yet invoke the endpoint side, connect wakeups
 or decide timestamp eligibility.
 

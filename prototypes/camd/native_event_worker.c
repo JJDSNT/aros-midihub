@@ -310,6 +310,17 @@ enum CAMDNativeWorkerResult camd_native_worker_wake(
     return CAMD_NATIVE_WORKER_OK;
 }
 
+#ifdef __AROS__
+enum CAMDNativeWorkerResult camd_native_worker_wake_from_interrupt(
+    struct CAMDNativeEventWorker *worker)
+{
+    if (!worker || !worker->process || worker->wake_signal < 0)
+        return CAMD_NATIVE_WORKER_INVALID;
+    Signal(&worker->process->pr_Task, 1UL << worker->wake_signal);
+    return CAMD_NATIVE_WORKER_OK;
+}
+#endif
+
 enum CAMDNativeWorkerResult camd_native_worker_stop(
     struct CAMDNativeEventWorker *worker)
 {

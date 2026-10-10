@@ -120,7 +120,8 @@ It deliberately does not yet implement:
 - wiring the worker wakeups to actual `DriverData` producer/transmitter events;
 - timestamp-based eligibility and delayed dispatch;
 - an interrupt-safe ingress handoff; the current queue lock is task-context
-  only;
+  only (the AROS worker now has a lock-free `Signal()`-only capacity wake for
+  an already-quiesced lifetime, but no interrupt producer may enqueue);
 - any format/protocol converter or lossy policy;
 - the adapter backend that invokes the new `DriverData` endpoint-reference
   helpers and connects worker wakeups to producer/transmitter events;
@@ -134,6 +135,8 @@ make test
 ```
 
 The next slice makes the adapter backend invoke the implemented `DriverData`
-endpoint references, producer enqueue and transmitter-capacity wakeups without
-intercepting existing cluster traffic. Public vectors remain blocked until the
-data shim, timestamp policy, legacy projection policy and U01 review pass.
+endpoint references and producer enqueue, then installs the worker's
+interrupt-safe capacity wake only after the physical driver's close contract
+has quiesced callbacks. Existing cluster traffic remains untouched. Public
+vectors remain blocked until the data shim, timestamp policy, legacy
+projection policy and U01 review pass.

@@ -202,9 +202,11 @@ downstream with no queue or registry lock held, and commits only after
 acceptance. A full or failing downstream leaves the item queued, which avoids
 both loss and duplicate delivery when a legacy driver buffer temporarily
 cannot accept more data. A private bounded-work executor now supplies coalesced
-task/signal wakeups and synchronous stop on both host and AROS builds. Wiring
-those wakeups to each transport and timestamp eligibility remain separate
-runtime policies.
+task/signal wakeups and synchronous stop on both host and AROS builds. Its AROS
+capacity-notification entry calls only interrupt-safe Exec `Signal()`; the
+caller must keep the worker alive and prevent stop until the interrupt source
+is quiescent. Wiring that entry to each transport and timestamp eligibility
+remain separate runtime policies.
 
 Endpoint sessions are unidirectional. Their requested `QueueCapacity` is a
 minimum reservation of native records, not a hint and not shared unreserved
