@@ -24,6 +24,11 @@ and `DriverData` path without passing through the adapter.
 is fully allocated at creation, is fixed to MIDI 1.0 or UMP, and counts native
 records rather than bytes or converted packets.
 
+`native_event_pump.c` is its single-consumer delivery bridge. It checks out a
+complete head item, invokes the downstream without holding the queue lock and
+commits only after acceptance. Backpressure or callback failure releases the
+checkout and leaves the identical native item queued for retry.
+
 The current slice proves:
 
 - the proposed pointer-free record sizes on the host compiler;
@@ -79,6 +84,12 @@ The current slice proves:
   cancelled, full-rejection and oversize-rejection history;
 - concurrent producers are serialized with a task-context lock and receive
   deterministic bounded backpressure rather than unbounded allocation.
+- transactional checkout prevents drain/cancel from removing an item while a
+  downstream decision is in flight; accepted items commit exactly once and a
+  blocked downstream leaves them at the head;
+- a bounded-work pump delivers MIDI 1.0 batches, complete SysEx or UMP without
+  conversion, stops deterministically on downstream backpressure and exposes
+  callback failures separately from a full destination;
 - sessions are unidirectional; `QueueCapacity` is a minimum reserved native
   record count, and successful opens expose effective capacity and the native
   MIDI 1.0 SysEx limit through registry-owned session information;
@@ -90,7 +101,7 @@ It deliberately does not yet implement:
 
 - stable-ID storage or key derivation;
 - concurrent retirement/failure-path stress on native AROS;
-- scheduling or timestamp-based dispatch from a queued provider;
+- wakeup integration and timestamp-based dispatch from a queued provider;
 - an interrupt-safe ingress handoff; the current queue lock is task-context
   only;
 - any format/protocol converter or lossy policy;
@@ -104,7 +115,7 @@ Run it with the normal host suite:
 make test
 ```
 
-The next slice connects the adapter backend to AROS `DriverData` without
-intercepting existing cluster traffic, then exercises retirement and queue
-backpressure in the native runtime. Public vectors remain blocked until the
-AROS shim, scheduling policy, legacy projection policy and U01 review pass.
+The next slice gives the AROS adapter backend a task/signal wakeup around this
+pump, then connects it to `DriverData` without intercepting existing cluster
+traffic. Public vectors remain blocked until the AROS shim, timestamp policy,
+legacy projection policy and U01 review pass.

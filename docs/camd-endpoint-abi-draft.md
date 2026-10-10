@@ -293,7 +293,11 @@ asynchronous callbacks and is released only after stop plus callback drain.
 This proves lifetime, dispatch and capacity negotiation. The software provider
 uses the bounded primitive through registry send/drain/cancel operations and
 returns explicit queue-full and oversized-message results. Scheduling and the
-native AROS driver/runtime integration are not yet complete.
+native AROS driver/runtime integration are not yet complete. The private queue
+now also has transactional checkout/commit/release and a bounded-work pump:
+downstream callbacks run unlocked, acceptance commits exactly once, and
+backpressure leaves the native item queued. These are implementation details,
+not additional public v43 operations.
 
 Provider callbacks execute without registry, endpoint or legacy graph locks.
 Their context remains valid until the shutdown callback has completed and the

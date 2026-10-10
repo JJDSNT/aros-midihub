@@ -2941,25 +2941,334 @@ index 0000000000..61e41a4eba
 +
 +#endif
 diff --git a/workbench/libs/camd/mmakefile.src b/workbench/libs/camd/mmakefile.src
-index bf193caead..901a86dd85 100644
+index bf193caead..f80772940f 100644
 --- a/workbench/libs/camd/mmakefile.src
 +++ b/workbench/libs/camd/mmakefile.src
-@@ -5,7 +5,8 @@ USER_LDFLAGS := -static
+@@ -5,7 +5,9 @@ USER_LDFLAGS := -static
  
  FILES :=    drivers clusters init camdwait mididistr midifromdriver \
  	    midimsgtype2 miditodriver receiverproc strings sysexdistr \
 -	    unlinkmidilink getmidilinkfromownernode camdclock
 +	    unlinkmidilink getmidilinkfromownernode camdclock endpoint_registry \
-+	    provider_contract legacy_driver_adapter native_event_queue
++	    provider_contract legacy_driver_adapter native_event_queue \
++	    native_event_pump
  
  FUNCS := \
      lockcamd \
+diff --git a/workbench/libs/camd/native_event_pump.c b/workbench/libs/camd/native_event_pump.c
+new file mode 100644
+index 0000000000..b98313628f
+--- /dev/null
++++ b/workbench/libs/camd/native_event_pump.c
+@@ -0,0 +1,242 @@
++#include "native_event_pump.h"
++
++#include <limits.h>
++#include <string.h>
++
++#ifdef __AROS__
++#include <exec/memory.h>
++#include <proto/exec.h>
++#else
++#include <stdlib.h>
++#endif
++
++struct CAMDNativeEventPump {
++    struct CAMDNativeEventQueue *queue;
++    struct CAMDProviderReceiveSinkV1 downstream;
++    struct CAMDMIDI1EventV1 *midi1;
++    struct CAMDUMPEventV1 *ump;
++    uint8_t *sysex;
++    uint32_t format;
++    uint32_t max_batch_records;
++    uint32_t max_sysex_bytes;
++};
++
++static void *pump_alloc(size_t size, int clear)
++{
++#ifdef __AROS__
++    ULONG flags = MEMF_ANY | (clear ? MEMF_CLEAR : 0);
++
++    if (size > (size_t)ULONG_MAX)
++        return NULL;
++    return AllocVec((ULONG)size, flags);
++#else
++    return clear ? calloc(1, size) : malloc(size);
++#endif
++}
++
++static void pump_free(void *pointer)
++{
++#ifdef __AROS__
++    if (pointer)
++        FreeVec(pointer);
++#else
++    free(pointer);
++#endif
++}
++
++static int valid_config(const struct CAMDNativePumpConfigV1 *config,
++                        const struct CAMDProviderReceiveSinkV1 *downstream)
++{
++    if (!config || config->Size != sizeof(*config) || config->Version != 1 ||
++        config->MaxBatchRecords == 0 || !downstream ||
++        downstream->Size != sizeof(*downstream) || downstream->Version != 1)
++        return 0;
++    if (config->DataFormat == CAMD_PROVIDER_FORMAT_MIDI1)
++        return config->MaxSysExBytes >= 2 && downstream->SubmitMIDI1 &&
++               downstream->SubmitMIDI1SysEx && !downstream->SubmitUMP;
++    if (config->DataFormat == CAMD_PROVIDER_FORMAT_UMP)
++        return config->MaxSysExBytes == 0 && !downstream->SubmitMIDI1 &&
++               !downstream->SubmitMIDI1SysEx && downstream->SubmitUMP;
++    return 0;
++}
++
++enum CAMDNativePumpResult camd_native_pump_create(
++    struct CAMDNativeEventQueue *queue,
++    const struct CAMDNativePumpConfigV1 *config,
++    const struct CAMDProviderReceiveSinkV1 *downstream,
++    struct CAMDNativeEventPump **pump_out)
++{
++    struct CAMDNativeEventPump *pump;
++    size_t bytes;
++
++    if (!pump_out)
++        return CAMD_NATIVE_PUMP_INVALID;
++    *pump_out = NULL;
++    if (!queue || !valid_config(config, downstream))
++        return CAMD_NATIVE_PUMP_INVALID;
++    pump = pump_alloc(sizeof(*pump), 1);
++    if (!pump)
++        return CAMD_NATIVE_PUMP_NOMEM;
++    pump->queue = queue;
++    pump->downstream = *downstream;
++    pump->format = config->DataFormat;
++    pump->max_batch_records = config->MaxBatchRecords;
++    pump->max_sysex_bytes = config->MaxSysExBytes;
++#if SIZE_MAX <= UINT32_MAX
++    if (config->MaxBatchRecords > SIZE_MAX / sizeof(*pump->midi1))
++        goto nomem;
++#endif
++    bytes = (size_t)config->MaxBatchRecords * sizeof(*pump->midi1);
++    if (pump->format == CAMD_PROVIDER_FORMAT_MIDI1) {
++        pump->midi1 = pump_alloc(bytes, 0);
++        pump->sysex = pump_alloc(config->MaxSysExBytes, 0);
++        if (!pump->midi1 || !pump->sysex)
++            goto nomem;
++    } else {
++#if SIZE_MAX <= UINT32_MAX
++        if (config->MaxBatchRecords > SIZE_MAX / sizeof(*pump->ump))
++            goto nomem;
++#endif
++        bytes = (size_t)config->MaxBatchRecords * sizeof(*pump->ump);
++        pump->ump = pump_alloc(bytes, 0);
++        if (!pump->ump)
++            goto nomem;
++    }
++    *pump_out = pump;
++    return CAMD_NATIVE_PUMP_OK;
++
++nomem:
++    pump_free(pump->sysex);
++    pump_free(pump->ump);
++    pump_free(pump->midi1);
++    pump_free(pump);
++    return CAMD_NATIVE_PUMP_NOMEM;
++}
++
++void camd_native_pump_destroy(struct CAMDNativeEventPump *pump)
++{
++    if (!pump)
++        return;
++    pump_free(pump->sysex);
++    pump_free(pump->ump);
++    pump_free(pump->midi1);
++    pump_free(pump);
++}
++
++static enum CAMDNativePumpResult checkout_head(
++    struct CAMDNativeEventPump *pump,
++    const struct CAMDNativeQueueHeadV1 *head,
++    struct CAMDNativeQueueCheckoutV1 *checkout,
++    enum CAMDProviderResult *downstream_result)
++{
++    enum CAMDNativeQueueResult queue_result;
++    struct CAMDNativeQueueSysExInfoV1 sysex_info;
++    size_t count = 0;
++
++    if (head->RecordCount > pump->max_batch_records)
++        return CAMD_NATIVE_PUMP_STATE;
++    if ((pump->format == CAMD_PROVIDER_FORMAT_MIDI1 &&
++         head->Kind == CAMD_NATIVE_QUEUE_ITEM_UMP) ||
++        (pump->format == CAMD_PROVIDER_FORMAT_UMP &&
++         head->Kind != CAMD_NATIVE_QUEUE_ITEM_UMP))
++        return CAMD_NATIVE_PUMP_STATE;
++    if (head->Kind == CAMD_NATIVE_QUEUE_ITEM_MIDI1) {
++        queue_result = camd_native_queue_checkout_midi1(
++            pump->queue, pump->midi1, pump->max_batch_records, &count,
++            checkout);
++        if (queue_result == CAMD_NATIVE_QUEUE_OK)
++            *downstream_result = pump->downstream.SubmitMIDI1(
++                pump->downstream.Context, pump->midi1, count);
++    } else if (head->Kind == CAMD_NATIVE_QUEUE_ITEM_MIDI1_SYSEX) {
++        memset(&sysex_info, 0, sizeof(sysex_info));
++        sysex_info.Size = sizeof(sysex_info);
++        sysex_info.Version = 1;
++        queue_result = camd_native_queue_checkout_midi1_sysex(
++            pump->queue, pump->sysex, pump->max_sysex_bytes, &sysex_info,
++            checkout);
++        if (queue_result == CAMD_NATIVE_QUEUE_OK)
++            *downstream_result = pump->downstream.SubmitMIDI1SysEx(
++                pump->downstream.Context, pump->sysex,
++                sysex_info.ByteCount, sysex_info.TimeHigh,
++                sysex_info.TimeLow, sysex_info.ClockDomain,
++                sysex_info.Flags);
++    } else if (head->Kind == CAMD_NATIVE_QUEUE_ITEM_UMP) {
++        queue_result = camd_native_queue_checkout_ump(
++            pump->queue, pump->ump, pump->max_batch_records, &count,
++            checkout);
++        if (queue_result == CAMD_NATIVE_QUEUE_OK)
++            *downstream_result = pump->downstream.SubmitUMP(
++                pump->downstream.Context, pump->ump, count);
++    } else {
++        return CAMD_NATIVE_PUMP_STATE;
++    }
++    if (queue_result == CAMD_NATIVE_QUEUE_BUSY)
++        return CAMD_NATIVE_PUMP_BUSY;
++    if (queue_result != CAMD_NATIVE_QUEUE_OK)
++        return CAMD_NATIVE_PUMP_STATE;
++    return CAMD_NATIVE_PUMP_OK;
++}
++
++enum CAMDNativePumpResult camd_native_pump_run(
++    struct CAMDNativeEventPump *pump,
++    size_t item_budget,
++    size_t *processed_items,
++    size_t *processed_records,
++    enum CAMDProviderResult *downstream_result)
++{
++    enum CAMDNativePumpResult result = CAMD_NATIVE_PUMP_OK;
++    size_t items = 0, records = 0;
++
++    if (!pump || item_budget == 0 || !processed_items ||
++        !processed_records || !downstream_result)
++        return CAMD_NATIVE_PUMP_INVALID;
++    *processed_items = 0;
++    *processed_records = 0;
++    *downstream_result = CAMD_PROVIDER_OK;
++    while (items < item_budget) {
++        struct CAMDNativeQueueHeadV1 head;
++        struct CAMDNativeQueueCheckoutV1 checkout;
++        enum CAMDNativeQueueResult queue_result;
++
++        memset(&head, 0, sizeof(head));
++        head.Size = sizeof(head);
++        head.Version = 1;
++        queue_result = camd_native_queue_peek(pump->queue, &head);
++        if (queue_result == CAMD_NATIVE_QUEUE_EMPTY) {
++            result = items == 0 ? CAMD_NATIVE_PUMP_EMPTY
++                                : CAMD_NATIVE_PUMP_OK;
++            break;
++        }
++        if (queue_result != CAMD_NATIVE_QUEUE_OK) {
++            result = CAMD_NATIVE_PUMP_STATE;
++            break;
++        }
++        memset(&checkout, 0, sizeof(checkout));
++        checkout.Size = sizeof(checkout);
++        checkout.Version = 1;
++        result = checkout_head(pump, &head, &checkout, downstream_result);
++        if (result != CAMD_NATIVE_PUMP_OK)
++            break;
++        if (*downstream_result != CAMD_PROVIDER_OK) {
++            if (camd_native_queue_release(pump->queue, &checkout) !=
++                CAMD_NATIVE_QUEUE_OK) {
++                result = CAMD_NATIVE_PUMP_STATE;
++                break;
++            }
++            result = *downstream_result == CAMD_PROVIDER_QUEUE_FULL
++                         ? CAMD_NATIVE_PUMP_BLOCKED
++                         : CAMD_NATIVE_PUMP_DOWNSTREAM;
++            break;
++        }
++        if (camd_native_queue_commit(pump->queue, &checkout) !=
++            CAMD_NATIVE_QUEUE_OK) {
++            result = CAMD_NATIVE_PUMP_STATE;
++            break;
++        }
++        ++items;
++        records += head.RecordCount;
++    }
++    *processed_items = items;
++    *processed_records = records;
++    return result;
++}
+diff --git a/workbench/libs/camd/native_event_pump.h b/workbench/libs/camd/native_event_pump.h
+new file mode 100644
+index 0000000000..787b8e6335
+--- /dev/null
++++ b/workbench/libs/camd/native_event_pump.h
+@@ -0,0 +1,54 @@
++#ifndef CAMD_NATIVE_EVENT_PUMP_H
++#define CAMD_NATIVE_EVENT_PUMP_H
++
++/*
++ * Private single-consumer pump for a CAMD native-event queue.
++ *
++ * A downstream callback runs without the queue lock held.  The head item is
++ * committed only after CAMD_PROVIDER_OK; every other result leaves it queued
++ * for an explicit retry or cancellation.  This is the bridge needed between
++ * reserved session queues and bounded legacy/device buffers.
++ */
++
++#include "native_event_queue.h"
++
++enum CAMDNativePumpResult {
++    CAMD_NATIVE_PUMP_OK = 0,
++    CAMD_NATIVE_PUMP_INVALID,
++    CAMD_NATIVE_PUMP_NOMEM,
++    CAMD_NATIVE_PUMP_EMPTY,
++    CAMD_NATIVE_PUMP_BLOCKED,
++    CAMD_NATIVE_PUMP_DOWNSTREAM,
++    CAMD_NATIVE_PUMP_BUSY,
++    CAMD_NATIVE_PUMP_STATE
++};
++
++struct CAMDNativePumpConfigV1 {
++    uint32_t Size;
++    uint32_t Version;
++    uint32_t DataFormat;
++    uint32_t MaxBatchRecords;
++    uint32_t MaxSysExBytes;
++};
++
++struct CAMDNativeEventPump;
++
++enum CAMDNativePumpResult camd_native_pump_create(
++    struct CAMDNativeEventQueue *queue,
++    const struct CAMDNativePumpConfigV1 *config,
++    const struct CAMDProviderReceiveSinkV1 *downstream,
++    struct CAMDNativeEventPump **pump);
++void camd_native_pump_destroy(struct CAMDNativeEventPump *pump);
++
++/* Process at most item_budget complete queue items. processed_records counts
++ * native records, so a batch can contribute more than one.  A blocked or
++ * failing downstream result is returned separately and the item stays at the
++ * head. */
++enum CAMDNativePumpResult camd_native_pump_run(
++    struct CAMDNativeEventPump *pump,
++    size_t item_budget,
++    size_t *processed_items,
++    size_t *processed_records,
++    enum CAMDProviderResult *downstream_result);
++
++#endif
 diff --git a/workbench/libs/camd/native_event_queue.c b/workbench/libs/camd/native_event_queue.c
 new file mode 100644
-index 0000000000..fb0cbbc18b
+index 0000000000..98071b99c0
 --- /dev/null
 +++ b/workbench/libs/camd/native_event_queue.c
-@@ -0,0 +1,522 @@
+@@ -0,0 +1,717 @@
 +#include "native_event_queue.h"
 +
 +#include <limits.h>
@@ -3006,6 +3315,9 @@ index 0000000000..fb0cbbc18b
 +    uint64_t cancelled;
 +    uint64_t full_rejections;
 +    uint64_t oversize_rejections;
++    uint64_t next_checkout;
++    uint64_t active_checkout;
++    uint32_t checked_out_records;
 +};
 +
 +static void *queue_alloc(size_t size, int clear)
@@ -3138,6 +3450,7 @@ index 0000000000..fb0cbbc18b
 +    queue->format = config->DataFormat;
 +    queue->capacity = config->Capacity;
 +    queue->max_sysex_bytes = config->MaxSysExBytes;
++    queue->next_checkout = 1;
 +    *queue_out = queue;
 +    return CAMD_NATIVE_QUEUE_OK;
 +
@@ -3338,6 +3651,8 @@ index 0000000000..fb0cbbc18b
 +
 +    if (!event_count || (!events && event_capacity != 0))
 +        return CAMD_NATIVE_QUEUE_INVALID;
++    if (queue->active_checkout != 0)
++        return CAMD_NATIVE_QUEUE_BUSY;
 +    if (queue->used == 0)
 +        return CAMD_NATIVE_QUEUE_EMPTY;
 +    first = &queue->slots[queue->head];
@@ -3396,6 +3711,10 @@ index 0000000000..fb0cbbc18b
 +    if (queue->format != CAMD_PROVIDER_FORMAT_MIDI1)
 +        return CAMD_NATIVE_QUEUE_WRONG_FORMAT;
 +    queue_lock_acquire(&queue->lock);
++    if (queue->active_checkout != 0) {
++        result = CAMD_NATIVE_QUEUE_BUSY;
++        goto out;
++    }
 +    if (queue->used == 0) {
 +        result = CAMD_NATIVE_QUEUE_EMPTY;
 +        goto out;
@@ -3437,6 +3756,187 @@ index 0000000000..fb0cbbc18b
 +    return result;
 +}
 +
++static enum CAMDNativeQueueResult begin_checkout(
++    struct CAMDNativeEventQueue *queue, uint32_t kind,
++    struct CAMDNativeQueueCheckoutV1 *checkout)
++{
++    struct queue_slot *first;
++    uint64_t token;
++
++    if (queue->active_checkout != 0)
++        return CAMD_NATIVE_QUEUE_BUSY;
++    if (queue->used == 0)
++        return CAMD_NATIVE_QUEUE_EMPTY;
++    first = &queue->slots[queue->head];
++    if (first->kind != kind)
++        return CAMD_NATIVE_QUEUE_WRONG_FORMAT;
++    if (first->batch_count == 0 || first->batch_count > queue->used)
++        return CAMD_NATIVE_QUEUE_INVALID;
++    token = queue->next_checkout++;
++    if (queue->next_checkout == 0)
++        queue->next_checkout = 1;
++    queue->active_checkout = token;
++    queue->checked_out_records = first->batch_count;
++    checkout->Token = token;
++    checkout->Kind = kind;
++    checkout->RecordCount = first->batch_count;
++    return CAMD_NATIVE_QUEUE_OK;
++}
++
++static int valid_checkout(const struct CAMDNativeQueueCheckoutV1 *checkout)
++{
++    return checkout && checkout->Size == sizeof(*checkout) &&
++           checkout->Version == 1;
++}
++
++enum CAMDNativeQueueResult camd_native_queue_checkout_midi1(
++    struct CAMDNativeEventQueue *queue,
++    struct CAMDMIDI1EventV1 *events,
++    size_t event_capacity,
++    size_t *event_count,
++    struct CAMDNativeQueueCheckoutV1 *checkout)
++{
++    enum CAMDNativeQueueResult result;
++    uint32_t count;
++    size_t i;
++
++    if (!queue || !valid_checkout(checkout) || !event_count ||
++        (!events && event_capacity != 0))
++        return CAMD_NATIVE_QUEUE_INVALID;
++    if (queue->format != CAMD_PROVIDER_FORMAT_MIDI1)
++        return CAMD_NATIVE_QUEUE_WRONG_FORMAT;
++    queue_lock_acquire(&queue->lock);
++    result = begin_checkout(queue, CAMD_NATIVE_QUEUE_ITEM_MIDI1, checkout);
++    if (result != CAMD_NATIVE_QUEUE_OK)
++        goto out;
++    count = checkout->RecordCount;
++    *event_count = count;
++    if (event_capacity < count) {
++        queue->active_checkout = 0;
++        queue->checked_out_records = 0;
++        result = CAMD_NATIVE_QUEUE_RANGE;
++        goto out;
++    }
++    for (i = 0; i < count; ++i)
++        events[i] = queue->slots[queue_index(queue, queue->head, i)].midi1;
++out:
++    queue_lock_release(&queue->lock);
++    return result;
++}
++
++enum CAMDNativeQueueResult camd_native_queue_checkout_midi1_sysex(
++    struct CAMDNativeEventQueue *queue,
++    uint8_t *bytes,
++    size_t byte_capacity,
++    struct CAMDNativeQueueSysExInfoV1 *info,
++    struct CAMDNativeQueueCheckoutV1 *checkout)
++{
++    enum CAMDNativeQueueResult result;
++    struct queue_slot *slot;
++
++    if (!queue || !valid_checkout(checkout) || !info ||
++        info->Size != sizeof(*info) || info->Version != 1 ||
++        (!bytes && byte_capacity != 0))
++        return CAMD_NATIVE_QUEUE_INVALID;
++    if (queue->format != CAMD_PROVIDER_FORMAT_MIDI1)
++        return CAMD_NATIVE_QUEUE_WRONG_FORMAT;
++    queue_lock_acquire(&queue->lock);
++    result = begin_checkout(queue, CAMD_NATIVE_QUEUE_ITEM_MIDI1_SYSEX,
++                            checkout);
++    if (result != CAMD_NATIVE_QUEUE_OK)
++        goto out;
++    slot = &queue->slots[queue->head];
++    *info = slot->sysex;
++    if (byte_capacity < slot->sysex.ByteCount) {
++        queue->active_checkout = 0;
++        queue->checked_out_records = 0;
++        result = CAMD_NATIVE_QUEUE_RANGE;
++        goto out;
++    }
++    memcpy(bytes, sysex_slot(queue, queue->head), slot->sysex.ByteCount);
++out:
++    queue_lock_release(&queue->lock);
++    return result;
++}
++
++enum CAMDNativeQueueResult camd_native_queue_checkout_ump(
++    struct CAMDNativeEventQueue *queue,
++    struct CAMDUMPEventV1 *events,
++    size_t event_capacity,
++    size_t *event_count,
++    struct CAMDNativeQueueCheckoutV1 *checkout)
++{
++    enum CAMDNativeQueueResult result;
++    uint32_t count;
++    size_t i;
++
++    if (!queue || !valid_checkout(checkout) || !event_count ||
++        (!events && event_capacity != 0))
++        return CAMD_NATIVE_QUEUE_INVALID;
++    if (queue->format != CAMD_PROVIDER_FORMAT_UMP)
++        return CAMD_NATIVE_QUEUE_WRONG_FORMAT;
++    queue_lock_acquire(&queue->lock);
++    result = begin_checkout(queue, CAMD_NATIVE_QUEUE_ITEM_UMP, checkout);
++    if (result != CAMD_NATIVE_QUEUE_OK)
++        goto out;
++    count = checkout->RecordCount;
++    *event_count = count;
++    if (event_capacity < count) {
++        queue->active_checkout = 0;
++        queue->checked_out_records = 0;
++        result = CAMD_NATIVE_QUEUE_RANGE;
++        goto out;
++    }
++    for (i = 0; i < count; ++i)
++        events[i] = queue->slots[queue_index(queue, queue->head, i)].ump;
++out:
++    queue_lock_release(&queue->lock);
++    return result;
++}
++
++static enum CAMDNativeQueueResult finish_checkout(
++    struct CAMDNativeEventQueue *queue,
++    const struct CAMDNativeQueueCheckoutV1 *checkout, int commit)
++{
++    enum CAMDNativeQueueResult result = CAMD_NATIVE_QUEUE_OK;
++
++    if (!queue || !valid_checkout(checkout))
++        return CAMD_NATIVE_QUEUE_INVALID;
++    queue_lock_acquire(&queue->lock);
++    if (queue->active_checkout == 0 ||
++        queue->active_checkout != checkout->Token ||
++        queue->checked_out_records != checkout->RecordCount ||
++        queue->slots[queue->head].kind != checkout->Kind) {
++        result = CAMD_NATIVE_QUEUE_STATE;
++        goto out;
++    }
++    if (commit) {
++        if (checkout->Kind == CAMD_NATIVE_QUEUE_ITEM_MIDI1_SYSEX)
++            memset(sysex_slot(queue, queue->head), 0,
++                   queue->slots[queue->head].sysex.ByteCount);
++        consume_records(queue, queue->checked_out_records);
++    }
++    queue->active_checkout = 0;
++    queue->checked_out_records = 0;
++out:
++    queue_lock_release(&queue->lock);
++    return result;
++}
++
++enum CAMDNativeQueueResult camd_native_queue_commit(
++    struct CAMDNativeEventQueue *queue,
++    const struct CAMDNativeQueueCheckoutV1 *checkout)
++{
++    return finish_checkout(queue, checkout, 1);
++}
++
++enum CAMDNativeQueueResult camd_native_queue_release(
++    struct CAMDNativeEventQueue *queue,
++    const struct CAMDNativeQueueCheckoutV1 *checkout)
++{
++    return finish_checkout(queue, checkout, 0);
++}
++
 +enum CAMDNativeQueueResult camd_native_queue_cancel(
 +    struct CAMDNativeEventQueue *queue,
 +    size_t *cancelled_records)
@@ -3446,6 +3946,10 @@ index 0000000000..fb0cbbc18b
 +    if (!queue || !cancelled_records)
 +        return CAMD_NATIVE_QUEUE_INVALID;
 +    queue_lock_acquire(&queue->lock);
++    if (queue->active_checkout != 0) {
++        queue_lock_release(&queue->lock);
++        return CAMD_NATIVE_QUEUE_BUSY;
++    }
 +    count = queue->used;
 +    for (i = 0; i < count; ++i) {
 +        uint32_t index = queue_index(queue, queue->head, i);
@@ -3484,10 +3988,10 @@ index 0000000000..fb0cbbc18b
 +}
 diff --git a/workbench/libs/camd/native_event_queue.h b/workbench/libs/camd/native_event_queue.h
 new file mode 100644
-index 0000000000..8c1d1fcb13
+index 0000000000..f471c3c2dc
 --- /dev/null
 +++ b/workbench/libs/camd/native_event_queue.h
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,161 @@
 +#ifndef CAMD_NATIVE_EVENT_QUEUE_H
 +#define CAMD_NATIVE_EVENT_QUEUE_H
 +
@@ -3513,7 +4017,9 @@ index 0000000000..8c1d1fcb13
 +    CAMD_NATIVE_QUEUE_FULL,
 +    CAMD_NATIVE_QUEUE_TOO_LARGE,
 +    CAMD_NATIVE_QUEUE_WRONG_FORMAT,
-+    CAMD_NATIVE_QUEUE_RANGE
++    CAMD_NATIVE_QUEUE_RANGE,
++    CAMD_NATIVE_QUEUE_STATE,
++    CAMD_NATIVE_QUEUE_BUSY
 +};
 +
 +enum CAMDNativeQueueItemKindV1 {
@@ -3560,6 +4066,17 @@ index 0000000000..8c1d1fcb13
 +    uint32_t HighWaterRecords;
 +};
 +
++/* A checkout copies one complete head item without removing it.  Exactly one
++ * checkout may be active per queue.  The consumer calls commit only after the
++ * downstream accepted the item, or release to leave it queued for retry. */
++struct CAMDNativeQueueCheckoutV1 {
++    uint32_t Size;
++    uint32_t Version;
++    uint64_t Token;
++    uint32_t Kind;
++    uint32_t RecordCount;
++};
++
 +struct CAMDNativeEventQueue;
 +
 +enum CAMDNativeQueueResult camd_native_queue_create(
@@ -3602,6 +4119,31 @@ index 0000000000..8c1d1fcb13
 +    struct CAMDUMPEventV1 *events,
 +    size_t event_capacity,
 +    size_t *event_count);
++
++enum CAMDNativeQueueResult camd_native_queue_checkout_midi1(
++    struct CAMDNativeEventQueue *queue,
++    struct CAMDMIDI1EventV1 *events,
++    size_t event_capacity,
++    size_t *event_count,
++    struct CAMDNativeQueueCheckoutV1 *checkout);
++enum CAMDNativeQueueResult camd_native_queue_checkout_midi1_sysex(
++    struct CAMDNativeEventQueue *queue,
++    uint8_t *bytes,
++    size_t byte_capacity,
++    struct CAMDNativeQueueSysExInfoV1 *info,
++    struct CAMDNativeQueueCheckoutV1 *checkout);
++enum CAMDNativeQueueResult camd_native_queue_checkout_ump(
++    struct CAMDNativeEventQueue *queue,
++    struct CAMDUMPEventV1 *events,
++    size_t event_capacity,
++    size_t *event_count,
++    struct CAMDNativeQueueCheckoutV1 *checkout);
++enum CAMDNativeQueueResult camd_native_queue_commit(
++    struct CAMDNativeEventQueue *queue,
++    const struct CAMDNativeQueueCheckoutV1 *checkout);
++enum CAMDNativeQueueResult camd_native_queue_release(
++    struct CAMDNativeEventQueue *queue,
++    const struct CAMDNativeQueueCheckoutV1 *checkout);
 +
 +enum CAMDNativeQueueResult camd_native_queue_cancel(
 +    struct CAMDNativeEventQueue *queue,

@@ -23,7 +23,9 @@ enum CAMDNativeQueueResult {
     CAMD_NATIVE_QUEUE_FULL,
     CAMD_NATIVE_QUEUE_TOO_LARGE,
     CAMD_NATIVE_QUEUE_WRONG_FORMAT,
-    CAMD_NATIVE_QUEUE_RANGE
+    CAMD_NATIVE_QUEUE_RANGE,
+    CAMD_NATIVE_QUEUE_STATE,
+    CAMD_NATIVE_QUEUE_BUSY
 };
 
 enum CAMDNativeQueueItemKindV1 {
@@ -70,6 +72,17 @@ struct CAMDNativeQueueStatsV1 {
     uint32_t HighWaterRecords;
 };
 
+/* A checkout copies one complete head item without removing it.  Exactly one
+ * checkout may be active per queue.  The consumer calls commit only after the
+ * downstream accepted the item, or release to leave it queued for retry. */
+struct CAMDNativeQueueCheckoutV1 {
+    uint32_t Size;
+    uint32_t Version;
+    uint64_t Token;
+    uint32_t Kind;
+    uint32_t RecordCount;
+};
+
 struct CAMDNativeEventQueue;
 
 enum CAMDNativeQueueResult camd_native_queue_create(
@@ -112,6 +125,31 @@ enum CAMDNativeQueueResult camd_native_queue_dequeue_ump(
     struct CAMDUMPEventV1 *events,
     size_t event_capacity,
     size_t *event_count);
+
+enum CAMDNativeQueueResult camd_native_queue_checkout_midi1(
+    struct CAMDNativeEventQueue *queue,
+    struct CAMDMIDI1EventV1 *events,
+    size_t event_capacity,
+    size_t *event_count,
+    struct CAMDNativeQueueCheckoutV1 *checkout);
+enum CAMDNativeQueueResult camd_native_queue_checkout_midi1_sysex(
+    struct CAMDNativeEventQueue *queue,
+    uint8_t *bytes,
+    size_t byte_capacity,
+    struct CAMDNativeQueueSysExInfoV1 *info,
+    struct CAMDNativeQueueCheckoutV1 *checkout);
+enum CAMDNativeQueueResult camd_native_queue_checkout_ump(
+    struct CAMDNativeEventQueue *queue,
+    struct CAMDUMPEventV1 *events,
+    size_t event_capacity,
+    size_t *event_count,
+    struct CAMDNativeQueueCheckoutV1 *checkout);
+enum CAMDNativeQueueResult camd_native_queue_commit(
+    struct CAMDNativeEventQueue *queue,
+    const struct CAMDNativeQueueCheckoutV1 *checkout);
+enum CAMDNativeQueueResult camd_native_queue_release(
+    struct CAMDNativeEventQueue *queue,
+    const struct CAMDNativeQueueCheckoutV1 *checkout);
 
 enum CAMDNativeQueueResult camd_native_queue_cancel(
     struct CAMDNativeEventQueue *queue,

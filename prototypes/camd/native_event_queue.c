@@ -44,6 +44,9 @@ struct CAMDNativeEventQueue {
     uint64_t cancelled;
     uint64_t full_rejections;
     uint64_t oversize_rejections;
+    uint64_t next_checkout;
+    uint64_t active_checkout;
+    uint32_t checked_out_records;
 };
 
 static void *queue_alloc(size_t size, int clear)
@@ -176,6 +179,7 @@ enum CAMDNativeQueueResult camd_native_queue_create(
     queue->format = config->DataFormat;
     queue->capacity = config->Capacity;
     queue->max_sysex_bytes = config->MaxSysExBytes;
+    queue->next_checkout = 1;
     *queue_out = queue;
     return CAMD_NATIVE_QUEUE_OK;
 
@@ -376,6 +380,8 @@ static enum CAMDNativeQueueResult dequeue_events(
 
     if (!event_count || (!events && event_capacity != 0))
         return CAMD_NATIVE_QUEUE_INVALID;
+    if (queue->active_checkout != 0)
+        return CAMD_NATIVE_QUEUE_BUSY;
     if (queue->used == 0)
         return CAMD_NATIVE_QUEUE_EMPTY;
     first = &queue->slots[queue->head];
@@ -434,6 +440,10 @@ enum CAMDNativeQueueResult camd_native_queue_dequeue_midi1_sysex(
     if (queue->format != CAMD_PROVIDER_FORMAT_MIDI1)
         return CAMD_NATIVE_QUEUE_WRONG_FORMAT;
     queue_lock_acquire(&queue->lock);
+    if (queue->active_checkout != 0) {
+        result = CAMD_NATIVE_QUEUE_BUSY;
+        goto out;
+    }
     if (queue->used == 0) {
         result = CAMD_NATIVE_QUEUE_EMPTY;
         goto out;
@@ -475,6 +485,187 @@ enum CAMDNativeQueueResult camd_native_queue_dequeue_ump(
     return result;
 }
 
+static enum CAMDNativeQueueResult begin_checkout(
+    struct CAMDNativeEventQueue *queue, uint32_t kind,
+    struct CAMDNativeQueueCheckoutV1 *checkout)
+{
+    struct queue_slot *first;
+    uint64_t token;
+
+    if (queue->active_checkout != 0)
+        return CAMD_NATIVE_QUEUE_BUSY;
+    if (queue->used == 0)
+        return CAMD_NATIVE_QUEUE_EMPTY;
+    first = &queue->slots[queue->head];
+    if (first->kind != kind)
+        return CAMD_NATIVE_QUEUE_WRONG_FORMAT;
+    if (first->batch_count == 0 || first->batch_count > queue->used)
+        return CAMD_NATIVE_QUEUE_INVALID;
+    token = queue->next_checkout++;
+    if (queue->next_checkout == 0)
+        queue->next_checkout = 1;
+    queue->active_checkout = token;
+    queue->checked_out_records = first->batch_count;
+    checkout->Token = token;
+    checkout->Kind = kind;
+    checkout->RecordCount = first->batch_count;
+    return CAMD_NATIVE_QUEUE_OK;
+}
+
+static int valid_checkout(const struct CAMDNativeQueueCheckoutV1 *checkout)
+{
+    return checkout && checkout->Size == sizeof(*checkout) &&
+           checkout->Version == 1;
+}
+
+enum CAMDNativeQueueResult camd_native_queue_checkout_midi1(
+    struct CAMDNativeEventQueue *queue,
+    struct CAMDMIDI1EventV1 *events,
+    size_t event_capacity,
+    size_t *event_count,
+    struct CAMDNativeQueueCheckoutV1 *checkout)
+{
+    enum CAMDNativeQueueResult result;
+    uint32_t count;
+    size_t i;
+
+    if (!queue || !valid_checkout(checkout) || !event_count ||
+        (!events && event_capacity != 0))
+        return CAMD_NATIVE_QUEUE_INVALID;
+    if (queue->format != CAMD_PROVIDER_FORMAT_MIDI1)
+        return CAMD_NATIVE_QUEUE_WRONG_FORMAT;
+    queue_lock_acquire(&queue->lock);
+    result = begin_checkout(queue, CAMD_NATIVE_QUEUE_ITEM_MIDI1, checkout);
+    if (result != CAMD_NATIVE_QUEUE_OK)
+        goto out;
+    count = checkout->RecordCount;
+    *event_count = count;
+    if (event_capacity < count) {
+        queue->active_checkout = 0;
+        queue->checked_out_records = 0;
+        result = CAMD_NATIVE_QUEUE_RANGE;
+        goto out;
+    }
+    for (i = 0; i < count; ++i)
+        events[i] = queue->slots[queue_index(queue, queue->head, i)].midi1;
+out:
+    queue_lock_release(&queue->lock);
+    return result;
+}
+
+enum CAMDNativeQueueResult camd_native_queue_checkout_midi1_sysex(
+    struct CAMDNativeEventQueue *queue,
+    uint8_t *bytes,
+    size_t byte_capacity,
+    struct CAMDNativeQueueSysExInfoV1 *info,
+    struct CAMDNativeQueueCheckoutV1 *checkout)
+{
+    enum CAMDNativeQueueResult result;
+    struct queue_slot *slot;
+
+    if (!queue || !valid_checkout(checkout) || !info ||
+        info->Size != sizeof(*info) || info->Version != 1 ||
+        (!bytes && byte_capacity != 0))
+        return CAMD_NATIVE_QUEUE_INVALID;
+    if (queue->format != CAMD_PROVIDER_FORMAT_MIDI1)
+        return CAMD_NATIVE_QUEUE_WRONG_FORMAT;
+    queue_lock_acquire(&queue->lock);
+    result = begin_checkout(queue, CAMD_NATIVE_QUEUE_ITEM_MIDI1_SYSEX,
+                            checkout);
+    if (result != CAMD_NATIVE_QUEUE_OK)
+        goto out;
+    slot = &queue->slots[queue->head];
+    *info = slot->sysex;
+    if (byte_capacity < slot->sysex.ByteCount) {
+        queue->active_checkout = 0;
+        queue->checked_out_records = 0;
+        result = CAMD_NATIVE_QUEUE_RANGE;
+        goto out;
+    }
+    memcpy(bytes, sysex_slot(queue, queue->head), slot->sysex.ByteCount);
+out:
+    queue_lock_release(&queue->lock);
+    return result;
+}
+
+enum CAMDNativeQueueResult camd_native_queue_checkout_ump(
+    struct CAMDNativeEventQueue *queue,
+    struct CAMDUMPEventV1 *events,
+    size_t event_capacity,
+    size_t *event_count,
+    struct CAMDNativeQueueCheckoutV1 *checkout)
+{
+    enum CAMDNativeQueueResult result;
+    uint32_t count;
+    size_t i;
+
+    if (!queue || !valid_checkout(checkout) || !event_count ||
+        (!events && event_capacity != 0))
+        return CAMD_NATIVE_QUEUE_INVALID;
+    if (queue->format != CAMD_PROVIDER_FORMAT_UMP)
+        return CAMD_NATIVE_QUEUE_WRONG_FORMAT;
+    queue_lock_acquire(&queue->lock);
+    result = begin_checkout(queue, CAMD_NATIVE_QUEUE_ITEM_UMP, checkout);
+    if (result != CAMD_NATIVE_QUEUE_OK)
+        goto out;
+    count = checkout->RecordCount;
+    *event_count = count;
+    if (event_capacity < count) {
+        queue->active_checkout = 0;
+        queue->checked_out_records = 0;
+        result = CAMD_NATIVE_QUEUE_RANGE;
+        goto out;
+    }
+    for (i = 0; i < count; ++i)
+        events[i] = queue->slots[queue_index(queue, queue->head, i)].ump;
+out:
+    queue_lock_release(&queue->lock);
+    return result;
+}
+
+static enum CAMDNativeQueueResult finish_checkout(
+    struct CAMDNativeEventQueue *queue,
+    const struct CAMDNativeQueueCheckoutV1 *checkout, int commit)
+{
+    enum CAMDNativeQueueResult result = CAMD_NATIVE_QUEUE_OK;
+
+    if (!queue || !valid_checkout(checkout))
+        return CAMD_NATIVE_QUEUE_INVALID;
+    queue_lock_acquire(&queue->lock);
+    if (queue->active_checkout == 0 ||
+        queue->active_checkout != checkout->Token ||
+        queue->checked_out_records != checkout->RecordCount ||
+        queue->slots[queue->head].kind != checkout->Kind) {
+        result = CAMD_NATIVE_QUEUE_STATE;
+        goto out;
+    }
+    if (commit) {
+        if (checkout->Kind == CAMD_NATIVE_QUEUE_ITEM_MIDI1_SYSEX)
+            memset(sysex_slot(queue, queue->head), 0,
+                   queue->slots[queue->head].sysex.ByteCount);
+        consume_records(queue, queue->checked_out_records);
+    }
+    queue->active_checkout = 0;
+    queue->checked_out_records = 0;
+out:
+    queue_lock_release(&queue->lock);
+    return result;
+}
+
+enum CAMDNativeQueueResult camd_native_queue_commit(
+    struct CAMDNativeEventQueue *queue,
+    const struct CAMDNativeQueueCheckoutV1 *checkout)
+{
+    return finish_checkout(queue, checkout, 1);
+}
+
+enum CAMDNativeQueueResult camd_native_queue_release(
+    struct CAMDNativeEventQueue *queue,
+    const struct CAMDNativeQueueCheckoutV1 *checkout)
+{
+    return finish_checkout(queue, checkout, 0);
+}
+
 enum CAMDNativeQueueResult camd_native_queue_cancel(
     struct CAMDNativeEventQueue *queue,
     size_t *cancelled_records)
@@ -484,6 +675,10 @@ enum CAMDNativeQueueResult camd_native_queue_cancel(
     if (!queue || !cancelled_records)
         return CAMD_NATIVE_QUEUE_INVALID;
     queue_lock_acquire(&queue->lock);
+    if (queue->active_checkout != 0) {
+        queue_lock_release(&queue->lock);
+        return CAMD_NATIVE_QUEUE_BUSY;
+    }
     count = queue->used;
     for (i = 0; i < count; ++i) {
         uint32_t index = queue_index(queue, queue->head, i);

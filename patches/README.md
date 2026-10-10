@@ -307,9 +307,9 @@ waits for endpoint, session and callback leases. Host callbacks reenter
 snapshot enumeration and retirement to prove those properties; reused slots
 reject stale handles.
 
-No bounded data queue, public watch/session vector, UMP wire parser, converter
-or reverse legacy projection uses the provider path yet, so existing CAMD
-behavior remains unchanged. A private fixed-port adapter now publishes
+No public watch/session vector, UMP wire parser, converter or reverse legacy
+projection uses the provider path yet, so existing CAMD behavior remains
+unchanged. A private fixed-port adapter now publishes
 caller-identified legacy driver ports as MIDI 1.0-only endpoints, checks
 direction per port and forwards native events/SysEx without UMP. It is not yet
 connected to AROS `DriverData`, so sharing physical-port opens with the legacy
@@ -330,7 +330,10 @@ the registry. Sessions now request a minimum reservation and expose effective
 capacity plus the MIDI 1.0 SysEx limit; inconsistent provider results are
 closed and rejected. The host software provider uses the queue to prove full,
 oversize, drain and cancel behavior. Scheduling and interrupt ingress remain
-deliberately unconnected.
+deliberately unconnected. Transactional checkout/commit/release plus a
+bounded-work pump now call the downstream unlocked and retain the exact head
+item on backpressure or callback failure. Native task wakeup and timestamp
+eligibility are still deliberately unconnected.
 
 ### Testing
 

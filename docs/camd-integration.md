@@ -113,10 +113,11 @@ itself.
    lock order. This does not freeze public symbols.
 2. Implement the private registry, generation snapshots and watches as the
    shared control plane, without changing CAMD 41/42 structures.
-3. Connect the host-tested fixed-port adapter to AROS `DriverData` so endpoint
-   sessions share physical-port opens with the unchanged cluster path. Then
-   apply the validated capacity/backpressure contract to those existing
-   buffers, then add scheduling and the reverse cluster projection.
+3. Wrap the host-tested transactional queue pump in an AROS task/signal wakeup,
+   then connect the fixed-port adapter to `DriverData` so endpoint sessions
+   share physical-port opens with the unchanged cluster path. Add timestamp
+   eligibility and the reverse cluster projection after the lossless retry
+   path is operational.
    The host model already proves endpoint/session ownership, asynchronous
    receive teardown and separate native MIDI 1.0/UMP dispatch; do not require
    MIDI 1.0-to-MIDI 1.0 traffic to convert through UMP.

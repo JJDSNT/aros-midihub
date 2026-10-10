@@ -197,6 +197,12 @@ full, oversize, drain and cancel behavior to the common contract. The private
 queue model now proves preallocation, format separation, atomic batches,
 bounded SysEx, saturating counters and explicit backpressure. It uses a
 task-context lock; interrupt ingress still requires a reviewed handoff.
+Its transactional single-consumer pump copies a complete head item, calls the
+downstream with no queue or registry lock held, and commits only after
+acceptance. A full or failing downstream leaves the item queued, which avoids
+both loss and duplicate delivery when a legacy driver buffer temporarily
+cannot accept more data. Task wakeup and timestamp eligibility remain separate
+runtime policies.
 
 Endpoint sessions are unidirectional. Their requested `QueueCapacity` is a
 minimum reservation of native records, not a hint and not shared unreserved
@@ -215,10 +221,11 @@ model, but their native message path remains first-class.
 
 The executable private model now proves the ingress half of this boundary:
 caller-supplied stable IDs, fixed-port publication, per-port direction checks,
-native MIDI 1.0 event/SysEx forwarding and two-phase retirement. The remaining
-AROS shim must share `DriverData` open/reference state with the existing
-cluster path. It must not open the same hardware port twice or redirect legacy
-cluster traffic through endpoint sessions.
+native MIDI 1.0 event/SysEx forwarding, retryable queue pumping and two-phase
+retirement. The remaining AROS shim must provide task/signal wakeup and share
+`DriverData` open/reference state with the existing cluster path. It must not
+open the same hardware port twice or redirect legacy cluster traffic through
+endpoint sessions.
 
 For each projectable Endpoint + Group + direction, the adapter owns a stable
 cluster identity independent of mutable display names. While an endpoint is
