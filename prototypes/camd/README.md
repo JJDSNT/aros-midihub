@@ -109,6 +109,10 @@ The current slice proves:
 - a task/signal worker resumes the pump on explicit producer or downstream
   capacity notifications, records work/block/failure counters and stops after
   at most the current bounded pump run;
+- a bounded task-context fan-out attaches workers by generation-checked handles
+  and synchronizes detach against wake traversal; this lets one stable physical
+  port task relay capacity to multiple session workers without exposing their
+  mutable pointers to its interrupt callback;
 - existing cluster attachment/removal uses the shared port-reference state,
   while private endpoint acquire/release helpers can join the same physical
   open without a second driver `OpenPort()`; failed opens roll back ownership;
@@ -123,7 +127,8 @@ It deliberately does not yet implement:
 
 - stable-ID storage or key derivation;
 - concurrent retirement/failure-path stress on native AROS;
-- wiring the worker wakeups to actual `DriverData` producer/transmitter events;
+- wiring the host-tested worker fan-out to the stable `DriverData` receiver
+  process and its producer/transmitter events;
 - timestamp-based eligibility and delayed dispatch;
 - an interrupt-safe ingress handoff; the current queue lock is task-context
   only (the AROS worker now has a lock-free `Signal()`-only capacity wake for

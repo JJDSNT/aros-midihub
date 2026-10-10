@@ -584,6 +584,13 @@ worker. The legacy cluster path now uses the shared `DriverData` reference
 state, but the adapter does not yet invoke the endpoint side, connect wakeups
 or decide timestamp eligibility.
 
+A bounded host-tested fan-out now defines the multi-session capacity handoff.
+The driver interrupt will signal a stable per-port task, which wakes attached
+session workers from task context. Generation-checked handles reject stale
+detach, and detach synchronizes with traversal before a session worker may be
+stopped. This avoids an interrupt-visible mutable session list; the remaining
+work is to embed the relay in `DriverData` and invoke it from the transmitter.
+
 ## Implemented steps
 
 The items below are in the order to do them. Each one is one commit in

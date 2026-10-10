@@ -212,6 +212,14 @@ caller must keep the worker alive and prevent stop until the interrupt source
 is quiescent. Wiring that entry to each transport and timestamp eligibility
 remain separate runtime policies.
 
+For a legacy physical port with multiple endpoint sessions, the selected
+handoff is two-stage. The interrupt signals one stable per-port relay task; in
+task context, a bounded generation-checked fan-out wakes the attached session
+workers. Detach is synchronous with fan-out traversal. Consequently, the
+interrupt never dereferences a session-owned worker and session close can
+detach before stopping and freeing it. The host model implements and tests the
+fan-out; its `DriverData` relay wiring remains the next AROS step.
+
 Endpoint sessions are unidirectional. Their requested `QueueCapacity` is a
 minimum reservation of native records, not a hint and not shared unreserved
 space. A successful open reports effective capacity at least as large as the
