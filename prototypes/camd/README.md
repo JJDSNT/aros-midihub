@@ -45,6 +45,20 @@ AROS `DriverData` path now uses it instead of two isolated booleans: legacy
 input/output presence and endpoint input/output reference counts produce one
 physical open transition on the first owner and one close on the last.
 
+`identity_map.c` is the bounded CAMD-owned identity database model. Providers
+submit a namespaced evidence key and confidence, while CAMD generates the
+opaque 128-bit ID. A new or previously uncommitted mapping is advertised as
+ephemeral until an atomic full-snapshot commit succeeds; a later retry promotes
+it without changing the in-memory ID. Generator and commit callbacks execute
+under the map lock and must not reenter the map.
+
+`legacy_identity_key.c` defines the evidence available from fixed legacy
+drivers. Provider keys use the ASCII-case-folded module leaf from the fixed
+`DEVS:Midi` directory; endpoint keys add the port index and deliberately omit
+direction so one physical bidirectional port has one identity. This evidence
+is path-bound, not authoritative: renaming the module creates a new identity,
+while replacing a module under the same filename reuses the mapping.
+
 The current slice proves:
 
 - the proposed pointer-free record sizes on the host compiler;
@@ -131,14 +145,23 @@ The current slice proves:
 - the legacy output backend connects the adapter to per-session native queues
   and workers, preserves atomic producer admission, retries a blocked physical
   port through its fan-out without replay, and rolls back failed attach/open
-  or retryable close paths.
+  or retryable close paths;
+- the bounded identity map rejects malformed, duplicate-key and duplicate-ID
+  records, serializes concurrent resolution and generates exactly one mapping
+  for simultaneous resolution of the same key;
+- failed persistence keeps the endpoint usable with explicit ephemeral
+  confidence, while a later successful atomic snapshot commit promotes all
+  in-memory mappings without changing their IDs;
+- legacy provider and endpoint keys are versioned, bounded, path-bound and
+  independent of mutable display names and port direction.
 
 It deliberately does not yet implement:
 
-- stable-ID storage or key derivation;
+- the AROS random-ID generator and atomic persistent storage binding;
+- active duplicate-evidence ambiguity handling in the endpoint registry;
 - concurrent retirement/failure-path stress on native AROS;
-- instantiating the AROS output binding for loaded drivers after stable-ID
-  derivation/storage is decided;
+- instantiating the AROS output binding for loaded drivers after the identity
+  map is bound to AROS storage;
 - timestamp-based eligibility and delayed dispatch;
 - an interrupt-safe ingress handoff; the current queue lock is task-context
   only (the AROS worker now has a lock-free `Signal()`-only capacity wake for
@@ -160,7 +183,7 @@ The output backend now has an AROS binding for its four physical-port
 callbacks. It invokes the implemented `DriverData` reference helpers, submits
 short messages directly to the native MIDI 1.0 ring and holds the legacy SysEx
 borrowed buffer until final transmission. The next slice instantiates this
-binding from loaded drivers using caller-supplied stable IDs; key derivation or
-persistent identity must be decided before automatic publication. Existing
-cluster traffic remains untouched. Public vectors remain blocked until the
-data shim, timestamp policy, legacy projection policy and U01 review pass.
+binding from loaded drivers after binding the host-proven identity model to an
+AROS random-ID source and atomically replaced persistent file. Existing cluster
+traffic remains untouched. Public vectors remain blocked until the data shim,
+timestamp policy, legacy projection policy and U01 review pass.

@@ -326,11 +326,17 @@ There are two distinct adapter directions. The fixed-port ingress adapter
 publishes an existing CAMD driver into the endpoint registry. Existing CAMD
 41/42 applications still reach that driver through the original clusters and
 MIDI 1.0 queues; endpoint clients use the private MIDI 1.0 provider callbacks.
-The executable model requires stable IDs as input, rejects UMP, checks each
-port's direction and forwards complete native messages without conversion.
+The executable adapter requires stable IDs as input, rejects UMP, checks each
+port's direction and forwards complete native messages without conversion. A
+separate host-tested private identity map now derives legacy evidence from the
+case-folded `DEVS:Midi` module leaf plus port index and maps it to CAMD-generated
+opaque IDs. Direction is excluded from that path-bound key. Persistence failure
+keeps the ID usable only as explicitly ephemeral; the AROS generator and atomic
+store binding remain pending.
 The private AROS `DriverData` state now combines legacy direction presence and
 endpoint direction reference counts into one first-open/last-close lifecycle.
-The adapter backend is not yet connected to those endpoint helpers.
+The compiled output backend is connected to those endpoint helpers but is not
+yet instantiated from loaded drivers.
 
 The reverse projection described below exposes suitable native endpoints to
 legacy applications and is a separate component.

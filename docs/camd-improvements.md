@@ -587,7 +587,16 @@ context. A host-tested output backend implements endpoint-session acquire,
 worker attach/detach, producer wake and bounded delivery. Its compiled AROS
 binding now connects those callbacks to shared `DriverData` references and the
 native MIDI 1.0 transmitter. Loaded drivers do not instantiate it yet, pending
-stable-ID policy, and timestamp eligibility remains undecided.
+the AROS identity-storage binding, and timestamp eligibility remains undecided.
+A bounded host-tested private identity map now owns opaque 128-bit ID
+allocation, rejects loaded key/ID collisions, serializes concurrent resolution
+and retries atomic full-snapshot persistence. Until commit succeeds the same
+in-memory ID is explicitly ephemeral; successful retry promotes it without an
+ID change. Fixed `DEVS:Midi` drivers use a versioned path-bound key derived from
+the ASCII-case-folded module leaf and port index, with separate provider and
+endpoint namespaces and no direction component. The AROS random-ID generator,
+atomic persistent file and active duplicate-evidence diagnostics remain to be
+implemented.
 
 A bounded host-tested fan-out now defines the multi-session capacity handoff.
 The driver interrupt signals a stable per-port task, which wakes attached

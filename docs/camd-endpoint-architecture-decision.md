@@ -106,6 +106,25 @@ an ambiguity diagnostic until administrative resolution.
 User-visible names and transport metadata may change without changing the
 stable ID. A provider cannot choose a global system ID directly.
 
+The executable private identity model implements this ownership boundary with
+a bounded preallocated map, opaque-ID generator callback and atomic
+full-snapshot commit callback. Resolution is serialized: concurrent requests
+for the same evidence key receive one ID and only one new mapping is generated.
+A failed commit leaves that same in-memory mapping usable but explicitly
+ephemeral; a later successful commit promotes it without changing the ID.
+Generator and commit callbacks run under the identity-map lock and must not
+reenter it. The AROS generator and persistent-file binding remain to be added.
+
+For fixed drivers loaded from `DEVS:Midi`, the best evidence actually present
+is path-bound. The private key model uses a versioned, ASCII-case-folded module
+leaf as the provider key and adds the fixed port index for the endpoint key.
+Direction is excluded, so a bidirectional physical port has one endpoint
+identity. The provider and endpoint namespaces are distinct. Consequently a
+module rename intentionally creates a new identity, while replacement under
+the same filename reuses it; neither case is misrepresented as authoritative
+hardware identity. Active simultaneous duplicates still require the registry
+ambiguity policy described above.
+
 ## Lifecycle and discovery
 
 The lifecycle is:
@@ -253,9 +272,10 @@ enqueue. The compiled AROS shim now binds those physical-port callbacks to the
 `DriverData` endpoint helpers and native MIDI 1.0 transmitter. Short messages
 are copied into the legacy ring; SysEx keeps the pump checkout buffer borrowed
 until the driver transmits its final F7. Capacity notifications already reach
-the relay task from the transmitter. Instantiation still requires explicit
-stable endpoint IDs and must not redirect legacy cluster traffic through
-endpoint sessions.
+the relay task from the transmitter. A host-tested private map and legacy-key
+model can now supply the required IDs, but their random generator and atomic
+persistent store are not yet bound on AROS. Instantiation must not redirect
+legacy cluster traffic through endpoint sessions.
 
 For each projectable Endpoint + Group + direction, the adapter owns a stable
 cluster identity independent of mutable display names. While an endpoint is

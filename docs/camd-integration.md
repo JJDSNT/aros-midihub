@@ -113,8 +113,11 @@ itself.
    lock order. This does not freeze public symbols.
 2. Implement the private registry, generation snapshots and watches as the
    shared control plane, without changing CAMD 41/42 structures.
-3. Instantiate the fixed-port output adapter from loaded drivers after the
-   stable-ID derivation/storage rule is decided. Its compiled AROS backend
+3. Bind the host-tested private identity map to an AROS random-ID generator and
+   atomically replaced persistent store, then instantiate the fixed-port output
+   adapter from loaded drivers. The versioned legacy evidence key is the
+   case-folded `DEVS:Midi` module leaf plus port index; it is explicitly
+   path-bound and excludes direction. Its compiled AROS backend
    already owns each session's bounded queue/pump/worker, calls the `DriverData`
    shared-open helpers, performs transactional attach/detach against the port
    fan-out and submits native MIDI 1.0 directly to the legacy transmitter.

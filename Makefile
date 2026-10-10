@@ -18,7 +18,7 @@ HEADERS = include/midihub/applemidi.h include/midihub/rtpmidi.h \
 
 .PHONY: test test-network test-synth test-synth-fluid demo m68k synth-m68k clean
 
-test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test
+test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test
 	./build/protocol-test
 	./build/ble-midi-test
 	./build/routes-test
@@ -33,6 +33,7 @@ test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test b
 	./build/camd-native-event-worker-test
 	./build/camd-native-worker-fanout-test
 	./build/camd-legacy-output-backend-test
+	./build/camd-identity-map-test
 
 build/camd-endpoint-core-test: tests/camd_endpoint_core.c \
                                prototypes/camd/endpoint_registry.c \
@@ -169,6 +170,18 @@ build/camd-legacy-output-backend-test: tests/camd_legacy_output_backend.c \
 		prototypes/camd/native_event_queue.c \
 		prototypes/camd/endpoint_registry.c \
 		prototypes/camd/provider_contract.c -pthread
+
+build/camd-identity-map-test: tests/camd_identity_map.c \
+                              prototypes/camd/identity_map.c \
+                              prototypes/camd/identity_map.h \
+                              prototypes/camd/legacy_identity_key.c \
+                              prototypes/camd/legacy_identity_key.h \
+                              prototypes/camd/endpoint_registry.h
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Iprototypes/camd -o $@ \
+		tests/camd_identity_map.c \
+		prototypes/camd/identity_map.c \
+		prototypes/camd/legacy_identity_key.c -pthread
 
 build/ump-test: tests/ump.c src/ump.c include/midihub/ump.h
 	mkdir -p build
