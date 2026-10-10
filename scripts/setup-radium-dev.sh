@@ -13,10 +13,10 @@ done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 SUBMODULE="$ROOT/third_party/aros-contrib"
 # Initialize without checkout, so sparse settings precede materialization.
-git -C "$ROOT" submodule update --init --no-checkout -- "$SUBMODULE"
+git -C "$ROOT" submodule update --init --no-checkout -- third_party/aros-contrib
 git -C "$SUBMODULE" sparse-checkout init --cone
 git -C "$SUBMODULE" sparse-checkout set MultiMedia/radium
-git -C "$ROOT" submodule update --checkout -- "$SUBMODULE"
+git -C "$ROOT" submodule update --checkout -- third_party/aros-contrib
 RADIUM="$SUBMODULE/MultiMedia/radium"
 [[ -f "$RADIUM/mmakefile.src" ]] || { echo "Radium MetaMake source missing: $RADIUM" >&2; exit 1; }
 echo "Radium available: $RADIUM"
