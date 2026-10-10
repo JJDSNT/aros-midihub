@@ -18,7 +18,7 @@ Thus `THEMES:` is a **catalogue of directories**, while `THEME:` is an **assign 
 ## Proposed convention
 
 - **`SoundFonts:`** — a logical AROS assign exposing the collection of installed SoundFont banks (initially SF2, with extensibility for other formats). It is not a new physical disk volume.
-- **Active/default SoundFont** — a separate system preference, analogous to `ENV:SYS/theme.var`. The potential `SOUNDFONT:` assign must be designed carefully: unlike `THEME:`, which targets a directory, a selected SF2 is ordinarily a file. A path preference (e.g. `ENV:SYS/soundfont.var`) is the minimal safe proposal until file-assign behavior and consumer conventions are validated. An optional `SOUNDFONT:` assign could instead point to a directory containing the default bank, but should not be assumed to point directly to an SF2 file.
+- **Active/default SoundFont** — store the full path of the selected bank file in `ENV:SYS/soundfont.var` (persistent copy: `ENVARC:SYS/soundfont.var`), e.g. `SOUNDFONTS:GeneralUser-GS.sf2`. This parallels the theme selection variable while respecting the fact that an SF2 bank is a file rather than a theme directory. **No singular `SOUNDFONT:` assign or artificial directory is proposed.**
 - **Storage** — keep physical storage configurable; allow system-provided and user-installed banks without requiring all banks to reside inside the MIDIHub package.
 - **Selection** — default bank selection is independent of per-application and per-track overrides.
 
@@ -44,7 +44,7 @@ Applications such as a future AROS Radium port, other DAWs, MIDI players and MID
 ## Questions for upstream investigation
 
 1. **Verified:** AROS defines `THEMES:` / `THEME:` in Startup-Sequence, reads `ENV:SYS/theme.var`, and falls back to `THEMES:AROSDefault`. Confirm separately how Appearance Preferences writes and applies selection changes at runtime.
-2. Decide whether a singular `SoundFont:` assign is appropriate for a selected *file*, or whether a named preference plus `SoundFonts:` is more idiomatic.
+2. **Design decision:** use a full file path in `ENV:SYS/soundfont.var` / `ENVARC:SYS/soundfont.var`; do not create a singular `SOUNDFONT:` assign or a wrapper directory.
 3. Define precedence for system, user and application defaults; paths, missing files, removable volumes and licensing.
 4. Determine whether an AROS SoundFont Preferences UI is warranted or whether the initial integration should use existing preferences.
 5. Assess whether `SoundFonts:` should be a multi-assign search path and how duplicate filenames are resolved.
@@ -52,6 +52,6 @@ Applications such as a future AROS Radium port, other DAWs, MIDI players and MID
 
 ## Next step
 
-Use the verified AROS Themes/Theme precedent to prototype the smallest upstream-compatible SoundFont catalogue and default-bank preference. First resolve the file-versus-directory difference and runtime update semantics; do not implement a singular assign by assumption. **Do not introduce a new system service or synthesizer API solely to provide file discovery.**
+Use the verified AROS Themes/Theme precedent to prototype the smallest upstream-compatible SoundFont catalogue and default-bank preference. The file-versus-directory distinction is resolved by storing the complete bank file path in the preference, with no singular assign. Still investigate runtime update semantics, fallback, and missing-file handling. **Do not introduce a new system service or synthesizer API solely to provide file discovery.**
 
 Related: [MIDIHub Preferences](preferences.md).
