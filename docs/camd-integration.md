@@ -113,11 +113,12 @@ itself.
    lock order. This does not freeze public symbols.
 2. Implement the private registry, generation snapshots and watches as the
    shared control plane, without changing CAMD 41/42 structures.
-3. Connect the fixed-port adapter to the implemented `DriverData` shared-open
-   helpers and native transmitter. The host-tested output backend already owns
-   each session's bounded queue/pump/worker, performs transactional
-   attach/detach against the port fan-out and wakes after producer enqueue.
-   Transmitter capacity already reaches the fan-out through the stable per-port
+3. Instantiate the fixed-port output adapter from loaded drivers after the
+   stable-ID derivation/storage rule is decided. Its compiled AROS backend
+   already owns each session's bounded queue/pump/worker, calls the `DriverData`
+   shared-open helpers, performs transactional attach/detach against the port
+   fan-out and submits native MIDI 1.0 directly to the legacy transmitter.
+   Transmitter capacity reaches the fan-out through the stable per-port
    receiver task. The unchanged cluster path already participates in the same
    first-open/last-close state. Add timestamp eligibility and reverse cluster
    projection after this path is operational.

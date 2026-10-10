@@ -137,8 +137,8 @@ It deliberately does not yet implement:
 
 - stable-ID storage or key derivation;
 - concurrent retirement/failure-path stress on native AROS;
-- binding the host-tested output backend callbacks to AROS `DriverData` and
-  invoking its endpoint-reference helpers;
+- instantiating the AROS output binding for loaded drivers after stable-ID
+  derivation/storage is decided;
 - timestamp-based eligibility and delayed dispatch;
 - an interrupt-safe ingress handoff; the current queue lock is task-context
   only (the AROS worker now has a lock-free `Signal()`-only capacity wake for
@@ -156,9 +156,11 @@ make test
 The AROS runtime now embeds the bounded fan-out in `DriverData`. A transmitter
 capacity change signals only the stable receiver process; that task performs
 the fan-out, and shutdown frees its relay signal before destroying the fan-out.
-The host-tested output backend now performs transactional acquire, worker
-attach/detach, bounded enqueue and producer wake. The next slice binds its four
-physical-port callbacks to the implemented AROS `DriverData` helpers and
-native MIDI 1.0 transmitter. Existing cluster traffic remains untouched.
-Public vectors remain blocked until the data shim, timestamp policy, legacy
-projection policy and U01 review pass.
+The output backend now has an AROS binding for its four physical-port
+callbacks. It invokes the implemented `DriverData` reference helpers, submits
+short messages directly to the native MIDI 1.0 ring and holds the legacy SysEx
+borrowed buffer until final transmission. The next slice instantiates this
+binding from loaded drivers using caller-supplied stable IDs; key derivation or
+persistent identity must be decided before automatic publication. Existing
+cluster traffic remains untouched. Public vectors remain blocked until the
+data shim, timestamp policy, legacy projection policy and U01 review pass.

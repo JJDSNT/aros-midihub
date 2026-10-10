@@ -583,10 +583,11 @@ callbacks before stopping or freeing its worker. The legacy cluster path now
 uses the shared `DriverData` reference state. Each `DriverData` also owns a
 stable relay signal and bounded worker fan-out: transmitter capacity release
 signals its receiver task, which wakes attached session workers in task
-context. A host-tested output backend now implements endpoint-session acquire,
-worker attach/detach, producer wake and bounded delivery against abstract
-physical-port callbacks. The adapter does not yet bind those callbacks to
-AROS `DriverData` or decide timestamp eligibility.
+context. A host-tested output backend implements endpoint-session acquire,
+worker attach/detach, producer wake and bounded delivery. Its compiled AROS
+binding now connects those callbacks to shared `DriverData` references and the
+native MIDI 1.0 transmitter. Loaded drivers do not instantiate it yet, pending
+stable-ID policy, and timestamp eligibility remains undecided.
 
 A bounded host-tested fan-out now defines the multi-session capacity handoff.
 The driver interrupt signals a stable per-port task, which wakes attached
@@ -594,9 +595,10 @@ session workers from task context. Generation-checked handles reject stale
 detach, and detach synchronizes with traversal before a session worker may be
 stopped. The AROS runtime now embeds this relay in `DriverData` and invokes it
 only when the transmitter actually releases capacity. This avoids an
-interrupt-visible mutable session list; attaching adapter-owned workers is the
-remaining AROS binding step. The host backend already proves transactional
-attach rollback, detach-before-stop, producer wake and retry without replay.
+interrupt-visible mutable session list. The AROS output binding supplies the
+adapter-owned workers; its eventual driver-lifecycle instantiation must pass
+caller-owned stable IDs. The host backend proves transactional attach rollback,
+detach-before-stop, producer wake and retry without replay.
 
 ## Implemented steps
 

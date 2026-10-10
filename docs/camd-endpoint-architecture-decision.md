@@ -249,10 +249,13 @@ directions, allowing output and input integration as separate reviewed steps
 without claiming absent operations. A host-tested output backend now owns each
 session's native MIDI 1.0 queue, pump and worker, acquires/releases its physical
 port, attaches/detaches the worker transactionally and wakes it after producer
-enqueue. The remaining AROS shim must bind those physical-port callbacks to
-the `DriverData` endpoint helpers and transmitter. Capacity notifications
-already reach the relay task from the transmitter. It must not redirect legacy
-cluster traffic through endpoint sessions.
+enqueue. The compiled AROS shim now binds those physical-port callbacks to the
+`DriverData` endpoint helpers and native MIDI 1.0 transmitter. Short messages
+are copied into the legacy ring; SysEx keeps the pump checkout buffer borrowed
+until the driver transmits its final F7. Capacity notifications already reach
+the relay task from the transmitter. Instantiation still requires explicit
+stable endpoint IDs and must not redirect legacy cluster traffic through
+endpoint sessions.
 
 For each projectable Endpoint + Group + direction, the adapter owns a stable
 cluster identity independent of mutable display names. While an endpoint is
