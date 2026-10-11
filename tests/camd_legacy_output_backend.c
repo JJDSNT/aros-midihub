@@ -122,6 +122,258 @@ static void wait_for(struct physical_port *port, unsigned int *field,
     pthread_mutex_unlock(&port->lock);
 }
 
+struct input_port {
+    unsigned int acquires;
+    unsigned int releases;
+    unsigned int outputs;
+};
+
+struct input_consumer {
+    unsigned int events;
+    unsigned int sysex;
+    uint8_t last[3];
+    size_t sysex_bytes;
+    int full;
+};
+
+static enum CAMDProviderResult input_acquire(void *context)
+{
+    ++((struct input_port *)context)->acquires;
+    return CAMD_PROVIDER_OK;
+}
+
+static enum CAMDProviderResult input_release(void *context)
+{
+    ++((struct input_port *)context)->releases;
+    return CAMD_PROVIDER_OK;
+}
+
+static enum CAMDProviderResult input_output(void *context)
+{
+    ++((struct input_port *)context)->outputs;
+    return CAMD_PROVIDER_OK;
+}
+
+static enum CAMDProviderResult input_no_midi1(
+    void *context, const struct CAMDMIDI1EventV1 *event)
+{
+    (void)context;
+    (void)event;
+    return CAMD_PROVIDER_CALLBACK_FAILED;
+}
+
+static enum CAMDProviderResult input_no_sysex(
+    void *context, const uint8_t *bytes, size_t byte_count,
+    uint32_t time_high, uint32_t time_low, uint32_t clock_domain,
+    uint32_t flags)
+{
+    (void)context;
+    (void)bytes;
+    (void)byte_count;
+    (void)time_high;
+    (void)time_low;
+    (void)clock_domain;
+    (void)flags;
+    return CAMD_PROVIDER_CALLBACK_FAILED;
+}
+
+static enum CAMDProviderResult consume_midi1(
+    void *context, const struct CAMDMIDI1EventV1 *events, size_t event_count)
+{
+    struct input_consumer *consumer = context;
+
+    assert(event_count == 1 && events[0].Length == 3);
+    if (consumer->full)
+        return CAMD_PROVIDER_QUEUE_FULL;
+    memcpy(consumer->last, events[0].Bytes, 3);
+    ++consumer->events;
+    return CAMD_PROVIDER_OK;
+}
+
+static enum CAMDProviderResult consume_sysex(
+    void *context, const uint8_t *bytes, size_t byte_count,
+    uint32_t time_high, uint32_t time_low, uint32_t clock_domain,
+    uint32_t flags)
+{
+    struct input_consumer *consumer = context;
+
+    (void)time_high;
+    (void)time_low;
+    (void)clock_domain;
+    (void)flags;
+    assert(bytes[0] == 0xf0 && bytes[byte_count - 1] == 0xf7);
+    consumer->sysex_bytes = byte_count;
+    ++consumer->sysex;
+    return CAMD_PROVIDER_OK;
+}
+
+/* Two input sessions on one of two ports receive what that port delivers. */
+static void test_input_sessions(void)
+{
+    struct CAMDEndpointRegistry *registry = camd_registry_create();
+    struct CAMDNativeWorkerFanout *fanout = NULL;
+    struct CAMDLegacyOutputBackend *backend = NULL;
+    struct CAMDLegacyDriverAdapter *adapter = NULL;
+    struct CAMDLegacyOutputBackendConfigV1 config;
+    struct CAMDLegacyOutputPortV1 ports[2];
+    struct CAMDLegacyPortDescriptorV1 adapter_ports[2];
+    struct CAMDLegacyDriverDescriptorV1 descriptor;
+    struct CAMDProviderOpenRequestV1 request;
+    struct CAMDProviderReceiveSinkV1 sink;
+    struct CAMDMIDI1EventV1 event = note_event(60);
+    struct CAMDHandleV1 first, second;
+    struct input_port physical[2];
+    struct input_consumer one, two;
+    const uint8_t sysex[] = { 0xf0, 0x7d, 0x01, 0xf7 };
+    uint32_t dropped = 99;
+    size_t i;
+
+    assert(registry);
+    memset(physical, 0, sizeof(physical));
+    memset(&one, 0, sizeof(one));
+    memset(&two, 0, sizeof(two));
+    assert(camd_native_worker_fanout_create(1, &fanout) ==
+           CAMD_NATIVE_WORKER_FANOUT_OK);
+    memset(ports, 0, sizeof(ports));
+    memset(adapter_ports, 0, sizeof(adapter_ports));
+    for (i = 0; i < 2; ++i) {
+        ports[i].Size = sizeof(ports[i]);
+        ports[i].Version = 1;
+        ports[i].EndpointID = make_id(40 + (uint32_t)i);
+        ports[i].Context = &physical[i];
+        ports[i].CapacityFanout = fanout;
+        adapter_ports[i].Size = sizeof(adapter_ports[i]);
+        adapter_ports[i].Version = 1;
+        adapter_ports[i].EndpointID = ports[i].EndpointID;
+        adapter_ports[i].Directions = CAMD_PROVIDER_DIRECTION_ALL;
+        strcpy(adapter_ports[i].Name, i ? "Legacy 1" : "Legacy 0");
+    }
+    memset(&config, 0, sizeof(config));
+    config.Size = sizeof(config);
+    config.Version = 1;
+    config.Callbacks.Size = sizeof(config.Callbacks);
+    config.Callbacks.Version = 1;
+    config.Callbacks.Acquire = input_output;
+    config.Callbacks.Release = input_output;
+    config.Callbacks.SubmitMIDI1 = input_no_midi1;
+    config.Callbacks.SubmitMIDI1SysEx = input_no_sysex;
+    config.Callbacks.AcquireInput = input_acquire;
+    config.Ports = ports;
+    config.PortCount = 2;
+    config.MaxQueueCapacity = 8;
+    config.MaxSysExBytes = 16;
+    config.WorkerItemBudget = 1;
+    /* Input needs both of its callbacks. */
+    assert(camd_legacy_output_backend_create(&config, &backend) ==
+           CAMD_PROVIDER_INVALID);
+    config.Callbacks.ReleaseInput = input_release;
+    assert(camd_legacy_output_backend_create(&config, &backend) ==
+           CAMD_PROVIDER_OK);
+
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.Size = sizeof(descriptor);
+    descriptor.Version = 1;
+    descriptor.ProviderID = make_id(140);
+    descriptor.IdentityKind = 3;
+    descriptor.ProtocolCapabilities = 1;
+    descriptor.BackendContext = camd_legacy_output_backend_context(backend);
+    descriptor.BackendOps = camd_legacy_output_backend_ops(backend);
+    descriptor.Ports = adapter_ports;
+    descriptor.PortCount = 2;
+    assert(camd_legacy_driver_adapter_create(registry, &descriptor,
+                                             &adapter) == CAMD_REGISTRY_OK);
+
+    memset(&request, 0, sizeof(request));
+    request.Size = sizeof(request);
+    request.Version = 1;
+    request.EndpointID = ports[1].EndpointID;
+    request.Direction = CAMD_PROVIDER_DIRECTION_INPUT;
+    request.DataFormat = CAMD_PROVIDER_FORMAT_MIDI1;
+    request.Protocol = CAMD_PROVIDER_PROTOCOL_MIDI1;
+    request.QueueCapacity = 4;
+    assert(camd_registry_session_open(registry, &request, &first) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_registry_session_open(registry, &request, &second) ==
+           CAMD_REGISTRY_OK);
+    assert(physical[1].acquires == 2 && physical[0].acquires == 0 &&
+           physical[1].outputs == 0);
+    /* An input session does not send. */
+    assert(camd_registry_session_send_midi1(registry, first, &event, 1) !=
+           CAMD_REGISTRY_OK);
+
+    /* Nothing is delivered before a session starts receiving. */
+    assert(camd_legacy_output_backend_receive_midi1(backend, 1, &event,
+                                                    &dropped) ==
+           CAMD_PROVIDER_OK && dropped == 0);
+    memset(&sink, 0, sizeof(sink));
+    sink.Size = sizeof(sink);
+    sink.Version = 1;
+    sink.SubmitMIDI1 = consume_midi1;
+    sink.SubmitMIDI1SysEx = consume_sysex;
+    sink.Context = &one;
+    assert(camd_registry_session_start_receive(registry, first, &sink) ==
+           CAMD_REGISTRY_OK);
+    sink.Context = &two;
+    assert(camd_registry_session_start_receive(registry, second, &sink) ==
+           CAMD_REGISTRY_OK);
+
+    assert(camd_legacy_output_backend_receive_midi1(backend, 1, &event,
+                                                    &dropped) ==
+           CAMD_PROVIDER_OK && dropped == 0);
+    assert(one.events == 1 && two.events == 1 && one.last[1] == 60);
+    /* The other port's input reaches neither session. */
+    assert(camd_legacy_output_backend_receive_midi1(backend, 0, &event,
+                                                    NULL) ==
+           CAMD_PROVIDER_OK);
+    assert(one.events == 1 && two.events == 1);
+    assert(camd_legacy_output_backend_receive_sysex(backend, 1, sysex,
+                                                    sizeof(sysex), NULL) ==
+           CAMD_PROVIDER_OK);
+    assert(one.sysex == 1 && two.sysex == 1 &&
+           one.sysex_bytes == sizeof(sysex));
+    assert(camd_legacy_output_backend_receive_midi1(backend, 2, &event,
+                                                    NULL) ==
+           CAMD_PROVIDER_INVALID);
+
+    /* A sink without room loses the message; the other still gets it. */
+    two.full = 1;
+    assert(camd_legacy_output_backend_receive_midi1(backend, 1, &event,
+                                                    &dropped) ==
+           CAMD_PROVIDER_OK && dropped == 1);
+    assert(one.events == 2 && two.events == 1);
+    two.full = 0;
+
+    assert(camd_registry_session_stop_receive(registry, first) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_legacy_output_backend_receive_midi1(backend, 1, &event,
+                                                    NULL) ==
+           CAMD_PROVIDER_OK);
+    assert(one.events == 2 && two.events == 2);
+
+    assert(camd_legacy_output_backend_destroy(backend) ==
+           CAMD_PROVIDER_STATE);
+    assert(camd_registry_session_close(registry, first) == CAMD_REGISTRY_OK);
+    /* A receiving session has to stop before it closes. */
+    assert(camd_registry_session_close(registry, second) ==
+           CAMD_REGISTRY_STATE);
+    assert(camd_registry_session_stop_receive(registry, second) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_registry_session_close(registry, second) == CAMD_REGISTRY_OK);
+    assert(physical[1].releases == 2);
+    assert(camd_legacy_output_backend_receive_midi1(backend, 1, &event,
+                                                    NULL) ==
+           CAMD_PROVIDER_OK);
+    assert(two.events == 2);
+
+    assert(camd_legacy_driver_adapter_begin_retire(adapter) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_legacy_driver_adapter_release(adapter) == CAMD_REGISTRY_OK);
+    assert(camd_legacy_output_backend_destroy(backend) == CAMD_PROVIDER_OK);
+    assert(camd_native_worker_fanout_destroy(fanout) ==
+           CAMD_NATIVE_WORKER_FANOUT_OK);
+    camd_registry_destroy(registry);
+}
+
 int main(void)
 {
     struct CAMDEndpointRegistry *registry = camd_registry_create();
@@ -261,6 +513,7 @@ int main(void)
     camd_registry_destroy(registry);
     pthread_cond_destroy(&physical.condition);
     pthread_mutex_destroy(&physical.lock);
+    test_input_sessions();
     puts("CAMD legacy output backend OK");
     return 0;
 }

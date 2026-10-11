@@ -1,0 +1,1131 @@
+diff --git a/workbench/libs/camd/camd.conf b/workbench/libs/camd/camd.conf
+--- a/workbench/libs/camd/camd.conf
++++ b/workbench/libs/camd/camd.conf
+@@ -63,4 +63,5 @@ LONG CloseEndpointSession(struct CAMDHandleV1 *session) (A0)
+ LONG PutEndpointMidi(struct CAMDHandleV1 *session, struct CAMDMIDI1EventV1 *events, ULONG count) (A0, A1, D0)
+ LONG PutEndpointSysEx(struct CAMDHandleV1 *session, UBYTE *bytes, ULONG length) (A0, A1, D0)
+ LONG DrainEndpointSession(struct CAMDHandleV1 *session) (A0)
++LONG GetEndpointMidi(struct CAMDHandleV1 *session, struct CAMDMIDI1EventV1 *event, UBYTE *sysex, ULONG size, ULONG *length) (A0, A1, A2, D0, A3)
+ ##end functionlist
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -85,6 +85,7 @@
+ #define ENDPOINT_OUTPUT_SYSEX 4096
+ #define ENDPOINT_OUTPUT_BUDGET 16
+ #define ENDPOINT_SNAPSHOTS 32
++#define ENDPOINT_RECEIVERS 64
+ #define NUMBEROFSYSEXSTORECEIVE 1025
+ 
+ struct MyMidiMessage2{
+@@ -170,6 +171,15 @@ struct DriverData{
+ 	LONG EndpointOutputSig;
+ 	struct CAMDNativeWorkerFanout *EndpointOutputFanout;
+ 
++	/* Set while the port is a published endpoint. The receiver process
++	   hands what it parses to the endpoint's input sessions and collects
++	   each SysEx message here first. */
++	struct CAMDLegacyDriverOutputBackend *EndpointBackend;
++	UBYTE *EndpointSysEx;
++	ULONG EndpointSysExLength;
++	BOOL EndpointSysExOverflow;
++	ULONG EndpointInputDropped;	// messages an input session had no room for
++
+ 	UWORD *re_start;
+ 	UWORD *re_write;
+ 	UWORD *re_end;
+@@ -248,6 +258,16 @@ struct ClusterWatch{
+ 
+ struct CAMDEndpointRegistry;
+ struct CAMDEndpointSnapshot;
++struct CAMDNativeEventQueue;
++
++/* The client side of an open input session. */
++struct EndpointReceiver{
++	struct CAMDHandleV1 session;	// generation 0 while the slot is free
++	struct CAMDNativeEventQueue *queue;
++	struct Task *task;
++	ULONG signal;			// signal number, or CAMD_SIGNAL_NONE
++	BOOL lost;			// the queue was full since the last read
++};
+ struct CAMDIdentityStoreAROS;
+ 
+ struct CamdBase_intern{
+@@ -291,6 +311,9 @@ struct CamdBase_intern{
+     struct CAMDEndpointSnapshot *EndpointSnapshots[ENDPOINT_SNAPSHOTS];
+     ULONG EndpointSnapshotGenerations[ENDPOINT_SNAPSHOTS];
+ 
++    /* Input sessions' queues, also under EndpointClientSemaphore. */
++    struct EndpointReceiver EndpointReceivers[ENDPOINT_RECEIVERS];
++
+ 
+ };
+ 
+@@ -458,6 +481,17 @@ void RemoveEndpointSnapshot(const struct CAMDHandleV1 *handle,
+ 	struct CamdBase *CamdBase);
+ void FreeEndpointSnapshots(struct CamdBase *CamdBase);
+ BOOL EndpointClientsRemain(struct CamdBase *CamdBase);
++struct CAMDMIDI1EventV1;
++LONG StartEndpointReceiver(const struct CAMDHandleV1 *session,ULONG capacity,
++	ULONG maxsysex,ULONG signal,struct CamdBase *CamdBase);
++void StopEndpointReceiver(const struct CAMDHandleV1 *session,
++	struct CamdBase *CamdBase);
++LONG ReadEndpointReceiver(const struct CAMDHandleV1 *session,
++	struct CAMDMIDI1EventV1 *event,UBYTE *sysex,ULONG size,ULONG *length,
++	struct CamdBase *CamdBase);
++void DeliverDriverEndpointMidi(struct DriverData *driverdata,
++	struct MyMidiMessage2 *msg2);
++void DeliverDriverEndpointSysEx(struct DriverData *driverdata,UBYTE data);
+ 
+ void FreeDriverData(struct Drivers *driver,
+ 	struct CamdBase *CamdBase
+diff --git a/workbench/libs/camd/camdendpoint.h b/workbench/libs/camd/camdendpoint.h
+--- a/workbench/libs/camd/camdendpoint.h
++++ b/workbench/libs/camd/camdendpoint.h
+@@ -112,7 +112,12 @@ struct CAMDMIDI1EventV1 {
+     ULONG ClockDomain;
+ };
+ 
+-/* QueueCapacity is the least number of native records to reserve. */
++/* CAMDSessionRequestV1.Signal when the opener wants no signal. */
++#define CAMD_SIGNAL_NONE                 0xffffffffu
++
++/* QueueCapacity is the least number of native records to reserve. Signal is
++ * for an input session: the number of the signal the opening task gets when
++ * something arrives, or CAMD_SIGNAL_NONE. */
+ struct CAMDSessionRequestV1 {
+     ULONG Size;
+     ULONG Version;
+@@ -122,6 +127,7 @@ struct CAMDSessionRequestV1 {
+     ULONG Protocol;
+     ULONG Conversion;
+     ULONG QueueCapacity;
++    ULONG Signal;
+ };
+ 
+ /* What an open session got. MaxSysExBytes is zero for UMP. */
+diff --git a/workbench/libs/camd/closeendpointsession.c b/workbench/libs/camd/closeendpointsession.c
+--- a/workbench/libs/camd/closeendpointsession.c
++++ b/workbench/libs/camd/closeendpointsession.c
+@@ -22,7 +22,8 @@
+ 
+ /*  FUNCTION
+ 		Closes a session. Messages not yet sent are dropped; call
+-		DrainEndpointSession() first to have them sent.
++		DrainEndpointSession() first to have them sent. Messages
++		received and not yet read are dropped too.
+ 
+     INPUTS
+ 		session - from OpenEndpointSession().
+@@ -50,6 +51,8 @@
+ 
+ 	if(session==NULL) return CAMD_REGISTRY_INVALID;
+ 
++	StopEndpointReceiver(session,CamdBase);
++
+ 	return camd_registry_session_close(CB(CamdBase)->EndpointRegistry,*session);
+ 
+     AROS_LIBFUNC_EXIT
+diff --git a/workbench/libs/camd/driver_endpoints.c b/workbench/libs/camd/driver_endpoints.c
+--- a/workbench/libs/camd/driver_endpoints.c
++++ b/workbench/libs/camd/driver_endpoints.c
+@@ -2,8 +2,9 @@
+  * Publishes a loaded driver's fixed ports in the private endpoint registry.
+  *
+  * Legacy cluster traffic does not pass through these objects, and a failure
+- * here leaves the driver's clusters working. Only output is published until
+- * the input handoff exists.
++ * here leaves the driver's clusters working. Output sessions have their own
++ * queue and worker; input sessions get each complete message the port's
++ * receiver process parses, beside the port's legacy cluster.
+  */
+ 
+ #include <exec/memory.h>
+@@ -75,7 +76,7 @@ void PublishDriverEndpoints(struct Drivers *driver, char *path,
+         ports[i].Size = sizeof(ports[i]);
+         ports[i].Version = 1;
+         ports[i].EndpointID = ids[i];
+-        ports[i].Directions = CAMD_PROVIDER_DIRECTION_OUTPUT;
++        ports[i].Directions = CAMD_PROVIDER_DIRECTION_ALL;
+         mysprintf(CamdBase, name, "%s.%ld", driver->mididevicedata->Name,
+                   (long)i);
+         name[sizeof(ports[i].Name) - 1] = '\0';
+@@ -121,6 +122,16 @@ void PublishDriverEndpoints(struct Drivers *driver, char *path,
+         goto done;
+     }
+ 
++    /* From here on the receiver processes deliver to input sessions. A port
++     * whose SysEx buffer could not be had still publishes; it then delivers
++     * no SysEx. */
++    for (i = 0; i < count; ++i) {
++        driver->driverdatas[i]->EndpointSysEx =
++            AllocVec(ENDPOINT_OUTPUT_SYSEX, MEMF_ANY);
++        driver->driverdatas[i]->EndpointSysExLength = 0;
++        driver->driverdatas[i]->EndpointBackend = backend;
++    }
++
+     D(bug("camd.library: %s published %ld endpoints, identity kind %ld\n",
+           driver->mididevicedata->Name, (long)count, (long)kind));
+     show_id("provider", 0, &provider_id);
+@@ -153,6 +164,14 @@ BOOL UnpublishDriverEndpoints(struct Drivers *driver,
+         driver->EndpointAdapter = NULL;
+     }
+     if (driver->EndpointBackend != NULL) {
++        ULONG i;
++
++        /* No session is left, so every port is closed for endpoints and its
++         * receiver process delivers nothing any more. */
++        for (i = 0; driver->driverdatas != NULL && i < driver->numports; ++i) {
++            if (driver->driverdatas[i] != NULL)
++                driver->driverdatas[i]->EndpointBackend = NULL;
++        }
+         if (camd_legacy_driver_output_backend_destroy(
+                 driver->EndpointBackend) != CAMD_PROVIDER_OK) {
+             D(bug("camd.library: %s output sessions are still open\n",
+@@ -163,3 +182,62 @@ BOOL UnpublishDriverEndpoints(struct Drivers *driver,
+     }
+     return TRUE;
+ }
++
++/* Called by the port's receiver process for each complete short message. */
++void DeliverDriverEndpointMidi(struct DriverData *driverdata,
++                               struct MyMidiMessage2 *msg2)
++{
++    struct CAMDMIDI1EventV1 event;
++    uint32_t dropped = 0;
++
++    if (msg2->len < 1 || msg2->len > 3)
++        return;
++    memset(&event, 0, sizeof(event));
++    event.Size = sizeof(event);
++    event.Version = 1;
++    event.Length = msg2->len;
++    event.Bytes[0] = msg2->status;
++    event.Bytes[1] = msg2->data1;
++    event.Bytes[2] = msg2->data2;
++    camd_legacy_driver_output_backend_receive_midi1(
++        driverdata->EndpointBackend, (size_t)driverdata->portnum, &event,
++        &dropped);
++    driverdata->EndpointInputDropped += dropped;
++}
++
++/* Called by the port's receiver process for each SysEx byte: 0xF0 starts a
++ * message, 0xF7 ends it and 0xFF tells that the driver broke it off. Input
++ * sessions get complete messages only. */
++void DeliverDriverEndpointSysEx(struct DriverData *driverdata, UBYTE data)
++{
++    uint32_t dropped = 0;
++
++    if (driverdata->EndpointSysEx == NULL)
++        return;
++    if (data == 0xf0) {
++        driverdata->EndpointSysExLength = 0;
++        driverdata->EndpointSysExOverflow = FALSE;
++    } else if (driverdata->EndpointSysExLength == 0) {
++        return;
++    }
++    if (data == 0xff) {
++        driverdata->EndpointSysExLength = 0;
++        return;
++    }
++    if (driverdata->EndpointSysExLength < ENDPOINT_OUTPUT_SYSEX)
++        driverdata->EndpointSysEx[driverdata->EndpointSysExLength++] = data;
++    else
++        driverdata->EndpointSysExOverflow = TRUE;
++    if (data == 0xf7) {
++        if (driverdata->EndpointSysExOverflow) {
++            ++driverdata->EndpointInputDropped;
++        } else {
++            camd_legacy_driver_output_backend_receive_sysex(
++                driverdata->EndpointBackend, (size_t)driverdata->portnum,
++                driverdata->EndpointSysEx, driverdata->EndpointSysExLength,
++                &dropped);
++            driverdata->EndpointInputDropped += dropped;
++        }
++        driverdata->EndpointSysExLength = 0;
++    }
++}
+diff --git a/workbench/libs/camd/drivers.c b/workbench/libs/camd/drivers.c
+--- a/workbench/libs/camd/drivers.c
++++ b/workbench/libs/camd/drivers.c
+@@ -378,6 +378,9 @@ void FreeDriverData(struct Drivers *driver,
+ 		for(lokke=0;lokke<driver->numports;lokke++){
+ 			driverdata=driver->driverdatas[lokke];
+ 			if(driverdata!=NULL){
++				if(driverdata->EndpointSysEx!=NULL){
++					FreeVec(driverdata->EndpointSysEx);
++				}
+ 				if(driverdata->EndpointOutputFanout!=NULL){
+ 					camd_native_worker_fanout_destroy(
+ 						driverdata->EndpointOutputFanout);
+diff --git a/workbench/libs/camd/endpoint_client.c b/workbench/libs/camd/endpoint_client.c
+--- a/workbench/libs/camd/endpoint_client.c
++++ b/workbench/libs/camd/endpoint_client.c
+@@ -1,14 +1,18 @@
+ /*
+- * Snapshot handles of the endpoint client functions.
++ * Client-side state of the endpoint functions: snapshot handles and the
++ * queues of input sessions.
+  *
+- * A client holds a slot and a generation, never the snapshot's address, so a
+- * stale or foreign handle is refused instead of followed.
++ * A client holds a slot and a generation, never an address, so a stale or
++ * foreign handle is refused instead of followed.
+  */
+ 
+ #include <proto/exec.h>
+ 
++#include <string.h>
++
+ #include "camd_intern.h"
+ #include "endpoint_registry.h"
++#include "native_event_queue.h"
+ 
+ LONG AddEndpointSnapshot(struct CAMDEndpointSnapshot *snapshot,
+                          struct CAMDHandleV1 *handle,
+@@ -88,3 +92,200 @@ void FreeEndpointSnapshots(struct CamdBase *CamdBase)
+         }
+     }
+ }
++
++static enum CAMDProviderResult queue_to_provider(
++    enum CAMDNativeQueueResult result)
++{
++    if (result == CAMD_NATIVE_QUEUE_OK)
++        return CAMD_PROVIDER_OK;
++    if (result == CAMD_NATIVE_QUEUE_TOO_LARGE)
++        return CAMD_PROVIDER_TOO_LARGE;
++    return CAMD_PROVIDER_QUEUE_FULL;
++}
++
++static void receiver_arrived(struct EndpointReceiver *receiver,
++                             enum CAMDNativeQueueResult result)
++{
++    if (result != CAMD_NATIVE_QUEUE_OK)
++        receiver->lost = TRUE;
++    if (receiver->signal != CAMD_SIGNAL_NONE)
++        Signal(receiver->task, 1UL << receiver->signal);
++}
++
++/* The two sinks run in the port's receiver process. */
++static enum CAMDProviderResult receiver_midi1(
++    void *context, const struct CAMDMIDI1EventV1 *events, size_t event_count)
++{
++    struct EndpointReceiver *receiver = context;
++    enum CAMDNativeQueueResult result;
++
++    result = camd_native_queue_enqueue_midi1_items(receiver->queue, events,
++                                                   event_count);
++    receiver_arrived(receiver, result);
++    return queue_to_provider(result);
++}
++
++static enum CAMDProviderResult receiver_sysex(
++    void *context, const uint8_t *bytes, size_t byte_count,
++    uint32_t time_high, uint32_t time_low, uint32_t clock_domain,
++    uint32_t flags)
++{
++    struct EndpointReceiver *receiver = context;
++    enum CAMDNativeQueueResult result;
++
++    result = camd_native_queue_enqueue_midi1_sysex(
++        receiver->queue, bytes, byte_count, time_high, time_low,
++        clock_domain, flags);
++    receiver_arrived(receiver, result);
++    return queue_to_provider(result);
++}
++
++/* EndpointClientSemaphore must be held. */
++static struct EndpointReceiver *find_receiver(
++    const struct CAMDHandleV1 *session, struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    ULONG i;
++
++    if (session->generation == 0)
++        return NULL;
++    for (i = 0; i < ENDPOINT_RECEIVERS; ++i) {
++        if (base->EndpointReceivers[i].session.generation ==
++                session->generation &&
++            base->EndpointReceivers[i].session.slot == session->slot)
++            return &base->EndpointReceivers[i];
++    }
++    return NULL;
++}
++
++/* Gives an open input session its queue and starts it receiving. The
++ * calling task is the one that gets the signal. */
++LONG StartEndpointReceiver(const struct CAMDHandleV1 *session, ULONG capacity,
++                           ULONG maxsysex, ULONG signal,
++                           struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    struct EndpointReceiver *receiver = NULL;
++    struct CAMDNativeQueueConfigV1 config;
++    struct CAMDProviderReceiveSinkV1 sink;
++    LONG result;
++    ULONG i;
++
++    if (signal != CAMD_SIGNAL_NONE && signal > 31)
++        return CAMD_REGISTRY_INVALID;
++
++    ObtainSemaphore(&base->EndpointClientSemaphore);
++    for (i = 0; i < ENDPOINT_RECEIVERS; ++i) {
++        if (base->EndpointReceivers[i].session.generation == 0) {
++            receiver = &base->EndpointReceivers[i];
++            break;
++        }
++    }
++    if (receiver == NULL) {
++        ReleaseSemaphore(&base->EndpointClientSemaphore);
++        return CAMD_REGISTRY_NOMEM;
++    }
++    memset(&config, 0, sizeof(config));
++    config.Size = sizeof(config);
++    config.Version = 1;
++    config.DataFormat = CAMD_PROVIDER_FORMAT_MIDI1;
++    config.Capacity = capacity;
++    config.MaxSysExBytes = maxsysex;
++    if (camd_native_queue_create(&config, &receiver->queue) !=
++        CAMD_NATIVE_QUEUE_OK) {
++        ReleaseSemaphore(&base->EndpointClientSemaphore);
++        return CAMD_REGISTRY_NOMEM;
++    }
++    receiver->task = FindTask(NULL);
++    receiver->signal = signal;
++    receiver->lost = FALSE;
++    receiver->session = *session;
++
++    memset(&sink, 0, sizeof(sink));
++    sink.Size = sizeof(sink);
++    sink.Version = 1;
++    sink.Context = receiver;
++    sink.SubmitMIDI1 = receiver_midi1;
++    sink.SubmitMIDI1SysEx = receiver_sysex;
++    result = camd_registry_session_start_receive(base->EndpointRegistry,
++                                                 *session, &sink);
++    if (result != CAMD_REGISTRY_OK) {
++        receiver->session.generation = 0;
++        camd_native_queue_destroy(receiver->queue);
++        receiver->queue = NULL;
++    }
++    ReleaseSemaphore(&base->EndpointClientSemaphore);
++    return result;
++}
++
++/* Stops a session receiving and frees its queue; nothing for an output
++ * session. The semaphore is held throughout, so the slot is not reused
++ * while a delivery could still be in its sink. */
++void StopEndpointReceiver(const struct CAMDHandleV1 *session,
++                          struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    struct EndpointReceiver *receiver;
++
++    ObtainSemaphore(&base->EndpointClientSemaphore);
++    receiver = find_receiver(session, CamdBase);
++    if (receiver != NULL) {
++        camd_registry_session_stop_receive(base->EndpointRegistry, *session);
++        camd_native_queue_destroy(receiver->queue);
++        receiver->queue = NULL;
++        receiver->session.generation = 0;
++    }
++    ReleaseSemaphore(&base->EndpointClientSemaphore);
++}
++
++LONG ReadEndpointReceiver(const struct CAMDHandleV1 *session,
++                          struct CAMDMIDI1EventV1 *event, UBYTE *sysex,
++                          ULONG size, ULONG *length,
++                          struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    struct EndpointReceiver *receiver;
++    struct CAMDNativeQueueHeadV1 head;
++    struct CAMDNativeQueueSysExInfoV1 info;
++    enum CAMDNativeQueueResult got;
++    size_t count = 0;
++    LONG result;
++
++    ObtainSemaphoreShared(&base->EndpointClientSemaphore);
++    receiver = find_receiver(session, CamdBase);
++    if (receiver == NULL) {
++        result = CAMD_REGISTRY_STALE;
++    } else if (receiver->lost) {
++        receiver->lost = FALSE;
++        result = CAMD_REGISTRY_QUEUE_FULL;
++    } else {
++        memset(&head, 0, sizeof(head));
++        head.Size = sizeof(head);
++        head.Version = 1;
++        got = camd_native_queue_peek(receiver->queue, &head);
++        if (got != CAMD_NATIVE_QUEUE_OK) {
++            result = CAMD_REGISTRY_EMPTY;
++        } else if (head.Kind == CAMD_NATIVE_QUEUE_ITEM_MIDI1_SYSEX) {
++            *length = head.ByteCount;
++            if (sysex == NULL || size < head.ByteCount) {
++                result = CAMD_REGISTRY_TOO_LARGE;
++            } else {
++                memset(&info, 0, sizeof(info));
++                info.Size = sizeof(info);
++                info.Version = 1;
++                got = camd_native_queue_dequeue_midi1_sysex(
++                    receiver->queue, sysex, size, &info);
++                result = got == CAMD_NATIVE_QUEUE_OK ? CAMD_REGISTRY_OK
++                                                     : CAMD_REGISTRY_EMPTY;
++            }
++        } else {
++            got = camd_native_queue_dequeue_midi1(receiver->queue, event, 1,
++                                                  &count);
++            result = got == CAMD_NATIVE_QUEUE_OK && count == 1
++                         ? CAMD_REGISTRY_OK
++                         : CAMD_REGISTRY_EMPTY;
++        }
++    }
++    ReleaseSemaphore(&base->EndpointClientSemaphore);
++    return result;
++}
+diff --git a/workbench/libs/camd/getendpointmidi.c b/workbench/libs/camd/getendpointmidi.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/getendpointmidi.c
+@@ -0,0 +1,84 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++#include "provider_contract.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH5(LONG, GetEndpointMidi,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDHandleV1 *, session, A0),
++	AROS_LHA(struct CAMDMIDI1EventV1 *, event, A1),
++	AROS_LHA(UBYTE *, sysex, A2),
++	AROS_LHA(ULONG, size, D0),
++	AROS_LHA(ULONG *, length, A3),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 54, Camd)
++
++/*  FUNCTION
++		Takes the oldest message an input session received: either
++		one short MIDI 1.0 message or one complete System Exclusive
++		message.
++
++    INPUTS
++		session - from OpenEndpointSession().
++		event - filled in with a short message.
++		sysex - where a System Exclusive message is copied to.
++		size - the room at sysex.
++		length - filled in with 0 for a short message, or with the
++		    number of bytes of a System Exclusive message.
++
++    RESULT
++		CAMD_REGISTRY_OK with a message.
++		CAMD_REGISTRY_EMPTY when there is none.
++		CAMD_REGISTRY_TOO_LARGE when the oldest message is System
++		Exclusive and does not fit in size: length tells how much it
++		needs and the message stays.
++		CAMD_REGISTRY_QUEUE_FULL once after messages were lost because
++		the session's queue was full; no message is taken.
++		Another CAMD_REGISTRY_ value otherwise.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change. Does not wait. Read until CAMD_REGISTRY_EMPTY after
++		each signal.
++
++    EXAMPLE
++		for(;;){
++			result=GetEndpointMidi(&session,&event,buffer,sizeof(buffer),&length);
++			if(result==CAMD_REGISTRY_EMPTY) break;
++			if(result==CAMD_REGISTRY_QUEUE_FULL) note_loss();
++			else if(result==CAMD_REGISTRY_OK && length==0) handle(&event);
++			else if(result==CAMD_REGISTRY_OK) handle_sysex(buffer,length);
++			else break;
++		}
++
++    BUGS
++
++    SEE ALSO
++		OpenEndpointSession()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	if(session==NULL || event==NULL || length==NULL){
++		return CAMD_REGISTRY_INVALID;
++	}
++	*length=0;
++
++	return ReadEndpointReceiver(session,event,sysex,size,length,CamdBase);
++
++    AROS_LIBFUNC_EXIT
++}
+diff --git a/workbench/libs/camd/legacy_driver_output_backend.c b/workbench/libs/camd/legacy_driver_output_backend.c
+--- a/workbench/libs/camd/legacy_driver_output_backend.c
++++ b/workbench/libs/camd/legacy_driver_output_backend.c
+@@ -55,6 +55,30 @@ static enum CAMDProviderResult release_output(void *context)
+     return result;
+ }
+ 
++static enum CAMDProviderResult acquire_input(void *context)
++{
++    struct driver_output_port *port = context;
++    enum CAMDProviderResult result;
++
++    ObtainSemaphore(CB(port->camd_base)->CLSemaphore);
++    result = AcquireDriverEndpointPort(
++        port->driver_data, CAMD_PROVIDER_DIRECTION_INPUT, port->camd_base);
++    ReleaseSemaphore(CB(port->camd_base)->CLSemaphore);
++    return result;
++}
++
++static enum CAMDProviderResult release_input(void *context)
++{
++    struct driver_output_port *port = context;
++    enum CAMDProviderResult result;
++
++    ObtainSemaphore(CB(port->camd_base)->CLSemaphore);
++    result = ReleaseDriverEndpointPort(
++        port->driver_data, CAMD_PROVIDER_DIRECTION_INPUT, port->camd_base);
++    ReleaseSemaphore(CB(port->camd_base)->CLSemaphore);
++    return result;
++}
++
+ static enum CAMDProviderResult submit_midi1(
+     void *context, const struct CAMDMIDI1EventV1 *event)
+ {
+@@ -179,6 +203,8 @@ enum CAMDProviderResult camd_legacy_driver_output_backend_create(
+     backend_config.Callbacks.Release = release_output;
+     backend_config.Callbacks.SubmitMIDI1 = submit_midi1;
+     backend_config.Callbacks.SubmitMIDI1SysEx = submit_sysex;
++    backend_config.Callbacks.AcquireInput = acquire_input;
++    backend_config.Callbacks.ReleaseInput = release_input;
+     backend_config.Ports = ports;
+     backend_config.PortCount = config->PortCount;
+     backend_config.MaxQueueCapacity = config->MaxQueueCapacity;
+@@ -209,6 +235,28 @@ void *camd_legacy_driver_output_backend_context(
+                    : NULL;
+ }
+ 
++enum CAMDProviderResult camd_legacy_driver_output_backend_receive_midi1(
++    struct CAMDLegacyDriverOutputBackend *backend, size_t port_index,
++    const struct CAMDMIDI1EventV1 *event, uint32_t *dropped)
++{
++    if (!backend)
++        return CAMD_PROVIDER_INVALID;
++    return camd_legacy_output_backend_receive_midi1(backend->backend,
++                                                    port_index, event,
++                                                    dropped);
++}
++
++enum CAMDProviderResult camd_legacy_driver_output_backend_receive_sysex(
++    struct CAMDLegacyDriverOutputBackend *backend, size_t port_index,
++    const uint8_t *bytes, size_t byte_count, uint32_t *dropped)
++{
++    if (!backend)
++        return CAMD_PROVIDER_INVALID;
++    return camd_legacy_output_backend_receive_sysex(backend->backend,
++                                                    port_index, bytes,
++                                                    byte_count, dropped);
++}
++
+ enum CAMDProviderResult camd_legacy_driver_output_backend_destroy(
+     struct CAMDLegacyDriverOutputBackend *backend)
+ {
+diff --git a/workbench/libs/camd/legacy_driver_output_backend.h b/workbench/libs/camd/legacy_driver_output_backend.h
+--- a/workbench/libs/camd/legacy_driver_output_backend.h
++++ b/workbench/libs/camd/legacy_driver_output_backend.h
+@@ -1,7 +1,7 @@
+ #ifndef CAMD_LEGACY_DRIVER_OUTPUT_BACKEND_H
+ #define CAMD_LEGACY_DRIVER_OUTPUT_BACKEND_H
+ 
+-/* Private AROS binding from the bounded MIDI 1.0 output backend to DriverData. */
++/* Private AROS binding from the MIDI 1.0 driver backend to DriverData. */
+ 
+ #include "legacy_output_backend.h"
+ 
+@@ -37,6 +37,14 @@ const struct CAMDProviderOpsV1 *camd_legacy_driver_output_backend_ops(
+ void *camd_legacy_driver_output_backend_context(
+     struct CAMDLegacyDriverOutputBackend *backend);
+ 
++/* What port port_index received, from its receiver process. */
++enum CAMDProviderResult camd_legacy_driver_output_backend_receive_midi1(
++    struct CAMDLegacyDriverOutputBackend *backend, size_t port_index,
++    const struct CAMDMIDI1EventV1 *event, uint32_t *dropped);
++enum CAMDProviderResult camd_legacy_driver_output_backend_receive_sysex(
++    struct CAMDLegacyDriverOutputBackend *backend, size_t port_index,
++    const uint8_t *bytes, size_t byte_count, uint32_t *dropped);
++
+ /* Retryable: returns STATE while provider sessions still own the backend. */
+ enum CAMDProviderResult camd_legacy_driver_output_backend_destroy(
+     struct CAMDLegacyDriverOutputBackend *backend);
+diff --git a/workbench/libs/camd/legacy_output_backend.c b/workbench/libs/camd/legacy_output_backend.c
+--- a/workbench/libs/camd/legacy_output_backend.c
++++ b/workbench/libs/camd/legacy_output_backend.c
+@@ -24,6 +24,7 @@ struct CAMDLegacyOutputBackend {
+     struct backend_lock lock;
+     struct CAMDLegacyOutputCallbacksV1 callbacks;
+     struct CAMDLegacyOutputPortV1 *ports;
++    struct output_session **inputs;     /* per port, under lock */
+     size_t port_count;
+     uint32_t max_queue_capacity;
+     uint32_t max_sysex_bytes;
+@@ -43,6 +44,11 @@ struct output_session {
+     int fanout_attached;
+     int port_acquired;
+     int pipeline_destroyed;
++    uint32_t direction;
++    /* Input sessions only; all under the backend lock. */
++    struct output_session *next_input;
++    struct CAMDProviderReceiveSinkV1 sink;
++    int receiving;
+ };
+ 
+ static void *backend_alloc(size_t size)
+@@ -196,6 +202,178 @@ static void destroy_pipeline(struct output_session *session)
+     session->pipeline_destroyed = 1;
+ }
+ 
++static enum CAMDProviderResult open_input(
++    struct CAMDLegacyOutputBackend *backend,
++    const struct CAMDProviderOpenRequestV1 *request,
++    struct CAMDProviderOpenResultV1 *result)
++{
++    struct CAMDLegacyOutputPortV1 *port;
++    struct output_session *session;
++    enum CAMDProviderResult provider_result;
++    size_t index;
++
++    if (!backend->callbacks.AcquireInput ||
++        request->DataFormat != CAMD_PROVIDER_FORMAT_MIDI1 ||
++        request->Protocol != CAMD_PROVIDER_PROTOCOL_MIDI1 ||
++        request->QueueCapacity == 0 ||
++        request->QueueCapacity > backend->max_queue_capacity)
++        return CAMD_PROVIDER_UNSUPPORTED;
++    port = find_port(backend, &request->EndpointID);
++    if (!port)
++        return CAMD_PROVIDER_INVALID;
++    index = (size_t)(port - backend->ports);
++    lock_acquire(&backend->lock);
++    if (backend->retiring || backend->active_sessions == UINT32_MAX) {
++        lock_release(&backend->lock);
++        return backend->retiring ? CAMD_PROVIDER_RETIRED
++                                 : CAMD_PROVIDER_STATE;
++    }
++    ++backend->active_sessions;
++    lock_release(&backend->lock);
++
++    session = backend_alloc(sizeof(*session));
++    if (!session) {
++        release_reservation(backend);
++        return CAMD_PROVIDER_CALLBACK_FAILED;
++    }
++    session->backend = backend;
++    session->port = port;
++    session->direction = CAMD_PROVIDER_DIRECTION_INPUT;
++    session->pipeline_destroyed = 1;
++    provider_result = backend->callbacks.AcquireInput(port->Context);
++    if (provider_result != CAMD_PROVIDER_OK) {
++        backend_free(session);
++        release_reservation(backend);
++        return provider_result;
++    }
++    session->port_acquired = 1;
++    lock_acquire(&backend->lock);
++    session->next_input = backend->inputs[index];
++    backend->inputs[index] = session;
++    lock_release(&backend->lock);
++    result->SessionContext = session;
++    result->EffectiveQueueCapacity = request->QueueCapacity;
++    result->MaxSysExBytes = backend->max_sysex_bytes;
++    return CAMD_PROVIDER_OK;
++}
++
++static enum CAMDProviderResult close_input(
++    struct CAMDLegacyOutputBackend *backend, struct output_session *session)
++{
++    struct output_session **link;
++    enum CAMDProviderResult result;
++
++    /* Out of the list first: no delivery can then reach the session. */
++    lock_acquire(&backend->lock);
++    link = &backend->inputs[session->port - backend->ports];
++    while (*link && *link != session)
++        link = &(*link)->next_input;
++    if (*link)
++        *link = session->next_input;
++    session->receiving = 0;
++    lock_release(&backend->lock);
++    if (session->port_acquired) {
++        result = backend->callbacks.ReleaseInput(session->port->Context);
++        if (result != CAMD_PROVIDER_OK)
++            return result;
++        session->port_acquired = 0;
++    }
++    backend_free(session);
++    release_reservation(backend);
++    return CAMD_PROVIDER_OK;
++}
++
++static enum CAMDProviderResult backend_start_receive(
++    void *context, void *session_context,
++    const struct CAMDProviderReceiveSinkV1 *sink)
++{
++    struct CAMDLegacyOutputBackend *backend = context;
++    struct output_session *session = session_context;
++
++    if (!backend || !session || session->backend != backend ||
++        session->direction != CAMD_PROVIDER_DIRECTION_INPUT || !sink ||
++        sink->Size != sizeof(*sink) || sink->Version != 1 ||
++        !sink->SubmitMIDI1 || !sink->SubmitMIDI1SysEx)
++        return CAMD_PROVIDER_INVALID;
++    lock_acquire(&backend->lock);
++    if (session->receiving) {
++        lock_release(&backend->lock);
++        return CAMD_PROVIDER_STATE;
++    }
++    session->sink = *sink;
++    session->receiving = 1;
++    lock_release(&backend->lock);
++    return CAMD_PROVIDER_OK;
++}
++
++/* Deliveries hold the lock, so none is in a sink once this returns. */
++static enum CAMDProviderResult backend_stop_receive(void *context,
++                                                    void *session_context)
++{
++    struct CAMDLegacyOutputBackend *backend = context;
++    struct output_session *session = session_context;
++
++    if (!backend || !session || session->backend != backend ||
++        session->direction != CAMD_PROVIDER_DIRECTION_INPUT)
++        return CAMD_PROVIDER_INVALID;
++    lock_acquire(&backend->lock);
++    session->receiving = 0;
++    lock_release(&backend->lock);
++    return CAMD_PROVIDER_OK;
++}
++
++enum CAMDProviderResult camd_legacy_output_backend_receive_midi1(
++    struct CAMDLegacyOutputBackend *backend, size_t port_index,
++    const struct CAMDMIDI1EventV1 *event, uint32_t *dropped)
++{
++    struct output_session *session;
++    uint32_t lost = 0;
++
++    if (dropped)
++        *dropped = 0;
++    if (!backend || port_index >= backend->port_count || !event)
++        return CAMD_PROVIDER_INVALID;
++    lock_acquire(&backend->lock);
++    for (session = backend->inputs[port_index]; session;
++         session = session->next_input) {
++        if (session->receiving &&
++            session->sink.SubmitMIDI1(session->sink.Context, event, 1) !=
++                CAMD_PROVIDER_OK)
++            ++lost;
++    }
++    lock_release(&backend->lock);
++    if (dropped)
++        *dropped = lost;
++    return CAMD_PROVIDER_OK;
++}
++
++enum CAMDProviderResult camd_legacy_output_backend_receive_sysex(
++    struct CAMDLegacyOutputBackend *backend, size_t port_index,
++    const uint8_t *bytes, size_t byte_count, uint32_t *dropped)
++{
++    struct output_session *session;
++    uint32_t lost = 0;
++
++    if (dropped)
++        *dropped = 0;
++    if (!backend || port_index >= backend->port_count || !bytes ||
++        byte_count < 2)
++        return CAMD_PROVIDER_INVALID;
++    lock_acquire(&backend->lock);
++    for (session = backend->inputs[port_index]; session;
++         session = session->next_input) {
++        if (session->receiving &&
++            session->sink.SubmitMIDI1SysEx(session->sink.Context, bytes,
++                                           byte_count, 0, 0, 0, 0) !=
++                CAMD_PROVIDER_OK)
++            ++lost;
++    }
++    lock_release(&backend->lock);
++    if (dropped)
++        *dropped = lost;
++    return CAMD_PROVIDER_OK;
++}
++
+ static enum CAMDProviderResult backend_open(
+     void *context, const struct CAMDProviderOpenRequestV1 *request,
+     struct CAMDProviderOpenResultV1 *result)
+@@ -209,6 +387,9 @@ static enum CAMDProviderResult backend_open(
+     struct CAMDProviderReceiveSinkV1 sink;
+     enum CAMDProviderResult provider_result = CAMD_PROVIDER_CALLBACK_FAILED;
+ 
++    if (backend && request && result &&
++        request->Direction == CAMD_PROVIDER_DIRECTION_INPUT)
++        return open_input(backend, request, result);
+     if (!backend || !request || !result ||
+         request->Direction != CAMD_PROVIDER_DIRECTION_OUTPUT ||
+         request->DataFormat != CAMD_PROVIDER_FORMAT_MIDI1 ||
+@@ -235,6 +416,7 @@ static enum CAMDProviderResult backend_open(
+     }
+     session->backend = backend;
+     session->port = port;
++    session->direction = CAMD_PROVIDER_DIRECTION_OUTPUT;
+     memset(&queue_config, 0, sizeof(queue_config));
+     queue_config.Size = sizeof(queue_config);
+     queue_config.Version = 1;
+@@ -306,6 +488,8 @@ static enum CAMDProviderResult backend_close(void *context,
+ 
+     if (!backend || !session || session->backend != backend)
+         return CAMD_PROVIDER_INVALID;
++    if (session->direction == CAMD_PROVIDER_DIRECTION_INPUT)
++        return close_input(backend, session);
+     if (session->fanout_attached) {
+         if (camd_native_worker_fanout_detach(
+                 session->port->CapacityFanout, session->fanout_handle) !=
+@@ -333,7 +517,8 @@ static enum CAMDProviderResult backend_send_midi1(
+     struct output_session *session = session_context;
+     enum CAMDNativeQueueResult result;
+ 
+-    if (!backend || !session || session->backend != backend)
++    if (!backend || !session || session->backend != backend ||
++        session->direction != CAMD_PROVIDER_DIRECTION_OUTPUT)
+         return CAMD_PROVIDER_INVALID;
+     result = camd_native_queue_enqueue_midi1_items(session->queue, events,
+                                                    event_count);
+@@ -353,7 +538,8 @@ static enum CAMDProviderResult backend_send_sysex(
+     struct output_session *session = session_context;
+     enum CAMDNativeQueueResult result;
+ 
+-    if (!backend || !session || session->backend != backend)
++    if (!backend || !session || session->backend != backend ||
++        session->direction != CAMD_PROVIDER_DIRECTION_OUTPUT)
+         return CAMD_PROVIDER_INVALID;
+     result = camd_native_queue_enqueue_midi1_sysex(
+         session->queue, bytes, byte_count, time_high, time_low,
+@@ -371,7 +557,8 @@ static enum CAMDProviderResult backend_drain(void *context,
+     struct output_session *session = session_context;
+     struct CAMDNativeQueueStatsV1 stats;
+ 
+-    if (!backend || !session || session->backend != backend)
++    if (!backend || !session || session->backend != backend ||
++        session->direction != CAMD_PROVIDER_DIRECTION_OUTPUT)
+         return CAMD_PROVIDER_INVALID;
+     memset(&stats, 0, sizeof(stats));
+     stats.Size = sizeof(stats);
+@@ -392,7 +579,8 @@ static enum CAMDProviderResult backend_cancel(void *context,
+     struct output_session *session = session_context;
+     size_t cancelled;
+ 
+-    if (!backend || !session || session->backend != backend)
++    if (!backend || !session || session->backend != backend ||
++        session->direction != CAMD_PROVIDER_DIRECTION_OUTPUT)
+         return CAMD_PROVIDER_INVALID;
+     return queue_result(camd_native_queue_cancel(session->queue, &cancelled));
+ }
+@@ -431,7 +619,9 @@ static int valid_config(const struct CAMDLegacyOutputBackendConfigV1 *config)
+         config->Callbacks.Size != sizeof(config->Callbacks) ||
+         config->Callbacks.Version != 1 || !config->Callbacks.Acquire ||
+         !config->Callbacks.Release || !config->Callbacks.SubmitMIDI1 ||
+-        !config->Callbacks.SubmitMIDI1SysEx || !config->Ports ||
++        !config->Callbacks.SubmitMIDI1SysEx ||
++        !config->Callbacks.AcquireInput != !config->Callbacks.ReleaseInput ||
++        !config->Ports ||
+         config->PortCount == 0 ||
+         config->PortCount > SIZE_MAX / sizeof(*config->Ports) ||
+         config->MaxQueueCapacity == 0 || config->MaxSysExBytes < 2 ||
+@@ -471,7 +661,11 @@ enum CAMDProviderResult camd_legacy_output_backend_create(
+         return CAMD_PROVIDER_CALLBACK_FAILED;
+     }
+     backend->ports = backend_alloc(config->PortCount * sizeof(*backend->ports));
+-    if (!backend->ports) {
++    backend->inputs = backend_alloc(config->PortCount *
++                                    sizeof(*backend->inputs));
++    if (!backend->ports || !backend->inputs) {
++        backend_free(backend->inputs);
++        backend_free(backend->ports);
+         lock_destroy(&backend->lock);
+         backend_free(backend);
+         return CAMD_PROVIDER_CALLBACK_FAILED;
+@@ -489,6 +683,10 @@ enum CAMDProviderResult camd_legacy_output_backend_create(
+     backend->ops.Close = backend_close;
+     backend->ops.SendMIDI1 = backend_send_midi1;
+     backend->ops.SendMIDI1SysEx = backend_send_sysex;
++    if (config->Callbacks.AcquireInput) {
++        backend->ops.StartReceive = backend_start_receive;
++        backend->ops.StopReceive = backend_stop_receive;
++    }
+     backend->ops.Drain = backend_drain;
+     backend->ops.Cancel = backend_cancel;
+     backend->ops.BeginShutdown = backend_begin_shutdown;
+@@ -520,6 +718,7 @@ enum CAMDProviderResult camd_legacy_output_backend_destroy(
+         return CAMD_PROVIDER_STATE;
+     }
+     lock_release(&backend->lock);
++    backend_free(backend->inputs);
+     backend_free(backend->ports);
+     lock_destroy(&backend->lock);
+     backend_free(backend);
+diff --git a/workbench/libs/camd/legacy_output_backend.h b/workbench/libs/camd/legacy_output_backend.h
+--- a/workbench/libs/camd/legacy_output_backend.h
++++ b/workbench/libs/camd/legacy_output_backend.h
+@@ -2,11 +2,13 @@
+ #define CAMD_LEGACY_OUTPUT_BACKEND_H
+ 
+ /*
+- * Private bounded output backend for fixed-port MIDI 1.0 drivers.
++ * Private backend for fixed-port MIDI 1.0 drivers.
+  *
+- * Each provider session owns one native MIDI 1.0 queue, pump and worker. The
++ * Each output session owns one native MIDI 1.0 queue, pump and worker. The
+  * physical port owns the fan-out used to retry blocked workers when driver
+- * capacity is released. No MIDI 1.0 event is converted to UMP.
++ * capacity is released. An input session owns no queue: the driver's
++ * task-context receiver hands each complete message to the sinks of the
++ * port's receiving sessions. No MIDI 1.0 event is converted to UMP.
+  */
+ 
+ #include "native_worker_fanout.h"
+@@ -29,6 +31,9 @@ struct CAMDLegacyOutputCallbacksV1 {
+     CAMDLegacyOutputPortFnV1 Release;
+     CAMDLegacyOutputMIDI1FnV1 SubmitMIDI1;
+     CAMDLegacyOutputSysExFnV1 SubmitMIDI1SysEx;
++    /* Both NULL when the ports cannot be opened for input. */
++    CAMDLegacyOutputPortFnV1 AcquireInput;
++    CAMDLegacyOutputPortFnV1 ReleaseInput;
+ };
+ 
+ struct CAMDLegacyOutputPortV1 {
+@@ -62,6 +67,16 @@ const struct CAMDProviderOpsV1 *camd_legacy_output_backend_ops(
+ void *camd_legacy_output_backend_context(
+     struct CAMDLegacyOutputBackend *backend);
+ 
++/* What port port_index received, for its receiving input sessions. Call from
++ * task context, one port at a time; a sink that has no room loses the message
++ * and *dropped, when given, counts those sinks. */
++enum CAMDProviderResult camd_legacy_output_backend_receive_midi1(
++    struct CAMDLegacyOutputBackend *backend, size_t port_index,
++    const struct CAMDMIDI1EventV1 *event, uint32_t *dropped);
++enum CAMDProviderResult camd_legacy_output_backend_receive_sysex(
++    struct CAMDLegacyOutputBackend *backend, size_t port_index,
++    const uint8_t *bytes, size_t byte_count, uint32_t *dropped);
++
+ /* Fails with STATE while an open or live session still owns the backend. */
+ enum CAMDProviderResult camd_legacy_output_backend_destroy(
+     struct CAMDLegacyOutputBackend *backend);
+diff --git a/workbench/libs/camd/midifromdriver.c b/workbench/libs/camd/midifromdriver.c
+--- a/workbench/libs/camd/midifromdriver.c
++++ b/workbench/libs/camd/midifromdriver.c
+@@ -55,6 +55,10 @@ void Receiver_SysExSuperTreat(
+ 	struct MidiLink *midilink;
+ 	struct MyMidiNode *mymidinode;
+ 
++	if(driverdata->EndpointBackend!=NULL){
++		DeliverDriverEndpointSysEx(driverdata,data);
++	}
++
+ 	ObtainSemaphoreShared(&driverdata->incluster->semaphore);
+ 
+ 		if(! (IsListEmpty(&driverdata->incluster->cluster.mcl_Receivers))){
+@@ -83,6 +87,12 @@ void Receiver_SuperTreat2(
+ 	struct MyMidiNode *mymidinode;
+ 	ULONG msg;
+ 
++	/* Only a driver's port has endpoint sessions, not ParseMidi()'s
++	   parser. */
++	if(driverdata->EndpointBackend!=NULL){
++		DeliverDriverEndpointMidi(driverdata,msg2);
++	}
++
+ 	ObtainSemaphoreShared(&driverdata->incluster->semaphore);
+ 
+ 		if(! (IsListEmpty(&driverdata->incluster->cluster.mcl_Receivers))){
+diff --git a/workbench/libs/camd/mmakefile.src b/workbench/libs/camd/mmakefile.src
+--- a/workbench/libs/camd/mmakefile.src
++++ b/workbench/libs/camd/mmakefile.src
+@@ -62,7 +62,8 @@ FUNCS := \
+     closeendpointsession \
+     putendpointmidi \
+     putendpointsysex \
+-    drainendpointsession
++    drainendpointsession \
++    getendpointmidi
+ 
+ #MM workbench-libs-camd-includes : \
+ #MM     kernel-exec-includes \
+diff --git a/workbench/libs/camd/openendpointsession.c b/workbench/libs/camd/openendpointsession.c
+--- a/workbench/libs/camd/openendpointsession.c
++++ b/workbench/libs/camd/openendpointsession.c
+@@ -40,9 +40,12 @@
+ 
+     NOTES
+ 		New in V43 and provisional: the endpoint functions can still
+-		change. Only CAMD_DIRECTION_OUTPUT sessions
+-		of CAMD_DATA_FORMAT_MIDI1 open so far. Existing clusters and
+-		links keep working on the same port, which is opened once.
++		change. Only CAMD_DATA_FORMAT_MIDI1 sessions
++		open so far. Existing clusters and links keep working on the
++		same port, which is opened once. An input session gets what
++		the port receives from then on; read it with
++		GetEndpointMidi(). The task that opens an input session is
++		the one signalled, with the request's Signal.
+ 		Close every session before closing camd.library.
+ 
+     EXAMPLE
+@@ -50,7 +53,8 @@
+     BUGS
+ 
+     SEE ALSO
+-		CloseEndpointSession(), PutEndpointMidi(), PutEndpointSysEx()
++		CloseEndpointSession(), PutEndpointMidi(), PutEndpointSysEx(),
++		GetEndpointMidi()
+ 
+     INTERNALS
+ 
+@@ -91,15 +95,20 @@
+ 		&handle);
+ 	if(result!=CAMD_REGISTRY_OK) return result;
+ 
++	got.Size=sizeof(got);
++	got.Version=1;
++	result=camd_registry_session_info(CB(CamdBase)->EndpointRegistry,
++		handle,&got);
++	if(result==CAMD_REGISTRY_OK && got.Direction==CAMD_DIRECTION_INPUT){
++		result=StartEndpointReceiver(&handle,got.EffectiveQueueCapacity,
++			got.MaxSysExBytes,request->Signal,CamdBase);
++	}
++	if(result!=CAMD_REGISTRY_OK){
++		camd_registry_session_close(CB(CamdBase)->EndpointRegistry,handle);
++		return result;
++	}
++
+ 	if(info!=NULL){
+-		got.Size=sizeof(got);
+-		got.Version=1;
+-		result=camd_registry_session_info(CB(CamdBase)->EndpointRegistry,
+-			handle,&got);
+-		if(result!=CAMD_REGISTRY_OK){
+-			camd_registry_session_close(CB(CamdBase)->EndpointRegistry,handle);
+-			return result;
+-		}
+ 		full.Size=sizeof(full);
+ 		full.Version=1;
+ 		full.Direction=got.Direction;

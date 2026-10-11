@@ -1200,13 +1200,14 @@ static void test_endpoints(void)
     request.DataFormat = CAMD_DATA_FORMAT_UMP;
     request.Protocol = CAMD_PROTOCOL_MIDI2;
     request.QueueCapacity = 8;
+    request.Signal = CAMD_SIGNAL_NONE;
     check(OpenEndpointSession(&request, &session, NULL) == CAMD_REGISTRY_UNSUPPORTED,
           "a UMP session on a MIDI 1.0 port is CAMD_REGISTRY_UNSUPPORTED", NULL);
     request.DataFormat = CAMD_DATA_FORMAT_MIDI1;
     request.Protocol = CAMD_PROTOCOL_MIDI1;
-    request.Direction = CAMD_DIRECTION_INPUT;
-    check(OpenEndpointSession(&request, &session, NULL) == CAMD_REGISTRY_UNSUPPORTED,
-          "an input session is CAMD_REGISTRY_UNSUPPORTED so far", NULL);
+    request.Direction = CAMD_DIRECTION_INPUT | CAMD_DIRECTION_OUTPUT;
+    check(OpenEndpointSession(&request, &session, NULL) == CAMD_REGISTRY_INVALID,
+          "a session with two directions is CAMD_REGISTRY_INVALID", NULL);
     request.Direction = CAMD_DIRECTION_OUTPUT;
     request.EndpointID.word[3] ^= 0x5a5a5a5aUL;
     check(OpenEndpointSession(&request, &session, NULL) != CAMD_REGISTRY_OK && session.generation == 0,
@@ -1263,6 +1264,174 @@ out:
     if (node) DeleteMidi(node);
 }
 
+static int find_endpoint(const char *name, struct CAMDEndpointIDV1 *id)
+{
+    struct CAMDHandleV1 snapshot;
+    struct CAMDEndpointInfoV1 info;
+    ULONG count = 0, i;
+    int found = 0;
+
+    if (ObtainEndpointSnapshot(&snapshot, &count) != CAMD_REGISTRY_OK) return 0;
+    for (i = 0; i < count && !found; i++) {
+        memset(&info, 0, sizeof(info));
+        info.Size = sizeof(info);
+        info.Version = 1;
+        if (GetEndpointInfo(&snapshot, i, &info) == CAMD_REGISTRY_OK && !strcmp(info.Name, name)) {
+            *id = info.ID;
+            found = 1;
+        }
+    }
+    ReleaseEndpointSnapshot(&snapshot);
+    return found;
+}
+
+/* A port hands over what it receives in its own process, so wait a little. */
+static LONG read_soon(struct CAMDHandleV1 *session, struct CAMDMIDI1EventV1 *event, UBYTE *sysex, ULONG size,
+                      ULONG *length)
+{
+    LONG result = CAMD_REGISTRY_EMPTY;
+    int tries;
+
+    for (tries = 0; tries < 100; tries++) {
+        result = GetEndpointMidi(session, event, sysex, size, length);
+        if (result != CAMD_REGISTRY_EMPTY) break;
+        Delay(1);
+    }
+    return result;
+}
+
+/* Input sessions, on the loopback driver's first port. */
+static void test_endpoint_input(void)
+{
+    static char out_cluster[] = "loopback.out.0";
+    static char in_cluster[] = "loopback.in.0";
+    static UBYTE sysex[] = { 0xf0, 0x7d, 0x09, 0x08, 0x07, 0xf7 };
+    UBYTE buffer[16];
+    struct CAMDEndpointIDV1 id;
+    struct CAMDSessionRequestV1 request;
+    struct CAMDSessionInfoV1 got;
+    struct CAMDHandleV1 input, output, small;
+    struct CAMDMIDI1EventV1 event, events[8];
+    struct MidiNode *node = NULL;
+    struct MidiLink *sender = NULL, *receiver = NULL;
+    MidiMsg msg;
+    ULONG length = 99, i;
+    BYTE bit;
+    LONG result;
+    int count;
+
+    if (!FindCluster(out_cluster) || !find_endpoint("loopback.0", &id)) {
+        skip("loopback endpoint", "no DEVS:Midi/loopback");
+        return;
+    }
+    bit = AllocSignal(-1);
+    if (bit < 0) {
+        check(0, "input: AllocSignal", NULL);
+        return;
+    }
+    memset(&request, 0, sizeof(request));
+    request.Size = sizeof(request);
+    request.Version = 1;
+    request.EndpointID = id;
+    request.Direction = CAMD_DIRECTION_INPUT;
+    request.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+    request.Protocol = CAMD_PROTOCOL_MIDI1;
+    request.QueueCapacity = 16;
+    request.Signal = 32;
+    check(OpenEndpointSession(&request, &input, NULL) == CAMD_REGISTRY_INVALID, "a signal number past 31 is CAMD_REGISTRY_INVALID", NULL);
+    request.Signal = (ULONG)bit;
+    memset(&got, 0, sizeof(got));
+    got.Size = sizeof(got);
+    got.Version = 1;
+    result = OpenEndpointSession(&request, &input, &got);
+    check(result == CAMD_REGISTRY_OK && got.Direction == CAMD_DIRECTION_INPUT && got.QueueCapacity >= 16,
+          "OpenEndpointSession opens an input session", NULL);
+    if (result != CAMD_REGISTRY_OK) {
+        FreeSignal(bit);
+        return;
+    }
+    check(GetEndpointMidi(&input, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_EMPTY && length == 0,
+          "GetEndpointMidi is CAMD_REGISTRY_EMPTY with nothing received", NULL);
+    events[0] = midi1(0x90, 0x3c, 0x64);
+    check(PutEndpointMidi(&input, events, 1) != CAMD_REGISTRY_OK, "an input session does not send", NULL);
+
+    request.Direction = CAMD_DIRECTION_OUTPUT;
+    request.Signal = CAMD_SIGNAL_NONE;
+    result = OpenEndpointSession(&request, &output, NULL);
+    check(result == CAMD_REGISTRY_OK, "an output session opens on the same endpoint", NULL);
+    if (result != CAMD_REGISTRY_OK) goto out;
+    check(GetEndpointMidi(&output, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_STALE,
+          "an output session does not receive", NULL);
+
+    SetSignal(0, 1UL << bit);
+    events[1] = midi1(0x80, 0x3c, 0x40);
+    check(PutEndpointMidi(&output, events, 2) == CAMD_REGISTRY_OK, "the output session sends two messages", NULL);
+    memset(&event, 0, sizeof(event));
+    result = read_soon(&input, &event, buffer, sizeof(buffer), &length);
+    check(result == CAMD_REGISTRY_OK && length == 0 && event.Length == 3 && event.Bytes[0] == 0x90 &&
+          event.Bytes[1] == 0x3c && event.Bytes[2] == 0x64, "the input session receives the first", NULL);
+    result = read_soon(&input, &event, buffer, sizeof(buffer), &length);
+    check(result == CAMD_REGISTRY_OK && event.Bytes[0] == 0x80 && event.Bytes[2] == 0x40, "and the second, in order", NULL);
+    check((SetSignal(0, 0) & (1UL << bit)) != 0, "the opening task was signalled", NULL);
+
+    check(PutEndpointSysEx(&output, sysex, sizeof(sysex)) == CAMD_REGISTRY_OK, "the output session sends SysEx", NULL);
+    result = read_soon(&input, &event, buffer, 3, &length);
+    check(result == CAMD_REGISTRY_TOO_LARGE && length == sizeof(sysex),
+          "SysEx that does not fit is CAMD_REGISTRY_TOO_LARGE with its length", NULL);
+    memset(buffer, 0, sizeof(buffer));
+    result = GetEndpointMidi(&input, &event, buffer, sizeof(buffer), &length);
+    check(result == CAMD_REGISTRY_OK && length == sizeof(sysex) && !memcmp(buffer, sysex, sizeof(sysex)),
+          "the input session then receives the complete SysEx", NULL);
+
+    /* Both ways between a session and the port's legacy clusters. */
+    node = new_node("camdcompat endpoint input", 32, 256);
+    sender = node ? link_to(node, MLTYPE_Sender, out_cluster) : NULL;
+    receiver = node ? link_to(node, MLTYPE_Receiver, in_cluster) : NULL;
+    check(sender && receiver, "legacy links to the same port", NULL);
+    if (sender && receiver) {
+        PutMidi(sender, 0xb0074000UL);
+        result = read_soon(&input, &event, buffer, sizeof(buffer), &length);
+        check(result == CAMD_REGISTRY_OK && event.Bytes[0] == 0xb0 && event.Bytes[1] == 0x07 && event.Bytes[2] == 0x40,
+              "the input session receives what a legacy link sent", NULL);
+        check(get_soon(node, &msg) && msg.mm_Status == 0xb0, "and so does the legacy receiver", NULL);
+        events[0] = midi1(0xc1, 0x05, 0x00);
+        events[0].Length = 2;
+        check(PutEndpointMidi(&output, events, 1) == CAMD_REGISTRY_OK && get_soon(node, &msg) && msg.mm_Status == 0xc1 &&
+              msg.mm_Data1 == 0x05, "a legacy receiver gets what the output session sent", NULL);
+        result = read_soon(&input, &event, buffer, sizeof(buffer), &length);
+        check(result == CAMD_REGISTRY_OK && event.Length == 2 && event.Bytes[0] == 0xc1, "and so does the input session", NULL);
+    }
+
+    /* A second input session with a queue of four loses the rest. */
+    request.Direction = CAMD_DIRECTION_INPUT;
+    request.QueueCapacity = 4;
+    result = OpenEndpointSession(&request, &small, NULL);
+    check(result == CAMD_REGISTRY_OK, "a second input session opens", NULL);
+    if (result == CAMD_REGISTRY_OK) {
+        for (i = 0; i < 8; i++) events[i] = midi1(0x92, (UBYTE)i, 0x10);
+        check(PutEndpointMidi(&output, events, 8) == CAMD_REGISTRY_OK && DrainEndpointSession(&output) == CAMD_REGISTRY_OK,
+              "eight messages are sent", NULL);
+        Delay(10);
+        check(GetEndpointMidi(&small, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_QUEUE_FULL,
+              "a full input queue reports CAMD_REGISTRY_QUEUE_FULL once", NULL);
+        for (count = 0; GetEndpointMidi(&small, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK; count++)
+            if (event.Bytes[1] != (UBYTE)count) break;
+        check(count == 4, "and keeps the four oldest messages in order", NULL);
+        for (count = 0; GetEndpointMidi(&input, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK; count++);
+        check(count == 8, "the larger session received all eight", NULL);
+        check(CloseEndpointSession(&small) == CAMD_REGISTRY_OK, "the second input session closes", NULL);
+    }
+    check(CloseEndpointSession(&output) == CAMD_REGISTRY_OK, "the output session closes", NULL);
+out:
+    check(CloseEndpointSession(&input) == CAMD_REGISTRY_OK, "the input session closes", NULL);
+    check(GetEndpointMidi(&input, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_STALE,
+          "a closed input session is CAMD_REGISTRY_STALE", NULL);
+    if (sender) RemoveMidiLink(sender);
+    if (receiver) RemoveMidiLink(receiver);
+    if (node) DeleteMidi(node);
+    FreeSignal(bit);
+}
+
 /* A client that exits with a snapshot and a session still open. CAMD must
    then stay loaded: the runner flushes memory and runs --v43 again. */
 static void test_endpoint_leak(void)
@@ -1290,6 +1459,7 @@ static void test_endpoint_leak(void)
         request.DataFormat = CAMD_DATA_FORMAT_MIDI1;
         request.Protocol = CAMD_PROTOCOL_MIDI1;
         request.QueueCapacity = 4;
+        request.Signal = CAMD_SIGNAL_NONE;
         result = OpenEndpointSession(&request, &session, NULL);
     }
     check(result == CAMD_REGISTRY_OK, "a session and a snapshot are left open", NULL);
@@ -1454,6 +1624,7 @@ int main(int argc, char **argv)
             skip("camd.library 43", "older library");
         } else {
             RUN(test_endpoints);
+            RUN(test_endpoint_input);
         }
     } else if (v42_mode) {
         if (CamdBase->lib_Version < 42) {
