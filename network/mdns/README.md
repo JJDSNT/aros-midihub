@@ -79,7 +79,8 @@ Around it:
    `_midi2._udp` through `bonami.library`, and remove `embedded.c`.
 3. Join AROS's `nipc.library` to the Envoy bridge, if that is wanted; see
    [`docs/nipc-envoy-future.md`](../../docs/nipc-envoy-future.md).
-4. Send it upstream: the three AROS patches to AROS, the byte-order fixes,
+4. Send it upstream: the three AROS patches to AROS (sent on 2026-10-11 as
+   AROS PR #1543), the byte-order fixes,
    protocol work and API additions to Bonami, and then the AROS-specific
    parts (the daemon, the service entry, the build files) to the AROS tree
    with Bonami's notices kept. The license of AROS's `netservice.h`, once

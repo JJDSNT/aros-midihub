@@ -289,7 +289,8 @@ disposable and is not a build dependency.
 ## Network patches
 
 `patches/net/series` lists patches that are independent of CAMD and of each
-other in purpose. `make check-patches` applies both series. They were found
+other in purpose. `make check-patches` applies both series. They were sent
+upstream on 2026-10-11 as AROS PR #1543 and stay here until it is merged. They were found
 while running Bonami on hosted AROS (`tools/bonami-hosted.sh`), and compile
 for amiga-m68k and raspi-aarch64 as well.
 

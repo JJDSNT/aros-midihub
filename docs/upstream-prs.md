@@ -12,6 +12,13 @@ Branches of `JJDSNT/AROS` opened against `aros-development-team/AROS`
 | #1485 | `llvmpipe-link` | llvmpipe: link the target-side LLVM archives by path | merged |
 | #1506 | `bluetooth-le-stack-v2` | bluetooth: add remaining LE peripheral and GATT support | merged |
 | #1507 | `btmidi-class-v2` | bluetooth: add BLE MIDI class | open, reworked after review |
+| #1543 | `arostcp-ipv4-multicast` | AROSTCP: IPv4 multicast on SANA-II interfaces, with a netdb crash and hosted eth.device multicast | open |
+
+#1543 is `patches/net/series` as three commits on upstream `51bffe65a4`
+(worktree `~/AROS-net`). Before it was sent, AROSTCP and the mDNS components
+were rebuilt on hosted AROS against that head and `tools/bonami-hosted.sh`
+passed against Avahi. When it is merged, remove the three patches and the
+series.
 
 The sections below are the PR bodies as first written, except the one about
 `btmidi.class`, which describes the class as it is after the review.
