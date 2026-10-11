@@ -190,8 +190,6 @@ It deliberately does not yet implement:
 - filesystem-level fault injection against native AROS DOS operations;
 - active duplicate-evidence ambiguity handling in the endpoint registry;
 - concurrent retirement/failure-path stress on native AROS;
-- instantiating the AROS output binding for loaded drivers after the identity
-  map is bound to AROS storage;
 - timestamp-based eligibility and delayed dispatch;
 - an interrupt-safe ingress handoff; the current queue lock is task-context
   only (the AROS worker now has a lock-free `Signal()`-only capacity wake for

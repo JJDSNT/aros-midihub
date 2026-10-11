@@ -192,19 +192,20 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-legacy-output-backend.patch` | add bounded native MIDI 1.0 output sessions and bind their physical callbacks to shared `DriverData` ownership and the legacy transmitter, without publishing endpoints or changing the public ABI |
 | `aros-camd-identity-store.patch` | add the private bounded identity map, architecture-independent checked IFF format and recoverable `ENVARC:` storage backed by `uuid.library`; failure leaves legacy CAMD operational |
 | `aros-camd-identity-recovery.patch` | share the actual main/`.new`/`.bak` recovery state machine with the exhaustive host fault-injection model |
-| `aros-camd-legacy-identity-set.patch` | compile the legacy evidence keys and the all-or-nothing provider plus per-port ID resolution; nothing calls it yet |
+| `aros-camd-legacy-identity-set.patch` | compile the legacy evidence keys and the all-or-nothing provider plus per-port ID resolution |
+| `aros-camd-driver-endpoints.patch` | `LoadDriver()` publishes each loaded driver's ports as private output endpoints with stored IDs, and `FreeDriverData()` retires them first; a failure leaves the driver's clusters working |
 
 ```sh
-for p in camd-names-64bit camd-arena-segments camd-driver-scan-align \
-         debugdriver-port-index camd-port-open camd-notify-lock \
-         camd-rescan usb-midi-camd usb-midi-lifecycle camd-part-notify \
-         camd-v42 camd-link-comments camd-sysex-errors \
-         camd-endpoint-core camd-endpoint-runtime \
-         camd-legacy-output-backend camd-identity-store \
-         camd-identity-recovery camd-legacy-identity-set; do
+grep -v '^#' patches/camd-series | while read -r p; do
     git -C ~/AROS apply "$PWD/patches/aros-$p.patch" || break
 done
 ```
+
+[`camd-series`](camd-series) is the apply order.
+[`tools/check-camd-patches.sh`](../tools/check-camd-patches.sh) (`make
+check-patches`) applies it to a clean index of `~/AROS` and reports any CAMD
+change in that tree which the series lacks. Generate a new patch as the
+difference between that index and the tree, not by hand.
 
 **Names on 64-bit targets.** `mysprintf()` took its variadic arguments from
 `&fmt+1`, which only works where they sit on the stack (m68k, i386), so every

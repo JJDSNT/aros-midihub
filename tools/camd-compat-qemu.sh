@@ -9,7 +9,9 @@
 # Extras/aros-midihub/C) and is not modified. Boots twice from a FAT image
 # built in WORK_DIR: once for the 41.1 contract, once with
 # DEVS:Midi/debugdriver moved out for RethinkCAMD(). The first boot also
-# runs the camd.library 42 checks, which skip themselves on 41. Needs
+# runs the camd.library 42 checks, which skip themselves on 41. Both boots
+# share the image, so the endpoint IDs of the first are compared with those
+# of the second. Needs
 # qemu-system-aarch64 (raspi3b), sfdisk and mtools.
 # Exit status: 0 when no check failed.
 set -eu
@@ -89,5 +91,20 @@ for run in contract v42 rethink; do
         status=1
     }
 done
+
+# A camd.library that publishes driver endpoints prints their stored IDs on
+# the serial console. The second boot must find the IDs the first one made.
+ids() {
+    grep -a 'camd.library: \(provider\|endpoint\) [0-9]* id ' "$work/serial-$1.log" | tr -d '\r' || true
+}
+first=$(ids contract)
+if [ -n "$first" ]; then
+    if [ "$first" = "$(ids rethink)" ]; then
+        echo "PASS endpoint IDs survive a reboot ($(echo "$first" | wc -l) IDs)"
+    else
+        echo "FAIL endpoint IDs changed across a reboot"
+        status=1
+    fi
+fi
 rm -f "$img"
 exit $status

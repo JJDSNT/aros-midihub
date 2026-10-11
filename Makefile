@@ -16,7 +16,7 @@ HEADERS = include/midihub/applemidi.h include/midihub/rtpmidi.h \
           ports/aros/midihub/camd.h ports/aros/midihub/network.h \
           ports/aros/camd_bridge.h
 
-.PHONY: test test-network test-synth test-synth-fluid demo m68k synth-m68k clean
+.PHONY: test check-patches test-network test-synth test-synth-fluid demo m68k synth-m68k clean
 
 test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test build/camd-identity-file-test build/camd-identity-store-recovery-test build/camd-legacy-identity-set-test
 	./build/protocol-test
@@ -37,6 +37,9 @@ test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test b
 	./build/camd-identity-file-test
 	./build/camd-identity-store-recovery-test
 	./build/camd-legacy-identity-set-test
+
+check-patches:
+	tools/check-camd-patches.sh
 
 build/camd-endpoint-core-test: tests/camd_endpoint_core.c \
                                prototypes/camd/endpoint_registry.c \
