@@ -28,3 +28,4 @@ camd-endpoint-watch
 camd-identity-unreadable
 camd-endpoint-publish
 camd-endpoint-projection
+camd-endpoint-diagnostics

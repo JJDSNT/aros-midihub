@@ -203,6 +203,7 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-identity-unreadable.patch` | identity files that hold no complete snapshot no longer switch endpoint publication off: that run gives temporary IDs and leaves the files untouched |
 | `aros-camd-endpoint-publish.patch` | a program publishes its own endpoint: `PublishEndpoint()`, `WithdrawEndpoint()`, `SetPublishedEndpointState()`, `PutPublishedMidi()`, `PutPublishedSysEx()` and `GetPublishedMidi()`; the name gives the stable ID, and a withdrawn endpoint waits for its clients' sessions to close |
 | `aros-camd-endpoint-projection.patch` | a published endpoint also takes part in the legacy clusters `<name>.out.0` and `<name>.in.0`, like a driver's port, so existing programs reach it by linking; complete messages pass between clusters and endpoint without a byte stream |
+| `aros-camd-endpoint-diagnostics.patch` | `CancelEndpointSession()` and `GetEndpointSessionStats()`; an offline published endpoint leaves its legacy clusters; a published endpoint and a driver cannot share a name |
 
 ```sh
 grep -v '^#' patches/camd-series | while read -r p; do
@@ -379,8 +380,8 @@ patches and with all of them:
 | up to `camd-part-notify` | 50 of 50 | skipped | 8 of 8 |
 | all patches | 65 of 65 | 34 of 34 | 13 of 13 |
 
-`MIDIHubCAMDCompat --v43` is a client of the provisional endpoint functions: 103
-checks on hosted AROS, and 103 again after `--v43-leak` exits with a session
+`MIDIHubCAMDCompat --v43` is a client of the provisional endpoint functions: 108
+checks on hosted AROS, and 108 again after `--v43-leak` exits with a session
 open and `Avail FLUSH` tries to expunge the library. Its session and a legacy link send to the same
 debugdriver port, and the runner compares the bytes the driver printed. Input
 sessions are tested on the loopback driver, in both directions between a

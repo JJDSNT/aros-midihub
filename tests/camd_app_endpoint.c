@@ -232,6 +232,23 @@ int main(void)
            CAMD_PROVIDER_INVALID);
     events[0] = note(31);
 
+    {
+        struct CAMDSessionStatsV1 stats;
+
+        memset(&stats, 0xff, sizeof(stats));
+        assert(camd_registry_session_stats(registry, first, &stats) ==
+               CAMD_REGISTRY_OK);
+        /* Two queued, then three refused together. */
+        assert(stats.Size == sizeof(stats) && stats.Sent == 2 &&
+               stats.Rejected == 3 && stats.Received == 0);
+        assert(camd_registry_session_stats(registry, input, &stats) ==
+               CAMD_REGISTRY_OK);
+        /* A message and SysEx delivered, one message lost. */
+        assert(stats.Received == 2 && stats.Dropped == 1 && stats.Sent == 0);
+        assert(camd_registry_session_stats(registry, refused, &stats) ==
+               CAMD_REGISTRY_STALE);
+    }
+
     /* The legacy side: injected messages are taken like a session's, and the
      * projection sink gets what the publisher emits. */
     {

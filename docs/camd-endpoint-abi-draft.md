@@ -15,8 +15,8 @@ in this draft is exported as a public symbol.
 ## Provisional version 43 slice
 
 `patches/aros-camd-endpoint-client.patch`, `aros-camd-endpoint-input.patch` and
-`aros-camd-endpoint-watch.patch` and `aros-camd-endpoint-publish.patch` append
-eighteen ordinary vectors behind
+`aros-camd-endpoint-watch.patch` and `aros-camd-endpoint-publish.patch` and
+`aros-camd-endpoint-diagnostics.patch` append twenty ordinary vectors behind
 `.version 43` and installs `midi/camdendpoint.h`, so that the endpoint core has
 a real client before review. Everything in it can still change.
 
@@ -39,6 +39,8 @@ a real client before review. Everything in it can still change.
 | `LONG PutPublishedMidi(endpoint, events, count)` | A0, A1, D0 | to every receiving client session |
 | `LONG PutPublishedSysEx(endpoint, bytes, length)` | A0, A1, D0 | |
 | `LONG GetPublishedMidi(endpoint, event, sysex, size, length)` | A0, A1, A2, D0, A3 | oldest message clients sent, clients served in turn |
+| `LONG CancelEndpointSession(session)` | A0 | drop what an output session has not handed over yet |
+| `LONG GetEndpointSessionStats(session, stats)` | A0, A1 | records sent, rejected, received and dropped since open |
 | `LONG CloseEndpointSession(session)` | A0 | |
 
 Results are `enum CAMDRegistryResult` values. The native MIDI 1.0 record for
@@ -61,6 +63,73 @@ one endpoint, native MIDI 1.0, with CAMD owning the queues, the sessions and
 the object's lifetime. The private operations table that drivers use is not
 exposed, so the section below about keeping the provider API private still
 holds for everything else.
+
+### Known limits of the provisional slice
+
+These are deliberate or still open; each is what the code does today.
+
+**Scope**
+
+- Native MIDI 1.0 only. No UMP session opens, no Group or Function Block is
+  published or enumerable, and nothing converts between MIDI 1.0 and UMP.
+- The time fields of `CAMDMIDI1EventV1` are carried and ignored: output is
+  immediate and received messages are not stamped.
+- Names, registers, record layouts and result codes are not reviewed upstream
+  and can change. `enum CAMDRegistryResult` is the internal registry enum
+  exposed as it is.
+- Layouts are checked on x86-64 only. The patches build for raspi-aarch64;
+  nothing after driver endpoint publication has been run there, and m68k and
+  i386 are not built.
+
+**Behaviour a client has to know**
+
+- A program that exits without closing its sessions, snapshots and watches or
+  withdrawing its endpoints keeps camd.library loaded for good. If it named a
+  signal, CAMD goes on signalling a task that no longer exists, as CAMD 41
+  does for a node left behind. There is no per-task cleanup.
+- Nothing waits except `DrainEndpointSession()`, which waits without a
+  timeout: for a driver port as long as the port takes, for a published
+  endpoint until its publisher has read everything or withdraws.
+- Input is lossy by design. A full input-session queue loses the newest
+  messages, reported once by `GetEndpointMidi()` and counted in
+  `GetEndpointSessionStats()`. A SysEx message longer than the session's
+  `MaxSysExBytes` (4096) is dropped whole.
+- A legacy link that sends to a published endpoint is never held up: when the
+  publisher does not read, the newest messages are lost, and that loss is
+  counted only inside CAMD.
+- `PutPublishedMidi()` and `PutPublishedSysEx()` run the receivers' work in
+  the publisher's task, including legacy receive hooks.
+- Open-by-ID has no minimum generation: a client that kept an ID opens
+  whatever endpoint has that ID now.
+- Do not call the publishing functions while holding `LockCAMD()`; they take
+  the cluster lock exclusively, like `AddMidiLinkA()`.
+
+**Fixed sizes**
+
+- 32 snapshots, 64 input sessions, 16 watches of 32 events and 32 published
+  endpoints in the whole system; 32 sessions per endpoint; at most 64 records
+  per session queue; 256 stored identities.
+
+**Identity**
+
+- A driver port's ID follows the driver's file name and port number, a
+  published endpoint's follows its name. Renaming either gives a new ID.
+- Published names are compared exactly, driver file names without regard to
+  ASCII case.
+- Damaged identity files with no complete copy give temporary IDs for that
+  run and are left untouched; nothing repairs or reports them beyond a line on
+  the debug console. Failing DOS calls in the middle of a write are covered
+  only by the host model.
+- Stored identities are never removed.
+
+**Lifecycle**
+
+- Drivers are never unloaded, so a driver port's endpoint never retires
+  before camd.library is expunged.
+- A withdrawn endpoint's name cannot be published again until its clients
+  have closed their sessions.
+- An endpoint offline leaves its legacy clusters; the links of other programs
+  stay and wait.
 
 ## ABI strategy
 

@@ -1604,6 +1604,26 @@ static void test_published_endpoint(void)
     memset(buffer, 0, sizeof(buffer));
     check(GetEndpointMidi(&from_port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK && length == sizeof(sysex) &&
           !memcmp(buffer, sysex, sizeof(sysex)), "and the SysEx", NULL);
+    {
+        struct CAMDSessionStatsV1 sent, got;
+
+        memset(&sent, 0, sizeof(sent));
+        memset(&got, 0, sizeof(got));
+        sent.Size = got.Size = sizeof(sent);
+        sent.Version = got.Version = 1;
+        check(GetEndpointSessionStats(&to_port, &sent) == CAMD_REGISTRY_OK && sent.Sent == 3 && sent.Rejected == 0 &&
+              GetEndpointSessionStats(&from_port, &got) == CAMD_REGISTRY_OK && got.Received == 2 && got.Dropped == 0,
+              "GetEndpointSessionStats counts what the sessions carried", NULL);
+    }
+    events[0] = midi1(0x93, 0x47, 0x50);
+    events[1] = midi1(0x83, 0x47, 0x00);
+    check(PutEndpointMidi(&to_port, events, 2) == CAMD_REGISTRY_OK && CancelEndpointSession(&to_port) == CAMD_REGISTRY_OK &&
+          GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_EMPTY,
+          "CancelEndpointSession drops what was not taken yet", NULL);
+    strcpy(publish.Name, "debugdriver");
+    check(!FindCluster("debugdriver.out.0") || PublishEndpoint(&publish, &again, NULL) == CAMD_REGISTRY_DUPLICATE,
+          "a loaded driver's name cannot be published", NULL);
+    strcpy(publish.Name, name);
     events[0].Length = 0;
     check(PutPublishedMidi(&port, events, 1) == CAMD_REGISTRY_INVALID, "the publisher cannot send a message without bytes", NULL);
     events[0] = midi1(0x93, 0x46, 0x50);
@@ -1645,13 +1665,18 @@ static void test_published_endpoint(void)
     check(SetPublishedEndpointState(&port, CAMD_ENDPOINT_OFFLINE) == CAMD_REGISTRY_OK && endpoint_state(name) == CAMD_ENDPOINT_OFFLINE,
           "the endpoint goes offline and stays in the snapshot", NULL);
     check(PutEndpointMidi(&to_port, events, 1) == CAMD_REGISTRY_STATE, "a session to an offline endpoint is CAMD_REGISTRY_STATE", NULL);
+    if (sender && receiver) {
+        check(!MidiLinkConnected(sender) && FindCluster(out_cluster) != NULL, "offline it leaves its clusters, where the links wait", NULL);
+        PutMidi(sender, 0x94030300UL);
+    }
     request.Direction = CAMD_DIRECTION_OUTPUT;
     check(OpenEndpointSession(&request, &late, NULL) == CAMD_REGISTRY_STATE, "no session opens with an offline endpoint", NULL);
     check(SetPublishedEndpointState(&port, CAMD_ENDPOINT_AVAILABLE) == CAMD_REGISTRY_OK && find_endpoint(name, &found) &&
           !memcmp(&found, &id, sizeof(id)), "it comes back with the same ID", NULL);
     check(PutEndpointMidi(&to_port, events, 1) == CAMD_REGISTRY_OK &&
           GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK && event.Bytes[1] == 0x46,
-          "and the open session carries messages again", NULL);
+          "and the open session carries messages again, with nothing from while it was offline", NULL);
+    if (sender) check(MidiLinkConnected(sender), "back online it is in its clusters again", NULL);
 
     /* The publisher goes while its clients still hold sessions. */
     WithdrawEndpoint(&port);

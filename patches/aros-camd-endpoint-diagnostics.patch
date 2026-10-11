@@ -1,0 +1,609 @@
+diff --git a/workbench/libs/camd/camd.conf b/workbench/libs/camd/camd.conf
+--- a/workbench/libs/camd/camd.conf
++++ b/workbench/libs/camd/camd.conf
+@@ -73,4 +73,6 @@ LONG SetPublishedEndpointState(struct CAMDHandleV1 *endpoint, ULONG state) (A0,
+ LONG PutPublishedMidi(struct CAMDHandleV1 *endpoint, struct CAMDMIDI1EventV1 *events, ULONG count) (A0, A1, D0)
+ LONG PutPublishedSysEx(struct CAMDHandleV1 *endpoint, UBYTE *bytes, ULONG length) (A0, A1, D0)
+ LONG GetPublishedMidi(struct CAMDHandleV1 *endpoint, struct CAMDMIDI1EventV1 *event, UBYTE *sysex, ULONG size, ULONG *length) (A0, A1, A2, D0, A3)
++LONG CancelEndpointSession(struct CAMDHandleV1 *session) (A0)
++LONG GetEndpointSessionStats(struct CAMDHandleV1 *session, struct CAMDSessionStatsV1 *stats) (A0, A1)
+ ##end functionlist
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -559,6 +559,10 @@ struct EndpointProjection *CreateEndpointProjection(
+ 	struct CAMDAppEndpoint *app,const char *name,ULONG directions,
+ 	struct CamdBase *CamdBase);
+ void DeleteEndpointProjection(struct EndpointProjection *projection);
++BOOL SetEndpointProjectionOnline(struct EndpointProjection *projection,
++	BOOL online);
++const char *EndpointProjectionName(struct EndpointProjection *projection);
++BOOL AppEndpointNamed(const char *name,struct CamdBase *CamdBase);
+ BOOL ProjectMidiToEndpoint(struct DriverData *driverdata,ULONG msg);
+ BOOL ProjectSysExToEndpoint(struct DriverData *driverdata,UBYTE *buffer);
+ void Receiver_SuperTreat2(struct DriverData *driverdata,
+diff --git a/workbench/libs/camd/camdendpoint.h b/workbench/libs/camd/camdendpoint.h
+--- a/workbench/libs/camd/camdendpoint.h
++++ b/workbench/libs/camd/camdendpoint.h
+@@ -148,6 +148,19 @@ struct CAMDSessionRequestV1 {
+     ULONG Signal;
+ };
+ 
++/* Records since a session opened; each count stops at 0xffffffff. Sent and
++ * Rejected are an output session's: queued, and refused because the queue was
++ * full or the message too large. Received and Dropped are an input
++ * session's: queued for reading, and lost because its queue was full. */
++struct CAMDSessionStatsV1 {
++    ULONG Size;
++    ULONG Version;
++    ULONG Sent;
++    ULONG Rejected;
++    ULONG Received;
++    ULONG Dropped;
++};
++
+ /* A program's own endpoint. Directions are as its clients see them:
+  * CAMD_DIRECTION_OUTPUT when they can send to it, CAMD_DIRECTION_INPUT when
+  * they can receive from it. Name identifies it: the same Name gets the same
+diff --git a/workbench/libs/camd/cancelendpointsession.c b/workbench/libs/camd/cancelendpointsession.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/cancelendpointsession.c
+@@ -0,0 +1,56 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++#include "provider_contract.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH1(LONG, CancelEndpointSession,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDHandleV1 *, session, A0),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 64, Camd)
++
++/*  FUNCTION
++		Drops what an output session has queued and not yet handed
++		over, including messages waiting for their time.
++
++    INPUTS
++		session - from OpenEndpointSession().
++
++    RESULT
++		CAMD_REGISTRY_OK, or another CAMD_REGISTRY_ value.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change. A message already on its way to the
++		port is not taken back.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		DrainEndpointSession(), CloseEndpointSession()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	if(session==NULL) return CAMD_REGISTRY_INVALID;
++
++	return camd_registry_session_cancel(CB(CamdBase)->EndpointRegistry,*session);
++
++    AROS_LIBFUNC_EXIT
++}
+diff --git a/workbench/libs/camd/drivers.c b/workbench/libs/camd/drivers.c
+--- a/workbench/libs/camd/drivers.c
++++ b/workbench/libs/camd/drivers.c
+@@ -438,6 +438,14 @@ void LoadDriver(char *name,
+ 
+ 	if(mididevicedata==NULL) return;
+ 
++	/* A published endpoint of that name has the clusters the driver's
++	   ports would join. */
++	if(AppEndpointNamed(mididevicedata->Name,CamdBase)){
++		D(bug("camd.library: %s is a published endpoint's name; driver not loaded\n",mididevicedata->Name));
++		CloseMidiDevice(mididevicedata);
++		return;
++	}
++
+ 	if((mididevicedata->Flags&1)==0){
+ #ifdef __AROS__
+ 		D(bug("%s: mididevicedata->Flags&1==0 is not not supported for AROS!\n",name));
+diff --git a/workbench/libs/camd/endpoint_projection.c b/workbench/libs/camd/endpoint_projection.c
+--- a/workbench/libs/camd/endpoint_projection.c
++++ b/workbench/libs/camd/endpoint_projection.c
+@@ -22,6 +22,8 @@ struct EndpointProjection {
+     struct MidiDeviceData device;
+     struct CAMDAppEndpoint *app;
+     struct CamdBase *CamdBase;
++    ULONG directions;
++    BOOL attached;      /* in its clusters */
+     char name[CAMD_ENDPOINT_NAME_BYTES];
+ };
+ 
+@@ -148,14 +150,75 @@ BOOL ProjectSysExToEndpoint(struct DriverData *driverdata, UBYTE *buffer)
+     return TRUE;
+ }
+ 
++/* Puts the endpoint in its clusters, where links may already be waiting.
++ * Must not hold CLSemaphore. */
++static BOOL attach_projection(struct EndpointProjection *projection)
++{
++    struct CamdBase *CamdBase = projection->CamdBase;
++    struct CAMDProviderReceiveSinkV1 sink;
++    BOOL attached;
++
++    if (projection->attached)
++        return TRUE;
++    ObtainSemaphore(CB(CamdBase)->CLSemaphore);
++    attached = AttachDriverData(&projection->driver, CamdBase);
++    ReleaseSemaphore(CB(CamdBase)->CLSemaphore);
++    if (attached == FALSE)
++        return FALSE;
++    projection->attached = TRUE;
++    if ((projection->directions & CAMD_DIRECTION_INPUT) != 0) {
++        memset(&sink, 0, sizeof(sink));
++        sink.Size = sizeof(sink);
++        sink.Version = 1;
++        sink.Context = projection->driver.driverdatas[0];
++        sink.SubmitMIDI1 = project_midi1;
++        sink.SubmitMIDI1SysEx = project_sysex;
++        camd_app_endpoint_set_projection(projection->app, &sink);
++    }
++    return TRUE;
++}
++
++/* Takes the endpoint out of its clusters. Links of other programs stay there
++ * and wait, as they do for an unplugged port. Must not hold CLSemaphore. */
++static void detach_projection(struct EndpointProjection *projection)
++{
++    struct CamdBase *CamdBase = projection->CamdBase;
++
++    if (!projection->attached)
++        return;
++    /* No emit is in the sink once this returns. */
++    camd_app_endpoint_set_projection(projection->app, NULL);
++    /* A sender inside ProjectMidiToEndpoint() holds its cluster's semaphore,
++     * which detaching waits for. */
++    ObtainSemaphore(CB(CamdBase)->CLSemaphore);
++    DetachDriverData(&projection->driver, CamdBase);
++    ReleaseSemaphore(CB(CamdBase)->CLSemaphore);
++    projection->attached = FALSE;
++}
++
++/* An offline endpoint leaves its clusters and comes back to them. */
++BOOL SetEndpointProjectionOnline(struct EndpointProjection *projection,
++                                 BOOL online)
++{
++    if (projection == NULL)
++        return TRUE;
++    if (online)
++        return attach_projection(projection);
++    detach_projection(projection);
++    return TRUE;
++}
++
++const char *EndpointProjectionName(struct EndpointProjection *projection)
++{
++    return projection->name;
++}
++
+ /* Must not hold CLSemaphore. */
+ struct EndpointProjection *CreateEndpointProjection(
+     struct CAMDAppEndpoint *app, const char *name, ULONG directions,
+     struct CamdBase *CamdBase)
+ {
+     struct EndpointProjection *projection;
+-    struct CAMDProviderReceiveSinkV1 sink;
+-    BOOL attached;
+ 
+     projection = AllocMem(sizeof(*projection),
+                           MEMF_ANY | MEMF_CLEAR | MEMF_PUBLIC);
+@@ -180,44 +243,21 @@ struct EndpointProjection *CreateEndpointProjection(
+         return NULL;
+     }
+     projection->driver.driverdatas[0]->Projection = app;
+-
+-    ObtainSemaphore(CB(CamdBase)->CLSemaphore);
+-    attached = AttachDriverData(&projection->driver, CamdBase);
+-    ReleaseSemaphore(CB(CamdBase)->CLSemaphore);
+-    if (attached == FALSE) {
++    projection->directions = directions;
++    if (!attach_projection(projection)) {
+         FreeDriverData(&projection->driver, CamdBase);
+         FreeMem(projection, sizeof(*projection));
+         return NULL;
+     }
+-
+-    if ((directions & CAMD_DIRECTION_INPUT) != 0) {
+-        memset(&sink, 0, sizeof(sink));
+-        sink.Size = sizeof(sink);
+-        sink.Version = 1;
+-        sink.Context = projection->driver.driverdatas[0];
+-        sink.SubmitMIDI1 = project_midi1;
+-        sink.SubmitMIDI1SysEx = project_sysex;
+-        camd_app_endpoint_set_projection(app, &sink);
+-    }
+     return projection;
+ }
+ 
+-/* Takes the endpoint out of its clusters. Links of other programs stay there
+- * and wait, as they do for an unplugged port. Must not hold CLSemaphore. */
++/* Must not hold CLSemaphore. */
+ void DeleteEndpointProjection(struct EndpointProjection *projection)
+ {
+-    struct CamdBase *CamdBase;
+-
+     if (projection == NULL)
+         return;
+-    CamdBase = projection->CamdBase;
+-    /* No emit is in the sink once this returns. */
+-    camd_app_endpoint_set_projection(projection->app, NULL);
+-    /* A sender inside ProjectMidiToEndpoint() holds its cluster's semaphore,
+-     * which detaching waits for. */
+-    ObtainSemaphore(CB(CamdBase)->CLSemaphore);
+-    DetachDriverData(&projection->driver, CamdBase);
+-    ReleaseSemaphore(CB(CamdBase)->CLSemaphore);
+-    FreeDriverData(&projection->driver, CamdBase);
++    detach_projection(projection);
++    FreeDriverData(&projection->driver, projection->CamdBase);
+     FreeMem(projection, sizeof(*projection));
+ }
+diff --git a/workbench/libs/camd/endpoint_publish.c b/workbench/libs/camd/endpoint_publish.c
+--- a/workbench/libs/camd/endpoint_publish.c
++++ b/workbench/libs/camd/endpoint_publish.c
+@@ -97,6 +97,45 @@ static LONG resolve_name(struct CAMDIdentityMap *map, uint32_t namespace_id,
+     return CAMD_REGISTRY_OK;
+ }
+ 
++static BOOL driver_named(const char *name, struct CamdBase *CamdBase)
++{
++    struct Drivers *driver;
++    BOOL found = FALSE;
++
++    ObtainSemaphoreShared(CB(CamdBase)->CLSemaphore);
++    for (driver = CB(CamdBase)->drivers; driver; driver = driver->next) {
++        if (strcmp(driver->mididevicedata->Name, name) == 0) {
++            found = TRUE;
++            break;
++        }
++    }
++    ReleaseSemaphore(CB(CamdBase)->CLSemaphore);
++    return found;
++}
++
++/* Whether a published endpoint has that name, for LoadDriver(). A driver is
++ * in CAMD's list before this is asked, and PublishAppEndpoint() looks at
++ * that list with the semaphore held, so one of the two always sees the
++ * other. */
++BOOL AppEndpointNamed(const char *name, struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    BOOL found = FALSE;
++    ULONG i;
++
++    ObtainSemaphoreShared(&base->EndpointClientSemaphore);
++    for (i = 0; i < ENDPOINT_PUBLISHERS; ++i) {
++        if (base->EndpointPublishers[i].projection != NULL &&
++            strcmp(EndpointProjectionName(
++                       base->EndpointPublishers[i].projection), name) == 0) {
++            found = TRUE;
++            break;
++        }
++    }
++    ReleaseSemaphore(&base->EndpointClientSemaphore);
++    return found;
++}
++
+ static BOOL terminated(const char *text, size_t size)
+ {
+     return memchr(text, '\0', size) != NULL;
+@@ -134,6 +173,11 @@ LONG PublishAppEndpoint(const struct CAMDPublishRequestV1 *request,
+ 
+     ObtainSemaphore(&base->EndpointClientSemaphore);
+     reap_publishers(CamdBase);
++    /* A loaded driver of that name already owns the clusters. */
++    if (driver_named(request->Name, CamdBase)) {
++        result = CAMD_REGISTRY_DUPLICATE;
++        goto out;
++    }
+     for (i = 0; i < ENDPOINT_PUBLISHERS; ++i) {
+         if (base->EndpointPublishers[i].app == NULL) {
+             publisher = &base->EndpointPublishers[i];
+@@ -251,11 +295,20 @@ LONG SetAppEndpointState(const struct CAMDHandleV1 *handle, ULONG state,
+     struct EndpointPublisher *publisher;
+     LONG result = CAMD_REGISTRY_STALE;
+ 
+-    ObtainSemaphoreShared(&base->EndpointClientSemaphore);
++    /* Exclusive: the endpoint's clusters change with its state. */
++    ObtainSemaphore(&base->EndpointClientSemaphore);
+     publisher = find_publisher(handle, CamdBase);
+-    if (publisher != NULL)
++    if (publisher != NULL) {
+         result = camd_legacy_driver_adapter_set_state(publisher->adapter, 0,
+                                                       state);
++        if (result == CAMD_REGISTRY_OK &&
++            !SetEndpointProjectionOnline(publisher->projection,
++                                         state == CAMD_ENDPOINT_AVAILABLE)) {
++            camd_legacy_driver_adapter_set_state(publisher->adapter, 0,
++                                                 CAMD_ENDPOINT_OFFLINE);
++            result = CAMD_REGISTRY_NOMEM;
++        }
++    }
+     ReleaseSemaphore(&base->EndpointClientSemaphore);
+     return result;
+ }
+diff --git a/workbench/libs/camd/endpoint_registry.c b/workbench/libs/camd/endpoint_registry.c
+--- a/workbench/libs/camd/endpoint_registry.c
++++ b/workbench/libs/camd/endpoint_registry.c
+@@ -81,6 +81,11 @@ struct session_slot {
+     uint32_t requested_queue_capacity;
+     uint32_t effective_queue_capacity;
+     uint32_t max_sysex_bytes;
++    /* Saturating record counts, for camd_registry_session_stats(). */
++    uint32_t sent;
++    uint32_t rejected;
++    uint32_t received;
++    uint32_t dropped;
+     void *provider_context;
+     struct receive_bridge *receive_bridge;
+     uint32_t receive_inflight;
+@@ -896,6 +901,32 @@ out:
+     return result;
+ }
+ 
++enum CAMDRegistryResult camd_registry_session_stats(
++    struct CAMDEndpointRegistry *registry,
++    struct CAMDHandleV1 session_handle,
++    struct CAMDSessionStatsV1 *stats)
++{
++    struct session_slot *session;
++    enum CAMDRegistryResult result = CAMD_REGISTRY_OK;
++
++    if (!registry || !stats)
++        return CAMD_REGISTRY_INVALID;
++    core_lock_acquire(&registry->lock);
++    session = resolve_session(registry, session_handle);
++    if (!session) {
++        result = CAMD_REGISTRY_STALE;
++    } else {
++        stats->Size = sizeof(*stats);
++        stats->Version = 1;
++        stats->Sent = session->sent;
++        stats->Rejected = session->rejected;
++        stats->Received = session->received;
++        stats->Dropped = session->dropped;
++    }
++    core_lock_release(&registry->lock);
++    return result;
++}
++
+ size_t camd_registry_session_count(struct CAMDEndpointRegistry *registry)
+ {
+     size_t count = 0, i;
+@@ -990,6 +1021,30 @@ static enum CAMDRegistryResult prepare_session_callback(
+     return CAMD_REGISTRY_OK;
+ }
+ 
++static void count_records(uint32_t *counter, size_t records)
++{
++    if (records > UINT32_MAX - *counter)
++        *counter = UINT32_MAX;
++    else
++        *counter += (uint32_t)records;
++}
++
++/* Called with registry->lock held, before finish_session_callback(). */
++static void account_send(struct CAMDEndpointRegistry *registry,
++                         struct CAMDHandleV1 session_handle, size_t records,
++                         enum CAMDProviderResult callback_result)
++{
++    struct session_slot *session = resolve_session(registry, session_handle);
++
++    if (!session)
++        return;
++    if (callback_result == CAMD_PROVIDER_OK)
++        count_records(&session->sent, records);
++    else if (callback_result == CAMD_PROVIDER_QUEUE_FULL ||
++             callback_result == CAMD_PROVIDER_TOO_LARGE)
++        count_records(&session->rejected, records);
++}
++
+ static enum CAMDRegistryResult finish_session_callback(
+     struct CAMDEndpointRegistry *registry,
+     struct CAMDHandleV1 session_handle,
+@@ -1041,6 +1096,7 @@ enum CAMDRegistryResult camd_registry_session_send_midi1(
+     core_lock_release(&registry->lock);
+     callback_result = callback(context, provider_session, events, event_count);
+     core_lock_acquire(&registry->lock);
++    account_send(registry, session_handle, event_count, callback_result);
+     result = finish_session_callback(registry, session_handle, callback_result);
+ out:
+     core_lock_release(&registry->lock);
+@@ -1089,6 +1145,7 @@ enum CAMDRegistryResult camd_registry_session_send_midi1_sysex(
+     callback_result = callback(context, provider_session, bytes, byte_count,
+                                time_high, time_low, clock_domain, flags);
+     core_lock_acquire(&registry->lock);
++    account_send(registry, session_handle, 1, callback_result);
+     result = finish_session_callback(registry, session_handle, callback_result);
+ out:
+     core_lock_release(&registry->lock);
+@@ -1125,6 +1182,7 @@ enum CAMDRegistryResult camd_registry_session_send_ump(
+     core_lock_release(&registry->lock);
+     callback_result = callback(context, provider_session, events, event_count);
+     core_lock_acquire(&registry->lock);
++    account_send(registry, session_handle, event_count, callback_result);
+     result = finish_session_callback(registry, session_handle, callback_result);
+ out:
+     core_lock_release(&registry->lock);
+@@ -1184,7 +1242,8 @@ static enum CAMDProviderResult receive_bridge_begin(
+     return CAMD_PROVIDER_OK;
+ }
+ 
+-static void receive_bridge_end(struct receive_bridge *bridge)
++static void receive_bridge_end(struct receive_bridge *bridge, size_t records,
++                               enum CAMDProviderResult consumed)
+ {
+     struct CAMDEndpointRegistry *registry = bridge->registry;
+     struct session_slot *session;
+@@ -1201,6 +1260,10 @@ static void receive_bridge_end(struct receive_bridge *bridge)
+         --session->receive_inflight;
+         if (provider)
+             --provider->callbacks_inflight;
++        if (consumed == CAMD_PROVIDER_OK)
++            count_records(&session->received, records);
++        else
++            count_records(&session->dropped, records);
+     }
+     core_lock_release(&registry->lock);
+ }
+@@ -1227,7 +1290,7 @@ static enum CAMDProviderResult receive_bridge_midi1(
+     callback = bridge->consumer.SubmitMIDI1;
+     consumer_context = bridge->consumer.Context;
+     result = callback(consumer_context, events, event_count);
+-    receive_bridge_end(bridge);
++    receive_bridge_end(bridge, event_count, result);
+     return result;
+ }
+ 
+@@ -1256,7 +1319,7 @@ static enum CAMDProviderResult receive_bridge_midi1_sysex(
+     consumer_context = bridge->consumer.Context;
+     result = callback(consumer_context, bytes, byte_count, time_high, time_low,
+                       clock_domain, flags);
+-    receive_bridge_end(bridge);
++    receive_bridge_end(bridge, 1, result);
+     return result;
+ }
+ 
+@@ -1282,7 +1345,7 @@ static enum CAMDProviderResult receive_bridge_ump(
+     callback = bridge->consumer.SubmitUMP;
+     consumer_context = bridge->consumer.Context;
+     result = callback(consumer_context, events, event_count);
+-    receive_bridge_end(bridge);
++    receive_bridge_end(bridge, event_count, result);
+     return result;
+ }
+ 
+diff --git a/workbench/libs/camd/endpoint_registry.h b/workbench/libs/camd/endpoint_registry.h
+--- a/workbench/libs/camd/endpoint_registry.h
++++ b/workbench/libs/camd/endpoint_registry.h
+@@ -82,6 +82,12 @@ enum CAMDRegistryResult camd_registry_session_open(
+     const struct CAMDProviderOpenRequestV1 *request,
+     struct CAMDHandleV1 *session);
+ 
++/* Writes the whole record. */
++enum CAMDRegistryResult camd_registry_session_stats(
++    struct CAMDEndpointRegistry *registry,
++    struct CAMDHandleV1 session,
++    struct CAMDSessionStatsV1 *stats);
++
+ /* Sessions opened and not yet closed, including ones still closing. */
+ size_t camd_registry_session_count(struct CAMDEndpointRegistry *registry);
+ 
+diff --git a/workbench/libs/camd/getendpointsessionstats.c b/workbench/libs/camd/getendpointsessionstats.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/getendpointsessionstats.c
+@@ -0,0 +1,73 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++#include "provider_contract.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH2(LONG, GetEndpointSessionStats,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDHandleV1 *, session, A0),
++	AROS_LHA(struct CAMDSessionStatsV1 *, stats, A1),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 65, Camd)
++
++/*  FUNCTION
++		Tells how many records a session queued, was refused,
++		received and lost since it opened.
++
++    INPUTS
++		session - from OpenEndpointSession().
++		stats - Size and Version set by the caller. At most Size bytes
++		    are written, and Size is then the size of the full record.
++
++    RESULT
++		CAMD_REGISTRY_OK, CAMD_REGISTRY_STALE for a closed session, or
++		another CAMD_REGISTRY_ value.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		OpenEndpointSession()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	struct CAMDSessionStatsV1 full;
++	ULONG size;
++	LONG result;
++
++	if(session==NULL || stats==NULL || stats->Size<2*sizeof(ULONG) ||
++	   stats->Version!=1){
++		return CAMD_REGISTRY_INVALID;
++	}
++	result=camd_registry_session_stats(CB(CamdBase)->EndpointRegistry,
++		*session,&full);
++	if(result!=CAMD_REGISTRY_OK) return result;
++
++	size=stats->Size<sizeof(full) ? stats->Size : sizeof(full);
++	CopyMem(&full,stats,size);
++	stats->Size=sizeof(full);
++
++	return CAMD_REGISTRY_OK;
++
++    AROS_LIBFUNC_EXIT
++}
+diff --git a/workbench/libs/camd/mmakefile.src b/workbench/libs/camd/mmakefile.src
+--- a/workbench/libs/camd/mmakefile.src
++++ b/workbench/libs/camd/mmakefile.src
+@@ -73,7 +73,9 @@ FUNCS := \
+     setpublishedendpointstate \
+     putpublishedmidi \
+     putpublishedsysex \
+-    getpublishedmidi
++    getpublishedmidi \
++    cancelendpointsession \
++    getendpointsessionstats
+ 
+ #MM workbench-libs-camd-includes : \
+ #MM     kernel-exec-includes \
