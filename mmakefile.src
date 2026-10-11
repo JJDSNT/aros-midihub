@@ -19,6 +19,7 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-bonami \
 #MM      contrib-aros-midihub-mdnsd \
 #MM      contrib-aros-midihub-mdnstools \
+#MM      contrib-aros-midihub-mdnscx \
 #MM      contrib-aros-midihub-mdnsprobe
 #MM contrib-aros-midihub-program : linklibs-arosmidihub
 #MM contrib-aros-midihub-selftest : linklibs-arosmidihub
@@ -134,6 +135,14 @@ BONAMI_TOOL_CFLAGS := -Wall -Wextra -Wno-unused-parameter -Wno-pointer-sign
     targetdir=$(MIDIHUB_PACKAGE)/C cflags="$(BONAMI_TOOL_CFLAGS)"
 %build_prog mmake=contrib-aros-midihub-mdnstools-dnssd progname=dnssd \
     files="$(BONAMI_TOOLS)/dnssd $(BONAMI_TOOLS)/ba_common" \
+    targetdir=$(MIDIHUB_PACKAGE)/C cflags="$(BONAMI_TOOL_CFLAGS)"
+
+# Bonami's GadTools commodity: Nearby, Handshake and Share in one window.
+BONAMI_CX := $(BONAMI_AROS)/commodity
+#MM contrib-aros-midihub-mdnscx : contrib-aros-midihub-bonami
+%build_prog mmake=contrib-aros-midihub-mdnscx progname=Bonami \
+    files="$(BONAMI_CX)/bonami_main $(BONAMI_CX)/bonami_window \
+           $(BONAMI_CX)/bonami_mdns $(BONAMI_CX)/bonami_types" \
     targetdir=$(MIDIHUB_PACKAGE)/C cflags="$(BONAMI_TOOL_CFLAGS)"
 
 #MM contrib-aros-midihub-mdnsprobe : \

@@ -66,6 +66,21 @@ What changed for AROS is in `ba_common.h`: hooks are declared with
 `BA_HOOK()`, output goes through `VNewRawDoFmt()`, and addresses are printed
 byte by byte, so the same source builds for every AROS architecture.
 
+`commodity/` holds Bonami's GadTools commodity, `Bonami`: Nearby, Handshake
+and Share in one window, opened with `CX_POPUP=YES`, from Exchange, or with
+Ctrl-Alt-N. Build it with `make contrib-aros-midihub-mdnscx`.
+
+![The Bonami commodity on hosted AROS](../../../docs/images/bonami-commodity.png)
+
+On hosted AROS it was driven by hand on 2026-10-11 (no automatic test): the
+list of kinds, the instances of one kind from this host and from Avahi, and
+a Handshake that filled in host, address, port and text. In the Share row
+the "Port" label overlaps the kind gadget with AROS's default font; the
+layout uses fixed positions from the original. On AROS the startup code
+opens the libraries and provides `WBenchMsg`, so the program's own
+`OpenLibrary()` calls are gone; values that GadTools writes through a
+pointer are `IPTR`.
+
 In the shell a `key=value` argument of `Share` needs quotes
 (`Share Name web 80 "path=/"`): `ReadArgs()` otherwise takes the `=` as a
 separator. Each pair becomes a TXT string of its own; a value cannot contain
