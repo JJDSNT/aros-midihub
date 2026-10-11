@@ -200,6 +200,7 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-midi-loopback-driver.patch` | new `DEVS:Midi/loopback` driver with two ports: what is sent to `loopback.out.<n>` is received from `loopback.in.<n>` |
 | `aros-camd-endpoint-input.patch` | input sessions: a driver port's receiver process hands each complete message to the port's receiving sessions beside its legacy cluster; `GetEndpointMidi()` reads a session's bounded queue and the opening task is signalled |
 | `aros-camd-endpoint-watch.patch` | `StartEndpointWatch()`, `GetEndpointWatchEvent()` and `EndEndpointWatch()`: a bounded queue of endpoint changes with a signal, reporting loss instead of blocking |
+| `aros-camd-identity-unreadable.patch` | identity files that hold no complete snapshot no longer switch endpoint publication off: that run gives temporary IDs and leaves the files untouched |
 
 ```sh
 grep -v '^#' patches/camd-series | while read -r p; do
@@ -391,6 +392,13 @@ three passes on Linux-hosted AROS in a few seconds, from a copy of
 `build-aros-linux/bin/linux-x86_64/AROS`, with the same results. Both scripts
 also check that the endpoint IDs the first boot stores are the ones the second
 boot publishes.
+
+The hosted runner then damages the identity store's files in its copy and
+boots again for each case: only `.bak` left, a truncated main file beside a
+`.bak` or a complete `.new`, and junk beside a truncated `.new` and a `.bak`
+all bring the same IDs back. With nothing complete the endpoints get
+temporary IDs and the damaged file is not touched; with no file at all new
+IDs are made and kept.
 
 `build-aros-linux` lies inside this repository, which `~/AROS/contrib/extras`
 links to, so mmake would scan the build tree as source and a full `make`

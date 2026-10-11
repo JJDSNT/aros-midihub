@@ -8,7 +8,8 @@
 # and not modified. Boots the copy twice: once for the 41.1 contract and the
 # camd.library 42 and 43 checks, once with DEVS:Midi/debugdriver moved out for
 # RethinkCAMD(). Both boots share the copy, so the endpoint IDs of the first
-# are compared with those of the second. Needs xvfb-run.
+# are compared with those of the second. Further short boots damage the
+# identity store's files in the copy and check what comes back. Needs xvfb-run.
 # Exit status: 0 when no check failed.
 set -eu
 
@@ -88,5 +89,76 @@ if grep -q '^PASS CloseEndpointSession$' "$work/camdcompat-v43.log" 2>/dev/null;
         status=1
     fi
 fi
+
+# The identity store on a real filesystem. Each case leaves ENVARC: as an
+# interrupted or damaged replacement would and boots again: a complete main,
+# .new or .bak file must bring the same IDs back. Damaged files with nothing
+# complete give temporary IDs and stay as they are; no file at all gives new
+# IDs that are kept.
+store="$sys/Prefs/Env-Archive/SYS/camd-identities.iff"
+all_ids() {
+    grep -a 'camd.library: \(provider\|endpoint\) [0-9]* id ' "$work/serial-$1.log" || true
+}
+recover() {
+    boot "$cmd --v43-leak >NIL:" "$1" ""
+    all_ids "$1"
+}
+if [ -f "$store" ]; then
+    keep="$work/identities.keep"
+    base=$(recover store-plain)
+    cp "$store" "$keep"
+    expect_same() {
+        if [ -n "$base" ] && [ "$(recover "$1")" = "$base" ]; then
+            echo "PASS identity store: $2"
+        else
+            echo "FAIL identity store: $2"
+            status=1
+        fi
+        rm -f "$store" "$store.new" "$store.bak"
+        cp "$keep" "$store"
+    }
+    mv "$store" "$store.bak"
+    expect_same store-bak "only the backup is left"
+    head -c 100 "$keep" > "$store"
+    cp "$keep" "$store.bak"
+    expect_same store-cut-bak "a truncated main file and a backup"
+    head -c 100 "$keep" > "$store"
+    cp "$keep" "$store.new"
+    expect_same store-cut-new "a truncated main file and a complete new file"
+    printf 'not an identity file' > "$store"
+    cp "$keep" "$store.bak"
+    head -c 2000 "$keep" > "$store.new"
+    expect_same store-junk "junk, a truncated new file and a backup"
+
+    # Nothing complete: the endpoints still work, with temporary IDs, and the
+    # damaged file is left for whoever wants to look at it.
+    head -c 100 "$keep" > "$store"
+    fresh=$(recover store-none)
+    if [ -n "$fresh" ] && [ "$fresh" != "$base" ] &&
+       [ "$(echo "$fresh" | wc -l)" = "$(echo "$base" | wc -l)" ] &&
+       ! grep -aq 'identity kind 3' "$work/serial-store-none.log" &&
+       grep -aq 'identity kind 4' "$work/serial-store-none.log"; then
+        echo "PASS identity store: without a complete file the endpoints get temporary IDs"
+    else
+        echo "FAIL identity store: without a complete file the endpoints get temporary IDs"
+        status=1
+    fi
+    if head -c 100 "$keep" | cmp -s - "$store" && [ ! -e "$store.new" ] && [ ! -e "$store.bak" ]; then
+        echo "PASS identity store: the damaged file is left untouched"
+    else
+        echo "FAIL identity store: the damaged file is left untouched"
+        status=1
+    fi
+    rm -f "$store"
+    fresh=$(recover store-empty)
+    if [ -n "$fresh" ] && [ "$(recover store-fresh)" = "$fresh" ] &&
+       grep -aq 'identity kind 3' "$work/serial-store-fresh.log"; then
+        echo "PASS identity store: with no file at all new IDs are made and kept"
+    else
+        echo "FAIL identity store: with no file at all new IDs are made and kept"
+        status=1
+    fi
+fi
+
 rm -rf "$sys"
 exit $status
