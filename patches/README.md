@@ -368,6 +368,20 @@ patches and with all of them:
 | up to `camd-part-notify` | 50 of 50 | skipped | 8 of 8 |
 | all patches | 60 of 60 | 34 of 34 | 8 of 8 |
 
+Use the build tree's `bin/raspi-aarch64/AROS` as `SD_DIR`; an older copy with a
+`debugdriver` from before `debugdriver-port-index` crashes on the first send.
+
+[`tools/camd-compat-hosted.sh`](../tools/camd-compat-hosted.sh) runs the same
+three passes on Linux-hosted AROS in a few seconds, from a copy of
+`build-aros-linux/bin/linux-x86_64/AROS`, with the same results. Both scripts
+also check that the endpoint IDs the first boot stores are the ones the second
+boot publishes.
+
+`build-aros-linux` lies inside this repository, which `~/AROS/contrib/extras`
+links to, so mmake would scan the build tree as source and a full `make`
+fails. After each `configure`, append `ignoredir build-aros-linux` to
+`mmake.config` in every AROS build directory and delete `mmake.cache`.
+
 The USB MIDI patches build for `raspi-aarch64` but have not been run with a
 USB MIDI device.
 

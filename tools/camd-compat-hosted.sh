@@ -1,0 +1,75 @@
+#!/bin/sh
+# Runs MIDIHubCAMDCompat on Linux-hosted AROS.
+#
+#   tools/camd-compat-hosted.sh [AROS_DIR [WORK_DIR]]
+#
+# AROS_DIR is a hosted system tree with Extras/aros-midihub/C built, by
+# default build-aros-linux/bin/linux-x86_64/AROS. It is copied to WORK_DIR
+# and not modified. Boots the copy twice: once for the 41.1 contract and the
+# camd.library 42 checks, once with DEVS:Midi/debugdriver moved out for
+# RethinkCAMD(). Both boots share the copy, so the endpoint IDs of the first
+# are compared with those of the second. Needs xvfb-run.
+# Exit status: 0 when no check failed.
+set -eu
+
+here=$(cd "$(dirname "$0")/.." && pwd)
+aros=$(realpath "${1:-$here/build-aros-linux/bin/linux-x86_64/AROS}")
+work=$(realpath "${2:-$(mktemp -d)}")
+seconds=${CAMDCOMPAT_SECONDS:-120}
+sys="$work/AROS"
+
+test -x "$aros/boot/linux/AROSBootstrap"
+test -f "$aros/Devs/Midi/debugdriver"
+test -f "$aros/Extras/aros-midihub/C/MIDIHubCAMDCompat"
+
+rm -rf "$sys"
+mkdir -p "$work"
+cp -a --reflink=auto "$aros" "$sys"
+
+boot() {
+    printf '%b\nShutdown\n' "$1" > "$sys/S/User-Startup"
+    (cd "$sys" && timeout "$seconds" xvfb-run -a boot/linux/AROSBootstrap \
+        > "$work/serial-$2.log" 2>&1) || true
+    for run in $3; do
+        cp "$sys/camdcompat-$run.log" "$work/" 2>/dev/null || true
+    done
+}
+
+cmd=SYS:Extras/aros-midihub/C/MIDIHubCAMDCompat
+boot "$cmd >SYS:camdcompat-contract.log\n$cmd --v42 >SYS:camdcompat-v42.log" contract "contract v42"
+
+mv "$sys/Devs/Midi/debugdriver" "$sys/camdcompat-debugdriver"
+boot "$cmd --rethink >SYS:camdcompat-rethink.log" rethink rethink
+
+status=0
+for run in contract v42 rethink; do
+    log="$work/camdcompat-$run.log"
+    if [ ! -s "$log" ]; then
+        echo "no $run log: AROS did not run the suite (see $work/serial-$run.log)"
+        status=1
+        continue
+    fi
+    cat "$log"
+    grep -q '^FAIL' "$log" && status=1
+    tail -n 1 "$log" | grep -q '^camdcompat:' || {
+        echo "the $run run did not finish (see $work/serial-$run.log)"
+        status=1
+    }
+done
+
+# The debugdriver's IDs: the second boot must find those the first one made.
+ids() {
+    sed -n '/camd.library: debugdriver published/,/camd.library: drivers.c/p' \
+        "$work/serial-$1.log" | grep -a ' id ' || true
+}
+first=$(ids contract)
+if [ -n "$first" ]; then
+    if [ "$first" = "$(ids rethink)" ]; then
+        echo "PASS endpoint IDs survive a reboot ($(echo "$first" | wc -l) IDs)"
+    else
+        echo "FAIL endpoint IDs changed across a reboot"
+        status=1
+    fi
+fi
+rm -rf "$sys"
+exit $status
