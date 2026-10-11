@@ -22,3 +22,4 @@ camd-driver-endpoints
 debugdriver-output
 camd-endpoint-client
 camd-endpoint-expunge
+midi-loopback-driver

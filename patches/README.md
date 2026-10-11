@@ -197,6 +197,7 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-debugdriver-output.patch` | the debugdriver prints each byte it transmits, so a test can compare what reached a port |
 | `aros-camd-endpoint-client.patch` | provisional camd.library 43: `ObtainEndpointSnapshot()`, `GetEndpointInfo()`, `ReleaseEndpointSnapshot()`, `OpenEndpointSession()`, `PutEndpointMidi()`, `PutEndpointSysEx()`, `DrainEndpointSession()`, `CloseEndpointSession()` and the installed `midi/camdendpoint.h`; native MIDI 1.0 output sessions only |
 | `aros-camd-endpoint-expunge.patch` | camd.library refuses to be expunged while a client has left an endpoint session or snapshot open, instead of freeing the drivers under it |
+| `aros-midi-loopback-driver.patch` | new `DEVS:Midi/loopback` driver with two ports: what is sent to `loopback.out.<n>` is received from `loopback.in.<n>` |
 
 ```sh
 grep -v '^#' patches/camd-series | while read -r p; do
@@ -207,8 +208,10 @@ done
 [`camd-series`](camd-series) is the apply order.
 [`tools/check-camd-patches.sh`](../tools/check-camd-patches.sh) (`make
 check-patches`) applies it to a clean index of `~/AROS` and reports any CAMD
-change in that tree which the series lacks. Generate a new patch as the
-difference between that index and the tree, not by hand.
+change in that tree which the series lacks.
+[`tools/gen-camd-patch.sh`](../tools/gen-camd-patch.sh) writes a new patch as
+the difference between that index and the tree and appends it to the series;
+do not edit hunks by hand.
 
 **Names on 64-bit targets.** `mysprintf()` took its variadic arguments from
 `&fmt+1`, which only works where they sit on the stack (m68k, i386), so every

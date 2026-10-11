@@ -619,6 +619,70 @@ static void test_driver(void)
     DeleteMidi(node);
 }
 
+/* A driver hands over what it receives in its own process, so wait a little. */
+static int get_soon(struct MidiNode *node, MidiMsg *msg)
+{
+    int tries;
+
+    for (tries = 0; tries < 100; tries++) {
+        if (GetMidi(node, msg)) return 1;
+        Delay(1);
+    }
+    return 0;
+}
+
+/* The loopback driver: what goes to loopback.out.<n> comes from loopback.in.<n>. */
+static void test_loopback(void)
+{
+    static char out_cluster[] = "loopback.out.0";
+    static char in_cluster[] = "loopback.in.0";
+    static char other_in[] = "loopback.in.1";
+    static UBYTE identity[] = {0xf0, 0x7e, 0x7f, 0x06, 0x01, 0xf7};
+    UBYTE buffer[16];
+    struct MidiNode *out, *in, *other;
+    struct MidiLink *sender = NULL, *receiver = NULL, *other_receiver = NULL;
+    MidiMsg msg;
+
+    if (!FindCluster(out_cluster)) {
+        skip("loopback ports", "no DEVS:Midi/loopback");
+        return;
+    }
+    out = new_node("camdcompat loop out", 32, 256);
+    in = new_node("camdcompat loop in", 32, 256);
+    other = new_node("camdcompat loop other", 32, 256);
+    if (!out || !in || !other) {
+        check(0, "loopback: CreateMidiA", NULL);
+        goto out;
+    }
+    receiver = link_to(in, MLTYPE_Receiver, in_cluster);
+    other_receiver = link_to(other, MLTYPE_Receiver, other_in);
+    sender = link_to(out, MLTYPE_Sender, out_cluster);
+    check(sender && receiver && other_receiver, "links to a loopback port", NULL);
+    if (!sender || !receiver || !other_receiver) goto out;
+
+    PutMidi(sender, 0x903c6400UL);
+    check(get_soon(in, &msg) && msg.mm_Status == 0x90 && msg.mm_Data1 == 0x3c && msg.mm_Data2 == 0x64,
+          "a message sent to a driver port is received from it", NULL);
+    PutMidi(sender, 0x803c4000UL);
+    PutMidi(sender, 0xc0050000UL);
+    check(get_soon(in, &msg) && msg.mm_Status == 0x80 && get_soon(in, &msg) && msg.mm_Status == 0xc0 &&
+          msg.mm_Data1 == 0x05, "driver input keeps its order", NULL);
+    PutSysEx(sender, identity);
+    memset(buffer, 0, sizeof(buffer));
+    check(get_soon(in, &msg) && msg.mm_Status == 0xf0 && QuerySysEx(in) == sizeof(identity) &&
+          GetSysEx(in, buffer, sizeof(buffer)) == sizeof(identity) && !memcmp(buffer, identity, sizeof(identity)),
+          "SysEx sent to a driver port is received from it", NULL);
+    Delay(5);
+    check(!GetMidi(other, &msg), "another port of the driver receives nothing", NULL);
+out:
+    if (sender) RemoveMidiLink(sender);
+    if (receiver) RemoveMidiLink(receiver);
+    if (other_receiver) RemoveMidiLink(other_receiver);
+    if (out) DeleteMidi(out);
+    if (in) DeleteMidi(in);
+    if (other) DeleteMidi(other);
+}
+
 static void test_rethink_stub(void)
 {
     LONG result = RethinkCAMD();
@@ -1413,6 +1477,7 @@ int main(int argc, char **argv)
         RUN(test_msgtypes);
         RUN(test_notify);
         RUN(test_driver);
+        RUN(test_loopback);
         RUN(test_rethink_stub);
         /* Last: a deadlock leaves its process holding LockCAMD(). */
         RUN(test_notify_locked);
