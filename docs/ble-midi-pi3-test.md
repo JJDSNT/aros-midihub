@@ -6,6 +6,30 @@ MIDI Wrench and GarageBand. Here AROS is the BLE MIDI **peripheral**: the
 iPhone connects to it. The central role (AROS connecting to a BLE MIDI
 keyboard) needs such a keyboard and is described in [BLE MIDI](ble-midi.md).
 
+## Which class is under test
+
+The steps below were written for the copy of `btmidi.class` in this
+repository, whose ports are `BLE MIDI In` and `BLE MIDI Out`. To test the
+upstream class of AROS PR #1507, which is a CAMD driver:
+
+- Build `kernel-bluetooth-classes-btmidi` from the PR branch and do not
+  install this repository's class over it; both are `btmidi.class`.
+- After the first boot check that `DEVS:Midi/btmidi` exists. The class
+  writes it when it starts, and an unpatched `camd.library` only scans
+  `DEVS:Midi` when it is loaded: if a CAMD program was already running,
+  reboot once.
+- Use `btmidi.in.0` wherever a step says `BLE MIDI In` and `btmidi.out.0`
+  for `BLE MIDI Out`, for example
+  `MIDIHUB:C/MIDIHubCAMDProbe --monitor btmidi.in.0 300`.
+- MIDIHub.prefs does not know these ports as BLE MIDI yet, so the
+  `BLE MIDI`, `Offered` line of the preparation step does not apply. The class's own window, from the Classes
+  page of Bluetooth Preferences, shows the port list, the driver's state
+  and the counters.
+- Extra checks for this version: the window says "Installed as
+  DEVS:Midi/btmidi"; `btmidi.0` is marked in use while the probe runs and
+  not after it ends; a link to `btmidi.out.5` fails while no device is
+  bound.
+
 ## What the Pi 3 radio can and cannot do
 
 The Pi 3's BCM43438 is a Bluetooth 4.1 controller. LE Secure Connections

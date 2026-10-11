@@ -40,6 +40,11 @@ The current pages are:
 CAMD cluster additions and removals refresh the overview through a MUI input
 handler.
 
+This describes the copy of `btmidi.class` in this repository. The upstream
+class is a CAMD driver whose ports are `btmidi.in.<n>` and `btmidi.out.<n>`
+and has no configuration to read; the overview has to be changed for it
+(see Open work in [BLE MIDI](ble-midi.md)).
+
 BLE MIDI endpoints are recognised through `bluetooth.library` rather than by
 their names, because `btmidi.class` names a bound device's ports after the
 device. The overview asks the stack which registered devices are bound to

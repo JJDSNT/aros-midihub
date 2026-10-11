@@ -95,6 +95,21 @@ Nothing open.
 | B23 | Published names compare exactly, driver file names without regard to case. | One rule for both, chosen with B04. |
 | B24 | `midi/camdendpoint.h` mixes client records, publisher records and constants. | Split or order it once the surface stops moving. |
 
+## Raised by the upstream review of btmidi.class (2026-10-11)
+
+A transport has to be a `DEVS:Midi` driver, so what the endpoint registry
+knows about a transport is what a driver can tell it; see the amendment in
+[the architecture decision](camd-endpoint-architecture-decision.md). These
+wait for the maintainer's answer in AROS PR #1507 and for an agreed sketch,
+and are not started.
+
+| # | Limit or defect | What to do | Done when |
+|---|---|---|---|
+| B29 | A driver cannot say which device is behind a port. Identity is the file name plus the port number, so a BLE or USB device that takes another port is another endpoint. | An optional block beside `MidiDeviceData`, found the way `MidiDeviceData` is, through which a driver gives identity evidence and its confidence per port. No change to `MidiDeviceData`, the vectors or the cluster names; a driver without it behaves as today. | `btmidi` reports a device's address and the endpoint keeps its ID when the device changes port; the 41.1 contract suite is unchanged. |
+| B30 | All of a driver's ports are published as available, with or without a device. | Presence per port through the same block, mapped to available and offline. | An unbound `btmidi` port is offline in a snapshot and a watch reports the change. |
+| B31 | A driver port has no name but `<driver>.<n>`. | A display name per port through the same block; the cluster names stay. | `GetEndpointInfo()` returns the device's name. |
+| B32 | A driver cannot carry UMP or the time a message arrived. | A UMP path and a timed receive in the block, after B29 to B31 and after the specification gates. | Scheduled with the M0-M3 gates, not here. |
+
 ## Decisions needed
 
 None open. Taken on 2026-10-11: order a session's messages by time (B11);
@@ -111,12 +126,12 @@ Deferred until the library is complete, by decision:
 - Checking the UMP type table and every other UMP rule against the
   specification text (gates U02–U14).
 - Any MIDI 1.0↔UMP conversion, and legacy clusters for UMP endpoints.
-- UMP from a driver or transport, and Function Block versus Group Terminal
-  Block precedence.
+- UMP from a driver or transport (B32), and Function Block versus Group
+  Terminal Block precedence.
 - Offline state for a driver port whose device is unplugged: the legacy driver
-  interface has no way to tell CAMD.
+  interface has no way to tell CAMD (B30).
 - Unloading drivers: decided against in `camd-improvements.md` section 1.3.
 - A received message's time as the hardware saw it: the legacy driver
-  interface carries none.
+  interface carries none (B32).
 - Cleaning up after a task that dies without closing the library (B01 covers
   the task that closes it).

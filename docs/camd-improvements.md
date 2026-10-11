@@ -363,6 +363,13 @@ A future API could let software register a CAMD-visible endpoint with the
 metadata from section 2, giving software endpoints the same standing as
 driver-backed ones without writing driver files at run time.
 
+Since the upstream review of `btmidi.class` on 2026-10-11 this holds for
+programs only. A transport (BLE, network) is expected to be a `DEVS:Midi`
+driver, written at run time by its component as the USB class does, and
+`btmidi.class` now is one. The metadata of section 2 then has to come from
+the driver; see "What the driver model cannot say" in
+[the CAMD integration design](camd-integration.md).
+
 This should be designed together with dynamic driver endpoints rather than as
 an unrelated virtual-port mechanism. Both need identity, metadata, lifecycle,
 notification and a representation that remains compatible with ordinary CAMD

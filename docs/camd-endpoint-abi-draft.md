@@ -73,7 +73,9 @@ The publishing functions are a deliberately small public provider surface:
 one endpoint, native MIDI 1.0, with CAMD owning the queues, the sessions and
 the object's lifetime. The private operations table that drivers use is not
 exposed, so the section below about keeping the provider API private still
-holds for everything else.
+holds for everything else. It is a surface for programs. A transport is a
+`DEVS:Midi` driver and is published by CAMD from what the driver supplies;
+see the amendment of 2026-10-11 in the architecture decision.
 
 ### Known limits of the provisional slice
 

@@ -24,21 +24,37 @@ open and close a port and exchange MIDI bytes with the class. USB hardware
 access stays inside Poseidon. The source is in AROS
 `rom/usb/classes/camdmidi/` and `workbench/libs/camd/`.
 
-During incubation, MIDIHub uses CAMD client nodes to create virtual ports for
-network, BLE, and the SoundFont synthesizer. These are standard CAMD clusters:
-applications can send to and receive from them without a `DEVS:Midi` driver.
-As implementations mature, transport-specific components should move to their
-natural AROS homes; MIDIHub should consume the resulting CAMD-visible endpoints
-rather than retain duplicate transport implementations.
+**A transport is a CAMD device, and a CAMD device is a `DEVS:Midi` driver.**
+This was settled by the upstream review of `btmidi.class` on 2026-10-11
+(AROS PR #1507): the class had made a MidiNode with two clusters, as a
+client does, and was sent back to be a `struct MidiDeviceData` driver like
+the USB one. The objections apply to any transport: a client's clusters are
+invisible to whatever enumerates MIDI by device, exist only while the
+client's task does, add a queue in each direction, and repeat framing that
+CAMD's parser already does for a driver. `btmidi.class` now follows the USB
+model, and every later transport starts from it:
+
+- a small relocatable driver in `DEVS:Midi`, embedded in and written by the
+  component that owns the transport, whose `Init()` opens that component;
+- a fixed number of ports, with the component mapping its peers or devices
+  to them;
+- bytes to CAMD's receive function, and CAMD's transmit function drained on
+  `ActivateXmit`;
+- no `camd.library` opened from the transport.
+
+CAMD client nodes are for programs: the SoundFont synthesizer, MIDIHub's
+router, tools. MIDIHub's own network and BLE code still uses them from the
+incubation period; that code is to be replaced by the native components,
+not carried upstream as it is.
 
 ## Target architecture
 
 | Endpoint | Discovery or configuration | CAMD-facing component | Transport or output |
 | --- | --- | --- | --- |
 | USB MIDI | Poseidon class binding | Existing `DEVS:Midi` driver | Poseidon USB class |
-| RTP-MIDI / AppleMIDI | MIDI Preferences, mDNS, session negotiation | `applemidi.device` | `bsdsocket.library` |
-| Network MIDI 2.0 / UMP | MIDI Preferences, mDNS, session negotiation | `networkmidi2.device` | `bsdsocket.library` |
-| BLE MIDI | Bluetooth service discovery and binding | `btmidi.class` CAMD clients | `bluetooth.library` GATT |
+| RTP-MIDI / AppleMIDI | MIDI Preferences, mDNS, session negotiation | a `DEVS:Midi` driver in front of `applemidi.device` | `bsdsocket.library` |
+| Network MIDI 2.0 / UMP | MIDI Preferences, mDNS, session negotiation | a `DEVS:Midi` driver in front of `networkmidi2.device`; MIDI 1.0 until a driver can carry UMP | `bsdsocket.library` |
+| BLE MIDI | Bluetooth service discovery and binding | `DEVS:Midi/btmidi`, written by `btmidi.class` | `bluetooth.library` GATT |
 | Serial / DIN | Configured AROS serial device and port | Native serial MIDI component | AROS serial API |
 | Software synthesizer | SoundFont and AHI preferences | Native synth service CAMD client | TinySoundFont or FluidSynth to AHI |
 
@@ -51,15 +67,43 @@ or users to understand AppleMIDI, GATT, USB binding, or other transport details.
 During incubation, CAMD client nodes remain useful for Network MIDI testing.
 The native targets, however, are `applemidi.device` and
 `networkmidi2.device`: sockets, discovery, peer/session state and any internal
-tasks remain behind their respective device boundaries.
+tasks remain behind their respective device boundaries, and each reaches
+CAMD through a driver as above.
 
-Current CAMD drivers have a fixed `NPorts` after initialization. The preferred
-long-term direction is an additive CAMD dynamic-endpoint extension that leaves
-legacy `NPorts` unchanged while allowing a loaded device to register endpoint
-identity, metadata and connected/disconnected lifecycle at run time. A bounded
-pool of fixed ports with internal peer-to-port mapping is a fallback for CAMD
-versions without that extension, not the target architecture. The portable
-codecs remain independent of either native registration mechanism.
+## What the driver model cannot say
+
+Current CAMD drivers have a fixed `NPorts` after initialization and exchange
+a MIDI 1.0 byte stream. A bounded pool of fixed ports with internal
+peer-to-port mapping is therefore where every transport starts; `btmidi`
+does it with 16 ports. Doing so shows four things a driver has no way to
+tell CAMD:
+
+1. **Identity.** A port is known by its driver's file name and its number.
+   A BLE device has an address and a USB device a serial number, and neither
+   reaches CAMD. A device that takes another port is another endpoint.
+2. **Presence.** All 16 ports of `btmidi` look alike, with or without a
+   device. The only sign is `OpenPort()` failing.
+3. **A name** to show the user for a port.
+4. **UMP, and the time a message arrived.** The receive and transmit
+   functions carry single bytes.
+
+The direction is one additive extension **on the driver side**: an optional
+block a driver may provide beside `MidiDeviceData`, through which it gives
+CAMD a port's identity evidence, name and presence, and later a UMP path.
+It leaves `MidiDeviceData`, `NPorts`, the library's vectors and the
+`<driver>.in.<n>`/`<driver>.out.<n>` clusters as they are; a driver without
+the block is treated exactly as today, and an application written for
+CAMD 41 sees no difference. Inside CAMD the block feeds the endpoint
+registry, which already publishes each loaded driver's ports
+(`aros-camd-driver-endpoints.patch`) with file name plus port number as
+path-bound identity.
+
+This replaces the earlier idea of transports registering endpoints through
+a provider interface of their own. The extension is a prerequisite for
+stable routes to BLE and network peers and for native Network MIDI 2.0, not
+a later refinement. It was put to the upstream maintainer as a question in
+PR #1507; a concrete sketch goes into a separate issue if the answer is
+yes, before any code. The portable codecs remain independent of it.
 
 ## CAMD lifecycle
 
@@ -135,13 +179,22 @@ itself.
 4. Close CAMD gate U01 using evidence from that private implementation:
    appended client-vector order, record/version policy, 32/64-bit builds,
    ownership tests and upstream review. Keep provider registration private.
-5. Add native UMP transport/topology according
-   to the M0-M3 gates in [CAMD improvements](camd-improvements.md).
-6. Keep endpoint names and directions clear to CAMD clients across network,
+   Bring the upstream discussion forward: the `btmidi.class` review showed
+   that conformity with the existing device model is looked at first, so
+   the ABI sketch should be discussed before more endpoint code is written,
+   and sent in small pieces (fixes and the USB lifecycle, then version 42,
+   then endpoints).
+5. Sketch and agree the driver-side extension described under "What the
+   driver model cannot say"; give `btmidi` and the USB driver a port's
+   identity, name and presence through it.
+6. Add native UMP transport/topology according
+   to the M0-M3 gates in [CAMD improvements](camd-improvements.md), through
+   the same extension.
+7. Keep endpoint names and directions clear to CAMD clients across network,
    BLE, USB, serial, and synth.
-7. Validate the `MIDIHub Synth` receive port with a native CAMD sender and
+8. Validate the `MIDIHub Synth` receive port with a native CAMD sender and
    live AHI playback.
-8. Validate USB and BLE with physical devices, including binding, message
+9. Validate USB and BLE with physical devices, including binding, message
    transfer, SysEx, disconnection, and reconnection.
 9. Use endpoint enumeration/state in the MIDIHub overview; retain cluster
    enumeration for CAMD 41.

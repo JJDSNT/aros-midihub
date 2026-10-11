@@ -1,7 +1,8 @@
 # ADR: CAMD endpoint registry and provider architecture
 
 **Status:** Accepted as the target architecture; amended for a path-selective
-data plane; public C ABI not yet frozen.
+data plane, and on 2026-10-11 for how transports enter (see "Amendment:
+transports enter as drivers"); public C ABI not yet frozen.
 **Date:** 2026-10-09.
 **Scope:** CAMD endpoint/provider model, native topology and legacy projection.
 
@@ -54,6 +55,51 @@ of MIDI 1.0 ports. Option C is unsuitable because enumeration, open-by-ID,
 routing and watches must agree on a single generation. Option B matches the
 central-service/provider pattern used by current MIDI systems while allowing
 the existing CAMD graph to remain intact for old applications.
+
+## Amendment: transports enter as drivers
+
+**Date:** 2026-10-11. **Cause:** the upstream review of `btmidi.class`
+(AROS PR #1507), which turned down a transport that presented itself to CAMD
+through client calls and asked for a `struct MidiDeviceData` driver in
+`DEVS:Midi`, as `camdusbmidi.class` has.
+
+The decision above stands: one central registry, transport-neutral, with
+CAMD 41 clusters as a first-class MIDI 1.0 path. What changes is the
+provider side.
+
+- **A transport is a `DEVS:Midi` driver.** USB, BLE, AppleMIDI and Network
+  MIDI 2.0 reach CAMD as loaded drivers with numbered ports. The registry
+  learns about them through the legacy-driver adapter, which stops being a
+  compatibility bridge and becomes the way in for every transport. Where
+  this document says a transport provider "publishes endpoint state and
+  topology", read: the driver supplies it, and CAMD publishes it.
+- **Publishing is for programs.** `PublishEndpoint()` and the functions
+  beside it stay, for software endpoints: a synthesizer, a router, a tool. A
+  transport built on them would meet the same objections as the client
+  version of `btmidi.class`: not a device to anything that enumerates
+  drivers, alive only with its task, its own queue, its own framing.
+- **The provider contract becomes a driver-side extension.** What a provider
+  was to tell the registry (identity evidence and its confidence, name,
+  available or offline, native UMP) is to come from an optional block a
+  driver provides beside `MidiDeviceData`. It is additive and binary
+  compatible: existing drivers, applications, vectors and cluster names are
+  untouched, and a driver without the block is the path-bound, always
+  present, MIDI 1.0 driver of today. The private sized provider callback
+  table listed under "Consequences and next gate" is that block's internal
+  counterpart.
+- **Option A is still rejected.** A fixed pool of ports with the transport
+  mapping its peers to them is what a driver can do today, and `btmidi`
+  does it; the extension describes those ports to the registry and does not
+  resize `NPorts`.
+
+Consequences. Path-bound identity is wrong for a pooled port: the key is
+the driver's name and the port number, so a device that takes another port
+is another endpoint, and saved routes follow the port. Until the extension
+exists, a transport should keep its own stable device-to-port map. All of a
+driver's ports are published as available, with or without a device.
+UMP cannot come from a driver, so Network MIDI 2.0 is MIDI 1.0 through
+translation until the extension has a UMP path. The time a message arrived
+at the hardware is not carried.
 
 ## Authoritative objects
 

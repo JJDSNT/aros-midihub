@@ -122,7 +122,10 @@ MIDI 2.0 Channel Voice message is 64. So, in two steps:
 
 1. Finish the RTP-MIDI work in progress.
 2. Connect the portable multi-peer AppleMIDI manager to the AROS event loop
-   and create a CAMD node per connected peer.
+   and give each connected peer a port of a `DEVS:Midi` driver, as
+   `btmidi.class` does since its upstream review; a CAMD node per peer is
+   what that review turned down (see
+   [the CAMD integration design](camd-integration.md)).
 3. The AROS device runtime: validate AppleMIDI and Network MIDI 2.0 behind the CAMD device boundary, using the system mDNS registration and browse API.
 4. Upstream proposals: the system mDNS responder; the Network MIDI device under
    `workbench/devs/midi`; then the UMP-aware CAMD.

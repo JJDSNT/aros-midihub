@@ -1,20 +1,51 @@
 # Upstream pull requests
 
-Four branches in `~/AROS`, each based on `upstream/master` and meant to be
-pushed to `JJDSNT/AROS` and opened against `aros-development-team/AROS`
-`master`, as PR #1112 was. Nothing has been pushed yet. The descriptions
-below are the PR bodies.
+Branches of `JJDSNT/AROS` opened against `aros-development-team/AROS`
+`master`. State on 2026-10-11:
 
-| branch | title | commits |
-|---|---|---|
-| `bluetooth-le-midi` | bluetooth: BLE MIDI (LE peripheral pairing, connection parameters, btmidi.class) | 7 |
-| `camd-64bit-fixes` | camd: cluster names on 64-bit targets, and driver scan of arena-loaded modules | 2 |
-| `raspi-bt-console-firmware` | raspi-aarch64: keep the debug console off the Bluetooth radio, fetch its patchram | 2 |
-| `llvmpipe-link` | llvmpipe: link the target-side LLVM archives by path | 1 |
+| PR | branch | title | state |
+|---|---|---|---|
+| #1112 | `bluetooth-pi-transport` | bluetooth: Raspberry Pi onboard controller | merged |
+| #1482 | `bluetooth-le-midi` | bluetooth: BLE MIDI (stack and class in one) | closed, split into #1506 and #1507 |
+| #1483 | `camd-64bit-fixes` | camd: cluster names on 64-bit targets, and driver scan of arena-loaded modules | merged |
+| #1484 | `raspi-bt-console-firmware` | raspi-aarch64: keep the debug console off the Bluetooth radio, fetch its patchram | merged |
+| #1485 | `llvmpipe-link` | llvmpipe: link the target-side LLVM archives by path | merged |
+| #1506 | `bluetooth-le-stack-v2` | bluetooth: add remaining LE peripheral and GATT support | merged |
+| #1507 | `btmidi-class-v2` | bluetooth: add BLE MIDI class | open, reworked after review |
 
-The BLE MIDI branch works on its own. On real hardware it needs the CAMD
-fixes, and on a Raspberry Pi 3 also the raspi fixes. The llvmpipe fix only
-matters when building with an LLVM-built toolchain.
+The sections below are the PR bodies as first written, except the one about
+`btmidi.class`, which describes the class as it is after the review.
+
+## Review of #1507: a transport is a CAMD device
+
+The first `btmidi.class` opened `camd.library`, made a MidiNode with
+`CreateMidiA()` and published two clusters per role with `AddMidiLinkA()`.
+The maintainer (Kalamatee) stopped there, before the BLE side
+([comment](https://github.com/aros-development-team/AROS/pull/1507#issuecomment-6108626888)):
+that is the API of a MIDI application, and the class differed from every
+other MIDI hardware driver in the tree. He asked for the model of
+`camdusbmidi.class`: a `struct MidiDeviceData` stub in `DEVS:Midi` that
+CAMD loads, exported open and close functions returning a per-port adapter,
+bytes rather than messages to CAMD, output pulled through `ActivateXmit`,
+and roles mapped to numbered ports.
+
+The class was rewritten that way and pushed as two more commits on the same
+branch (`a45711131d`, `db7145795c`), with
+[a reply](https://github.com/aros-development-team/AROS/pull/1507#issuecomment-6112279392)
+that lists the changes against his eight points, where the class
+deliberately differs from the USB one, what was and was not tested, defects
+noticed in `camdusbmidi` while mirroring it (from reading, offered as
+separate fixes), and a question: whether an additive, binary-compatible
+extension on the driver side, for a port's identity, name and presence,
+would be welcome. Owed: the Pi 3 test of this version, reported in the PR;
+a squash before merge if he wants one; and, if he is open to the extension,
+an issue with a concrete sketch before any code.
+
+What this means for the CAMD work here is in
+[the CAMD integration design](camd-integration.md) and the amendment to
+[the architecture decision](camd-endpoint-architecture-decision.md). The
+rewrite lives in the worktree `~/AROS-btmidi`.
+
 
 ---
 
@@ -50,18 +81,22 @@ procedure and the controller waits for the host.
 
 ### btmidi.class
 
-In `rom/bluetooth/classes/btmidi`, beside `btgatt` and `btbattery`:
+In `rom/bluetooth/classes/btmidi`, beside `btgatt` and `btbattery`. As it
+is in #1507 after the review:
 
+- **CAMD driver:** the class embeds a `struct MidiDeviceData` stub with 16
+  ports and writes it to `DEVS:Midi/btmidi` when it starts. CAMD loads it
+  and the stub opens the class. The class does not open `camd.library`.
 - **Peripheral:** registers the BLE MIDI service; a connecting phone or
-  computer plays through the CAMD clusters `BLE MIDI In` and `BLE MIDI Out`.
-  Each central has its own reassembly state, so several can send at once.
-  `btgatt.class` still decides whether the service is offered and whether
-  the radios advertise.
+  computer plays through port 0, `btmidi.in.0` and `btmidi.out.0`. Each
+  central has its own decoder, so several can send at once, one SysEx at a
+  time. `btgatt.class` still decides whether the service is offered and
+  whether the radios advertise.
 - **Central:** binds to the BLE MIDI service of each registered device and
-  gives it a CAMD node named after it. Like `btbattery.class`, a binding
+  gives it the first free port from 1. Like `btbattery.class`, a binding
   never connects the device itself; it follows connect and disconnect events.
-- **Settings window:** renames the peripheral role's ports and shows their
-  activity.
+- **Status window:** lists which device has which port and shows the
+  peripheral role's activity. There are no names to edit.
 
 ### Testing
 
@@ -73,7 +108,8 @@ for `raspi-aarch64`.
 
 On a Raspberry Pi 3 with its on-board radio and an iPhone running MIDI
 Wrench, the iPhone connects to AROS and MIDI goes both ways between it and
-CAMD. The central
+CAMD. That was the first, client version of the class; the driver version
+has been run on hosted AROS only (see [BLE MIDI](ble-midi.md)). The central
 role has not been tried with a BLE MIDI peripheral yet.
 
 ---

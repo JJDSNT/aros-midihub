@@ -165,11 +165,14 @@ The optional [BLE MIDI transport](docs/ble-midi.md) connects a
 registered BLE MIDI peripheral to CAMD through `bluetooth.library`. Its
 portable packet codec supports running status, timestamps and multi-packet
 SysEx. Upstream AROS now supplies its GATT server, service-record API,
-notifications, advertising, and `btgatt.class` Preferences UI. The remaining
-[AROS patch](patches/README.md) adds Write Without Response and 128-bit service
-UUID advertising, plus service-write snapshots and queued notifications.
-`btmidi.class` registers the standard service and bridges it to CAMD. Physical
-BLE validation remains.
+notifications, advertising, the `btgatt.class` Preferences UI, and the LE
+peripheral work that used to be a patch here (AROS PR #1506).
+`btmidi.class` registers the standard service. Upstream (AROS PR #1507, in
+review) it is a CAMD driver, `DEVS:Midi/btmidi`, with one port for the
+peripheral role and one per bound device; the copy in this repository is
+the earlier version that makes CAMD clusters as a client, and is to be
+replaced by it. See [BLE MIDI](docs/ble-midi.md). Physical validation of the
+driver version remains.
 
 ### MIDI 2.0 / UMP
 
