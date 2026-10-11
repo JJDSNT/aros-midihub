@@ -21,8 +21,8 @@ passed against Avahi. When it is merged, remove the patches and the
 series.
 
 The maintainer reviewed it the same day
-([comment](https://github.com/aros-development-team/AROS/pull/1543#issuecomment-6112929373)
-and following): nine findings, four of them correctness problems that a
+([comment](https://github.com/aros-development-team/AROS/pull/1543#issuecomment-6112953952)
+): nine findings, four of them correctness problems that a
 test on hosted AROS against Avahi alone could not show. A tunnel interface
 was written through as a SANA-II one; IGMP queries were dropped because
 nothing joined the all-hosts group, so a membership would time out at a
