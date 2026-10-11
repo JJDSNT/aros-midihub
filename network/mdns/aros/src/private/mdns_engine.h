@@ -1,5 +1,5 @@
 /*
- * mdns_engine.h - shared mDNS engine state (NamedObject payload)
+ * mdns_engine.h - mdnsd's engine state
  */
 
 #ifndef BONAMI_PRIVATE_MDNS_ENGINE_H
@@ -15,13 +15,6 @@
 
 #include "private/bonami_ipc.h"
 #include "private/mdns_dns.h"
-
-#ifndef BONAMI_PRIVATE_BONAMI_INTERNAL_H
-struct BonamiPrivate;
-#endif
-
-#define MDNS_ENGINE_TOKEN       "Envoy.mdns"
-#define MDNS_ENGINE_STACK       16384
 
 /*
  * Signature stamped into a live token.  A NamedObject published in the
@@ -54,6 +47,7 @@ struct MDNSRegisteredService
     UWORD           rs_Port;
     UWORD           rs_Pad;
     APTR            rs_ClientRef;
+    struct Task    *rs_Task;        /* the client that registered it */
     ULONG           rs_HostAddr;
 };
 
@@ -92,6 +86,7 @@ struct MDNSInquirySession
  * every refresh, flooding the client with duplicate notifications.
  */
 #define MDNS_CE_ANNOUNCED       0x0001  /* MEVENT_ADD already delivered */
+#define MDNS_CE_LOCAL           0x0002  /* registered on this host: never expires */
 
 struct MDNSCacheEntry
 {
@@ -105,6 +100,17 @@ struct MDNSCacheEntry
     UWORD           ce_Flags;
     ULONG           ce_HostAddr;
     ULONG           ce_Expire;
+};
+
+/* A host's address, kept apart from the instances: the address record may
+ * arrive before the SRV record that names the host. */
+#define MDNS_HOSTS_MAX          64
+
+struct MDNSHostEntry
+{
+    struct Node     he_Node;
+    char            he_Name[MDNS_MAX_HOST + 1];
+    ULONG           he_Addr;
 };
 
 struct MDNSEngineToken
@@ -137,6 +143,8 @@ struct MDNSEngineToken
     struct List             et_BrowseSessions;
     struct List             et_InquirySessions;
     struct List             et_Cache;
+    struct List             et_Hosts;
+    ULONG                   et_HostCount;
     struct SignalSemaphore  et_ServiceLock;
     struct SignalSemaphore  et_SessionLock;
     volatile BOOL           et_Running;
@@ -146,13 +154,6 @@ struct MDNSEngineToken
     UWORD                   et_Pad;
 };
 
-int  MDNSTokenAttach(struct BonamiPrivate *pb);
-void MDNSTokenDetach(struct BonamiPrivate *pb);
-struct MDNSEngineToken *MDNSTokenGet(void);
-
-void MDNSEngineMain(void);
-LONG MDNSEnginePrepare(struct MDNSEngineToken *tok);
-void MDNSEnginePrepareUndo(struct MDNSEngineToken *tok);
 void MDNSEngineDispatch(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
 void MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
     const UBYTE *pkt, LONG pktlen, ULONG srcaddr);
@@ -162,6 +163,8 @@ LONG MDNSEngineRegister(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
 void MDNSEngineDeregister(struct MDNSEngineToken *tok, APTR ref);
 LONG MDNSEngineBrowse(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
 void MDNSEngineStopBrowse(struct MDNSEngineToken *tok, APTR ref);
+void MDNSEngineReleaseServices(struct MDNSEngineToken *tok, struct Task *task);
+void MDNSEngineReleaseBrowses(struct MDNSEngineToken *tok, struct Task *task);
 LONG MDNSEngineResolve(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
 LONG MDNSEngineInquiryNIPC(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
 void MDNSEngineInquiryTick(struct MDNSEngineToken *tok);
@@ -174,10 +177,13 @@ LONG mdnsNetSendMulticast(struct MDNSEngineToken *tok, const UBYTE *pkt,
     LONG pktlen);
 
 void mdnsRegAnnounceAll(struct MDNSEngineToken *tok);
+void mdnsRegHostChanged(struct MDNSEngineToken *tok);
+void mdnsRegGoodbyeAll(struct MDNSEngineToken *tok);
 void mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q);
 
 void mdnsBrowseSendQuery(struct MDNSEngineToken *tok, const char *type);
 void mdnsBrowseRetick(struct MDNSEngineToken *tok);
+void mdnsCacheExpire(struct MDNSEngineToken *tok);
 void mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
     const UBYTE *pkt, LONG pktlen);
 void mdnsBrowseFireHook(struct MDNSEngineToken *tok, struct MDNSBrowseSession *bs,

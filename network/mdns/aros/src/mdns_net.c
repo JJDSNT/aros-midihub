@@ -41,6 +41,12 @@ mdnsNetOpen(struct MDNSEngineToken *tok)
         return MDNS_OK;
     }
 
+    /* Without an address there is nothing to announce and no interface to
+     * join on; the caller tries again later. */
+    if (gethostid() == 0) {
+        return MDNSERR_NETWORK;
+    }
+
     baDbgPut("bonami: mdnsNetOpen enter\n");
     sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
@@ -65,10 +71,7 @@ mdnsNetOpen(struct MDNSEngineToken *tok)
 #endif
 
     /*
-     * et_UdpPort is the *bind* (source) port.  AROS normally uses 5353 for
-     * full multicast/responder mode.  The BONAMI_MDNS_PORT test override may
-     * select 0, letting the stack choose an ephemeral source port for
-     * legacy-unicast queries when a host-side responder owns 5353.
+     * et_UdpPort is the *bind* (source) port: 5353, as a responder needs.
      */
     memset(&sin, 0, sizeof(sin));
     sin.sin_family = AF_INET;
@@ -96,11 +99,11 @@ mdnsNetOpen(struct MDNSEngineToken *tok)
             sizeof(mreq)) < 0) {
         baDbgPutLong("bonami: mdnsNetOpen join failed errno=%ld\n",
             (LONG)Errno());
+        CloseSocket(sock);
+        return MDNSERR_NETWORK;
     }
-    if (mreq.imr_interface.s_addr != htonl(INADDR_ANY)) {
-        setsockopt(sock, IPPROTO_IP, IP_MULTICAST_IF,
-            (char *)&mreq.imr_interface, sizeof(mreq.imr_interface));
-    }
+    setsockopt(sock, IPPROTO_IP, IP_MULTICAST_IF,
+        (char *)&mreq.imr_interface, sizeof(mreq.imr_interface));
 
     on = 255;
     setsockopt(sock, IPPROTO_IP, IP_MULTICAST_TTL, (char *)&on, sizeof(on));

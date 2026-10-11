@@ -49,7 +49,6 @@ mdnsCacheAdd(struct MDNSEngineToken *tok, const char *inst, const char *type,
 
     ce = mdnsCacheFind(tok, inst, type);
     if (ce != NULL) {
-        ce->ce_Expire = mdnsEngineNow() + MDNS_DEFAULT_TTL;
         return ce;
     }
 
@@ -194,6 +193,93 @@ mdnsBrowseNotifyAll(struct MDNSEngineToken *tok, struct MDNSCacheEntry *ce)
     ReleaseSemaphore(&tok->et_SessionLock);
 }
 
+static struct MDNSHostEntry *
+mdnsHostFind(struct MDNSEngineToken *tok, const char *name)
+{
+    struct Node *n;
+
+    for (n = tok->et_Hosts.lh_Head; n != NULL && n->ln_Succ != NULL;
+        n = n->ln_Succ) {
+        if (Stricmp(((struct MDNSHostEntry *)n)->he_Name, name) == 0) {
+            return (struct MDNSHostEntry *)n;
+        }
+    }
+    return NULL;
+}
+
+/* Remembers a host's address; the host heard of longest ago makes room. */
+static void
+mdnsHostStore(struct MDNSEngineToken *tok, const char *name, ULONG addr)
+{
+    struct MDNSHostEntry *he;
+
+    he = mdnsHostFind(tok, name);
+    if (he != NULL) {
+        Remove(&he->he_Node);
+    } else if (tok->et_HostCount >= MDNS_HOSTS_MAX) {
+        he = (struct MDNSHostEntry *)RemHead(&tok->et_Hosts);
+    } else {
+        he = (struct MDNSHostEntry *)AllocMem(sizeof(*he), MEMF_CLEAR);
+        if (he != NULL) {
+            tok->et_HostCount++;
+        }
+    }
+    if (he == NULL) {
+        return;
+    }
+    strncpy(he->he_Name, name, MDNS_MAX_HOST);
+    he->he_Name[MDNS_MAX_HOST] = '\0';
+    he->he_Addr = addr;
+    AddTail(&tok->et_Hosts, &he->he_Node);
+}
+
+/* Tells the browses of its type that an instance is gone and forgets it. */
+static void
+mdnsCacheDrop(struct MDNSEngineToken *tok, struct MDNSCacheEntry *ce)
+{
+    struct MDNSBrowseSession *bs;
+    struct Node *n;
+
+    ObtainSemaphore(&tok->et_SessionLock);
+    for (n = tok->et_BrowseSessions.lh_Head; n != NULL && n->ln_Succ != NULL;
+        n = n->ln_Succ) {
+        bs = (struct MDNSBrowseSession *)n;
+        if (Stricmp(bs->bs_Type, ce->ce_Type) == 0) {
+            mdnsBrowseFireHook(tok, bs, ce, MEVENT_REMOVE);
+        }
+    }
+    ReleaseSemaphore(&tok->et_SessionLock);
+
+    Remove(&ce->ce_Node);
+    FreeMem(ce, sizeof(*ce));
+}
+
+/*
+ * Forgets what other hosts announced and did not announce again within the
+ * time their PTR record gave. Called once a second.
+ */
+void
+mdnsCacheExpire(struct MDNSEngineToken *tok)
+{
+    struct MDNSCacheEntry *ce;
+    struct Node *n;
+    struct Node *next;
+    ULONG now;
+
+    if (tok == NULL) {
+        return;
+    }
+    now = mdnsEngineNow();
+    for (n = tok->et_Cache.lh_Head; n != NULL && n->ln_Succ != NULL;
+        n = next) {
+        next = n->ln_Succ;
+        ce = (struct MDNSCacheEntry *)n;
+        if ((ce->ce_Flags & MDNS_CE_LOCAL) == 0 && ce->ce_Expire <= now) {
+            mdnsCacheDrop(tok, ce);
+        }
+    }
+}
+
 /*
  * Remove the trailing mDNS domain from an FQDN label sequence, turning e.g.
  * "_googlecast._tcp.local" into "_googlecast._tcp".  A single trailing root
@@ -273,6 +359,7 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
     const UBYTE *pkt, LONG pktlen)
 {
     struct MDNSCacheEntry *ce;
+    struct MDNSHostEntry *he;
     char inst[MDNS_MAX_NAME + 1];
     char type[MDNS_MAX_TYPE + 1];
     char hosttarget[MDNS_MAX_HOST + 1];
@@ -316,6 +403,9 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
             type[MDNS_MAX_TYPE] = '\0';
             mdnsStripDomain(type);
             ce = mdnsCacheAddType(tok, type, &isNew);
+            if (ce != NULL && r->ttl != 0) {
+                ce->ce_Expire = mdnsEngineNow() + r->ttl;
+            }
             if (ce != NULL && isNew) {
                 ce->ce_Flags |= MDNS_CE_ANNOUNCED;
                 mdnsMetaNotify(tok, ce);
@@ -335,7 +425,19 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
         *dot = '\0';                    /* inst is now just the instance label */
         mdnsStripDomain(type);
 
+        /* A time to live of zero is the instance saying goodbye. */
+        if (r->ttl == 0) {
+            ce = mdnsCacheFind(tok, inst, type);
+            if (ce != NULL && (ce->ce_Flags & MDNS_CE_LOCAL) == 0) {
+                mdnsCacheDrop(tok, ce);
+            }
+            return;
+        }
+
         ce = mdnsCacheAdd(tok, inst, type, &isNew);
+        if (ce != NULL) {
+            ce->ce_Expire = mdnsEngineNow() + r->ttl;
+        }
         if (ce != NULL && isNew) {
             ce->ce_Flags |= MDNS_CE_ANNOUNCED;
             mdnsBrowseNotifyAll(tok, ce);
@@ -357,6 +459,9 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
         addr |= (ULONG)r->rdata[1] << 16;
         addr |= (ULONG)r->rdata[2] << 8;
         addr |= (ULONG)r->rdata[3];
+        if (r->ttl != 0) {
+            mdnsHostStore(tok, r->name, addr);
+        }
         for (n = tok->et_Cache.lh_Head; n != NULL && n->ln_Succ != NULL;
             n = n->ln_Succ) {
             ce = (struct MDNSCacheEntry *)n;
@@ -369,7 +474,7 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
         }
         return;
     }
-    if (r->type != DNS_TYPE_SRV && r->type != DNS_TYPE_TXT) {
+    if ((r->type != DNS_TYPE_SRV && r->type != DNS_TYPE_TXT) || r->ttl == 0) {
         return;
     }
 
@@ -416,6 +521,12 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
                 ce->ce_Host[MDNS_MAX_HOST] = '\0';
                 changed = TRUE;
             }
+            /* The host's address may have been heard before this record. */
+            he = mdnsHostFind(tok, ce->ce_Host);
+            if (he != NULL && ce->ce_HostAddr != he->he_Addr) {
+                ce->ce_HostAddr = he->he_Addr;
+                changed = TRUE;
+            }
         }
     } else if (r->type == DNS_TYPE_TXT && r->rdlength > 0) {
         if (r->rdata[0] < r->rdlength) {
@@ -454,6 +565,7 @@ mdnsCacheAddLocal(struct MDNSEngineToken *tok, struct MDNSRegisteredService *rs,
     if (ce == NULL) {
         return NULL;
     }
+    ce->ce_Flags |= MDNS_CE_LOCAL;
     strncpy(ce->ce_Host, rs->rs_HostTarget, MDNS_MAX_HOST);
     ce->ce_Host[MDNS_MAX_HOST] = '\0';
     ce->ce_Port = rs->rs_Port;
@@ -490,7 +602,7 @@ mdnsBrowseAnnounceLocal(struct MDNSEngineToken *tok,
     /* Also surface the service *type* to any meta (_services._dns-sd) browse. */
     ce = mdnsCacheAddType(tok, rs->rs_Type, &isNew);
     if (ce != NULL) {
-        ce->ce_Flags |= MDNS_CE_ANNOUNCED;
+        ce->ce_Flags |= MDNS_CE_ANNOUNCED | MDNS_CE_LOCAL;
         mdnsMetaNotify(tok, ce);
     }
 }
@@ -505,39 +617,23 @@ void
 mdnsBrowseRemoveLocal(struct MDNSEngineToken *tok,
     struct MDNSRegisteredService *rs)
 {
-    struct MDNSBrowseSession *bs;
     struct MDNSCacheEntry *ce;
-    struct Node *n;
 
     if (tok == NULL || rs == NULL) {
         return;
     }
 
     ce = mdnsCacheFind(tok, rs->rs_Instance, rs->rs_Type);
-    if (ce == NULL) {
-        return;
+    if (ce != NULL) {
+        mdnsCacheDrop(tok, ce);
     }
-
-    ObtainSemaphore(&tok->et_SessionLock);
-    for (n = tok->et_BrowseSessions.lh_Head; n != NULL && n->ln_Succ != NULL;
-        n = n->ln_Succ) {
-        bs = (struct MDNSBrowseSession *)n;
-        if (Stricmp(bs->bs_Type, ce->ce_Type) == 0) {
-            mdnsBrowseFireHook(tok, bs, ce, MEVENT_REMOVE);
-        }
-    }
-    ReleaseSemaphore(&tok->et_SessionLock);
-
-    Remove(&ce->ce_Node);
-    FreeMem(ce, sizeof(*ce));
 }
 
 /*
  * Deliver services this machine already offers to a browse session that has just
  * started (the "you started Share, then Nearby" case).  Standard mDNS browse
  * behaviour is to immediately report everything already known.  Scans the local
- * service list; the network-discovered cache is delivered lazily as records
- * continue to arrive.
+ * service list, then the instances other hosts have announced.
  */
 static void
 mdnsBrowseDeliverExisting(struct MDNSEngineToken *tok,
@@ -568,6 +664,17 @@ mdnsBrowseDeliverExisting(struct MDNSEngineToken *tok,
         }
     }
     ReleaseSemaphore(&tok->et_ServiceLock);
+
+    /* And what other hosts have announced so far: mdnsd outlives its
+     * clients, so an answer may have come long before this browse. */
+    for (n = tok->et_Cache.lh_Head; !meta && n != NULL && n->ln_Succ != NULL;
+        n = n->ln_Succ) {
+        ce = (struct MDNSCacheEntry *)n;
+        if ((ce->ce_Flags & MDNS_CE_LOCAL) == 0 &&
+            Stricmp(ce->ce_Type, bs->bs_Type) == 0) {
+            mdnsBrowseFireHook(tok, bs, ce, MEVENT_ADD);
+        }
+    }
 }
 
 LONG
@@ -624,6 +731,30 @@ MDNSEngineStopBrowse(struct MDNSEngineToken *tok, APTR ref)
             Remove(n);
             FreeMem(bs, sizeof(*bs));
             break;
+        }
+    }
+    ReleaseSemaphore(&tok->et_SessionLock);
+}
+
+/* Ends every browse a client started; its hooks are not called again. */
+void
+MDNSEngineReleaseBrowses(struct MDNSEngineToken *tok, struct Task *task)
+{
+    struct MDNSBrowseSession *bs;
+    struct Node *n;
+    struct Node *next;
+
+    if (tok == NULL || task == NULL) {
+        return;
+    }
+    ObtainSemaphore(&tok->et_SessionLock);
+    for (n = tok->et_BrowseSessions.lh_Head; n != NULL && n->ln_Succ != NULL;
+        n = next) {
+        next = n->ln_Succ;
+        bs = (struct MDNSBrowseSession *)n;
+        if (bs->bs_Task == task) {
+            Remove(n);
+            FreeMem(bs, sizeof(*bs));
         }
     }
     ReleaseSemaphore(&tok->et_SessionLock);

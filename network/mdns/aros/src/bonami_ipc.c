@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  * Copyright 2026 amigazen project
  *
- * bonami_ipc.c - library-side IPC to mdns.task
+ * bonami_ipc.c - library-side IPC to mdnsd
  */
 
 #include <exec/types.h>
@@ -17,40 +17,29 @@
 #include <bonami/mdns.h>
 #include "private/bonami_internal.h"
 #include "private/bonami_ipc.h"
-#include "private/mdns_engine.h"
-#include "private/bonami_debug.h"
 
+/* Is mdnsd there? It may still go away before the next call. */
 LONG
 MDNSEnsureEngine(struct BonamiPrivate *pb)
 {
-    int rc;
+    struct MsgPort *port;
 
-    baDbgPut("bonami: MDNSEnsureEngine enter\n");
-    if (pb == NULL) {
-        baDbgPut("bonami: MDNSEnsureEngine pb=NULL\n");
-        return MDNSERR_BADPARAM;
-    }
+    (void)pb;
+    Forbid();
+    port = FindPort((STRPTR)BONAMI_ENGINE_PORT);
+    Permit();
+    return port != NULL ? MDNS_OK : MDNSERR_NOENGINE;
+}
 
-    if (pb->EngineOpen && pb->EngineToken != NULL &&
-        pb->EngineToken->et_Ready && pb->EngineToken->et_Port != NULL) {
-        baDbgPut("bonami: MDNSEnsureEngine already open\n");
-        return MDNS_OK;
-    }
+/* Tells mdnsd to drop every registration and browse of the calling task. */
+void
+MDNSReleaseTask(struct BonamiPrivate *pb)
+{
+    struct MDNSIPCMsg msg;
 
-    baDbgPut("bonami: MDNSEnsureEngine attach\n");
-    rc = MDNSTokenAttach(pb);
-    if (rc != MDNS_OK) {
-        baDbgPutLong("bonami: MDNSEnsureEngine attach rc=%ld\n", (LONG)rc);
-        return (LONG)rc;
-    }
-
-    if (pb->EngineToken == NULL || pb->EngineToken->et_Port == NULL) {
-        baDbgPut("bonami: MDNSEnsureEngine no engine port\n");
-        return MDNSERR_NOENGINE;
-    }
-
-    baDbgPut("bonami: MDNSEnsureEngine ok\n");
-    return MDNS_OK;
+    memset(&msg, 0, sizeof(msg));
+    msg.bim_Command = BONAMI_MSG_RELEASE;
+    MDNSSendIPC(pb, &msg);
 }
 
 LONG
@@ -119,34 +108,17 @@ MDNSTagsToRegisterMsg(struct TagItem *tags, struct MDNSIPCMsg *msg)
 LONG
 MDNSSendIPC(struct BonamiPrivate *pb, struct MDNSIPCMsg *msg)
 {
-    struct MDNSEngineToken *tok;
+    struct MsgPort *enginePort;
     struct MsgPort *replyPort;
     struct MDNSIPCMsg *copy;
-    LONG rc;
 
-    baDbgPutLong("bonami: MDNSSendIPC cmd=%ld\n",
-        (LONG)(msg != NULL ? (LONG)msg->bim_Command : -1L));
     if (pb == NULL || msg == NULL) {
-        baDbgPut("bonami: MDNSSendIPC bad param\n");
         return MDNSERR_BADPARAM;
     }
 
-    rc = MDNSEnsureEngine(pb);
-    if (rc != MDNS_OK) {
-        baDbgPutLong("bonami: MDNSSendIPC ensure rc=%ld\n", rc);
-        return MDNSERR_NOENGINE;
-    }
-
-    tok = pb->EngineToken;
-    if (tok == NULL || tok->et_Port == NULL) {
-        return MDNSERR_NOENGINE;
-    }
-
     /*
-     * Use a reply port created in (and owned by) the calling task, so that
-     * multiple clients calling concurrently from different tasks never share a
-     * reply port.  A shared port would let one caller's WaitPort/GetMsg consume
-     * another caller's reply.
+     * A reply port of the calling task's own, so that clients calling at the
+     * same time never take each other's reply.
      */
     replyPort = CreateMsgPort();
     if (replyPort == NULL) {
@@ -165,15 +137,24 @@ MDNSSendIPC(struct BonamiPrivate *pb, struct MDNSIPCMsg *msg)
     copy->bim_Msg.mn_ReplyPort = replyPort;
     copy->bim_Version = BONAMI_IPC_VERSION;
     copy->bim_Result = MDNSERR_NOTREADY;
+    copy->bim_Task = FindTask(NULL);
 
-    PutMsg(tok->et_Port, &copy->bim_Msg);
-    WaitPort(replyPort);
-
-    copy = (struct MDNSIPCMsg *)GetMsg(replyPort);
-    if (copy == NULL) {
+    /* mdnsd removes its port before it stops reading it, so a message sent
+     * to a port found here is always answered. */
+    Forbid();
+    enginePort = FindPort((STRPTR)BONAMI_ENGINE_PORT);
+    if (enginePort != NULL) {
+        PutMsg(enginePort, &copy->bim_Msg);
+    }
+    Permit();
+    if (enginePort == NULL) {
+        FreeMem(copy, sizeof(*copy));
         DeleteMsgPort(replyPort);
         return MDNSERR_NOENGINE;
     }
+
+    WaitPort(replyPort);
+    GetMsg(replyPort);
 
     msg->bim_Result = copy->bim_Result;
     msg->bim_Handle = copy->bim_Handle;
@@ -185,6 +166,5 @@ MDNSSendIPC(struct BonamiPrivate *pb, struct MDNSIPCMsg *msg)
     msg->bim_Dbg2 = copy->bim_Dbg2;
     FreeMem(copy, sizeof(*copy));
     DeleteMsgPort(replyPort);
-    baDbgPutLong("bonami: MDNSSendIPC result=%ld\n", msg->bim_Result);
     return msg->bim_Result;
 }

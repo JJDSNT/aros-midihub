@@ -42,7 +42,8 @@ AROS_LH0(void, CloseMDNSEngine,
     struct BonamiPrivate *, BonamiBase, 6, Bonami)
 {
     AROS_LIBFUNC_INIT
-    MDNSTokenDetach(BonamiBase);
+    /* The engine is the system's and stays; the caller's objects go. */
+    MDNSReleaseTask(BonamiBase);
     AROS_LIBFUNC_EXIT
 }
 
@@ -112,7 +113,6 @@ AROS_LH3(LONG, BrowseServiceTypeA,
     memset(&msg, 0, sizeof(msg));
     msg.bim_Command = BONAMI_MSG_BROWSE;
     msg.bim_Hook = hook;
-    msg.bim_Task = FindTask(NULL);
     strncpy(msg.bim_ServiceType, type, MDNS_MAX_TYPE);
     msg.bim_ServiceType[MDNS_MAX_TYPE] = '\0';
     rc = MDNSSendIPC(BonamiBase, &msg);
@@ -152,7 +152,6 @@ AROS_LH4(LONG, ResolveServiceA,
     memset(&msg, 0, sizeof(msg));
     msg.bim_Command = BONAMI_MSG_RESOLVE;
     msg.bim_Hook = hook;
-    msg.bim_Task = FindTask(NULL);
     strncpy(msg.bim_Name, name, MDNS_MAX_NAME);
     msg.bim_Name[MDNS_MAX_NAME] = '\0';
     strncpy(msg.bim_ServiceType, type, MDNS_MAX_TYPE);

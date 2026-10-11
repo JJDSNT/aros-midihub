@@ -20,10 +20,13 @@ struct Library *BonamiBase;
 
 /*
  * BonamiProbe [REGISTER name] [TYPE type] [PORT n] [BROWSE type] [SECONDS n]
+ *             [LEAK]
  *
  * Without arguments it only opens the engine and prints its counters. With
  * REGISTER it announces an instance of TYPE (default _bonamiprobe._udp) for
  * SECONDS; with BROWSE it prints what the engine reports for that type.
+ * With LEAK it ends without withdrawing either, so that closing the library
+ * has to.
  */
 
 #define SEEN_MAX 16
@@ -78,7 +81,7 @@ int main(void)
 {
     struct Library *socketBase;
     struct RDArgs *args;
-    IPTR arg[5] = { 0, 0, 0, 0, 0 };
+    IPTR arg[6] = { 0, 0, 0, 0, 0, 0 };
     struct Hook hook;
     MDNSRegisterRef registered = NULL;
     MDNSBrowseRef browsing = NULL;
@@ -86,7 +89,7 @@ int main(void)
     LONG result;
 
     mainTask = FindTask(NULL);
-    args = ReadArgs("REGISTER/K,TYPE/K,PORT/N,BROWSE/K,SECONDS/N", arg, NULL);
+    args = ReadArgs("REGISTER/K,TYPE/K,PORT/N,BROWSE/K,SECONDS/N,LEAK/S", arg, NULL);
     if (args == NULL) {
         PrintFault(IoErr(), "BonamiProbe");
         return RETURN_FAIL;
@@ -168,14 +171,15 @@ int main(void)
         }
     }
 
-    if (browsing != NULL)
-        StopBrowse(browsing);
-    if (registered != NULL)
-        DeregisterService(registered);
     if (seconds != 0)
         print_status("done");
-
-    CloseMDNSEngine();
+    if (!arg[5]) {
+        if (browsing != NULL)
+            StopBrowse(browsing);
+        if (registered != NULL)
+            DeregisterService(registered);
+        CloseMDNSEngine();
+    }
     CloseLibrary(BonamiBase);
     BonamiBase = NULL;
     FreeArgs(args);

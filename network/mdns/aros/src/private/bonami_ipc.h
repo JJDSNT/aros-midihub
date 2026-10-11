@@ -1,5 +1,8 @@
 /*
- * bonami_ipc.h - internal IPC to shared mDNS engine
+ * bonami_ipc.h - messages between bonami.library and mdnsd
+ *
+ * A client sends to the public port BONAMI_ENGINE_PORT and waits for the
+ * reply. bim_Task names the calling task in every message.
  */
 
 #ifndef BONAMI_PRIVATE_BONAMI_IPC_H
@@ -11,7 +14,7 @@
 #include "private/bonami_limits.h"
 
 #define BONAMI_ENGINE_PORT  "BonAmi"
-#define BONAMI_IPC_VERSION  1
+#define BONAMI_IPC_VERSION  2
 
 #define BONAMI_MSG_REGISTER     1
 #define BONAMI_MSG_UNREGISTER   2
@@ -24,6 +27,7 @@
 #define BONAMI_MSG_EVENT        9
 #define BONAMI_MSG_SHUTDOWN     10
 #define BONAMI_MSG_INQUIRY      11
+#define BONAMI_MSG_RELEASE      12      /* drop everything bim_Task owns */
 
 struct MDNSIPCMsg
 {

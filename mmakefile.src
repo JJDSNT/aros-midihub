@@ -17,6 +17,7 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-drawer-icons \
 #MM      contrib-aros-midihub-btmidi \
 #MM      contrib-aros-midihub-bonami \
+#MM      contrib-aros-midihub-mdnsd \
 #MM      contrib-aros-midihub-mdnsprobe
 #MM contrib-aros-midihub-program : linklibs-arosmidihub
 #MM contrib-aros-midihub-selftest : linklibs-arosmidihub
@@ -51,10 +52,12 @@ BONAMI_SRC := $(BONAMI_AROS)/src
 BONAMI_FILES := \
     $(BONAMI_SRC)/bonami_init \
     $(BONAMI_SRC)/bonami_api \
-    $(BONAMI_SRC)/bonami_ipc \
+    $(BONAMI_SRC)/bonami_ipc
+MDNSD_FILES := \
+    $(BONAMI_SRC)/mdnsd \
+    $(BONAMI_SRC)/mdnsd_service \
     $(BONAMI_SRC)/mdns_dns \
     $(BONAMI_SRC)/mdns_net \
-    $(BONAMI_SRC)/mdns_token \
     $(BONAMI_SRC)/mdns_engine \
     $(BONAMI_SRC)/mdns_reg \
     $(BONAMI_SRC)/mdns_browse \
@@ -87,6 +90,22 @@ contrib-aros-midihub-bonami-clean ::
 %copy_includes mmake=contrib-aros-midihub-bonami-include-base \
     path=libraries dir=$(BONAMI_AROS)/include/libraries \
     includes="bonamibase.h"
+
+# The daemon behind the library, managed by the AROSTCP service manager.
+#MM contrib-aros-midihub-mdnsd : \
+#MM      contrib-aros-midihub-bonami-includes \
+#MM      contrib-aros-midihub-mdnsd-svccfg
+%build_prog mmake=contrib-aros-midihub-mdnsd \
+    progname=mdnsd \
+    files="$(MDNSD_FILES)" \
+    targetdir=$(AROS_SYSTEM)/Network/Services \
+    cflags="-Wall -Wextra -Werror -Wno-volatile-register-var \
+            -Wno-unused-parameter -Wno-missing-field-initializers \
+            -Wno-pointer-sign"
+
+%copy_files_q mmake=contrib-aros-midihub-mdnsd-svccfg \
+    files="mdns" src=$(BONAMI_AROS)/services.d \
+    dst=$(AROS_SYSTEM)/Network/AROSTCP/db/services.d
 
 #MM contrib-aros-midihub-mdnsprobe : \
 #MM      contrib-aros-midihub-bonami

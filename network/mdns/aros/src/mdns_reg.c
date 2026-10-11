@@ -83,8 +83,11 @@ mdnsRegAppendSrv(UBYTE *rdata, const UBYTE *targetWire, LONG targetLen,
     return 6 + targetLen;
 }
 
-void
-mdnsRegAnnounceService(struct MDNSEngineToken *tok, struct MDNSRegisteredService *rs)
+/* Sends a service's records with the given time to live; zero withdraws
+ * them from every cache on the link (RFC 6762 section 10.1). */
+static void
+mdnsRegSendService(struct MDNSEngineToken *tok,
+    struct MDNSRegisteredService *rs, ULONG ttl)
 {
     UBYTE *pkt;
     struct MDNSHeader *hdr;
@@ -136,12 +139,12 @@ mdnsRegAnnounceService(struct MDNSEngineToken *tok, struct MDNSRegisteredService
     /* A PTR record is shared by every instance of the type, so it must not
      * carry the cache-flush bit (RFC 6762 section 10.2). */
     mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, typefqdn,
-        DNS_TYPE_PTR, DNS_CLASS_IN, MDNS_DEFAULT_TTL, ptrtarget,
+        DNS_TYPE_PTR, DNS_CLASS_IN, ttl, ptrtarget,
         (UWORD)ptrlen);
 
     srvlen = mdnsRegAppendSrv(srvdata, hostwire, hostwirelen, rs->rs_Port);
     mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, instfqdn,
-        DNS_TYPE_SRV, DNS_CLASS_IN | 0x8000, MDNS_DEFAULT_TTL, srvdata,
+        DNS_TYPE_SRV, DNS_CLASS_IN | 0x8000, ttl, srvdata,
         (UWORD)srvlen);
 
     txtlen = 0;
@@ -160,14 +163,14 @@ mdnsRegAnnounceService(struct MDNSEngineToken *tok, struct MDNSRegisteredService
         memcpy(txtdata + 1, rs->rs_TXT, (size_t)txtsl);
         txtlen = 1 + txtsl;
         mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, instfqdn,
-            DNS_TYPE_TXT, DNS_CLASS_IN | 0x8000, MDNS_DEFAULT_TTL, txtdata,
+            DNS_TYPE_TXT, DNS_CLASS_IN | 0x8000, ttl, txtdata,
             (UWORD)txtlen);
     } else {
         /* RFC 6763 section 6.1: an instance always has a TXT record; one
          * empty string when it has nothing to say. */
         txtdata[0] = 0;
         mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, instfqdn,
-            DNS_TYPE_TXT, DNS_CLASS_IN | 0x8000, MDNS_DEFAULT_TTL, txtdata,
+            DNS_TYPE_TXT, DNS_CLASS_IN | 0x8000, ttl, txtdata,
             (UWORD)1);
     }
 
@@ -185,13 +188,34 @@ mdnsRegAnnounceService(struct MDNSEngineToken *tok, struct MDNSRegisteredService
         addrdata[2] = (UBYTE)((tok->et_HostAddr >> 8) & 0xFF);
         addrdata[3] = (UBYTE)(tok->et_HostAddr & 0xFF);
         mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, hostfqdn,
-            DNS_TYPE_A, DNS_CLASS_IN | 0x8000, MDNS_DEFAULT_TTL, addrdata,
+            DNS_TYPE_A, DNS_CLASS_IN | 0x8000, ttl, addrdata,
             (UWORD)4);
     }
 
     hdr->flags = htons((unsigned short)(DNS_FLAG_QR | DNS_FLAG_AA));
     hdr->ancount = htons(ancount);
     mdnsNetSendMulticast(tok, pkt, pos);
+}
+
+void
+mdnsRegAnnounceService(struct MDNSEngineToken *tok, struct MDNSRegisteredService *rs)
+{
+    mdnsRegSendService(tok, rs, MDNS_DEFAULT_TTL);
+}
+
+/* Before the socket goes away: nobody should keep what this host offered. */
+void
+mdnsRegGoodbyeAll(struct MDNSEngineToken *tok)
+{
+    struct Node *n;
+
+    if (tok == NULL || tok->et_Socket < 0) {
+        return;
+    }
+    for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
+        n = n->ln_Succ) {
+        mdnsRegSendService(tok, (struct MDNSRegisteredService *)n, 0);
+    }
 }
 
 void
@@ -251,10 +275,12 @@ MDNSEngineRegister(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
     strcpy(rs->rs_Instance, msg->bim_Name);
     strcpy(rs->rs_Type, msg->bim_ServiceType);
     strcpy(rs->rs_Domain, msg->bim_Domain);
-    strcpy(rs->rs_HostTarget, tok->et_HostName);
+    mdnsRegBuildHostFqdn(rs->rs_HostTarget, (LONG)sizeof(rs->rs_HostTarget),
+        tok->et_HostName, MDNS_DOMAIN_LOCAL);
     strcpy(rs->rs_TXT, msg->bim_TXT);
     rs->rs_Port = msg->bim_Port;
     rs->rs_HostAddr = tok->et_HostAddr;
+    rs->rs_Task = msg->bim_Task;
 
     ref = mdnsEngineNextHandle(tok);
     rs->rs_ClientRef = ref;
@@ -300,7 +326,54 @@ MDNSEngineDeregister(struct MDNSEngineToken *tok, APTR ref)
      * (mdnsBrowseRemoveLocal takes the session lock), then free the service.
      */
     if (rs != NULL) {
+        mdnsRegSendService(tok, rs, 0);
         mdnsBrowseRemoveLocal(tok, rs);
         FreeMem(rs, sizeof(*rs));
     }
+}
+
+/* Withdraws every service a client registered. */
+void
+MDNSEngineReleaseServices(struct MDNSEngineToken *tok, struct Task *task)
+{
+    struct MDNSRegisteredService *rs;
+    struct Node *n;
+    struct Node *next;
+
+    if (tok == NULL || task == NULL) {
+        return;
+    }
+    for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
+        n = next) {
+        next = n->ln_Succ;
+        rs = (struct MDNSRegisteredService *)n;
+        if (rs->rs_Task == task) {
+            MDNSEngineDeregister(tok, rs->rs_ClientRef);
+        }
+    }
+}
+
+/*
+ * The socket was opened again, perhaps on another address or under another
+ * host name: every registration takes the host's current ones and is
+ * announced again.
+ */
+void
+mdnsRegHostChanged(struct MDNSEngineToken *tok)
+{
+    struct MDNSRegisteredService *rs;
+    struct Node *n;
+
+    if (tok == NULL) {
+        return;
+    }
+    for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
+        n = n->ln_Succ) {
+        rs = (struct MDNSRegisteredService *)n;
+        mdnsRegBuildHostFqdn(rs->rs_HostTarget, (LONG)sizeof(rs->rs_HostTarget),
+        tok->et_HostName, MDNS_DOMAIN_LOCAL);
+        rs->rs_HostAddr = tok->et_HostAddr;
+        mdnsBrowseAnnounceLocal(tok, rs);
+    }
+    mdnsRegAnnounceAll(tok);
 }

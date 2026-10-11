@@ -5,23 +5,41 @@ are derived from the Bonami revision pinned in `../bonami` and retain its BSD
 2-Clause license. They are copied here deliberately so the AROS contribution
 can be built and reviewed without requiring a nested checkout.
 
-The port currently provides:
+It has two parts:
 
-- AROS library entry points for the existing Bonami ABI;
-- a shared `mdns.task` using Exec message ports and `bsdsocket.library`;
-- registration, browsing, cache-based resolving, and status calls;
-- public headers installed by MetaMake; and
-- UDP multicast on the standard mDNS port 5353.
+- `mdnsd`, the one responder and browser of the host. The AROSTCP service
+  manager starts it from `db/services.d/mdns` and stops it with the stack;
+  it registers with `netservices.library` and, around a reconfiguration,
+  says goodbye, lets go of the stack and takes it up again with what the
+  applications had registered. It installs in
+  `SYS:System/Network/Services`. Started by hand it runs unmanaged until
+  Ctrl-C.
+- `bonami.library`, a thin client with the existing Bonami ABI. Every call is
+  a message to mdnsd's public port; the library holds no mDNS state and does
+  not open `bsdsocket.library`. Without mdnsd its calls return
+  `MDNSERR_NOENGINE`.
 
-Build the library and its small runtime diagnostic from an AROS build tree:
+A registration or a browse belongs to the task that made it. It ends with
+`DeregisterService()`/`StopBrowse()`, with `CloseMDNSEngine()`, or with the
+task's last `CloseLibrary()`; mdnsd then announces the service's goodbye and
+never calls that task's hook again. A task that ends without closing the
+library is not noticed. `CloseMDNSEngine()` no longer stops the engine for
+other callers.
+
+A browse hook still runs in mdnsd's process, as it ran in `mdns.task`: it
+must only copy the message and signal its own task.
+
+`<libraries/netservice.h>` is published by AROS under the GNU GPL version 2,
+while Bonami is BSD 2-Clause. Only `src/mdnsd_service.c` includes it; whether
+that header's license is meant to bind a daemon that merely registers is a
+question to settle with AROS before this goes upstream.
+
+Build from an AROS build tree:
 
 ```sh
-make contrib-aros-midihub-bonami
+make contrib-aros-midihub-bonami contrib-aros-midihub-mdnsd
 make contrib-aros-midihub-mdnsprobe
 ```
-
-The resulting files are `Libs/bonami.library` and
-`Extras/aros-midihub/C/BonamiProbe` in the AROS system tree.
 
 `BonamiProbe` without arguments opens the engine and prints its counters.
 `BonamiProbe REGISTER name [TYPE type] [PORT n] [BROWSE type] [SECONDS n]`
@@ -29,7 +47,8 @@ announces an instance and prints what a browse reports.
 
 `tools/bonami-hosted.sh` runs it on Linux-hosted AROS against the host's
 Avahi over a veth pair and checks that each side resolves the other's
-service. It passed on 2026-10-11 on x86-64. It needs the AROS network
+service and that the host sees the AROS service leave when its program
+only closes the library. It passed on 2026-10-11 on x86-64. It needs the AROS network
 patches in `patches/net-series`: before them AROSTCP delivered no IPv4
 multicast on a SANA-II interface and the hosted `eth.device` dropped it.
 
@@ -39,11 +58,16 @@ big-endian machine. Addresses inside the engine are numbers
 they meet a socket call or the public API; DNS fields are written byte by
 byte. The same source is correct on either byte order.
 
-Still missing, and next: probing and conflict handling, goodbyes,
-known-answer suppression, more than one interface, IPv6, and a host address
-record that arrives before the SRV record naming the host. The library
-cross-built for AArch64 before these changes; that build has not been
-repeated.
+mdnsd keeps what other hosts announce for the time their PTR record gives,
+drops it on a goodbye, and hands what it knows to a browse that starts
+later. It keeps host addresses by name, so an address record may come before
+the SRV record that names the host.
+
+Still missing, and next: probing and conflict handling before a name is
+announced, known-answer suppression, a query for an instance's SRV, TXT and
+address when only its PTR is known, more than one interface, following an
+address that changes without a reconfiguration, and IPv6. The cross-build for
+AArch64 has not been repeated since the split.
 
 AROS now provides a clean-room Envoy-compatible `nipc.library` and public
 `<envoy/nipc.h>` API. This initial port does not yet build Bonami's optional
@@ -51,8 +75,5 @@ inquiry bridge against them: the three NIPC compatibility functions remain in
 the ABI and return `MDNSERR_NOTREADY` until that separate integration is
 implemented and validated. Core mDNS/DNS-SD does not depend on NIPC.
 
-This first port preserves Bonami's single shared engine state. Before it is
-installed as a general system service, attachment ownership must be tracked
-per client so one caller cannot stop an engine still used by another caller.
 The protocol limitations and remaining interoperability work are listed in
 the parent [README](../README.md).

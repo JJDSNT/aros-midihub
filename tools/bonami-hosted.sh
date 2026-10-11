@@ -15,9 +15,12 @@
 # filled in) and to give the copied AROSBootstrap CAP_NET_RAW. The pair stays
 # until the host restarts.
 #
-# AROS registers ArosSvc and browses; the host publishes HostSvc and browses.
-# Needs a running avahi-daemon, avahi-utils, ethtool and xvfb-run.
-# Exit status: 0 when each side saw the other's service with its address.
+# mdnsd is started by the AROSTCP service manager. BonamiProbe registers
+# ArosSvc, browses, and ends without withdrawing anything; the host publishes
+# HostSvc and browses. Needs a running avahi-daemon, avahi-utils, ethtool and
+# xvfb-run.
+# Exit status: 0 when each side saw the other's service with its address and
+# the host saw the AROS one leave.
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -29,6 +32,8 @@ type=_bonamiprobe._udp
 test -x "$aros/boot/linux/AROSBootstrap"
 test -f "$aros/Libs/bonami.library"
 test -f "$aros/Extras/aros-midihub/C/BonamiProbe"
+test -f "$aros/System/Network/Services/mdnsd"
+test -f "$aros/System/Network/AROSTCP/db/services.d/mdns"
 test -f "$aros/Devs/networks/eth.device" || test -f "$aros/Devs/Networks/eth.device"
 
 if ! ip link show aroshost > /dev/null 2>&1; then
@@ -61,7 +66,8 @@ Path C S ADD QUIET
 Run >NIL: QUIET AROSTCP
 WaitForPort AROSTCP
 Wait 3
-SYS:Extras/aros-midihub/C/BonamiProbe REGISTER ArosSvc TYPE $type PORT 5004 BROWSE $type SECONDS 12 >SYS:bonami-probe.log
+SYS:Extras/aros-midihub/C/BonamiProbe REGISTER ArosSvc TYPE $type PORT 5004 BROWSE $type SECONDS 12 LEAK >SYS:bonami-probe.log
+Wait 4
 Shutdown
 EOF
 printf 'Run >NIL: Execute S:bonami-run\n' > "$sys/S/User-Startup"
@@ -87,5 +93,7 @@ check bonami-probe.log 'add "HostSvc" .* host .*\.local 192\.168\.166\.1 port 60
     "AROS resolved the host's service"
 check browse.log "^=;aroshost;IPv4;ArosSvc;$type;local;arosbox\.local;192\.168\.166\.2;5004;" \
     "Avahi resolved the AROS service"
+check browse.log "^-;aroshost;IPv4;ArosSvc;$type;local" \
+    "Avahi saw the AROS service leave when its program closed the library"
 echo "logs: $work"
 exit $status
