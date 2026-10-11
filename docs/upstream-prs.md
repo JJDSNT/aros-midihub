@@ -12,13 +12,14 @@ Branches of `JJDSNT/AROS` opened against `aros-development-team/AROS`
 | #1485 | `llvmpipe-link` | llvmpipe: link the target-side LLVM archives by path | merged |
 | #1506 | `bluetooth-le-stack-v2` | bluetooth: add remaining LE peripheral and GATT support | merged |
 | #1507 | `btmidi-class-v2` | bluetooth: add BLE MIDI class | open, reworked after review |
-| #1543 | `arostcp-ipv4-multicast` | AROSTCP: IPv4 multicast on SANA-II interfaces, with a netdb crash and hosted eth.device multicast | open |
+| #1543 | `arostcp-ipv4-multicast` | AROSTCP: IPv4 multicast on SANA-II interfaces, with a netdb crash and hosted eth.device multicast | merged, after two reviews |
+| #1558 | `arostcp-close-leaves-groups` | AROSTCP: a closing socket takes its group memberships with it | merged |
 
 #1543 is `patches/net/series` as three commits on upstream `51bffe65a4`
 (worktree `~/AROS-net`). Before it was sent, AROSTCP and the mDNS components
 were rebuilt on hosted AROS against that head and `tools/bonami-hosted.sh`
-passed against Avahi. When it is merged, remove the patches and the
-series.
+passed against Avahi. It was merged on 2026-10-11 as fourteen commits, and
+the patches are gone from here.
 
 The maintainer reviewed it the same day
 ([comment](https://github.com/aros-development-team/AROS/pull/1543#issuecomment-6112953952)
@@ -69,8 +70,8 @@ into on the same day, it was two defects:
   options under `#ifdef ENABLE_MUPTICAST`, a misspelling, so a closed socket
   never left its groups and the host went on answering IGMP queries for
   them. That is why the first defect did not show on the interface that
-  stayed. Fixed as `net/aros-arostcp-close-frees-memberships.patch`, and as
-  a local commit on the PR branch (`4656837da6`) that is not pushed yet.
+  stayed. #1543 was merged before this could join it, so it went upstream
+  as #1558 and was merged the same day.
 
 `tools/igmp-reload-hosted.sh` now checks both: mdnsd has to be in its group
 on both interfaces after the reloads and to have announced it again, and a

@@ -1,17 +1,3 @@
 # Network patches in apply order, one name per line: patches/net/aros-<name>.patch
-# Base: AROS upstream master 51bffe65a4 (2026-10-11). Independent of camd-series.
-arostcp-netdb-unknown-keyword
-eth-unix-multicast
-arostcp-ipv4-multicast
-arostcp-sana-cflags-only
-arostcp-ether-mcast-test
-arostcp-all-hosts-group
-arostcp-s2-multicast
-arostcp-multicast-no-route
-net-if-flags-unsigned
-eth-unix-multicast-filter
-arostcp-sana2arp-own-header
-arostcp-run-dhcp-softc
-arostcp-in-ifdetach
-eth-unix-multicast-free
-arostcp-close-frees-memberships
+# Base: AROS upstream master 95a501ff47 (2026-10-11). Nothing is carried:
+# the patches that were here are AROS PR #1543 and #1558, both merged.

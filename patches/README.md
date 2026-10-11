@@ -1,6 +1,6 @@
 # AROS patches
 
-**Base:** AROS upstream `master` at `51bffe65a4` (11 October 2026). The AROS
+**Base:** AROS upstream `master` at `95a501ff47` (11 October 2026). The AROS
 tree used here is `~/AROS`, branch `midihub/upstream-2026-10-11`.
 
 ## Now in upstream
@@ -288,27 +288,11 @@ disposable and is not a build dependency.
 
 ## Network patches
 
-`patches/net/series` lists patches that are independent of CAMD and of each
-other in purpose. `make check-patches` applies both series. They were sent
-upstream on 2026-10-11 as AROS PR #1543 and stay here until it is merged. They were found
-while running Bonami on hosted AROS (`tools/bonami-hosted.sh`), and compile
-for amiga-m68k and raspi-aarch64 as well.
-
-| Patch | What it fixes |
-|---|---|
-| `net/aros-arostcp-netdb-unknown-keyword.patch` | An unknown keyword in a netdb file crashed the stack: `FindArg()`'s -1 was kept in an enum the compiler made unsigned and then used as an index into the table of parsers. |
-| `net/aros-eth-unix-multicast.patch` | The hosted `eth.device` dropped every received multicast frame and refused `S2_MULTICAST`, `S2_ADDMULTICASTADDRESS` and `S2_DELMULTICASTADDRESS`. The host interface is opened promiscuous, so there is no filter to program. |
-| `net/aros-arostcp-sana-cflags-only.patch` | Review of PR #1543: the configuration flags moved to `ss_cflags` were written through a cast into tunnel interfaces, which are a `struct stf_softc`. `sana_softc_of()` gives the SANA-II interface or NULL. |
-| `net/aros-arostcp-ether-mcast-test.patch` | Review: three different tests for "Ethernet" decided where a group has a link address. One, `sana_ether_mcast()`; `IFF_MULTICAST` on Ethernet only; `arpresolve()` uses the exported `in_mcast_macaddr()`. |
-| `net/aros-arostcp-all-hosts-group.patch` | Review: nothing joined 224.0.0.1, so IGMP General Queries were dropped and a membership timed out at the switch. `in_ifinit()` joins it. `tools/igmp-hosted.sh` tests it. |
-| `net/aros-arostcp-s2-multicast.patch` | Review: a group's frames went out as `CMD_WRITE`; they now use `S2_MULTICAST` and count in `if_omcasts`. |
-| `net/aros-arostcp-multicast-no-route.patch` | Review: a socket that only joined a group could not send without a route. The first membership's interface is used when there is none. |
-| `net/aros-net-if-flags-unsigned.patch` | Review: `if_flags` and `ifr_flags` were `short`, so `IFF_MULTICAST` (0x8000) was the sign bit. |
-| `net/aros-eth-unix-multicast-filter.patch` | Review: the hosted `eth.device` passed every group on the host's network up to the stack. It keeps the addresses its clients asked for and filters by them. |
-| `net/aros-arostcp-sana2arp-own-header.patch` | Second review of PR #1543: `net/sana2arp.c` got the public `in_var.h`, so `in_mcast_macaddr()` was implicitly declared. It names the stack's header relative to itself and stops the compiler otherwise. |
-| `net/aros-arostcp-run-dhcp-softc.patch` | Second review, cosmetic: `run_dhcp()` cast the interface by hand with the softc in scope. |
-| `net/aros-arostcp-in-ifdetach.patch` | Second review: `if_detach()` left group memberships naming the freed interface, so one removed and added again by a reload looked joined to the all-hosts group and the device was never told. `in_ifdetach()` releases the interface's own membership and cuts the sockets' loose. `tools/igmp-reload-hosted.sh` tests it. |
-| `net/aros-eth-unix-multicast-free.patch` | Second review: the hosted `eth.device` did not free its multicast address list with the unit. |
-| `net/aros-arostcp-close-frees-memberships.patch` | Found with mdnsd: `in_pcbdetach()` freed a socket's multicast options under the misspelt `ENABLE_MUPTICAST`, so a closed socket never left its groups. Not in PR #1543 yet. |
-| `net/aros-arostcp-ipv4-multicast.patch` | IPv4 multicast on a SANA-II interface. `IFF_MULTICAST` was never set, and its bit was used for a private flag, now in `ss_cflags`; a group had no Ethernet address (RFC 1112 section 6.4); `ip_input()` had no case for a joined group; and a sender that chose its interface with `IP_MULTICAST_IF` still needed a route. |
-
+None is carried. The fifteen that were in `patches/net` are upstream: AROS PR
+#1543 (IPv4 multicast on SANA-II interfaces, the hosted `eth.device`, a
+netdb crash, and the fixes its two reviews asked for) and #1558 (a closing
+socket leaves its groups). `patches/net/series` stays, empty, and
+`make check-patches` still checks that the network sources of the AROS tree
+carry no local change. The tests written for them stay too:
+`tools/bonami-hosted.sh`, `tools/igmp-hosted.sh` and
+`tools/igmp-reload-hosted.sh`.
