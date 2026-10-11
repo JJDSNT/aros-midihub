@@ -14,6 +14,7 @@
 #include <exec/types.h>
 #include <exec/memory.h>
 #include <exec/ports.h>
+#include <exec/execbase.h>
 #include <dos/dos.h>
 #include <string.h>
 
@@ -30,8 +31,8 @@
 #include "private/bonami_ipc.h"
 #include "private/mdnsd_service.h"
 
-/* Seconds between attempts to open the socket while the host has no usable
- * address yet. */
+/* Seconds between looks at the stack's interfaces: for the first address,
+ * for one that changed, for an interface that came or went. */
 #define MDNSD_RETRY_SECONDS 3
 
 static int engineErrno;
@@ -118,6 +119,7 @@ token_create(void)
     NewList(&tok->et_Queries);
     NewList(&tok->et_Lookups);
     tok->et_Socket = -1;
+    tok->et_SendIf = -1;
     tok->et_NextHandle = 1;
     tok->et_QueryId = 1;
     tok->et_UdpPort = (UWORD)MDNS_DNS_PORT;
@@ -130,6 +132,83 @@ token_create(void)
         return NULL;
     }
     return tok;
+}
+
+/* Seconds between looks for clients that ended without closing the library. */
+#define MDNSD_REAP_SECONDS 5
+#define MDNSD_REAP_MAX 16
+
+static BOOL
+task_alive(struct Task *task)
+{
+    struct Node *n;
+    BOOL alive = FALSE;
+
+    Disable();
+    for (n = SysBase->TaskReady.lh_Head; n->ln_Succ != NULL && !alive;
+        n = n->ln_Succ) {
+        alive = n == &task->tc_Node;
+    }
+    for (n = SysBase->TaskWait.lh_Head; n->ln_Succ != NULL && !alive;
+        n = n->ln_Succ) {
+        alive = n == &task->tc_Node;
+    }
+    Enable();
+    return alive;
+}
+
+static void
+note_owner(struct Task **dead, LONG *count, struct Task *task)
+{
+    LONG i;
+
+    if (task == NULL || task == FindTask(NULL) || *count >= MDNSD_REAP_MAX) {
+        return;
+    }
+    for (i = 0; i < *count; i++) {
+        if (dead[i] == task) {
+            return;
+        }
+    }
+    if (!task_alive(task)) {
+        dead[(*count)++] = task;
+    }
+}
+
+/*
+ * A client that ends without closing bonami.library sends no release. What
+ * it left would be announced for ever and its hooks would be called in
+ * memory that is no longer its own, so the owners are checked against the
+ * system's task lists now and then. A task that started at the same address
+ * as one that ended is taken for it; nothing here can tell them apart.
+ */
+static void
+reap_dead_clients(struct MDNSEngineToken *tok)
+{
+    struct Task *dead[MDNSD_REAP_MAX];
+    struct Node *n;
+    LONG count = 0, i;
+
+    for (n = tok->et_Services.lh_Head; n->ln_Succ != NULL; n = n->ln_Succ) {
+        note_owner(dead, &count, ((struct MDNSRegisteredService *)n)->rs_Task);
+    }
+    for (n = tok->et_BrowseSessions.lh_Head; n->ln_Succ != NULL;
+        n = n->ln_Succ) {
+        note_owner(dead, &count, ((struct MDNSBrowseSession *)n)->bs_Task);
+    }
+    for (n = tok->et_Queries.lh_Head; n->ln_Succ != NULL; n = n->ln_Succ) {
+        note_owner(dead, &count, ((struct MDNSQuerySession *)n)->qs_Task);
+    }
+    for (n = tok->et_InquirySessions.lh_Head; n->ln_Succ != NULL;
+        n = n->ln_Succ) {
+        note_owner(dead, &count, ((struct MDNSInquirySession *)n)->is_Task);
+    }
+    for (i = 0; i < count; i++) {
+        MDNSEngineReleaseServices(tok, dead[i]);
+        MDNSEngineReleaseBrowses(tok, dead[i]);
+        MDNSEngineReleaseQueries(tok, dead[i]);
+        MDNSEngineReleaseInquiries(tok, dead[i]);
+    }
 }
 
 /* The stack's base and the socket belong to this task and go away together:
@@ -162,14 +241,15 @@ net_up(struct MDNSEngineToken *tok)
             SBTM_SETREF(SBTC_LOGTAGPTR), (IPTR)"mdnsd",
             TAG_END);
     }
-    if (tok->et_Socket < 0 && mdnsNetOpen(tok) == MDNS_OK) {
-        /* The host's name or address may be new: tell the link again. */
+    /* An interface came, went or changed its address: the host's records
+     * are told to the links again with the addresses as they are now. */
+    if (mdnsNetRescan(tok)) {
         mdnsRegHostChanged(tok);
     }
 }
 
-/* Waits for a signal, a datagram, or a second to pass: a quarter of one
- * while a name is being probed. */
+/* Waits for a signal, a datagram on any interface, or a second to pass: a
+ * quarter of one while a name is being probed. */
 static ULONG
 wait_and_receive(struct MDNSEngineToken *tok, ULONG sigmask, BOOL probing)
 {
@@ -178,7 +258,7 @@ wait_and_receive(struct MDNSEngineToken *tok, ULONG sigmask, BOOL probing)
     struct timeval tv;
     socklen_t fromlen;
     fd_set readfds;
-    LONG sock = tok->et_Socket;
+    LONG i, sock, top = -1;
     int got;
 
     if (SocketBase == NULL) {
@@ -187,28 +267,35 @@ wait_and_receive(struct MDNSEngineToken *tok, ULONG sigmask, BOOL probing)
     }
 
     FD_ZERO(&readfds);
-    tv.tv_sec = 1;
-    tv.tv_usec = 0;
-    if (sock < 0) {
-        tv.tv_sec = MDNSD_RETRY_SECONDS;
-        WaitSelect(0, NULL, NULL, NULL, &tv, &sigmask);
+    tv.tv_sec = probing ? 0 : 1;
+    tv.tv_usec = probing ? 250000 : 0;
+    for (i = 0; i < tok->et_IfCount; i++) {
+        sock = tok->et_Ifs[i].mi_Socket;
+        FD_SET(sock, &readfds);
+        if (sock > top) {
+            top = sock;
+        }
+    }
+    if (WaitSelect(top + 1, top >= 0 ? &readfds : NULL, NULL, NULL, &tv,
+            &sigmask) <= 0) {
         return sigmask;
     }
 
-    if (probing) {
-        tv.tv_sec = 0;
-        tv.tv_usec = 250000;
-    }
-    FD_SET(sock, &readfds);
-    if (WaitSelect(sock + 1, &readfds, NULL, NULL, &tv, &sigmask) > 0 &&
-        FD_ISSET(sock, &readfds)) {
+    for (i = 0; i < tok->et_IfCount; i++) {
+        sock = tok->et_Ifs[i].mi_Socket;
+        if (!FD_ISSET(sock, &readfds)) {
+            continue;
+        }
         fromlen = sizeof(from);
         got = recvfrom(sock, (char *)tok->et_RxBuf, MDNS_MAX_PACKET, 0,
             (struct sockaddr *)&from, &fromlen);
         if (got > 0) {
             tok->et_RxPackets++;
+            /* what this packet causes to be sent goes back to its link */
+            tok->et_SendIf = i;
             MDNSEngineHandlePacket(tok, tok->et_RxBuf, (LONG)got,
                 (ULONG)ntohl((unsigned long)from.sin_addr.s_addr));
+            tok->et_SendIf = -1;
         }
     }
     return sigmask;
@@ -224,6 +311,8 @@ main(void)
     ULONG portmask, got;
     BOOL running = TRUE;
     BOOL probing = FALSE;
+    ULONG lastReap = 0;
+    ULONG lastScan = 0;
 
     /* One responder owns the host's names. */
     Forbid();
@@ -268,14 +357,23 @@ main(void)
             net_down(tok);
         }
         if ((got & sig.ms_End) ||
-            (tok->et_SocketBase != NULL && tok->et_Socket < 0)) {
-            net_up(tok);
+            mdnsEngineNow() - lastScan >= MDNSD_RETRY_SECONDS) {
+            lastScan = mdnsEngineNow();
+            if (!(got & sig.ms_Begin) &&
+                (tok->et_SocketBase != NULL || (got & sig.ms_End))) {
+                net_up(tok);
+            }
         }
 
         while ((msg = (struct MDNSIPCMsg *)GetMsg(port)) != NULL) {
             if (MDNSEngineDispatch(tok, msg)) {
                 ReplyMsg(&msg->bim_Msg);
             }
+        }
+
+        if (running && mdnsEngineNow() - lastReap >= MDNSD_REAP_SECONDS) {
+            lastReap = mdnsEngineNow();
+            reap_dead_clients(tok);
         }
 
         probing = FALSE;

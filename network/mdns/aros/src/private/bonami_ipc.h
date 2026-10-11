@@ -38,6 +38,9 @@
  * instance is named after the host and replaces the task's earlier one. */
 #define BONAMI_REGF_NIPC        0x80000000UL
 
+/* bim_Flags of BONAMI_MSG_UPDATE: bim_TXT replaces the service's text. */
+#define BONAMI_UPDF_TXT         0x00000001UL
+
 struct MDNSIPCMsg
 {
     struct Message  bim_Msg;

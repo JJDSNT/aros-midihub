@@ -1,167 +1,258 @@
-# Bonami AROS port
+# Bonami for AROS
 
-This directory contains the native AROS port of `bonami.library`. The sources
-are derived from the Bonami revision pinned in `../bonami` and retain its BSD
-2-Clause license. They are copied here deliberately so the AROS contribution
-can be built and reviewed without requiring a nested checkout.
+A system-wide mDNS/DNS-SD service for AROS, ported from
+[amigazen Bonami](https://github.com/amigazen/Bonami) at the revision pinned
+in `../bonami`. The sources keep Bonami's BSD 2-Clause license and are copied
+here so that the port can be built and reviewed without a nested checkout.
 
-It has two parts:
+State on 2026-10-11: it runs on Linux-hosted AROS (x86-64), where
+`tools/bonami-hosted.sh` checks it against Avahi in 24 ways. It compiles for
+amiga-m68k and raspi-aarch64 and has not been run there.
 
-- `mdnsd`, the one responder and browser of the host. The AROSTCP service
-  manager starts it from `db/services.d/mdns` and stops it with the stack;
-  it registers with `netservices.library` and, around a reconfiguration,
-  says goodbye, lets go of the stack and takes it up again with what the
-  applications had registered. It installs in
-  `SYS:System/Network/Services`. Started by hand it runs unmanaged until
-  Ctrl-C.
-- `bonami.library`, a thin client with the existing Bonami ABI. Every call is
-  a message to mdnsd's public port; the library holds no mDNS state and does
-  not open `bsdsocket.library`. Without mdnsd its calls return
-  `MDNSERR_NOENGINE`.
+## What is here
 
-A registration or a browse belongs to the task that made it. It ends with
-`DeregisterService()`/`StopBrowse()`, with `CloseMDNSEngine()`, or with the
-task's last `CloseLibrary()`; mdnsd then announces the service's goodbye and
-never calls that task's hook again. A task that ends without closing the
-library is not noticed. `CloseMDNSEngine()` no longer stops the engine for
-other callers.
+| Path | What it is |
+|---|---|
+| `src/mdnsd*.c`, `src/mdns_*.c` | `mdnsd`, the daemon: the host's one responder and browser |
+| `src/bonami_*.c`, `bonami.conf` | `bonami.library`, the client library with Bonami's ABI |
+| `include/` | public headers: `<bonami/mdns.h>`, `<bonami/nipc.h>`, `<libraries/bonamibase.h>` |
+| `services.d/mdns` | the AROSTCP service manager's entry for the daemon |
+| `tools/` | `Nearby`, `Handshake`, `Share`, `dnssd` |
+| `commodity/` | `Bonami`, the GadTools commodity |
 
-A browse hook still runs in mdnsd's process, as it ran in `mdns.task`: it
-must only copy the message and signal its own task.
+`ports/aros/mdns_probe.c` in the repository's root builds `BonamiProbe`, the
+program the test drives.
 
-`<libraries/netservice.h>` is published by AROS under the GNU GPL version 2,
-while Bonami is BSD 2-Clause. Only `src/mdnsd_service.c` includes it; whether
-that header's license is meant to bind a daemon that merely registers is a
-question to settle with AROS before this goes upstream.
+## How it fits together
 
-Build from an AROS build tree:
+```text
+application ── bonami.library ──┐
+application ── bonami.library ──┼── message port "BonAmi" ── mdnsd ── bsdsocket.library
+tools, commodity ───────────────┘                              │
+                                                    one UDP 5353 socket
+                                                    for each interface
+```
+
+Upstream Bonami runs its engine as a task inside the library, started by the
+first caller and stopped by the last. On AROS the engine is a daemon:
+
+- **mdnsd** is started by the AROSTCP service manager from
+  `db/services.d/mdns` and registers with `netservices.library`. Around a
+  reconfiguration of the stack it says goodbye for what it announced, lets go
+  of `bsdsocket.library`, and afterwards takes it up again with what the
+  applications had registered. It installs in `SYS:System/Network/Services`.
+  Started by hand it runs unmanaged until Ctrl-C.
+- **bonami.library** holds no mDNS state and does not open
+  `bsdsocket.library`. Every call is a message to mdnsd's public port and
+  waits for the reply. Without mdnsd a call returns `MDNSERR_NOENGINE`.
+
+A registration, browse, query or inquiry belongs to the task that made it.
+It ends when the task withdraws it, calls `CloseMDNSEngine()`, or closes the
+library for the last time. `CloseMDNSEngine()` therefore no longer stops the
+engine for other callers. A task that ends without closing the library is
+found by mdnsd within about five seconds, which compares the owners with the
+system's task lists; a new task that starts at the same address as the dead
+one is taken for it.
+
+A hook given to the library is called in mdnsd's process, as upstream calls
+it in `mdns.task`. It may only copy what it is given and signal its own
+task; it must not print or call the library.
+
+## Building
+
+From an AROS build tree with this repository linked into `contrib/extras`:
 
 ```sh
 make contrib-aros-midihub-bonami contrib-aros-midihub-mdnsd
-make contrib-aros-midihub-mdnstools contrib-aros-midihub-mdnsprobe
+make contrib-aros-midihub-mdnstools contrib-aros-midihub-mdnscx
+make contrib-aros-midihub-mdnsprobe
 ```
 
-## Additions to the Bonami API
+The AROS tree needs the patches in `patches/net-series`; see
+`patches/README.md`. Without them AROSTCP delivers no IPv4 multicast on a
+SANA-II interface.
 
-The AROS library is version 40.2 and adds, after the existing functions:
+The library and the daemon install where the system looks for them. The
+tools, the commodity and the probe install in `Extras/aros-midihub/C` while
+this is incubating.
+
+## The network side
+
+mdnsd has one socket for each interface that is up, can multicast and has an
+IPv4 address, bound to it with `SO_BINDTODEVICE`. It looks at the stack's
+interfaces every three seconds: one that appears gets a socket, one that
+disappears or changes its address loses it, and after any change the host's
+records are announced again.
+
+- What is heard on a link is answered on that link.
+- An address record carries the address of the interface it is sent on.
+- A host reachable over two links has an address on each. The one heard first
+  is kept while its link is there, so that a browse is not told a new address
+  with every answer.
+- mdnsd does not receive what it sends (multicast loopback is off) and ignores
+  any packet from one of the host's own addresses.
+
+Of RFC 6762 and RFC 6763 it does this much:
+
+- A service name is probed three times, 250 ms apart, and then announced
+  twice. If another host answers for it, the service becomes "Name (2)",
+  "Name (3)" and so on and is probed again. The same happens when another
+  host later sends an SRV or TXT record for a name already announced.
+- It answers PTR questions for a type, SRV, TXT and ANY questions for an
+  instance, A questions for the host, and the `_services._dns-sd._udp`
+  enumeration. A PTR record the asker lists as known is not sent again.
+- PTR and TXT records live 75 minutes, SRV and address records two. A
+  service that is withdrawn, and everything when mdnsd stops, gets a goodbye.
+- A service's text is `key=value` pairs separated by spaces; each pair is
+  sent as a TXT string of its own, and the strings of a received record are
+  joined the same way.
+- What other hosts announce is kept for the time their PTR record gives and
+  dropped on a goodbye. A browse that starts later is told what is known.
+- A browse asks after 1, 2, 4... seconds and then once a minute, the first
+  time allowing a unicast answer. An instance known only by its PTR record
+  is asked for the rest, and a host without a known address for its address.
+
+Internally an address is a number (`0xAABBCCDD` is A.B.C.D), converted with
+`htonl()`/`ntohl()` where it meets a socket call or the public API, and DNS
+fields are written byte by byte. The same source is right on either byte
+order; upstream's was only right on a big-endian machine.
+
+## API
+
+The library keeps Bonami's functions at their offsets. `RegisterServiceA()`
+returns before the name has been probed, so a client is not told the name its
+service finally got; a browse is.
+
+`UpdateServiceA(ref, tags)` changes the text (`MDNS_TXTRecord`) or the port
+(`MDNS_Port`) of a registered service; a tag that is not given leaves its
+value alone. `StopResolve()` does nothing, because `ResolveServiceA()` answers
+at once from what is known, or returns `MDNSERR_NOTFOUND` and asks the link,
+so that a caller tries again.
+
+### Additions
+
+The AROS library is version 40.2 and adds, after Bonami's functions:
 
 | Addition | What it does |
 |---|---|
-| `LookupHostA(host, &addr, tags)` | Waits for a host's IPv4 address, at most `MDNS_Timeout` seconds (default 3). `addr` is in network byte order. A name without a dot is taken in `.local`. |
+| `LookupHostA(host, &addr, tags)` | Waits for a host's IPv4 address, at most `MDNS_Timeout` seconds (default 3). `addr` is in network byte order. A name without a dot is taken in `.local`. This host's own name is answered without asking. |
 | `QueryRecordA(name, rrtype, hook, tags)`, `StopQuery(ref)` | A standing question for any record. Each answer goes to the hook as a `struct MDNSRecordMsg`; names inside PTR and SRV data are written out in full. |
 | `MDNS_HostName` with `MDNS_HostAddr` in `RegisterServiceA()` | Registers a service for another host, which need not speak mDNS itself. |
 
 They close the three "dns-sd feature gaps" of Bonami's `TODO.md` and are
-meant to be offered to Bonami, not to stay an AROS dialect. mdnsd does not
-hear its own answers, so a question about one of this host's own services
-gets none; `LookupHostA()` does know this host's name.
+meant to be offered to Bonami, not to stay an AROS dialect.
 
-## Tools
+### Envoy bridge
 
-`tools/` holds Bonami's command-line front ends, ported from
-`SDK/Examples` of the pinned revision: `Nearby` (browse), `Handshake`
-(resolve), `Share` (advertise) and `dnssd`, which gains `-P`, `-q` and `-G`
-from the additions above. They install in `Extras/aros-midihub/C` for now.
-What changed for AROS is in `ba_common.h`: hooks are declared with
-`BA_HOOK()`, output goes through `VNewRawDoFmt()`, and addresses are printed
-byte by byte, so the same source builds for every AROS architecture.
-
-`commodity/` holds Bonami's GadTools commodity, `Bonami`: Nearby, Handshake
-and Share in one window, opened with `CX_POPUP=YES`, from Exchange, or with
-Ctrl-Alt-N. Build it with `make contrib-aros-midihub-mdnscx`.
-
-![The Bonami commodity on hosted AROS](../../../docs/images/bonami-commodity.png)
-
-On hosted AROS it was driven by hand on 2026-10-11 (no automatic test): the
-list of kinds, the instances of one kind from this host and from Avahi, and
-a Handshake that filled in host, address, port and text. In the Share row
-the "Port" label overlaps the kind gadget with AROS's default font; the
-layout uses fixed positions from the original. On AROS the startup code
-opens the libraries and provides `WBenchMsg`, so the program's own
-`OpenLibrary()` calls are gone; values that GadTools writes through a
-pointer are `IPTR`.
-
-In the shell a `key=value` argument of `Share` needs quotes
-(`Share Name web 80 "path=/"`): `ReadArgs()` otherwise takes the `=` as a
-separator. Each pair becomes a TXT string of its own; a value cannot contain
-a space.
-
-`BonamiProbe` without arguments opens the engine and prints its counters.
-`BonamiProbe REGISTER name [TYPE type] [PORT n] [BROWSE type] [SECONDS n]`
-announces an instance and prints what a browse reports.
-
-`tools/bonami-hosted.sh` runs it on Linux-hosted AROS against the host's
-Avahi over a veth pair and checks that each side resolves the other's
-service and that the host sees the AROS service leave when its program
-only closes the library, that a name the host already has is taken as
-"Name (2)", and that each tool does its part: 13 checks. It passed on
-2026-10-11 on x86-64. It needs the AROS network
-patches in `patches/net-series`: before them AROSTCP delivered no IPv4
-multicast on a SANA-II interface and the hosted `eth.device` dropped it.
-
-The first native run found that the port had only ever been right on a
-big-endian machine. Addresses inside the engine are numbers
-(`0xAABBCCDD` is A.B.C.D) and are converted with `htonl()`/`ntohl()` where
-they meet a socket call or the public API; DNS fields are written byte by
-byte. The same source is correct on either byte order.
-
-mdnsd keeps what other hosts announce for the time their PTR record gives,
-drops it on a goodbye, and hands what it knows to a browse that starts
-later. It keeps host addresses by name, so an address record may come before
-the SRV record that names the host.
-
-Of RFC 6762 and 6763 mdnsd does this much:
-
-- A name is probed three times before it is announced, then announced
-  twice. If another host answers for it, the service becomes "Name (2)",
-  "Name (3)" and so on, and is probed again. `RegisterServiceA()` returns
-  before that; the client is not told the final name, a browse is.
-- It answers PTR questions for a type, SRV, TXT and ANY questions for an
-  instance, A questions for the host, and the `_services._dns-sd._udp`
-  enumeration. A PTR record the asker lists as known is not sent again.
-- PTR and TXT records live 75 minutes, SRV and address records two; a
-  withdrawn service says goodbye.
-- A browse asks after 1, 2, 4... seconds and then once a minute, the first
-  time allowing a unicast answer. An instance known only by its PTR record
-  is asked for its other records, and a host without a known address for
-  its address.
-
-Still missing: defending a name that is already announced, the tie-break
-between two hosts probing the same name at once, probing the host name,
-known answers in mdnsd's own questions, delayed and aggregated responses,
-more than one interface, following an address that changes without a
-reconfiguration, and IPv6. The cross-build for AArch64 has not been repeated
-since the split.
-
-## Envoy bridge
-
-Bonami's three Envoy entry points work in this port, on Bonami's side only:
+Bonami's three Envoy entry points work, on Bonami's side:
 
 - `PublishNIPCEntitiesA(tags)` announces this host as one instance of
   `_envoy-nipc._tcp`, named after the host, on port 376 unless
   `MDNS_NIPC_Port` says otherwise. Its TXT record lists `MDNS_NIPC_Entity`,
   `MDNS_NIPC_Service` and `MDNS_NIPC_Owner` as `entity=`, `service=` and
-  `owner=`. A task has one publication; a second call replaces it and
-  `UnpublishNIPCEntitiesA()` or the task's last close withdraws it. A name
-  with a space, or more names than the 256 characters of text hold, is
-  refused.
+  `owner=`. A task has one publication; a second call replaces it, and
+  `UnpublishNIPCEntitiesA()` or the task's last close withdraws it.
 - `InquiryFromNIPCTagsA(hook, maxTime, maxResponses, tags)` takes the tags of
   `NIPCInquiryA()`. It matches `MATCH_ENTITY`, `MATCH_SERVICE`, `MATCH_OWNER`,
   `MATCH_HOSTNAME` and `MATCH_IPADDR` and answers `QUERY_HOSTNAME`,
-  `QUERY_IPADDR`, `QUERY_ENTITY`, `QUERY_SERVICE` and `QUERY_OWNER`; what
-  DNS-SD cannot tell (memory, versions, realms) is neither matched nor
-  answered. Each host answers once. The hook is called as `nipc.library`
-  calls it: a tag list per host, a zero return ends the inquiry, and a last
-  call with NULL comes at the response limit or when the time is up. A
-  `maxTime` of zero gives up the oldest inquiry with that hook.
+  `QUERY_IPADDR`, `QUERY_ENTITY`, `QUERY_SERVICE` and `QUERY_OWNER`. Each host
+  answers once. The hook is called as `nipc.library` calls it: a tag list for
+  each host, a zero return ends the inquiry, and a last call with NULL comes
+  at the response limit or when the time is up. A `maxTime` of zero gives up
+  the oldest inquiry with that hook.
 
 mdnsd repeats the Envoy tag values instead of including `<envoy/nipc.h>`, so
-core mDNS still builds and runs without Envoy.
+it builds and runs without Envoy. AROS's `nipc.library` does not call these
+functions; `docs/nipc-envoy-future.md` says how the two could be joined.
 
-What is missing is the other half: AROS's `nipc.library` does not call these
-functions. Its `NIPCInquiryA()` asks by broadcast on UDP port 376 and it
-announces nothing over DNS-SD. See `docs/nipc-envoy-future.md` for how the
-two can be joined.
+## Tools and commodity
 
-The protocol limitations and remaining interoperability work are listed in
-the parent [README](../README.md).
+`tools/` holds Bonami's command-line front ends, ported from `SDK/Examples`:
+
+- `Nearby [TYPE] [ALL] [TIME n] [RAW] [PORTS]` lists the kinds of service on
+  the network, or the instances of one kind.
+- `Handshake NAME TYPE [TIME n]` resolves one instance.
+- `Share NAME TYPE PORT [TEXT...] [QUIET]` announces a service until Ctrl-C.
+- `dnssd` follows Apple's `dns-sd`: `-B`, `-L`, `-R`, `-Z`, `-E`, `-F`, `-V`,
+  and, through the additions above, `-P` (register for another host), `-q`
+  (ask for any record) and `-G v4` (look up a host).
+
+A type may be a plain word (`web`, `printer`, `ssh`...) or a DNS-SD type. In
+the shell a `key=value` argument needs quotes (`Share Name web 80 "path=/"`),
+because `ReadArgs()` otherwise takes the `=` as a separator.
+
+`commodity/` holds `Bonami`, the GadTools commodity with Nearby, Handshake
+and Share in one window, opened with `CX_POPUP=YES`, from Exchange, or with
+Ctrl-Alt-N.
+
+![The Bonami commodity on hosted AROS](../../../docs/images/bonami-commodity.png)
+
+What changed in these for AROS is small and in one place, `tools/ba_common.h`:
+hooks are declared with `BA_HOOK()`, formatted output goes through
+`VNewRawDoFmt()`, and an address is printed byte by byte. In the commodity
+the AROS startup code opens the libraries, and the values GadTools writes
+through a pointer are `IPTR`.
+
+## Testing
+
+`tools/bonami-hosted.sh` boots Linux-hosted AROS on two veth links with the
+host's Avahi on the other end of both, and checks 24 things:
+
+- each side resolves the other's service, on both links, with each link's
+  address;
+- an interface's address changes and the next service is announced with the
+  new one, while the other interface keeps its own;
+- a program that only closes the library has its service withdrawn; a task
+  that ends without closing it has its service withdrawn by mdnsd;
+- a name the host already has is taken as "Name (2)", and a name another
+  host claims after it was announced is given up the same way;
+- `UpdateServiceA()` changes a text; `Share`, `Nearby`, `Handshake` and
+  `dnssd -P`, `-G`, `-q` do their part, and `Share` says goodbye on Ctrl-C;
+- the Envoy bridge publishes this host and finds the host that has an entity.
+
+It needs passwordless sudo, a running `avahi-daemon`, `avahi-utils`,
+`ethtool` and `xvfb-run`.
+
+The commodity has no automatic test. It was driven by hand on hosted AROS:
+the list of kinds, the instances of one kind from this host and from Avahi,
+and a Handshake that filled in host, address, port and text. Its Share panel,
+its hot key and Exchange were not tried.
+
+Nothing here has been run on m68k or AArch64, against Apple's Bonjour, or
+between two AROS systems.
+
+## Known limits
+
+Protocol:
+
+- The host name itself is not probed; only service names are.
+- Two hosts that probe the same name at the same moment are not told apart
+  by the tie-break of RFC 6762 section 8.2.
+- mdnsd's own questions do not list the answers it already has, and its
+  answers are sent at once rather than delayed and gathered.
+- IPv4 only.
+- At most eight interfaces. An address that changes is noticed within three
+  seconds, not at once.
+
+Library and daemon:
+
+- A client is not told the final name of its service.
+- A question about one of this host's own services gets no answer through
+  `QueryRecordA()`, since mdnsd does not hear itself.
+- A value in a service's text cannot contain a space, and the whole text is
+  at most 256 characters.
+- The Envoy bridge is not matched or answered for what DNS-SD cannot tell
+  (memory, versions, realms).
+
+Tools and commodity:
+
+- In the commodity's Share row the "Port" label overlaps the kind gadget
+  with AROS's default font; the layout uses the original's fixed positions.
+
+License:
+
+- `<libraries/netservice.h>` is published by AROS under the GNU GPL
+  version 2, while Bonami is BSD 2-Clause. Only `src/mdnsd_service.c`
+  includes it. Whether that header's license is meant to bind a daemon that
+  merely registers is a question to settle with AROS before this goes
+  upstream.

@@ -86,9 +86,12 @@ mdnsRegAppendSrv(UBYTE *rdata, const UBYTE *targetWire, LONG targetLen,
 /* Sends a service's records. As a goodbye their time to live is zero, which
  * withdraws them from every cache on the link (RFC 6762 section 10.1). */
 static void
-mdnsRegSendService(struct MDNSEngineToken *tok,
-    struct MDNSRegisteredService *rs, BOOL goodbye)
+mdnsRegSendServiceOn(struct MDNSEngineToken *tok,
+    struct MDNSRegisteredService *rs, BOOL goodbye, LONG ifindex)
 {
+    /* The address record names the interface it leaves on, unless the
+     * service stands for another host. */
+    ULONG addr = rs->rs_Proxy ? rs->rs_HostAddr : tok->et_Ifs[ifindex].mi_Addr;
     ULONG ttl = goodbye ? 0 : MDNS_TTL_OTHER;
     ULONG hostttl = goodbye ? 0 : MDNS_TTL_HOST;
     UBYTE *pkt;
@@ -190,11 +193,11 @@ mdnsRegSendService(struct MDNSEngineToken *tok,
      * order (and our own A-record decoder in mdns_browse.c).  Skip when the
      * address is unknown (0).
      */
-    if (rs->rs_HostAddr != 0) {
-        addrdata[0] = (UBYTE)((rs->rs_HostAddr >> 24) & 0xFF);
-        addrdata[1] = (UBYTE)((rs->rs_HostAddr >> 16) & 0xFF);
-        addrdata[2] = (UBYTE)((rs->rs_HostAddr >> 8) & 0xFF);
-        addrdata[3] = (UBYTE)(rs->rs_HostAddr & 0xFF);
+    if (addr != 0) {
+        addrdata[0] = (UBYTE)((addr >> 24) & 0xFF);
+        addrdata[1] = (UBYTE)((addr >> 16) & 0xFF);
+        addrdata[2] = (UBYTE)((addr >> 8) & 0xFF);
+        addrdata[3] = (UBYTE)(addr & 0xFF);
         mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, hostfqdn,
             DNS_TYPE_A, DNS_CLASS_IN | 0x8000, hostttl, addrdata,
             (UWORD)4);
@@ -202,7 +205,21 @@ mdnsRegSendService(struct MDNSEngineToken *tok,
 
     hdr->flags = htons((unsigned short)(DNS_FLAG_QR | DNS_FLAG_AA));
     hdr->ancount = htons(ancount);
-    mdnsNetSendMulticast(tok, pkt, pos);
+    mdnsNetSendOn(tok, ifindex, pkt, pos);
+}
+
+/* To the interface a question came in on, or else to every one. */
+static void
+mdnsRegSendService(struct MDNSEngineToken *tok,
+    struct MDNSRegisteredService *rs, BOOL goodbye)
+{
+    LONG i;
+
+    for (i = 0; i < tok->et_IfCount; i++) {
+        if (tok->et_SendIf < 0 || i == tok->et_SendIf) {
+            mdnsRegSendServiceOn(tok, rs, goodbye, i);
+        }
+    }
 }
 
 void
@@ -325,34 +342,43 @@ mdnsRegRename(struct MDNSRegisteredService *rs)
 }
 
 /*
- * A record in a response is owned by "name". If a service still being probed
- * wants that name, another host has it: the service takes the next name and
- * starts again. A name already announced is not defended yet.
+ * A record in a response from another host is owned by "name". If one of
+ * this host's services has that name, the name is contested: the service
+ * takes the next name and is probed from the start. For a service that was
+ * already announced only its own kinds of record count, and browses on this
+ * host are told that the old name is gone. No goodbye is sent for it: the
+ * records under that name now are the other host's.
  */
 void
 mdnsRegHandleAnswerName(struct MDNSEngineToken *tok, const char *name,
-    ULONG srcaddr)
+    UWORD type, ULONG srcaddr)
 {
     struct MDNSRegisteredService *rs;
     struct Node *n;
     char instfqdn[256];
 
-    if (tok == NULL || name == NULL || srcaddr == tok->et_HostAddr) {
+    if (tok == NULL || name == NULL || mdnsNetIsOwn(tok, srcaddr)) {
         return;
     }
     for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
         n = n->ln_Succ) {
         rs = (struct MDNSRegisteredService *)n;
-        if (rs->rs_State != MDNS_RS_PROBING) {
+        if (rs->rs_State == MDNS_RS_ANNOUNCED && type != DNS_TYPE_SRV &&
+            type != DNS_TYPE_TXT) {
             continue;
         }
         mdnsRegBuildFqdn(instfqdn, (LONG)sizeof(instfqdn), rs->rs_Instance,
             rs->rs_Type, rs->rs_Domain);
-        if (Stricmp(instfqdn, name) == 0) {
-            mdnsRegRename(rs);
-            rs->rs_Step = 0;
-            rs->rs_NextTick = mdnsEngineTicks() + MDNS_PROBE_TICKS;
+        if (Stricmp(instfqdn, name) != 0) {
+            continue;
         }
+        if (rs->rs_State == MDNS_RS_ANNOUNCED) {
+            mdnsBrowseRemoveLocal(tok, rs);
+        }
+        mdnsRegRename(rs);
+        rs->rs_State = MDNS_RS_PROBING;
+        rs->rs_Step = 0;
+        rs->rs_NextTick = mdnsEngineTicks() + MDNS_PROBE_TICKS;
     }
 }
 
@@ -585,6 +611,38 @@ MDNSEngineRegister(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
     rs->rs_NextTick = mdnsEngineTicks();
     msg->bim_Handle = ref;
     return MDNS_OK;
+}
+
+/* Changes a registered service's text or port and tells the link. Only
+ * the client that registered it may. */
+LONG
+MDNSEngineUpdate(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
+{
+    struct MDNSRegisteredService *rs;
+    struct Node *n;
+
+    for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
+        n = n->ln_Succ) {
+        rs = (struct MDNSRegisteredService *)n;
+        if (rs->rs_ClientRef != msg->bim_Handle) {
+            continue;
+        }
+        if (rs->rs_Task != msg->bim_Task) {
+            return MDNSERR_BADPARAM;
+        }
+        if (msg->bim_Flags & BONAMI_UPDF_TXT) {
+            strcpy(rs->rs_TXT, msg->bim_TXT);
+        }
+        if (msg->bim_Port != 0) {
+            rs->rs_Port = msg->bim_Port;
+        }
+        if (rs->rs_State == MDNS_RS_ANNOUNCED) {
+            mdnsRegSendService(tok, rs, FALSE);
+            mdnsBrowseAnnounceLocal(tok, rs);
+        }
+        return MDNS_OK;
+    }
+    return MDNSERR_NOTFOUND;
 }
 
 void

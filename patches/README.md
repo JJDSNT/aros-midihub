@@ -290,7 +290,8 @@ disposable and is not a build dependency.
 
 `patches/net-series` lists patches that are independent of CAMD and of each
 other in purpose. `make check-patches` applies both series. They were found
-while running Bonami on hosted AROS (`tools/bonami-hosted.sh`).
+while running Bonami on hosted AROS (`tools/bonami-hosted.sh`), and compile
+for amiga-m68k and raspi-aarch64 as well.
 
 | Patch | What it fixes |
 |---|---|

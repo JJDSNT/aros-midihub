@@ -11,7 +11,7 @@ it inside MIDIHub.
 |---|---|---|
 | AppleMIDI session (IN, OK, NO, BY, CK, RS) | `src/applemidi.c`, `src/session.c`, `src/peers.c` | up to eight peers, either role; host tests |
 | RTP-MIDI payload, recovery journal | `src/rtpmidi.c`, `src/sender.c`, `src/timing.c` | chapters N, C, P, W, M, E, Q, F, X; host tests |
-| mDNS for `_apple-midi._udp` | `network/mdns/embedded.c` | interim embedded advertiser and query responder |
+| mDNS for `_apple-midi._udp` | `network/mdns/embedded.c` | interim embedded advertiser and query responder; to be replaced by `bonami.library` and `mdnsd` (`network/mdns/aros`) |
 | Universal MIDI Packet, MIDI 1.0 translation | `src/ump.c` | host tests |
 | Network MIDI 2.0 (UDP), M2-124-UM | `src/netmidi2.c` | Host and Client sessions, FEC; host tests |
 | AROS program bridging to CAMD | `ports/aros/midihub/main.c` | AppleMIDI, one active peer, `MIDIHub In`/`Out` |
@@ -75,40 +75,28 @@ or session management.
 
 AppleMIDI advertises `_apple-midi._udp` and Network MIDI 2.0 advertises
 `_midi2._udp`, with TXT keys `UMPEndpointName` and `ProductInstanceId`.
-AROS has no system mDNS responder, which is why MIDIHub carries a minimal
+AROS had no system mDNS responder, which is why MIDIHub carries a minimal
 one.
 
-The right home is a **system responder** shared by every client. The preferred
-starting point is Bonami's BSD-licensed Amiga design: `bonami.library` exposes
-register, browse, and resolve operations while one engine task owns the socket,
-cache, and timers, and is the natural owner for probing and conflict state as
-those features are completed. Library calls reach that engine through private
-Exec message-port IPC. If each client embeds its own responder, several
-processes compete for UDP port 5353 and duplicate all that state.
+The right home is a **system responder** shared by every client, and it now
+exists in this repository: `mdnsd`, a daemon managed by the AROSTCP service
+manager, with `bonami.library` as its client library, ported from Bonami. It
+runs and is tested on hosted AROS; see
+[`network/mdns`](../network/mdns/README.md). If each client embedded its own
+responder, several processes would compete for UDP port 5353 and each keep
+its own cache, names and conflict state.
 
-AROSTCP already supplies the required IPv4 multicast transport,
-`IP_ADD_MEMBERSHIP`, `SO_REUSEADDR`, and `SO_REUSEPORT`. Its current
-multi-interface support also provides scoped IPv6 link-local/multicast output
-and `SO_BINDTODEVICE` for per-interface UDP sockets, giving the future system
-responder the transport primitives needed to add IPv6 mDNS without changing
-the Network MIDI architecture. Its multicast bind
-rules only treat `SO_REUSEADDR` like `SO_REUSEPORT` when the socket is bound
-to a multicast address. The current MIDIHub code binds `INADDR_ANY:5353`, so
-`SO_REUSEADDR` alone is insufficient for multiple embedded responders. This
-is another reason to use one system responder instead of making discovery a
-property of each transport process. See [mDNS and AROSTCP](mdns-arostcp.md).
+Network MIDI does not use it yet. The step that remains is to register and
+browse `_apple-midi._udp` and `_midi2._udp` through `bonami.library` and to
+remove the embedded responder; the two cannot run side by side, because
+mdnsd ignores packets from the host's own addresses. See
+[mDNS and AROSTCP](mdns-arostcp.md).
 
-This is worth proposing upstream on its own. Printers and file sharing would
-use it too. AROS now also has a clean-room Envoy-compatible `nipc.library`
-(commit `fbc2e274d880868c3fe447dffdfc9226fae0bd66`). Bonami already contains
-an optional NIPC discovery bridge using `_nipc._tcp`, so the same system mDNS
-service can potentially support Envoy/NIPC discovery as well. This is another
-reason to keep Bonami generic infrastructure rather than make it MIDI-specific;
-AROS has subsequently added `services.library`, a Services Manager,
-`accounts.library`, and an Accounts Server, with `nipc.library` answering
-service inquiries from the native service list. Bonami's NIPC bridge should
-therefore complement rather than replace that native Envoy inquiry path.
-NIPC/Envoy remains optional and is not a dependency of Network MIDI.
+The service is generic infrastructure: printers and file sharing can use it,
+and it carries Bonami's bridge for Envoy discovery, which AROS's
+`nipc.library` does not call yet
+([notes](nipc-envoy-future.md)). NIPC/Envoy remains optional and is not a
+dependency of Network MIDI.
 
 ## UMP: translate at the edge first
 

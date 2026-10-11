@@ -215,6 +215,25 @@ mdnsHostFind(struct MDNSEngineToken *tok, const char *name)
     return NULL;
 }
 
+/* The link a packet being handled came in on, as that interface's address. */
+static ULONG
+mdnsCurrentLink(struct MDNSEngineToken *tok)
+{
+    return tok->et_SendIf >= 0 ? tok->et_Ifs[tok->et_SendIf].mi_Addr : 0;
+}
+
+/*
+ * A host reached over two links has an address on each. The one heard first
+ * is kept for as long as its link is there, so that an address does not
+ * flip with every answer; only the same link may change it.
+ */
+static BOOL
+mdnsLinkMayChange(struct MDNSEngineToken *tok, ULONG oldAddr, ULONG oldLink)
+{
+    return oldAddr == 0 || oldLink == mdnsCurrentLink(tok) ||
+        !mdnsNetIsOwn(tok, oldLink);
+}
+
 /* Remembers a host's address; the host heard of longest ago makes room. */
 static void
 mdnsHostStore(struct MDNSEngineToken *tok, const char *name, ULONG addr)
@@ -222,6 +241,9 @@ mdnsHostStore(struct MDNSEngineToken *tok, const char *name, ULONG addr)
     struct MDNSHostEntry *he;
 
     he = mdnsHostFind(tok, name);
+    if (he != NULL && !mdnsLinkMayChange(tok, he->he_Addr, he->he_Link)) {
+        return;
+    }
     if (he != NULL) {
         Remove(&he->he_Node);
     } else if (tok->et_HostCount >= MDNS_HOSTS_MAX) {
@@ -238,6 +260,7 @@ mdnsHostStore(struct MDNSEngineToken *tok, const char *name, ULONG addr)
     strncpy(he->he_Name, name, MDNS_MAX_HOST);
     he->he_Name[MDNS_MAX_HOST] = '\0';
     he->he_Addr = addr;
+    he->he_Link = mdnsCurrentLink(tok);
     AddTail(&tok->et_Hosts, &he->he_Node);
     mdnsLookupHostKnown(tok, name, addr);
 }
@@ -485,8 +508,10 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
             n = n->ln_Succ) {
             ce = (struct MDNSCacheEntry *)n;
             if (ce->ce_Host[0] != '\0' && ce->ce_HostAddr != addr &&
-                Stricmp(ce->ce_Host, r->name) == 0) {
+                Stricmp(ce->ce_Host, r->name) == 0 &&
+                mdnsLinkMayChange(tok, ce->ce_HostAddr, ce->ce_Link)) {
                 ce->ce_HostAddr = addr;
+                ce->ce_Link = mdnsCurrentLink(tok);
                 ce->ce_Flags |= MDNS_CE_ANNOUNCED;
                 mdnsBrowseNotifyAll(tok, ce);
             }
@@ -544,6 +569,7 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
             he = mdnsHostFind(tok, ce->ce_Host);
             if (he != NULL && ce->ce_HostAddr != he->he_Addr) {
                 ce->ce_HostAddr = he->he_Addr;
+                ce->ce_Link = he->he_Link;
                 changed = TRUE;
             }
             if (he == NULL) {

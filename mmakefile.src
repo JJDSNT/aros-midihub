@@ -112,7 +112,8 @@ contrib-aros-midihub-bonami-clean ::
 
 # Bonami's command-line tools, ported from its SDK examples.
 BONAMI_TOOLS := $(BONAMI_AROS)/tools
-BONAMI_TOOL_CFLAGS := -Wall -Wextra -Wno-unused-parameter -Wno-pointer-sign
+BONAMI_TOOL_CFLAGS := -Wall -Wextra -Wno-unused-parameter -Wno-pointer-sign \
+    -Wno-volatile-register-var
 
 #MM- contrib-aros-midihub-mdnstools : \
 #MM      contrib-aros-midihub-mdnstools-nearby \

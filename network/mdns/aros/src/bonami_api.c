@@ -78,10 +78,17 @@ AROS_LH2(LONG, UpdateServiceA,
     LONG rc;
 
     memset(&msg, 0, sizeof(msg));
+    if (ref == NULL || tags == NULL)
+        return MDNSERR_BADPARAM;
+    /* Only the text and the port of a registered service can change; a tag
+     * that is not given leaves its value alone. */
+    MDNSTagsToRegisterMsg(tags, &msg);
     msg.bim_Command = BONAMI_MSG_UPDATE;
     msg.bim_Handle = ref;
-    rc = MDNSTagsToRegisterMsg(tags, &msg);
-    return rc == MDNS_OK ? MDNSSendIPC(BonamiBase, &msg) : rc;
+    msg.bim_Flags = FindTagItem(MDNS_TXTRecord, tags) != NULL ?
+        BONAMI_UPDF_TXT : 0;
+    rc = MDNSSendIPC(BonamiBase, &msg);
+    return rc;
     AROS_LIBFUNC_EXIT
 }
 

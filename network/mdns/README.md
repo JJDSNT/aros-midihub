@@ -1,99 +1,89 @@
-# System mDNS incubation
+# System mDNS for AROS
 
-This directory contains the code and references used to close AROS's missing
-system-wide mDNS/DNS-SD service. The intended upstream home is an AROS network
-service above `bsdsocket.library`; the code remains here while its API, AROS
-port, and interoperability are validated.
+This directory holds what closes AROS's missing system-wide mDNS/DNS-SD
+service. Its intended home is the AROS tree, as a network service above
+`bsdsocket.library`, and Bonami upstream for what is useful to classic Amiga
+too; it stays here while that is prepared.
 
 ## Contents
 
-- `embedded.c` is MIDIHub's current minimal `_apple-midi._udp` advertiser and
-  query responder. It remains in the normal MIDIHub build until the system
-  service can replace it.
-- `bonami/` pins the upstream
-  [amigazen Bonami](https://github.com/amigazen/Bonami) repository as a Git
-  submodule. It is the primary implementation and API reference for the AROS
-  port. Bonami uses the BSD 2-Clause license.
-- `aros/` contains the initial native AROS port derived from the pinned Bonami
-  revision. It builds `bonami.library` and keeps the public Bonami API intact.
+- `aros/` is the service: `mdnsd`, `bonami.library`, the command-line tools
+  and the commodity, ported from Bonami. Its
+  [README](aros/README.md) is the reference for how it works, what it does of
+  the protocol, how it is tested and what it lacks.
+- `bonami/` pins [amigazen Bonami](https://github.com/amigazen/Bonami) as a
+  Git submodule: the source the port derives from and the reference for its
+  API. Bonami uses the BSD 2-Clause license. The AROS build does not read the
+  submodule; initialize it only to compare:
 
-Clone this repository with submodules, or initialize this reference after an
-ordinary clone:
+  ```sh
+  git submodule update --init network/mdns/bonami
+  ```
 
-```sh
-git submodule update --init network/mdns/bonami
-```
+- `embedded.c` is MIDIHub's own small `_apple-midi._udp` advertiser and
+  responder. MIDIHub still builds with it. It goes when Network MIDI
+  registers and browses through `bonami.library` instead.
 
-The submodule is a source and history reference. The AROS build uses the
-reviewable snapshot in `aros/`, so an AROS source checkout does not need to
-fetch a nested repository before it can build the library.
+## Where it stands
 
-## Design decision
+On 2026-10-11 the service runs on Linux-hosted AROS and
+`tools/bonami-hosted.sh` checks it against Avahi: registering, browsing and
+resolving in both directions over two links, name conflicts, clients that
+go away, the tools, and the Envoy bridge. It compiles for amiga-m68k and
+raspi-aarch64 and has not been run on either.
 
-Bonami is a better base than creating another AROS-specific API. It already
-has the relevant Amiga structure:
+Three things had to change in AROS first, all in `patches/net-series`: a
+crash in AROSTCP's netdb parser, multicast in the hosted `eth.device`, and
+IPv4 multicast on SANA-II interfaces, which AROSTCP did not deliver.
 
-- `bonami.library` with TagItem-based register, browse, and resolve calls;
-- a single shared `mdns.task` engine;
-- private Exec message-port IPC;
-- opaque registration, browse, and resolve handles;
-- DNS-SD cache and Hook notifications;
-- `bsdsocket.library` ownership in the engine task;
-- BSD 2-Clause licensing suitable for an AROS contribution.
+## Why Bonami
 
-[mjansson/mdns](https://github.com/mjansson/mdns) is a useful portable packet
-and socket reference. It has an unrestricted license, avoids allocations in
-the library, and supports IPv4 and IPv6 helpers. It does not provide the shared
-daemon, cache lifecycle, repeated browsing, complete probing/conflict policy,
-client ownership, or an Amiga library API, so it is not included as another
-submodule. Individual implementation ideas can be used where they improve the
-Bonami port and their origin can be recorded in the affected files.
+Bonami already had the Amiga shape of the service: a library with
+TagItem-based register, browse and resolve calls, opaque handles, Hook
+notifications, a private message-port protocol to one shared engine, and a
+license AROS can take. Porting it keeps one API for AROS and classic
+systems instead of adding an AROS-only one.
 
-## Work required for AROS
+What the port changed, and why, in the order it mattered:
 
-The pinned Bonami revision is a working classic-Amiga implementation rather
-than a drop-in AROS component. The AROS port needs:
+1. **Byte order.** Upstream was only right on a big-endian machine.
+2. **A daemon instead of a task in the library.** `mdnsd` is managed by the
+   AROSTCP service manager; the library became a thin client; what a client
+   registers belongs to that client.
+3. **The protocol.** Probing and renaming, defending a name, goodbyes, cache
+   lifetimes, answers to every kind of question about a service, backing off.
+4. **Every interface**, each with its own socket and its own address records,
+   following address changes.
+5. **API additions** for what `dnssd` could not do: host lookup, a query for
+   any record, registering for another host. And `PublishNIPCEntitiesA()`,
+   a stub upstream, now publishes.
 
-1. native AROSTCP runtime validation with UDP 5353 as the normal bind port;
-2. full RFC 6762 probing, conflict detection, automatic rename, defensive
-   announcements, known-answer suppression, and goodbyes;
-3. interface enumeration and address-change handling, then IPv6 mDNS on
-   `ff02::fb`; current AROSTCP already supplies scoped link-local/multicast
-   output (`sin6_scope_id` / `IPV6_PKTINFO`) and `SO_BINDTODEVICE`, so this is
-   primarily Bonami/service integration rather than a missing socket-stack
-   prerequisite;
-4. working update and resolve cancellation operations;
-5. per-client ownership and cleanup for the shared engine;
-6. optional message-port event delivery so clients need not do work in an
-   engine-task Hook;
-7. tests with Bonjour and Avahi;
-8. Network MIDI registration and browsing for `_apple-midi._udp` and
-   `_midi2._udp`;
-9. build and validate Bonami's optional Envoy/NIPC bridge against the
-    `nipc.library` and public `<envoy/nipc.h>` API added upstream to AROS in
-    commit `fbc2e274d880868c3fe447dffdfc9226fae0bd66`, including
-    `_nipc._tcp` publication and browsing.
+[mjansson/mdns](https://github.com/mjansson/mdns) was considered as a base. It
+is a good packet and socket reference with an unrestricted license, but it
+has no shared daemon, cache lifetime, client ownership or Amiga library API,
+so it is not included.
 
-AROSTCP upstream commit `28dd8854eae4ccc1325d600689790938dd0f7fba` also
-records the multi-interface primitives needed by the responder: scoped IPv6
-link-local/multicast output and per-interface UDP binding. This removes a
-socket-stack uncertainty from the IPv6/multi-interface roadmap; Bonami still
-needs to enumerate interfaces, track address/link changes, join the mDNS group
-per interface, and select the correct scope for announcements and replies.
+## What is left
 
-AROS now goes beyond the initial NIPC addition. Upstream commit
-`06d56a768fa31bb1487e70a8dae11cd7667425ea` adds `services.library`, a
-Services Manager, `accounts.library`, and an Accounts Server, and teaches
-`nipc.library` to answer service inquiries from the configured services list.
-Bonami's `_nipc._tcp` bridge should therefore be evaluated as an optional
-DNS-SD discovery complement to native NIPC/Services inquiry, not assumed to
-replace it.
+For the service itself, the open items are listed under "Known limits" in
+[`aros/README.md`](aros/README.md): probing the host name, the simultaneous
+probe tie-break, known answers and delayed responses in mdnsd's own traffic,
+and IPv6. AROSTCP already has what IPv6 needs from the stack (scoped
+link-local multicast and `SO_BINDTODEVICE`).
 
-The AROS NIPC addition removes the former reason to disable Bonami's Envoy
-bridge merely because the platform lacked NIPC headers or a `nipc.library`.
-The bridge remains optional: the core mDNS/DNS-SD service and its MIDI clients
-must not depend on Envoy/NIPC.
+Around it:
 
-Changes that are useful to classic Amiga should be proposed to Bonami upstream.
-The AROS build glue and integration can then move into the AROS tree with the
-BSD notices retained.
+1. Run it on m68k and AArch64, against Apple's Bonjour, and between two AROS
+   systems.
+2. Move Network MIDI to it: register and browse `_apple-midi._udp` and
+   `_midi2._udp` through `bonami.library`, and remove `embedded.c`.
+3. Join AROS's `nipc.library` to the Envoy bridge, if that is wanted; see
+   [`docs/nipc-envoy-future.md`](../../docs/nipc-envoy-future.md).
+4. Send it upstream: the three AROS patches to AROS, the byte-order fixes,
+   protocol work and API additions to Bonami, and then the AROS-specific
+   parts (the daemon, the service entry, the build files) to the AROS tree
+   with Bonami's notices kept. The license of AROS's `netservice.h` has to be
+   settled for the last of these.
+
+How the service relates to the TCP/IP stack is described in
+[`docs/mdns-arostcp.md`](../../docs/mdns-arostcp.md).

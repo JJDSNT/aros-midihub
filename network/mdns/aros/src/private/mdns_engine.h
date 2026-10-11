@@ -136,6 +136,7 @@ struct MDNSCacheEntry
     UWORD           ce_Port;
     UWORD           ce_Flags;
     ULONG           ce_HostAddr;
+    ULONG           ce_Link;        /* interface the address was heard on */
     ULONG           ce_Expire;
 };
 
@@ -153,6 +154,16 @@ struct MDNSQuerySession
     ULONG           qs_Interval;
 };
 
+/* An interface mdnsd speaks on, with its own socket. */
+#define MDNS_IFS_MAX            8
+
+struct MDNSInterface
+{
+    char    mi_Name[20];
+    ULONG   mi_Addr;            /* 0xAABBCCDD == A.B.C.D */
+    LONG    mi_Socket;
+};
+
 /* A host's address, kept apart from the instances: the address record may
  * arrive before the SRV record that names the host. */
 #define MDNS_HOSTS_MAX          64
@@ -162,6 +173,7 @@ struct MDNSHostEntry
     struct Node     he_Node;
     char            he_Name[MDNS_MAX_HOST + 1];
     ULONG           he_Addr;
+    ULONG           he_Link;        /* address of the interface it was heard on */
 };
 
 struct MDNSEngineToken
@@ -174,7 +186,12 @@ struct MDNSEngineToken
     UWORD                   et_UdpPad;
     struct Task            *et_Task;
     struct MsgPort         *et_Port;
-    LONG                    et_Socket;
+    LONG                    et_Socket;      /* the first interface's, or -1:
+                                             * "is there a link at all" */
+    struct MDNSInterface    et_Ifs[MDNS_IFS_MAX];
+    LONG                    et_IfCount;
+    LONG                    et_SendIf;      /* interface of the packet being
+                                             * handled, or -1 */
     UBYTE                  *et_RxBuf;        /* MDNS_MAX_PACKET receive scratch */
     UBYTE                  *et_TxBuf;        /* MDNS_MAX_PACKET transmit scratch */
     struct Library         *et_SocketBase;  /* opened by mdns.task itself */
@@ -182,7 +199,7 @@ struct MDNSEngineToken
     LONG                    et_StartRc;      /* engine startup result */
     UWORD                   et_StartStage;   /* diagnostics: where start failed */
     LONG                    et_StartErrno;   /* diagnostics: bsdsocket Errno() */
-    ULONG                   et_HostAddr;
+    ULONG                   et_HostAddr;     /* the first interface's */
     ULONG                   et_RxPackets;    /* datagrams recvfrom() returned */
     ULONG                   et_RxAnswers;    /* answer records parsed from RX */
     ULONG                   et_TxPackets;    /* datagrams sendto() accepted */
@@ -215,6 +232,7 @@ void MDNSEngineTick(struct MDNSEngineToken *tok);
 
 LONG MDNSEngineRegister(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
 void MDNSEngineDeregister(struct MDNSEngineToken *tok, APTR ref);
+LONG MDNSEngineUpdate(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
 LONG MDNSEngineBrowse(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
 void MDNSEngineStopBrowse(struct MDNSEngineToken *tok, APTR ref);
 void MDNSEngineReleaseServices(struct MDNSEngineToken *tok, struct Task *task);
@@ -227,8 +245,10 @@ void MDNSEngineUnpublishNIPC(struct MDNSEngineToken *tok, struct Task *task);
 
 LONG mdnsNetOpen(struct MDNSEngineToken *tok);
 void mdnsNetClose(struct MDNSEngineToken *tok);
-LONG mdnsNetSend(struct MDNSEngineToken *tok, const UBYTE *pkt, LONG pktlen,
-    ULONG destaddr, UWORD destport);
+BOOL mdnsNetRescan(struct MDNSEngineToken *tok);
+BOOL mdnsNetIsOwn(struct MDNSEngineToken *tok, ULONG addr);
+LONG mdnsNetSendOn(struct MDNSEngineToken *tok, LONG index, const UBYTE *pkt,
+    LONG pktlen);
 LONG mdnsNetSendMulticast(struct MDNSEngineToken *tok, const UBYTE *pkt,
     LONG pktlen);
 
@@ -238,7 +258,7 @@ void mdnsRegGoodbyeAll(struct MDNSEngineToken *tok);
 void mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
     char (*known)[256], LONG knownCount);
 void mdnsRegHandleAnswerName(struct MDNSEngineToken *tok, const char *name,
-    ULONG srcaddr);
+    UWORD type, ULONG srcaddr);
 BOOL mdnsRegTick(struct MDNSEngineToken *tok);
 
 void mdnsBrowseSendQuery(struct MDNSEngineToken *tok, const char *type,

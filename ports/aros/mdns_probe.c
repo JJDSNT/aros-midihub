@@ -12,6 +12,7 @@
 #include <proto/dos.h>
 #include <proto/bonami.h>
 #include <utility/hooks.h>
+#include <exec/tasks.h>
 #include <aros/asmcall.h>
 #include <string.h>
 #include <bonami/mdns.h>
@@ -22,7 +23,7 @@ struct Library *BonamiBase;
 
 /*
  * BonamiProbe [REGISTER name] [TYPE type] [PORT n] [BROWSE type] [SECONDS n]
- *             [LEAK] [PUBLISH entity] [INQUIRE entity]
+ *             [LEAK] [PUBLISH entity] [INQUIRE entity] [GHOST name] [UPDATE]
  *
  * Without arguments it only opens the engine and prints its counters. With
  * REGISTER it announces an instance of TYPE (default _bonamiprobe._udp) for
@@ -30,7 +31,9 @@ struct Library *BonamiBase;
  * With LEAK it ends without withdrawing either, so that closing the library
  * has to. PUBLISH announces this host as an Envoy host with that entity and
  * the service "Probe"; INQUIRE asks which Envoy hosts have an entity ("*"
- * for any) the way nipc.library would, through the Bonami bridge.
+ * for any) the way nipc.library would, through the Bonami bridge. GHOST
+ * starts a task that registers "Ghost" and ends without closing the
+ * library, which mdnsd has to notice by itself.
  */
 
 #define SEEN_MAX 16
@@ -38,6 +41,25 @@ struct Library *BonamiBase;
 static struct Task *mainTask;
 static struct MDNSBrowseMsg seen[SEEN_MAX];
 static volatile ULONG seenWrite;
+
+static STRPTR ghostName;
+static struct Task *ghostTask;
+
+/* Registers and is gone: no deregistration, no release. The service is
+ * this task's, not the program's. */
+static void ghost_task(void)
+{
+    struct TagItem tags[] = {
+        { MDNS_ServiceName, (IPTR)ghostName },
+        { MDNS_ServiceType, (IPTR)"_bonamiprobe._udp" },
+        { MDNS_Port, 5999 },
+        { TAG_DONE, 0 }
+    };
+
+    RegisterServiceA(tags);
+    /* Long enough for the name to be probed and announced. */
+    Wait(SIGBREAKF_CTRL_D);
+}
 
 #define ANSWER_MAX 8
 static char answers[ANSWER_MAX][160];
@@ -162,7 +184,7 @@ int main(void)
 {
     struct Library *socketBase;
     struct RDArgs *args;
-    IPTR arg[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    IPTR arg[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     struct Hook inquiry;
     ULONG answerRead = 0;
     struct Hook hook;
@@ -172,14 +194,14 @@ int main(void)
     LONG result;
 
     mainTask = FindTask(NULL);
-    args = ReadArgs("REGISTER/K,TYPE/K,PORT/N,BROWSE/K,SECONDS/N,LEAK/S,PUBLISH/K,INQUIRE/K", arg, NULL);
+    args = ReadArgs("REGISTER/K,TYPE/K,PORT/N,BROWSE/K,SECONDS/N,LEAK/S,PUBLISH/K,INQUIRE/K,GHOST/K,UPDATE/S", arg, NULL);
     if (args == NULL) {
         PrintFault(IoErr(), "BonamiProbe");
         return RETURN_FAIL;
     }
     if (arg[4])
         seconds = *(LONG *)arg[4];
-    else if (arg[0] || arg[3] || arg[6] || arg[7])
+    else if (arg[0] || arg[3] || arg[6] || arg[7] || arg[8])
         seconds = 10;
 
     BonamiBase = OpenLibrary("bonami.library", 40);
@@ -233,6 +255,15 @@ int main(void)
         Printf("BonamiProbe: browse %s: %ld\n", (STRPTR)arg[3], result);
     }
 
+    if (result == MDNS_OK && arg[8]) {
+        ghostName = (STRPTR)arg[8];
+        ghostTask = NewCreateTask(TASKTAG_PC, (IPTR)ghost_task,
+            TASKTAG_NAME, (IPTR)"BonamiProbe ghost",
+            TASKTAG_STACKSIZE, 65536,
+            TAG_DONE);
+        Printf("BonamiProbe: ghost task %s\n",
+            ghostTask != NULL ? (STRPTR)"started" : (STRPTR)"failed");
+    }
     if (result == MDNS_OK && arg[6]) {
         struct TagItem tags[] = {
             { MDNS_NIPC_Entity, arg[6] },
@@ -271,6 +302,16 @@ int main(void)
         Delay(5);
         if (SetSignal(0, SIGBREAKF_CTRL_C) & SIGBREAKF_CTRL_C)
             break;
+        /* UPDATE: five seconds in, the registered service gets a new text. */
+        if (arg[9] && tick == 50 && registered != NULL) {
+            struct TagItem tags[] = {
+                { MDNS_TXTRecord, (IPTR)"updated=yes" },
+                { TAG_DONE, 0 }
+            };
+
+            Printf("BonamiProbe: update: %ld\n",
+                UpdateServiceA(registered, tags));
+        }
         SetSignal(0, SIGBREAKF_CTRL_F);
         while (answerRead != answerWrite)
             Printf("BonamiProbe: envoy%s\n",
@@ -290,6 +331,9 @@ int main(void)
         }
     }
 
+    /* The ghost ends now, with its service still registered. */
+    if (ghostTask != NULL)
+        Signal(ghostTask, SIGBREAKF_CTRL_D);
     if (seconds != 0)
         print_status("done");
     if (!arg[5]) {

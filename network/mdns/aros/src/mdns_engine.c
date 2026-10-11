@@ -45,7 +45,7 @@ MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
 
     /* The group's traffic is looped back to the sender. What this host said
      * it knows, and what it asked the link it does not ask itself. */
-    if (srcaddr == tok->et_HostAddr) {
+    if (mdnsNetIsOwn(tok, srcaddr)) {
         return;
     }
 
@@ -98,7 +98,7 @@ MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
             return;
         }
         tok->et_RxAnswers++;
-        mdnsRegHandleAnswerName(tok, r->name, srcaddr);
+        mdnsRegHandleAnswerName(tok, r->name, r->type, srcaddr);
         mdnsBrowseHandleRecord(tok, r, pkt, pktlen);
         mdnsQueryHandleRecord(tok, r, pkt, pktlen);
         offset += consumed;
@@ -120,7 +120,7 @@ MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
         if (mdnsParseRecord(pkt, pktlen, offset, r, &consumed) != 0) {
             return;
         }
-        mdnsRegHandleAnswerName(tok, r->name, srcaddr);
+        mdnsRegHandleAnswerName(tok, r->name, r->type, srcaddr);
         mdnsBrowseHandleRecord(tok, r, pkt, pktlen);
         mdnsQueryHandleRecord(tok, r, pkt, pktlen);
         offset += consumed;
@@ -164,6 +164,9 @@ MDNSEngineDispatch(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
         break;
     case BONAMI_MSG_REGISTER:
         msg->bim_Result = MDNSEngineRegister(tok, msg);
+        break;
+    case BONAMI_MSG_UPDATE:
+        msg->bim_Result = MDNSEngineUpdate(tok, msg);
         break;
     case BONAMI_MSG_UNREGISTER:
         MDNSEngineDeregister(tok, msg->bim_Handle);

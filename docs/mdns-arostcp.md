@@ -1,162 +1,133 @@
-# mDNS integration with AROSTCP
+# mDNS and AROSTCP
+
+How the system mDNS service relates to the TCP/IP stack: what each side is
+responsible for, what the stack had to gain, and how the service starts. The
+service itself is described in
+[`network/mdns/aros/README.md`](../network/mdns/aros/README.md).
 
 ## Responsibility boundary
 
-AROSTCP already provides the network mechanisms needed by mDNS. Its
-`bsdsocket.library` build enables IPv4 multicast, implements IGMP membership,
-accepts `IP_ADD_MEMBERSHIP`, and exposes multicast interface, TTL, and loop
-options. It also implements `SO_REUSEADDR` and `SO_REUSEPORT`. Current AROSTCP
-also provides the socket mechanisms needed for a multi-interface IPv6 mDNS
-implementation: scoped link-local/multicast output follows `sin6_scope_id`,
-`IPV6_PKTINFO`, or the interface owning the selected source address, and
-`SO_BINDTODEVICE` can pin a UDP socket to a particular interface. These
-capabilities are documented in upstream commit
-`28dd8854eae4ccc1325d600689790938dd0f7fba`.
-
-mDNS itself should remain above the TCP/IP stack. DNS record processing,
-probing, conflict renaming, registration leases, browsing, caching, and
-service lifetime are application-service policy. Putting that policy inside
-`bsdsocket.library` would couple it to AROSTCP and prevent the same service
-from working with another compatible socket provider.
-
-The proposed boundary, refined after reviewing Bonami, is:
-
 ```text
-Network MIDI, printing, file sharing, other clients
+Network MIDI, printing, file sharing, Envoy, tools
                         |
-                 bonami.library API
+                 bonami.library            thin client, Bonami's API
                         |
-             private Exec message-port IPC
+              message port "BonAmi"
                         |
-              shared mDNS engine task
-                        |
+                      mdnsd                one per host; owns names, cache,
+                        |                  timers and UDP port 5353
                 bsdsocket.library
                         |
               AROSTCP or another stack
 ```
 
-AROS now also provides a clean-room Envoy-compatible `nipc.library` over
-`bsdsocket.library`. Bonami's optional NIPC bridge can therefore form a
-parallel discovery path without changing this responsibility boundary:
+mDNS stays above the stack. Record processing, probing, renaming on
+conflict, browsing, caching and the lifetime of a registration are the
+service's policy. Inside `bsdsocket.library` they would tie the service to
+AROSTCP and keep it from running on another socket provider.
 
-```text
-Envoy/NIPC applications
-          |
-     nipc.library
-       /      \
-     RDP      discovery
-      |           |
-bsdsocket     Bonami / _nipc._tcp
-                  |
-             shared mDNS engine
-                  |
-           bsdsocket.library
-```
+The stack supplies mechanisms, and mdnsd uses only these:
 
-AROS has since expanded this native Envoy layer with `services.library`, a
-Services Manager, `accounts.library`, and an Accounts Server. Native
-`nipc.library` service inquiry can consult the Services Manager's configured
-service list. Bonami's `_nipc._tcp` path should therefore be treated as an
-optional zero-configuration discovery integration to validate, not as the
-owner or replacement of native Envoy service inquiry.
+- UDP sockets, `SO_REUSEADDR` and `SO_REUSEPORT`;
+- `SO_BINDTODEVICE`, to tie a socket to one interface;
+- `IP_ADD_MEMBERSHIP`, `IP_MULTICAST_IF`, `IP_MULTICAST_TTL` and
+  `IP_MULTICAST_LOOP`;
+- `SIOCGIFCONF` and `SIOCGIFFLAGS`, to find the interfaces;
+- `gethostname()`.
 
-NIPC remains a client/integration of the mDNS service rather than part of the
-TCP/IP stack, and Bonami's core API must remain usable without NIPC.
+For IPv6, which mdnsd does not speak yet, AROSTCP already has scoped
+link-local and multicast output (`sin6_scope_id`, `IPV6_PKTINFO`), recorded
+in upstream commit `28dd8854eae4ccc1325d600689790938dd0f7fba`.
 
-The responder should be an AROS network service, for example under
-`workbench/network/services/mdns`, rather than part of the AROSTCP stack
-directory. Keeping Bonami's public API also allows Amiga applications to share
-source across AROS and classic systems.
+## What AROSTCP lacked
+
+The first native run showed that IPv4 multicast did not work on a SANA-II
+interface, although the options were accepted. Three patches in
+`patches/net-series` fix what was found; none is specific to mDNS.
+
+| Patch | Fault |
+|---|---|
+| `aros-arostcp-ipv4-multicast.patch` | `IFF_MULTICAST` was never set and its bit carried a private flag; a group had no Ethernet address; `ip_input()` had no case for a joined group; a sender that had chosen its interface with `IP_MULTICAST_IF` still needed a route. |
+| `aros-eth-unix-multicast.patch` | The Linux-hosted `eth.device` dropped received multicast frames and refused the SANA-II multicast commands. |
+| `aros-arostcp-netdb-unknown-keyword.patch` | An unknown keyword in a netdb file crashed the stack. |
+
+One more fault is not patched: on amiga-m68k the stack does not build until
+`fd.library`'s headers exist, because its build file does not ask for them.
+`make workbench-libs-fd-includes` first works around it.
+
+Other SANA-II drivers were not looked at. A driver that filters multicast in
+hardware has to honour `S2_ADDMULTICASTADDRESS`, which AROSTCP sends when a
+group is joined; the hosted driver needs no filter because its host
+interface is promiscuous.
 
 ## Why one responder
 
-Every mDNS participant uses UDP port 5353. AROSTCP can deliver multicast UDP
-to multiple matching sockets when the reuse flags permit it, but that does
-not remove the duplicated cache, name ownership, probing, and conflict state
-created by one embedded responder per application.
+Every mDNS participant uses UDP port 5353. The stack can deliver a multicast
+datagram to several sockets bound with the reuse options, but that does not
+remove what several responders in one host would each keep for themselves:
+the cache, the ownership of names, and the probing and conflict state. Two
+responders in one host can also answer the same question twice, or contest
+each other's names.
 
-There is also a concrete bind detail in AROSTCP. In
-`bsdsocket/netinet/in_pcb.c`, `SO_REUSEADDR` is treated like `SO_REUSEPORT`
-for a socket bound to a multicast address. MIDIHub's current responder binds
-`INADDR_ANY:5353`, so its use of `SO_REUSEADDR` alone does not guarantee that
-another process can bind the same wildcard address and port. Adding
-`SO_REUSEPORT` is useful for an interim embedded implementation, but one
-resident responder is the intended system design.
-
-## Public service contract
-
-Bonami's BSD 2-Clause API and engine are the preferred baseline. It already
-provides the Amiga-native library, TagItem calls, opaque handles, Hooks, private
-IPC, cache, registration, browsing, and resolution. The AROS port should keep
-that public contract and extend it where required rather than introduce a
-second incompatible mDNS API.
-
-The service contract should provide:
-
-- register, update, and unregister a service instance;
-- browse and stop browsing for a service type;
-- resolve and cancel resolution of an instance;
-- result, removal, rename, and error events; an optional caller-owned message
-  port should avoid requiring application work inside the engine task's Hook
-  callback;
-- opaque handles so registrations and subscriptions are tied to a client;
-- leases or a liveness handshake so registrations from a crashed client
-  expire, plus goodbye records for an orderly release.
-
-The responder owns UDP sockets, record caches, timers, retransmission,
-probing, known-answer suppression, conflict handling, announcements, and
-goodbyes. It should eventually handle PTR, SRV, TXT, A, and AAAA records per
-active interface, along with interface address changes.
-
-Bonami is already much closer to this target than the embedded MIDIHub code,
-but its current tree documents important gaps: one interface, IPv4 only,
-simplified probing/conflict handling, a no-op resolve cancellation path, and
-an incomplete update operation. Multi-interface and IPv6 support are therefore
-Bonami/service work rather than a missing AROSTCP transport primitive: the
-stack can scope IPv6 link-local and multicast output per interface, and can
-bind UDP explicitly to an interface. An IPv6 mDNS port can use `ff02::fb`
-with the appropriate interface scope while IPv4 continues to use
-`224.0.0.251`. Its default ephemeral-port mode is a useful
-workaround for hosted classic-Amiga socket emulation; the native AROS build
-should bind 5353 by default and keep the override only for diagnostics.
+mdnsd therefore refuses to start twice, and MIDIHub's own embedded responder
+(`network/mdns/embedded.c`) has to go once Network MIDI uses the service:
+mdnsd ignores packets from the host's own addresses, so the two would not
+see each other.
 
 ## Startup and availability
 
-The responder depends on `bsdsocket.library`; it is not owned by AROSTCP.
-Following Bonami's model, the first `OpenMDNSEngine()` starts the shared engine
-and later clients attach to it. The engine remains alive while clients are
-attached. A persistent consumer such as Network MIDI therefore keeps discovery
-available without adding an AROSTCP startup command. A future system-startup
-holder may keep the cache warm even with no service clients, but it should use
-the same library API.
+mdnsd is a managed service of the stack. `db/services.d/mdns` names it; the
+AROSTCP service manager starts it with the stack and stops it with the
+stack. It registers with `netservices.library` and is signalled around a
+reconfiguration: at the start it says goodbye and closes
+`bsdsocket.library`, at the end it opens it again, finds the interfaces, and
+announces what applications had registered.
 
-This avoids changing AROSTCP's `S/startnet`, which currently starts the stack
-and waits for its public port. If the socket provider is not ready,
-`OpenMDNSEngine()` should return a useful error and permit a later retry.
-Network MIDI can start independently and keep manually configured peers working
-while discovery is unavailable.
+Nothing else needs to be started, and no client keeps the engine alive: a
+program that opens `bonami.library` while mdnsd is not running gets
+`MDNSERR_NOENGINE` from its calls and can try again later. Network MIDI can
+start on its own and work with manually configured peers while discovery is
+unavailable.
+
+This is where the port leaves Bonami's model, in which the first
+`OpenMDNSEngine()` starts the engine and the last `CloseMDNSEngine()` stops
+it. A daemon was chosen because the cache and the host's names outlive any
+one client, and because the stack needs to tell the responder when it goes
+away.
+
+`<libraries/netservice.h>` is published under the GNU GPL version 2. The
+daemon includes it in one file. Whether that is meant to bind a BSD-licensed
+service that only registers is open and has to be settled with AROS.
+
+## Public service contract
+
+Bonami's API is the contract; the port extends it instead of adding a second
+one. It gives a client:
+
+- register, update and withdraw a service instance, also for another host;
+- browse a type, and enumerate the types present;
+- resolve an instance and look up a host's address;
+- ask for any record;
+- publish and inquire in Envoy's terms.
+
+What a client makes belongs to its task and goes with the task, whether it
+closes the library or not.
+
+Not in the contract yet:
+
+- telling a client that its service was renamed after a conflict;
+- delivering events to a client's own message port. Events come through a
+  Hook that runs in mdnsd's process, which obliges every client to copy and
+  signal. The tools share one helper for that.
 
 ## MIDI migration
 
-The current `network/mdns/embedded.c` is useful incubation code. It advertises
-and answers basic questions for `_apple-midi._udp.local`, but it is not yet a
-general responder: it has no shared cache, browse/resolve API, probing and
-conflict renaming, arbitrary service registration, or complete multi-interface
-handling.
+1. Done: the service runs and is tested on hosted AROS.
+2. Next: Network MIDI registers and browses `_apple-midi._udp` and
+   `_midi2._udp` through `bonami.library`, and resolves peers with
+   `ResolveServiceA()` and `LookupHostA()`.
+3. Then `network/mdns/embedded.c` and its use of UDP port 5353 are removed.
 
-Migration should proceed in three steps:
-
-1. Keep the embedded responder for package testing; use both reuse options if
-   it must coexist with another port-5353 process.
-2. Port Bonami's library and shared engine to AROS, then complete probing,
-   conflict handling, interface tracking, IPv6 (`ff02::fb`) using AROSTCP's
-   scoped multicast facilities, cancellation, and safe asynchronous event
-   delivery. The pinned source and port notes live under
-   [`network/mdns`](../network/mdns/README.md).
-3. Change Network MIDI to register and browse `_apple-midi._udp` and
-   `_midi2._udp` through that API, then remove its ownership of UDP port 5353.
-
-MIDIHub then consumes the CAMD endpoints exposed by the native Network MIDI
-device. Its Preferences application may configure sessions and show discovered
-peers, but discovery state belongs to Bonami/system mDNS and session state
-belongs behind the Network MIDI device boundary.
+MIDIHub then consumes the CAMD endpoints exposed by the Network MIDI device.
+Its Preferences program may show discovered peers, but discovery state
+belongs to mdnsd and session state behind the Network MIDI device boundary.
