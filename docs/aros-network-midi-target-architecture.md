@@ -131,6 +131,18 @@ That runtime may legitimately:
 7. map active peers/sessions onto that device's exposed CAMD endpoints/units;
 8. perform orderly shutdown and release all resources.
 
+One rule constrains item 5. A `bsdsocket.library` base belongs to the task
+that opened it, and AROSTCP refuses a socket call made on another task's
+base ("attempted to use library base of Task ..."). AROS's own `sshd` fell
+into this with one global `SocketBase` that its session processes
+overwrote; upstream commit `3563571948` (2026-10-11) gave each task its own
+base and moved the accepted socket across with `ReleaseSocket()` and
+`ObtainSocket()`. For the Network MIDI devices this means every socket call
+is made by the device's own task. The CAMD driver's entry points run in
+the tasks of CAMD's clients and must only pass bytes to that task; no
+global `SocketBase` may be reachable from them. `ports/aros/midihub/network.c`
+has such a global today and is correct only because one task uses it.
+
 The important boundary is that applications use the normal CAMD MIDI-device
 interface. Internal tasks and persistent network state are implementation
 details, not a separate application-facing service.

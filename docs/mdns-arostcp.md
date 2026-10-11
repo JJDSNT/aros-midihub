@@ -83,6 +83,15 @@ reconfiguration: at the start it says goodbye and closes
 `bsdsocket.library`, at the end it opens it again, finds the interfaces, and
 announces what applications had registered.
 
+The base and the sockets are the daemon's alone. mdnsd opens
+`bsdsocket.library` in its own task, keeps the base in its engine token and
+passes it to whatever needs it; there is no global base. Clients never
+touch a socket: `bonami.library` reaches the daemon through a message
+port, and a client's hook is run by the daemon and only queues an event.
+That is what AROSTCP requires, since a base is valid only in the task that
+opened it; AROS's `sshd` had to be corrected for sharing one (upstream
+commit `3563571948`). Nothing in the port changes because of it.
+
 Nothing else needs to be started, and no client keeps the engine alive: a
 program that opens `bonami.library` while mdnsd is not running gets
 `MDNSERR_NOENGINE` from its calls and can try again later. Network MIDI can

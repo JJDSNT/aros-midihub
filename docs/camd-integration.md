@@ -40,7 +40,13 @@ model, and every later transport starts from it:
   to them;
 - bytes to CAMD's receive function, and CAMD's transmit function drained on
   `ActivateXmit`;
-- no `camd.library` opened from the transport.
+- no `camd.library` opened from the transport;
+- the transport's own resources used only from the transport's own task.
+  CAMD calls `OpenPort()`, `ClosePort()` and `ActivateXmit` in the tasks of
+  its clients, and the driver's code runs there. It hands bytes over (a ring
+  and a signal, as `btmidi` does) and touches nothing else. This matters
+  most for sockets: a `bsdsocket.library` base belongs to the task that
+  opened it, and the stack refuses a call made on another task's base.
 
 CAMD client nodes are for programs: the SoundFont synthesizer, MIDIHub's
 router, tools. MIDIHub's own network and BLE code still uses them from the
