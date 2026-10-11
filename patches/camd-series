@@ -33,3 +33,4 @@ camd-endpoint-time
 camd-endpoint-ump
 camd-endpoint-layout
 camd-endpoint-hardening
+camd-receive-ring-and-wait

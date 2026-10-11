@@ -1,0 +1,154 @@
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -201,6 +201,7 @@ struct DriverData{
+ 	UWORD *re_end;
+ 	int unpicked;
+ 	UWORD *re_read;
++	BOOL re_overflow;		// the driver delivered more than the ring holds
+ 
+ // To know the status of a ReceiverProcess. 0=not alive, or not initialized yet. 1=alive and fine. 2=signal failed.
+ 	LONG isReceiverProcessAlive;
+diff --git a/workbench/libs/camd/camdwait.c b/workbench/libs/camd/camdwait.c
+--- a/workbench/libs/camd/camdwait.c
++++ b/workbench/libs/camd/camdwait.c
+@@ -17,6 +17,7 @@ struct SignalSemaphore camdwaitsemaphore={{0}};
+ struct SignalSemaphore camdwaitsemaphore2={{0}};
+ 
+ struct Task *camdwaittask;
++struct Task *camdwaitcaller;	// under camdwaitsemaphore2
+ ULONG camdwaitsig;
+ ULONG camdwaitsig2;
+ 
+@@ -85,8 +86,6 @@ SAVEDS void CamdTimerProc(void){
+ 		return;
+ 	}
+ 
+-	ObtainSemaphore(&camdwaitsemaphore);
+-
+ 	camdwaittask=FindTask(0L);
+ 
+ 	camdwaitprocstatus=1;
+@@ -98,23 +97,17 @@ SAVEDS void CamdTimerProc(void){
+ 		);
+ 		if(sig&SIGBREAKF_CTRL_C) break;
+ 
+-		if(sig & 1L<<camdwaitsig){				// Someone wants to obtain the semaphore?
++		if(sig & 1L<<camdwaitsig){				// Someone wants to wait a little.
+ 			TimerIO->tr_node.io_Command=TR_ADDREQUEST;
+ 			TimerIO->tr_time.tv_secs=0;
+ 			TimerIO->tr_time.tv_micro=10;
+-			DoIO((struct IORequest *)TimerIO);	// ..Better let them wait.
+-
+-			ReleaseSemaphore(&camdwaitsemaphore);		// Well, okey then.
++			DoIO((struct IORequest *)TimerIO);
+ 
+-			Wait(1L<<camdwaitsig2);					// Finished soon?
+-
+-			ObtainSemaphore(&camdwaitsemaphore);		// But I want it back!
++			Signal(camdwaitcaller,SIGF_SINGLE);	// That was it.
+ 		}
+ 
+ 	}
+ 
+-	ReleaseSemaphore(&camdwaitsemaphore);
+-
+ 	FreeSignal(1L<<camdwaitsig2);
+ 	FreeSignal(1L<<camdwaitsig);
+ 	CloseDevice((struct IORequest *)TimerIO);
+@@ -182,10 +175,14 @@ void CamdWait(void){
+ 
+ 		iswaiting=TRUE;
+ 
+-		Signal(camdwaittask,1L<<camdwaitsig);		// Give me the semaphore!
+-		ObtainSemaphore(&camdwaitsemaphore);			// This should take some time.
+-			Signal(camdwaittask,1L<<camdwaitsig2);	// Okey, I've got it.
+-		ReleaseSemaphore(&camdwaitsemaphore);		// You're welcome.
++		/* A real wait for the timer process's answer. The caller used to
++		   take a semaphore the process gave up for the occasion, which
++		   only waited when the process had run since the last call: a
++		   caller holding Forbid() waited once and then spun. */
++		camdwaitcaller=FindTask(0L);
++		SetSignal(0,SIGF_SINGLE);
++		Signal(camdwaittask,1L<<camdwaitsig);
++		Wait(SIGF_SINGLE);
+ 
+ 		iswaiting=FALSE;
+ 
+diff --git a/workbench/libs/camd/drivers.c b/workbench/libs/camd/drivers.c
+--- a/workbench/libs/camd/drivers.c
++++ b/workbench/libs/camd/drivers.c
+@@ -190,7 +190,7 @@ BOOL AllocDriverData(
+ 		}
+ 		driverdata->buffercurrsend_rt=driverdata->buffer_rt;
+ 		driverdata->buffercurr_rt=driverdata->buffer_rt;
+-		driverdata->bufferend=driverdata->buffer+OUTBUFFERSIZE_RT;
++		driverdata->bufferend_rt=driverdata->buffer_rt+OUTBUFFERSIZE_RT;
+ 
+ 
+ 		driverdata->status=0;
+diff --git a/workbench/libs/camd/midifromdriver.c b/workbench/libs/camd/midifromdriver.c
+--- a/workbench/libs/camd/midifromdriver.c
++++ b/workbench/libs/camd/midifromdriver.c
+@@ -5,6 +5,7 @@
+ */
+ 
+ 
++#include <aros/atomic.h>
+ #include <proto/exec.h>
+ #include <proto/dos.h>
+ 
+@@ -453,7 +454,7 @@ void Receiver_first(
+ 		(*driverdata->Input_Treat)(driverdata,input);
+ 	}
+ 
+-	driverdata->unpicked--;
++	AROS_ATOMIC_DEC(driverdata->unpicked);
+ }
+ 
+ 
+@@ -472,12 +473,21 @@ SAVEDS void ASM Receiver(
+ 	REG(a2) struct DriverData *driverdata
+ #endif
+ ){
++	/* A full ring loses what comes in, not what is waiting to be read.
++	   The receiver process reports it. */
++	if(driverdata->unpicked>=RECEIVERPROCBUFFERSIZE-1){
++		driverdata->re_overflow=TRUE;
++		Signal(&driverdata->ReceiverProc->pr_Task,1L<<driverdata->ReceiverSig);
++		return;
++	}
+ 	*driverdata->re_write=input;
+ 	driverdata->re_write++;
+ 	if(driverdata->re_write==driverdata->re_end){
+ 		driverdata->re_write=driverdata->re_start;
+ 	}
+-	driverdata->unpicked++;
++	/* The driver counts up from an interrupt or another task while the
++	   receiver process counts down. */
++	AROS_ATOMIC_INC(driverdata->unpicked);
+ 	Signal(&driverdata->ReceiverProc->pr_Task,1L<<driverdata->ReceiverSig);
+ 
+ }
+diff --git a/workbench/libs/camd/receiverproc.c b/workbench/libs/camd/receiverproc.c
+--- a/workbench/libs/camd/receiverproc.c
++++ b/workbench/libs/camd/receiverproc.c
+@@ -42,6 +42,18 @@ SAVEDS void ReceiverFunc(void){
+ 			while(driverdata->unpicked>0){
+ 				Receiver_first(driverdata);
+ 			}
++			/* Bytes were lost: tell the port's receivers, give up a
++			   SysEx message that is being collected, and look for a
++			   status byte again. */
++			if(driverdata->re_overflow){
++				driverdata->re_overflow=FALSE;
++				Receiver_SetError(driverdata,CMEF_RecvOverflow);
++				if(driverdata->EndpointBackend!=NULL){
++					DeliverDriverEndpointSysEx(driverdata,0xff);
++					driverdata->EndpointInputDropped++;
++				}
++				driverdata->Input_Treat=Receiver_init;
++			}
+ 		}
+ 		if(sig&1L<<driverdata->EndpointOutputSig){
+ 			camd_native_worker_fanout_wake_all(

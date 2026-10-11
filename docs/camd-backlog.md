@@ -35,6 +35,16 @@ Closed in `aros-camd-endpoint-hardening.patch` and verified on hosted AROS
 | B11 | A session's queue is ordered by time, equal times by arrival. |
 | B13 | A session may ask for a SysEx limit up to 65536 bytes; an oversize received message is dropped and counted. |
 
+Closed in `aros-camd-receive-ring-and-wait.patch`, with the suite's stress
+pass (six tasks, 900 rounds, no unexpected result in fifteen runs):
+
+| # | What was done |
+|---|---|
+| B05 | `test_endpoint_stress`: two senders, a receiver, two publishers and an observer at once on the loopback port and on published endpoints. It found nothing; the count of received messages varies with timing because input sessions come and go, and is not asserted. |
+| B25 | `Receiver()` refuses what the ring cannot hold; the receiver process reports `CMEF_RecvOverflow`, gives up a SysEx message in progress and looks for a status byte again. The ring's count is updated atomically. |
+| B27 | `CamdWait()` waits for an answer signal from its timer process instead of borrowing a semaphore, so it blocks on every call. There is no test that holds `Forbid()` across a legacy wait. |
+| B28 | `bufferend_rt` is set; 2000 realtime messages pass a driver port. |
+
 Found while doing it, on hosted AROS: the shell that executes `User-Startup`
 at boot runs each command with task switching disabled (`TDNestCnt` is 1 when
 `main()` starts; a program started with `Run` has -1). A program there that
@@ -46,11 +56,7 @@ the boot shell is intended is a question for AROS, not for CAMD.
 
 ## P0 — can hurt as it is
 
-| # | Limit or defect | What to do | Done when |
-|---|---|---|---|
-| B05 | Only one task at a time has ever driven the endpoint functions. | A stress pass in the compatibility suite: several tasks opening, sending, receiving, closing, publishing, withdrawing and taking snapshots at once, on the loopback port and a published endpoint. This is a test, but the locking it exercises is library scope. | It runs for a fixed number of rounds on hosted AROS with no hang, crash or lost count, several times in a row. Fix what it finds. |
-| B25 | A port's receive ring (1025 entries) has no overflow check: `Receiver()` writes past unread data and only counts up. A driver that delivers a burst faster than the receiver process reads corrupts the stream; it was hit with a 10000-byte SysEx on the loopback driver. This is legacy CAMD code. | Refuse or count entries that do not fit, and report the loss as a receive error on the port's cluster and to its input sessions. | A burst larger than the ring loses bytes cleanly, with the error visible and later messages intact. |
-| B27 | Legacy waits on a driver port (`PutSysEx()`, `PutMidi()` on a full buffer, `ParseMidi()`) loop on `CamdWait()`, which stops waiting after its first call when the caller holds `Forbid()`: the caller then spins with the system stopped. Legacy CAMD code. | Make `CamdWait()` a real wait, as the drain now has. | A legacy `PutSysEx()` to a busy port under `Forbid()` ends. |
+Nothing open.
 
 ## P1 — a real client runs into it soon
 
@@ -58,7 +64,6 @@ the boot shell is intended is a question for AROS, not for CAMD.
 |---|---|---|---|
 | B12 | Scheduling exists only for driver ports. A published endpoint gets raw times. | Optional per publish request: "CAMD holds messages until their time before I take them". | A publisher that asks for it takes a timed message only when it is due. |
 | B26 | `DrainEndpointSession()` looks every two milliseconds instead of being woken when the queue empties. | Have the session's worker, or the publisher's read, signal the drainer; keep the timer for the limit only. | A drain returns within a scheduling quantum of the last hand-over, without periodic wakeups. |
-| B28 | `AllocDriverData()` sets `bufferend` twice and never `bufferend_rt`, so the realtime send ring of a driver port never wraps and writes past its 1025 bytes after that many realtime messages. Legacy CAMD code, found by reading. | Set `bufferend_rt`. | 2000 realtime messages to a driver port leave the heap intact. |
 
 ## P2 — complete the surface before review
 

@@ -680,6 +680,44 @@ static void test_loopback(void)
           "SysEx sent to a driver port is received from it", NULL);
     Delay(5);
     check(!GetMidi(other, &msg), "another port of the driver receives nothing", NULL);
+
+    /* More realtime messages than the port's realtime ring holds at once. */
+    {
+        int i, seen = 0;
+
+        for (i = 0; i < 2000; i++) {
+            PutMidi(sender, 0xf8000000UL);
+            while (GetMidi(in, &msg)) seen++;
+        }
+        Delay(5);
+        while (GetMidi(in, &msg)) seen++;
+        GetMidiErr(in);
+        PutMidi(sender, 0x90404000UL);
+        check(seen == 2000 && get_soon(in, &msg) && msg.mm_Status == 0x90 && msg.mm_Data1 == 0x40,
+              "two thousand realtime messages pass a driver port and leave it working", NULL);
+    }
+
+    /* A burst the port's receive ring cannot hold: the sender outranks the
+       port's receiver process, so nothing is read while it arrives. */
+    {
+        static UBYTE burst[3000];
+        BYTE old;
+        int i;
+
+        burst[0] = 0xf0;
+        for (i = 1; i < (int)sizeof(burst) - 1; i++) burst[i] = 0x11;
+        burst[sizeof(burst) - 1] = 0xf7;
+        GetMidiErr(in);
+        old = SetTaskPri(FindTask(NULL), 40);
+        PutSysEx(sender, burst);
+        SetTaskPri(FindTask(NULL), old);
+        Delay(10);
+        while (GetMidi(in, &msg)) if (msg.mm_Status == 0xf0) SkipSysEx(in);
+        check(GetMidiErr(in) & CMEF_RecvOverflow, "a burst past the receive ring is reported as CMEF_RecvOverflow", NULL);
+        PutMidi(sender, 0x90414000UL);
+        check(get_soon(in, &msg) && msg.mm_Status == 0x90 && msg.mm_Data1 == 0x41,
+              "and the port receives correctly afterwards", NULL);
+    }
 out:
     if (sender) RemoveMidiLink(sender);
     if (receiver) RemoveMidiLink(receiver);
@@ -2288,6 +2326,254 @@ static void test_endpoint_limits(void)
           "a driver port keeps its stored ID", NULL);
 }
 
+/* Stress: several tasks use the endpoint functions at once. Each counts the
+   rounds it finished and the results it did not expect. */
+#define STRESS_TASKS 6
+#define STRESS_ROUNDS 150
+
+static struct CAMDEndpointIDV1 stress_port;
+static volatile ULONG stress_rounds[STRESS_TASKS], stress_errors[STRESS_TASKS], stress_done[STRESS_TASKS];
+static volatile ULONG stress_received, stress_sent, stress_refused;
+static volatile LONG stress_next;
+
+static struct CAMDSessionRequestV1 stress_request(ULONG direction)
+{
+    struct CAMDSessionRequestV1 request;
+
+    memset(&request, 0, sizeof(request));
+    request.Size = sizeof(request);
+    request.Version = 1;
+    request.EndpointID = stress_port;
+    request.Direction = direction;
+    request.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+    request.Protocol = CAMD_PROTOCOL_MIDI1;
+    request.QueueCapacity = 16;
+    request.Signal = CAMD_SIGNAL_NONE;
+    return request;
+}
+
+/* Opens an output session on the loopback port, sends and closes. */
+static void stress_sender(ULONG me)
+{
+    struct CAMDSessionRequestV1 request = stress_request(CAMD_DIRECTION_OUTPUT);
+    struct CAMDHandleV1 session;
+    struct CAMDMIDI1EventV1 events[4];
+    ULONG round, i;
+    LONG result;
+
+    for (round = 0; round < STRESS_ROUNDS; round++) {
+        if (OpenEndpointSession(&request, &session, NULL) != CAMD_REGISTRY_OK) {
+            stress_errors[me]++;
+            continue;
+        }
+        for (i = 0; i < 4; i++) events[i] = midi1(0x90 | (UBYTE)me, (UBYTE)(round & 0x7f), (UBYTE)i);
+        result = PutEndpointMidi(&session, events, 4);
+        if (result == CAMD_REGISTRY_OK) stress_sent += 4;
+        else if (result == CAMD_REGISTRY_QUEUE_FULL) stress_refused += 4;
+        else stress_errors[me]++;
+        result = DrainEndpointSession(&session, 2000);
+        if (result != CAMD_REGISTRY_OK) stress_errors[me]++;
+        if (CloseEndpointSession(&session) != CAMD_REGISTRY_OK) stress_errors[me]++;
+        stress_rounds[me]++;
+    }
+}
+
+/* Opens an input session on the loopback port, reads what there is, closes. */
+static void stress_receiver(ULONG me)
+{
+    struct CAMDSessionRequestV1 request = stress_request(CAMD_DIRECTION_INPUT);
+    struct CAMDHandleV1 session;
+    struct CAMDSessionStatsV1 stats;
+    struct CAMDMIDI1EventV1 event;
+    UBYTE buffer[16];
+    ULONG round, length, tries;
+    LONG result;
+
+    request.QueueCapacity = 64;
+    for (round = 0; round < STRESS_ROUNDS; round++) {
+        if (OpenEndpointSession(&request, &session, NULL) != CAMD_REGISTRY_OK) {
+            stress_errors[me]++;
+            continue;
+        }
+        for (tries = 0; tries < 20; tries++) {
+            result = GetEndpointMidi(&session, &event, buffer, sizeof(buffer), &length);
+            if (result == CAMD_REGISTRY_OK) {
+                if (event.Length != 3 || (event.Bytes[0] & 0xf0) != 0x90) stress_errors[me]++;
+                stress_received++;
+            } else if (result != CAMD_REGISTRY_EMPTY && result != CAMD_REGISTRY_QUEUE_FULL) {
+                stress_errors[me]++;
+            }
+        }
+        memset(&stats, 0, sizeof(stats));
+        stats.Size = sizeof(stats);
+        stats.Version = 1;
+        if (GetEndpointSessionStats(&session, &stats) != CAMD_REGISTRY_OK) stress_errors[me]++;
+        if (CloseEndpointSession(&session) != CAMD_REGISTRY_OK) stress_errors[me]++;
+        stress_rounds[me]++;
+    }
+}
+
+/* Publishes an endpoint, is its own client both ways, withdraws it. */
+static void stress_publisher(ULONG me)
+{
+    struct CAMDPublishRequestV1 publish;
+    struct CAMDSessionRequestV1 request;
+    struct CAMDHandleV1 port, out, in;
+    struct CAMDEndpointIDV1 id;
+    struct CAMDMIDI1EventV1 event;
+    UBYTE buffer[16];
+    ULONG round, length;
+
+    for (round = 0; round < STRESS_ROUNDS; round++) {
+        publish = publish_request("", CAMD_DIRECTION_INPUT | CAMD_DIRECTION_OUTPUT);
+        sprintf(publish.Name, "camdcompat stress %lu", (unsigned long)me);
+        publish.Flags = CAMD_PUBLISH_TEMPORARY;
+        if (PublishEndpoint(&publish, &port, &id) != CAMD_REGISTRY_OK) {
+            stress_errors[me]++;
+            continue;
+        }
+        request = stress_request(CAMD_DIRECTION_OUTPUT);
+        request.EndpointID = id;
+        if (OpenEndpointSession(&request, &out, NULL) == CAMD_REGISTRY_OK) {
+            event = midi1(0x95, (UBYTE)(round & 0x7f), 1);
+            if (PutEndpointMidi(&out, &event, 1) != CAMD_REGISTRY_OK) stress_errors[me]++;
+            if (GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length) != CAMD_REGISTRY_OK ||
+                event.Bytes[1] != (UBYTE)(round & 0x7f))
+                stress_errors[me]++;
+        } else {
+            stress_errors[me]++;
+            out.generation = 0;
+        }
+        request.Direction = CAMD_DIRECTION_INPUT;
+        if (OpenEndpointSession(&request, &in, NULL) == CAMD_REGISTRY_OK) {
+            event = midi1(0x96, (UBYTE)(round & 0x7f), 2);
+            if (PutPublishedMidi(&port, &event, 1) != CAMD_REGISTRY_OK) stress_errors[me]++;
+            if (GetEndpointMidi(&in, &event, buffer, sizeof(buffer), &length) != CAMD_REGISTRY_OK ||
+                event.Bytes[0] != 0x96)
+                stress_errors[me]++;
+        } else {
+            stress_errors[me]++;
+            in.generation = 0;
+        }
+        /* Withdraw with the sessions still open on every other round. */
+        if (round & 1) {
+            if (out.generation) CloseEndpointSession(&out);
+            if (in.generation) CloseEndpointSession(&in);
+            WithdrawEndpoint(&port);
+        } else {
+            WithdrawEndpoint(&port);
+            if (out.generation && CloseEndpointSession(&out) != CAMD_REGISTRY_OK) stress_errors[me]++;
+            if (in.generation && CloseEndpointSession(&in) != CAMD_REGISTRY_OK) stress_errors[me]++;
+        }
+        stress_rounds[me]++;
+    }
+}
+
+/* Takes snapshots and reads a watch while the others change things. */
+static void stress_observer(ULONG me)
+{
+    struct CAMDHandleV1 snapshot, watch;
+    struct CAMDEndpointInfoV1 info;
+    struct CAMDEndpointWatchEventV1 change;
+    ULONG round, count, i;
+    LONG result;
+
+    if (StartEndpointWatch(&watch, CAMD_SIGNAL_NONE, NULL) != CAMD_REGISTRY_OK) {
+        stress_errors[me]++;
+        return;
+    }
+    for (round = 0; round < STRESS_ROUNDS; round++) {
+        count = 0;
+        if (ObtainEndpointSnapshot(&snapshot, &count, NULL) != CAMD_REGISTRY_OK) {
+            stress_errors[me]++;
+            continue;
+        }
+        for (i = 0; i < count; i++) {
+            memset(&info, 0, sizeof(info));
+            info.Size = sizeof(info);
+            info.Version = 1;
+            if (GetEndpointInfo(&snapshot, i, &info) != CAMD_REGISTRY_OK || info.Name[0] == 0) stress_errors[me]++;
+        }
+        ReleaseEndpointSnapshot(&snapshot);
+        for (i = 0; i < 40; i++) {
+            result = GetEndpointWatchEvent(&watch, &change);
+            if (result == CAMD_REGISTRY_EMPTY) break;
+            if (result != CAMD_REGISTRY_OK) stress_errors[me]++;
+        }
+        stress_rounds[me]++;
+    }
+    EndEndpointWatch(&watch);
+}
+
+static void stress_entry(void)
+{
+    ULONG me;
+
+    Forbid();
+    me = (ULONG)stress_next++;
+    Permit();
+    switch (me) {
+    case 0:
+    case 1: stress_sender(me); break;
+    case 2: stress_receiver(me); break;
+    case 3:
+    case 4: stress_publisher(me); break;
+    default: stress_observer(me); break;
+    }
+    stress_done[me] = 1;
+}
+
+static void test_endpoint_stress(void)
+{
+    struct CAMDHandleV1 in, out;
+    struct CAMDSessionRequestV1 request;
+    struct CAMDMIDI1EventV1 event;
+    UBYTE buffer[16];
+    ULONG length, errors = 0, rounds = 0, finished = 0, i, waited;
+
+    if (!find_endpoint("loopback.1", &stress_port)) {
+        skip("endpoint stress", "no DEVS:Midi/loopback");
+        return;
+    }
+    stress_next = 0;
+    for (i = 0; i < STRESS_TASKS; i++) {
+        if (!CreateNewProcTags(NP_Entry, (IPTR)stress_entry, NP_Name, (IPTR)"camdcompat stress", NP_Priority, 0, TAG_END)) {
+            check(0, "stress: CreateNewProc", NULL);
+            stress_done[i] = 1;
+        }
+    }
+    for (waited = 0; waited < 120 * 50; waited += 5) {
+        finished = 0;
+        for (i = 0; i < STRESS_TASKS; i++) finished += stress_done[i];
+        if (finished == STRESS_TASKS) break;
+        Delay(5);
+    }
+    for (i = 0; i < STRESS_TASKS; i++) {
+        errors += stress_errors[i];
+        rounds += stress_rounds[i];
+    }
+    printf("stress: %lu rounds, %lu sent, %lu refused, %lu received, %lu unexpected results\n", (unsigned long)rounds,
+           (unsigned long)stress_sent, (unsigned long)stress_refused, (unsigned long)stress_received, (unsigned long)errors);
+    check(finished == STRESS_TASKS, "six tasks using the endpoint functions at once all finish", NULL);
+    check(rounds == STRESS_TASKS * STRESS_ROUNDS, "every round ran", NULL);
+    check(errors == 0, "no call gave a result it should not", NULL);
+    if (finished != STRESS_TASKS) return;
+
+    /* The port and the library still work. */
+    request = stress_request(CAMD_DIRECTION_INPUT);
+    if (OpenEndpointSession(&request, &in, NULL) != CAMD_REGISTRY_OK) {
+        check(0, "after the stress a session opens", NULL);
+        return;
+    }
+    request.Direction = CAMD_DIRECTION_OUTPUT;
+    event = midi1(0x9a, 0x55, 0x66);
+    check(OpenEndpointSession(&request, &out, NULL) == CAMD_REGISTRY_OK && PutEndpointMidi(&out, &event, 1) == CAMD_REGISTRY_OK &&
+          read_soon(&in, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK && event.Bytes[0] == 0x9a &&
+          event.Bytes[1] == 0x55, "after the stress the port still carries a message", NULL);
+    CloseEndpointSession(&out);
+    CloseEndpointSession(&in);
+}
+
 /* A client that exits with a snapshot, a session and a published endpoint
    left behind. The runner flushes memory and runs --v43 again: after an
    ordinary exit the library has released them and goes, after an exit that
@@ -2513,6 +2799,7 @@ int main(int argc, char **argv)
             RUN(test_endpoint_watch);
             RUN(test_published_endpoint);
             RUN(test_ump_endpoint);
+            RUN(test_endpoint_stress);
             RUN(test_endpoint_limits);
         }
     } else if (v42_mode) {

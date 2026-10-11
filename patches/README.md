@@ -208,6 +208,7 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-endpoint-ump.patch` | native UMP without conversion for published endpoints: `PutEndpointUMP()`, `GetEndpointUMP()`, `PutPublishedUMP()`, `GetPublishedUMP()`; Groups and Function Blocks with `SetPublishedEndpointTopology()`, `GetEndpointGroup()` and `GetEndpointFunctionBlock()`; word counts checked against the message type |
 | `aros-camd-endpoint-layout.patch` | `midi/camdendpoint.h` checks every record's size at compile time |
 | `aros-camd-endpoint-hardening.patch` | objects go with their task's last close of the library; temporary IDs and a full identity store; time-ordered session queues and timed SysEx; a bounded, really blocking drain; direction flags, snapshot generation, name checks, per-session SysEx limits and `GetPublishedEndpointStats()` |
+| `aros-camd-receive-ring-and-wait.patch` | legacy fixes: a full receive ring loses the new bytes and reports `CMEF_RecvOverflow` instead of overwriting unread ones; `CamdWait()` really waits on every call; the realtime send ring wraps |
 
 ```sh
 grep -v '^#' patches/camd-series | while read -r p; do
@@ -382,10 +383,10 @@ patches and with all of them:
 |---|---|---|---|
 | first four patches | 50 of 50 | skipped | 4 of 8 (not implemented) |
 | up to `camd-part-notify` | 50 of 50 | skipped | 8 of 8 |
-| all patches | 65 of 65 | 34 of 34 | 13 of 13 |
+| all patches | 68 of 68 | 34 of 34 | 13 of 13 |
 
-`MIDIHubCAMDCompat --v43` is a client of the provisional endpoint functions: 177
-checks on hosted AROS. The runners repeat it twice in the second boot: after
+`MIDIHubCAMDCompat --v43` is a client of the provisional endpoint functions: 181
+checks on hosted AROS, a stress pass with six tasks among them. The runners repeat it twice in the second boot: after
 `--v43-leak` left objects behind, closed the library and `Avail FLUSH`
 expunged it, and after `--v43-abandon` ended without closing it, when the
 library has to stay. They start the suite with `Run`: the shell that executes
