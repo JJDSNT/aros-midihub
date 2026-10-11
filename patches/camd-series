@@ -34,3 +34,4 @@ camd-endpoint-ump
 camd-endpoint-layout
 camd-endpoint-hardening
 camd-receive-ring-and-wait
+camd-endpoint-hold-and-drain

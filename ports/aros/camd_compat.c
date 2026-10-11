@@ -2326,6 +2326,125 @@ static void test_endpoint_limits(void)
           "a driver port keeps its stored ID", NULL);
 }
 
+/* A publisher in another task: it takes what clients sent a little later. */
+static struct CAMDHandleV1 taker_port;
+static volatile int taker_done;
+
+static void taker_entry(void)
+{
+    struct CAMDMIDI1EventV1 event;
+    UBYTE buffer[8];
+    ULONG length;
+
+    Delay(6);
+    while (GetPublishedMidi(&taker_port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK);
+    taker_done = 1;
+}
+
+/* A published endpoint that has CAMD keep messages until their time, and a
+   drain that is woken when another task has read. */
+static void test_published_hold(void)
+{
+    struct CAMDPublishRequestV1 publish;
+    struct CAMDSessionRequestV1 request;
+    struct CAMDHandleV1 port, session;
+    struct CAMDEndpointIDV1 id;
+    struct CAMDMIDI1EventV1 event, events[2];
+    UBYTE buffer[8];
+    ULONG length, target, started, took;
+    BYTE bit = AllocSignal(-1);
+    LONG result;
+    int tries;
+
+    if (bit < 0) {
+        check(0, "hold: AllocSignal", NULL);
+        return;
+    }
+    publish = publish_request("camdcompat hold", CAMD_DIRECTION_OUTPUT);
+    publish.Flags = CAMD_PUBLISH_TEMPORARY | CAMD_PUBLISH_HOLD_UNTIL_DUE;
+    publish.DataFormat = CAMD_DATA_FORMAT_UMP;
+    check(PublishEndpoint(&publish, &port, NULL) == CAMD_REGISTRY_INVALID, "holding until due is CAMD_REGISTRY_INVALID for a UMP endpoint", NULL);
+    publish.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+    publish.Signal = (ULONG)bit;
+    result = PublishEndpoint(&publish, &port, &id);
+    check(result == CAMD_REGISTRY_OK, "an endpoint that holds messages until they are due is published", NULL);
+    if (result != CAMD_REGISTRY_OK) {
+        FreeSignal(bit);
+        return;
+    }
+    memset(&request, 0, sizeof(request));
+    request.Size = sizeof(request);
+    request.Version = 1;
+    request.EndpointID = id;
+    request.Direction = CAMD_DIRECTION_OUTPUT;
+    request.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+    request.Protocol = CAMD_PROTOCOL_MIDI1;
+    request.QueueCapacity = 8;
+    request.Signal = CAMD_SIGNAL_NONE;
+    result = OpenEndpointSession(&request, &session, NULL);
+    check(result == CAMD_REGISTRY_OK, "hold: a client opens a session", NULL);
+    if (result != CAMD_REGISTRY_OK) goto out;
+
+    /* One for 250 ms from now, then one without a time. */
+    SetSignal(0, 1UL << bit);
+    target = CamdTime() + 250;
+    events[0] = midi1(0x99, 0x01, 0x40);
+    events[0].Flags = CAMD_EVENT_TIME_VALID;
+    events[0].ClockDomain = CAMD_CLOCK_CAMD;
+    events[0].TimeLow = target;
+    events[1] = midi1(0x99, 0x02, 0x40);
+    check(PutEndpointMidi(&session, events, 2) == CAMD_REGISTRY_OK, "the client sends a timed and an untimed message", NULL);
+    result = CAMD_REGISTRY_EMPTY;
+    for (tries = 0; tries < 50 && result == CAMD_REGISTRY_EMPTY; tries++) {
+        result = GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length);
+        if (result == CAMD_REGISTRY_EMPTY) Delay(1);
+    }
+    check(result == CAMD_REGISTRY_OK && event.Bytes[1] == 0x02 && (LONG)(target - CamdTime()) > 0,
+          "the publisher takes the untimed one at once", NULL);
+    SetSignal(0, 1UL << bit);
+    check(GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_EMPTY &&
+          DrainEndpointSession(&session, 0) == CAMD_REGISTRY_QUEUE_FULL && (LONG)(target - CamdTime()) > 0,
+          "the timed one is not there to take before its time, and the session is not drained", NULL);
+    Wait(1UL << bit);
+    took = CamdTime();
+    check(GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK && event.Bytes[1] == 0x01 &&
+          (LONG)(took - target) >= 0 && took - target < 250, "the publisher is signalled and takes it when its time has come", NULL);
+    check(DrainEndpointSession(&session, 500) == CAMD_REGISTRY_OK, "the session is then drained", NULL);
+
+    /* Another task reads 120 ms from now: the drain returns then, not at
+       the end of its three seconds or of a one-second look. */
+    events[0] = midi1(0x99, 0x03, 0x40);
+    taker_port = port;
+    taker_done = 0;
+    if (PutEndpointMidi(&session, events, 1) == CAMD_REGISTRY_OK &&
+        CreateNewProcTags(NP_Entry, (IPTR)taker_entry, NP_Name, (IPTR)"camdcompat taker", NP_Priority, 0, TAG_END)) {
+        started = CamdTime();
+        result = DrainEndpointSession(&session, 3000);
+        took = CamdTime() - started;
+        check(result == CAMD_REGISTRY_OK && took >= 80 && took < 700, "a drain is woken when another task has taken the message", NULL);
+        for (tries = 0; tries < 100 && !taker_done; tries++) Delay(1);
+    } else {
+        check(0, "hold: the taking task starts", NULL);
+    }
+
+    /* Withdrawing wakes a drain too. */
+    events[0] = midi1(0x99, 0x04, 0x40);
+    events[0].Flags = CAMD_EVENT_TIME_VALID;
+    events[0].ClockDomain = CAMD_CLOCK_CAMD;
+    events[0].TimeLow = CamdTime() + 60000;
+    check(PutEndpointMidi(&session, events, 1) == CAMD_REGISTRY_OK, "a message for a minute from now is queued", NULL);
+    WithdrawEndpoint(&port);
+    started = CamdTime();
+    check(DrainEndpointSession(&session, 3000) != CAMD_REGISTRY_QUEUE_FULL && CamdTime() - started < 700,
+          "a drain does not wait for a withdrawn endpoint", NULL);
+    check(CloseEndpointSession(&session) == CAMD_REGISTRY_OK, "hold: the session closes with a message still waiting", NULL);
+    FreeSignal(bit);
+    return;
+out:
+    WithdrawEndpoint(&port);
+    FreeSignal(bit);
+}
+
 /* Stress: several tasks use the endpoint functions at once. Each counts the
    rounds it finished and the results it did not expect. */
 #define STRESS_TASKS 6
@@ -2799,6 +2918,7 @@ int main(int argc, char **argv)
             RUN(test_endpoint_watch);
             RUN(test_published_endpoint);
             RUN(test_ump_endpoint);
+            RUN(test_published_hold);
             RUN(test_endpoint_stress);
             RUN(test_endpoint_limits);
         }

@@ -107,9 +107,11 @@ These are deliberate or still open; each is what the code does today.
   (gate U02), and nothing was tested against another UMP implementation.
 - One clock: `CAMD_CLOCK_CAMD`, which is `CamdTime()` in milliseconds and
   wraps after 49.7 days. A time more than 2^31 ms ahead counts as past.
-- Scheduling exists for sessions to a driver's port only. A published
-  endpoint gets its clients' times as given and has to keep them itself, and
-  legacy links carry no time.
+- Scheduling exists for sessions to a driver's port, and for a MIDI 1.0
+  endpoint published with `CAMD_PUBLISH_HOLD_UNTIL_DUE`, at the cost of a
+  worker process per client session. Any other published endpoint gets its
+  clients' times as given and has to keep them itself. Legacy links carry no
+  time, and UMP is never held.
 - A received message's time is when it reached the session's queue, taken in
   the port's receiver process, not when the hardware saw it.
 - Scheduling is as exact as timer.device and the session's worker process,
@@ -141,8 +143,11 @@ These are deliberate or still open; each is what the code does today.
   loaded, and a signal it named goes on being sent to a task that no longer
   exists, as CAMD 41 does for a node left behind.
 - Nothing waits except `DrainEndpointSession()`, which waits at most the time
-  it is given, looking every two milliseconds. It really blocks, so the
-  session's worker runs also when the caller holds `Forbid()`. Every other
+  it is given and is woken when the queue has been emptied or its endpoint
+  withdrawn; on a withdrawn endpoint it returns `CAMD_REGISTRY_RETIRED` at
+  once. It really blocks, so the session's worker runs also when the caller
+  holds `Forbid()`. With more than 16 tasks draining at once, the others
+  look every two milliseconds instead. Every other
   function returns at once; none assumes that other tasks get to run while it
   is inside CAMD.
 - A session hands its messages over by time: one that waits does not hold

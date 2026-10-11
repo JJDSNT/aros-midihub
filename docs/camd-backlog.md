@@ -45,6 +45,19 @@ pass (six tasks, 900 rounds, no unexpected result in fifteen runs):
 | B27 | `CamdWait()` waits for an answer signal from its timer process instead of borrowing a semaphore, so it blocks on every call. There is no test that holds `Forbid()` across a legacy wait. |
 | B28 | `bufferend_rt` is set; 2000 realtime messages pass a driver port. |
 
+Closed in `aros-camd-endpoint-hold-and-drain.patch` (193 v43 checks, three
+runs in a row):
+
+| # | What was done |
+|---|---|
+| B12 | `CAMD_PUBLISH_HOLD_UNTIL_DUE`: each client session of such an endpoint gets a worker that moves a message to the publisher's side when its time has come; the publisher is signalled only then. MIDI 1.0 endpoints only. |
+| B26 | `DrainEndpointSession()` is woken by the session's worker, by the publisher's read and by a withdrawal; its timer is only for the limit. With more than 16 tasks draining at once, or no free signal, a caller falls back to looking every two milliseconds. |
+
+The test for these found two defects in the published endpoint's drain: it
+signalled the publisher for a message that was still being held, and it kept
+waiting on a withdrawn endpoint whose client had something queued. A drain on
+a withdrawn endpoint now returns `CAMD_REGISTRY_RETIRED` at once.
+
 Found while doing it, on hosted AROS: the shell that executes `User-Startup`
 at boot runs each command with task switching disabled (`TDNestCnt` is 1 when
 `main()` starts; a program started with `Run` has -1). A program there that
@@ -60,10 +73,7 @@ Nothing open.
 
 ## P1 — a real client runs into it soon
 
-| # | Limit or defect | What to do | Done when |
-|---|---|---|---|
-| B12 | Scheduling exists only for driver ports. A published endpoint gets raw times. | Optional per publish request: "CAMD holds messages until their time before I take them". | A publisher that asks for it takes a timed message only when it is due. |
-| B26 | `DrainEndpointSession()` looks every two milliseconds instead of being woken when the queue empties. | Have the session's worker, or the publisher's read, signal the drainer; keep the timer for the limit only. | A drain returns within a scheduling quantum of the last hand-over, without periodic wakeups. |
+Nothing open.
 
 ## P2 — complete the surface before review
 

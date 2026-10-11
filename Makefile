@@ -208,11 +208,11 @@ build/camd-identity-store-recovery-test: \
 		tests/camd_identity_store_recovery.c \
 		prototypes/camd/identity_store_recovery.c
 
-build/camd-app-endpoint-test: tests/camd_app_endpoint.c prototypes/camd/app_endpoint.c prototypes/camd/legacy_driver_adapter.c prototypes/camd/native_event_queue.c prototypes/camd/provider_contract.c prototypes/camd/endpoint_registry.c \
+build/camd-app-endpoint-test: tests/camd_app_endpoint.c prototypes/camd/app_endpoint.c prototypes/camd/legacy_driver_adapter.c prototypes/camd/native_event_queue.c prototypes/camd/native_event_pump.c prototypes/camd/native_event_worker.c prototypes/camd/provider_contract.c prototypes/camd/endpoint_registry.c \
 		prototypes/camd/app_endpoint.h prototypes/camd/camdendpoint.h
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Iprototypes/camd -pthread -o $@ \
-		tests/camd_app_endpoint.c prototypes/camd/app_endpoint.c prototypes/camd/legacy_driver_adapter.c prototypes/camd/native_event_queue.c prototypes/camd/provider_contract.c prototypes/camd/endpoint_registry.c
+		tests/camd_app_endpoint.c prototypes/camd/app_endpoint.c prototypes/camd/legacy_driver_adapter.c prototypes/camd/native_event_queue.c prototypes/camd/native_event_pump.c prototypes/camd/native_event_worker.c prototypes/camd/provider_contract.c prototypes/camd/endpoint_registry.c
 
 build/camd-legacy-identity-set-test: tests/camd_legacy_identity_set.c \
 		prototypes/camd/legacy_identity_set.c \

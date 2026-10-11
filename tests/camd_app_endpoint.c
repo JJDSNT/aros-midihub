@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 struct consumer {
     unsigned int events;
@@ -272,6 +273,146 @@ static void test_ump(void)
     assert(camd_legacy_driver_adapter_set_topology(adapter, 0, group, 1,
                                                    NULL, 0) ==
            CAMD_REGISTRY_RETIRED);
+    assert(camd_legacy_driver_adapter_release(adapter) == CAMD_REGISTRY_OK);
+    assert(camd_app_endpoint_destroy(app) == CAMD_PROVIDER_OK);
+    camd_registry_destroy(registry);
+}
+
+static uint32_t hold_clock(void *context)
+{
+    struct timespec now;
+
+    (void)context;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint32_t)(now.tv_sec * 1000u + now.tv_nsec / 1000000);
+}
+
+static void hold_sleep(long milliseconds)
+{
+    struct timespec pause = { milliseconds / 1000,
+                              (milliseconds % 1000) * 1000000L };
+
+    nanosleep(&pause, NULL);
+}
+
+static volatile unsigned int hold_notified;
+
+static void hold_notify(void *context)
+{
+    (void)context;
+    ++hold_notified;
+}
+
+/* With a clock the endpoint keeps a timed message until it is due. */
+static void test_hold(void)
+{
+    struct CAMDEndpointRegistry *registry = camd_registry_create();
+    struct CAMDAppEndpoint *app = NULL;
+    struct CAMDLegacyDriverAdapter *adapter = NULL;
+    struct CAMDAppEndpointConfigV1 config;
+    struct CAMDLegacyPortDescriptorV1 port;
+    struct CAMDLegacyDriverDescriptorV1 descriptor;
+    struct CAMDProviderOpenRequestV1 request;
+    struct CAMDMIDI1EventV1 events[2], taken;
+    struct CAMDHandleV1 session;
+    const uint8_t sysex[] = { 0xf0, 0x7d, 0x05, 0xf7 };
+    uint8_t buffer[8];
+    size_t sysex_count = 0;
+    uint32_t target;
+    int tries;
+
+    assert(registry);
+    memset(&config, 0, sizeof(config));
+    config.Size = sizeof(config);
+    config.Version = 1;
+    config.Directions = CAMD_PROVIDER_DIRECTION_OUTPUT;
+    config.MaxQueueCapacity = 8;
+    config.MaxSysExBytes = 8;
+    config.MaxSessions = 2;
+    config.Now = hold_clock;
+    config.Notify = hold_notify;
+    assert(camd_app_endpoint_create(&config, &app) == CAMD_PROVIDER_OK);
+    memset(&port, 0, sizeof(port));
+    port.Size = sizeof(port);
+    port.Version = 1;
+    port.EndpointID = make_id(21);
+    port.Directions = CAMD_PROVIDER_DIRECTION_OUTPUT;
+    strcpy(port.Name, "Program holding port");
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.Size = sizeof(descriptor);
+    descriptor.Version = 1;
+    descriptor.ProviderID = make_id(22);
+    descriptor.IdentityKind = 2;
+    descriptor.ProtocolCapabilities = 1;
+    descriptor.BackendContext = camd_app_endpoint_context(app);
+    descriptor.BackendOps = camd_app_endpoint_ops(app);
+    descriptor.Ports = &port;
+    descriptor.PortCount = 1;
+    descriptor.Transport = "camd-app";
+    assert(camd_legacy_driver_adapter_create(registry, &descriptor,
+                                             &adapter) == CAMD_REGISTRY_OK);
+    memset(&request, 0, sizeof(request));
+    request.Size = sizeof(request);
+    request.Version = 1;
+    request.EndpointID = port.EndpointID;
+    request.Direction = CAMD_PROVIDER_DIRECTION_OUTPUT;
+    request.DataFormat = CAMD_PROVIDER_FORMAT_MIDI1;
+    request.Protocol = CAMD_PROVIDER_PROTOCOL_MIDI1;
+    request.QueueCapacity = 4;
+    assert(camd_registry_session_open(registry, &request, &session) ==
+           CAMD_REGISTRY_OK);
+
+    /* One for 120 ms from now, and an untimed one sent after it. */
+    target = hold_clock(NULL) + 120;
+    events[0] = note(60);
+    events[0].Flags = CAMD_EVENT_TIME_VALID;
+    events[0].ClockDomain = CAMD_CLOCK_CAMD;
+    events[0].TimeLow = target;
+    events[1] = note(61);
+    assert(camd_registry_session_send_midi1(registry, session, events, 2) ==
+           CAMD_REGISTRY_OK);
+    for (tries = 0; tries < 100 && hold_notified == 0; ++tries)
+        hold_sleep(2);
+    assert(camd_app_endpoint_take(app, &taken, buffer, sizeof(buffer),
+                                  &sysex_count) == CAMD_PROVIDER_OK &&
+           taken.Bytes[1] == 61);
+    /* The timed one cannot be taken before its time. */
+    assert(camd_app_endpoint_take(app, &taken, buffer, sizeof(buffer),
+                                  &sysex_count) == CAMD_PROVIDER_QUEUE_FULL);
+    assert((int32_t)(target - hold_clock(NULL)) > 0);
+    assert(camd_registry_session_drain(registry, session) ==
+           CAMD_REGISTRY_QUEUE_FULL);
+    for (tries = 0; tries < 200; ++tries) {
+        if (camd_app_endpoint_take(app, &taken, buffer, sizeof(buffer),
+                                   &sysex_count) == CAMD_PROVIDER_OK)
+            break;
+        hold_sleep(5);
+    }
+    assert(tries < 200 && taken.Bytes[1] == 60);
+    assert((int32_t)(hold_clock(NULL) - target) >= 0);
+    assert(hold_notified >= 2);
+    assert(camd_registry_session_drain(registry, session) == CAMD_REGISTRY_OK);
+
+    /* Timed SysEx too, and cancelling drops what still waits. */
+    target = hold_clock(NULL) + 60000;
+    assert(camd_registry_session_send_midi1_sysex(
+               registry, session, sysex, sizeof(sysex), 0, target,
+               CAMD_CLOCK_CAMD, CAMD_EVENT_TIME_VALID) == CAMD_REGISTRY_OK);
+    hold_sleep(30);
+    assert(camd_app_endpoint_take(app, &taken, buffer, sizeof(buffer),
+                                  &sysex_count) == CAMD_PROVIDER_QUEUE_FULL);
+    assert(camd_registry_session_cancel(registry, session) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_registry_session_drain(registry, session) == CAMD_REGISTRY_OK);
+    /* Closing does not wait for a message's time either. */
+    assert(camd_registry_session_send_midi1_sysex(
+               registry, session, sysex, sizeof(sysex), 0, target,
+               CAMD_CLOCK_CAMD, CAMD_EVENT_TIME_VALID) == CAMD_REGISTRY_OK);
+    assert(camd_registry_session_close(registry, session) == CAMD_REGISTRY_OK);
+
+    camd_app_endpoint_detach(app);
+    assert(camd_legacy_driver_adapter_begin_retire(adapter) ==
+           CAMD_REGISTRY_OK);
     assert(camd_legacy_driver_adapter_release(adapter) == CAMD_REGISTRY_OK);
     assert(camd_app_endpoint_destroy(app) == CAMD_PROVIDER_OK);
     camd_registry_destroy(registry);
@@ -582,6 +723,10 @@ int main(void)
                adapter, 0, CAMD_ENDPOINT_OFFLINE) == CAMD_REGISTRY_RETIRED);
     assert(camd_registry_session_send_midi1(registry, first, events, 1) ==
            CAMD_REGISTRY_RETIRED);
+    /* What a client still had queued will not be taken: its drain says so
+     * instead of waiting. */
+    assert(camd_registry_session_drain(registry, first) ==
+           CAMD_REGISTRY_RETIRED);
     assert(camd_registry_session_open(registry, &request, &refused) !=
            CAMD_REGISTRY_OK);
     assert(notified == 0);
@@ -598,6 +743,7 @@ int main(void)
 
     camd_registry_destroy(registry);
     test_ump();
+    test_hold();
     puts("CAMD published endpoint OK");
     return 0;
 }
