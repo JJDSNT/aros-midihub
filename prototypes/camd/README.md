@@ -77,6 +77,12 @@ direction so one physical bidirectional port has one identity. This evidence
 is path-bound, not authoritative: renaming the module creates a new identity,
 while replacing a module under the same filename reuses the mapping.
 
+`legacy_identity_set.c` resolves what one loaded driver needs before it can be
+published: one provider ID and one ID per fixed port. Outputs are cleared on
+any failure, and the reported identity kind is read after the last mapping so
+it reflects whether the whole set persisted. A failed set can leave unpublished
+mappings in the append-only map; they are reused by the next attempt.
+
 The current slice proves:
 
 - the proposed pointer-free record sizes on the host compiler;

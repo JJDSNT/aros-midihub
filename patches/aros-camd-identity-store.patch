@@ -282,7 +282,7 @@ new file mode 100644
 index 0000000..ef8388c
 --- /dev/null
 +++ b/workbench/libs/camd/identity_file.h
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,33 @@
 +#ifndef CAMD_IDENTITY_FILE_H
 +#define CAMD_IDENTITY_FILE_H
 +

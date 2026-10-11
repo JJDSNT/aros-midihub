@@ -1,0 +1,223 @@
+diff --git a/workbench/libs/camd/legacy_identity_key.c b/workbench/libs/camd/legacy_identity_key.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/legacy_identity_key.c
+@@ -0,0 +1,84 @@
++#include "legacy_identity_key.h"
++
++#include <string.h>
++
++static int module_leaf(const char *path, const char **leaf, size_t *length)
++{
++    const char *cursor, *start;
++    size_t count = 0;
++
++    if (!path || !*path)
++        return 0;
++    start = path;
++    for (cursor = path; *cursor; ++cursor) {
++        unsigned char byte = (unsigned char)*cursor;
++
++        if (byte < 0x20 || byte == 0x7f)
++            return 0;
++        if (*cursor == '/' || *cursor == ':')
++            start = cursor + 1;
++    }
++    while (start[count])
++        ++count;
++    if (count == 0 || (count == 1 && start[0] == '.') ||
++        (count == 2 && start[0] == '.' && start[1] == '.'))
++        return 0;
++    *leaf = start;
++    *length = count;
++    return 1;
++}
++
++static uint8_t fold_ascii(uint8_t byte)
++{
++    if (byte >= 'A' && byte <= 'Z')
++        return (uint8_t)(byte + ('a' - 'A'));
++    return byte;
++}
++
++static enum CAMDIdentityMapResult make_key(
++    const char *module_path, uint32_t namespace_id, int include_port,
++    uint32_t port_index, struct CAMDIdentityKeyV1 *key)
++{
++    const char *leaf;
++    size_t length, i, required;
++
++    if (!key || !module_leaf(module_path, &leaf, &length))
++        return CAMD_IDENTITY_MAP_INVALID;
++    required = 2 + length + (include_port ? 4 : 0);
++    if (length > 255 || required > sizeof(key->Bytes))
++        return CAMD_IDENTITY_MAP_INVALID;
++    memset(key, 0, sizeof(*key));
++    key->Size = sizeof(*key);
++    key->Version = 1;
++    key->Namespace = namespace_id;
++    key->Confidence = CAMD_IDENTITY_PATH_BOUND;
++    key->Bytes[0] = 1; /* key format version */
++    key->Bytes[1] = (uint8_t)length;
++    for (i = 0; i < length; ++i)
++        key->Bytes[2 + i] = fold_ascii((uint8_t)leaf[i]);
++    if (include_port) {
++        size_t offset = 2 + length;
++
++        key->Bytes[offset] = (uint8_t)(port_index >> 24);
++        key->Bytes[offset + 1] = (uint8_t)(port_index >> 16);
++        key->Bytes[offset + 2] = (uint8_t)(port_index >> 8);
++        key->Bytes[offset + 3] = (uint8_t)port_index;
++    }
++    key->ByteCount = (uint32_t)required;
++    return CAMD_IDENTITY_MAP_OK;
++}
++
++enum CAMDIdentityMapResult camd_legacy_provider_identity_key(
++    const char *module_path, struct CAMDIdentityKeyV1 *key)
++{
++    return make_key(module_path, CAMD_IDENTITY_NAMESPACE_LEGACY_PROVIDER,
++                    0, 0, key);
++}
++
++enum CAMDIdentityMapResult camd_legacy_endpoint_identity_key(
++    const char *module_path, uint32_t port_index,
++    struct CAMDIdentityKeyV1 *key)
++{
++    return make_key(module_path, CAMD_IDENTITY_NAMESPACE_LEGACY_ENDPOINT,
++                    1, port_index, key);
++}
+diff --git a/workbench/libs/camd/legacy_identity_key.h b/workbench/libs/camd/legacy_identity_key.h
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/legacy_identity_key.h
+@@ -0,0 +1,18 @@
++#ifndef CAMD_LEGACY_IDENTITY_KEY_H
++#define CAMD_LEGACY_IDENTITY_KEY_H
++
++#include "identity_map.h"
++
++#define CAMD_IDENTITY_NAMESPACE_LEGACY_PROVIDER 0x4c505256u
++#define CAMD_IDENTITY_NAMESPACE_LEGACY_ENDPOINT 0x4c454e44u
++
++/* The module leaf is an AROS DEVS:Midi filename, not a display name. ASCII
++ * case is folded because the DOS path is case-insensitive. One physical port
++ * gets one endpoint key; input/output direction is deliberately excluded. */
++enum CAMDIdentityMapResult camd_legacy_provider_identity_key(
++    const char *module_path, struct CAMDIdentityKeyV1 *key);
++enum CAMDIdentityMapResult camd_legacy_endpoint_identity_key(
++    const char *module_path, uint32_t port_index,
++    struct CAMDIdentityKeyV1 *key);
++
++#endif
+diff --git a/workbench/libs/camd/legacy_identity_set.c b/workbench/libs/camd/legacy_identity_set.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/legacy_identity_set.c
+@@ -0,0 +1,73 @@
++#include "legacy_identity_set.h"
++
++#include <limits.h>
++#include <string.h>
++
++static enum CAMDIdentityMapResult resolve(
++    struct CAMDIdentityMap *map, const struct CAMDIdentityKeyV1 *key,
++    struct CAMDIdentityResolutionV1 *resolution)
++{
++    memset(resolution, 0, sizeof(*resolution));
++    resolution->Size = sizeof(*resolution);
++    resolution->Version = 1;
++    return camd_identity_map_resolve(map, key, resolution);
++}
++
++enum CAMDIdentityMapResult camd_legacy_identity_set_resolve(
++    struct CAMDIdentityMap *map, const char *module_path, size_t port_count,
++    struct CAMDEndpointIDV1 *provider_id,
++    struct CAMDEndpointIDV1 *endpoint_ids, uint32_t *identity_kind)
++{
++    struct CAMDIdentityKeyV1 provider_key, endpoint_key;
++    struct CAMDIdentityResolutionV1 resolution;
++    enum CAMDIdentityMapResult result;
++    size_t i;
++
++    if (provider_id)
++        memset(provider_id, 0, sizeof(*provider_id));
++    if (identity_kind)
++        *identity_kind = 0;
++    if (!map || !module_path || port_count == 0 || port_count > UINT32_MAX ||
++        port_count > SIZE_MAX / sizeof(*endpoint_ids) ||
++        !provider_id || !endpoint_ids || !identity_kind)
++        return CAMD_IDENTITY_MAP_INVALID;
++    memset(endpoint_ids, 0, port_count * sizeof(*endpoint_ids));
++
++    /* Validate both key shapes before adding any mapping. */
++    result = camd_legacy_provider_identity_key(module_path, &provider_key);
++    if (result != CAMD_IDENTITY_MAP_OK)
++        return result;
++    result = camd_legacy_endpoint_identity_key(
++        module_path, (uint32_t)(port_count - 1), &endpoint_key);
++    if (result != CAMD_IDENTITY_MAP_OK)
++        return result;
++
++    result = resolve(map, &provider_key, &resolution);
++    if (result != CAMD_IDENTITY_MAP_OK)
++        goto fail;
++    *provider_id = resolution.ID;
++    for (i = 0; i < port_count; ++i) {
++        result = camd_legacy_endpoint_identity_key(
++            module_path, (uint32_t)i, &endpoint_key);
++        if (result != CAMD_IDENTITY_MAP_OK)
++            goto fail;
++        result = resolve(map, &endpoint_key, &resolution);
++        if (result != CAMD_IDENTITY_MAP_OK)
++            goto fail;
++        endpoint_ids[i] = resolution.ID;
++    }
++
++    /* A later endpoint commit can promote the provider mapping. Refresh its
++     * effective confidence before the set is published. */
++    result = resolve(map, &provider_key, &resolution);
++    if (result != CAMD_IDENTITY_MAP_OK)
++        goto fail;
++    *provider_id = resolution.ID;
++    *identity_kind = resolution.EffectiveConfidence;
++    return CAMD_IDENTITY_MAP_OK;
++
++fail:
++    memset(provider_id, 0, sizeof(*provider_id));
++    memset(endpoint_ids, 0, port_count * sizeof(*endpoint_ids));
++    return result;
++}
+diff --git a/workbench/libs/camd/legacy_identity_set.h b/workbench/libs/camd/legacy_identity_set.h
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/legacy_identity_set.h
+@@ -0,0 +1,15 @@
++#ifndef CAMD_LEGACY_IDENTITY_SET_H
++#define CAMD_LEGACY_IDENTITY_SET_H
++
++#include "legacy_identity_key.h"
++
++/* Resolve one provider ID and one direction-independent ID per fixed port.
++ * For a valid output span, outputs are cleared on failure. IdentityKind
++ * reflects the final provider state after all mappings can persist. A failure
++ * can leave harmless unpublished mappings in the append-only identity map. */
++enum CAMDIdentityMapResult camd_legacy_identity_set_resolve(
++    struct CAMDIdentityMap *map, const char *module_path, size_t port_count,
++    struct CAMDEndpointIDV1 *provider_id,
++    struct CAMDEndpointIDV1 *endpoint_ids, uint32_t *identity_kind);
++
++#endif
+diff --git a/workbench/libs/camd/mmakefile.src b/workbench/libs/camd/mmakefile.src
+--- a/workbench/libs/camd/mmakefile.src
++++ b/workbench/libs/camd/mmakefile.src
+@@ -10,7 +10,8 @@
+ 	    native_event_pump native_event_worker legacy_port_refs \
+ 	    native_worker_fanout legacy_output_backend \
+ 	    legacy_driver_output_backend identity_map identity_file \
+-	    identity_store_recovery identity_store_aros
++	    identity_store_recovery identity_store_aros legacy_identity_key \
++	    legacy_identity_set
+ 
+ FUNCS := \
+     lockcamd \
