@@ -77,7 +77,7 @@ Wrench, GarageBand) is in [the Pi 3 test](ble-midi-pi3-test.md).
 
 ### AROS as the central
 
-1. Apply [the remaining BLE patch](../patches/aros-ble-midi-upstream-gaps.patch)
+1. Apply the BLE work that is in upstream AROS since `86aab939c4` (formerly `aros-ble-midi-upstream-gaps.patch` here)
    to the matching AROS checkout and build `bluetooth.library` and the normal
    `contrib-aros-midihub` target, which installs `btmidi.class`.
 2. In Bluetooth Preferences, scan, register, and connect to a BLE MIDI

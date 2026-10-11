@@ -153,7 +153,7 @@ has a device behind it right now. That is the `connected` field of 2.2.
 which only works where they are passed on the stack. On AArch64 and x86_64
 every cluster name and driver path came out as garbage, so no program could
 find a cluster by name. Found on a Raspberry Pi 3 running `raspi-aarch64`;
-[the fix](../patches/aros-camd-names-64bit.patch) uses `VNewRawDoFmt()`
+the fix (upstream `28ec43a517`) uses `VNewRawDoFmt()`
 with a `va_list`.
 
 **Compatibility:** safe. This changes an internal formatting helper and
@@ -166,7 +166,7 @@ in registers.
 `BPTR` and scanned it for `MidiDeviceData`. Modules loaded into one arena
 (`ELF_MODULE_ARENA`) store a size of 0 in each section hunk and the real
 size in a container hunk; the subtraction wrapped and the scan ran off the
-end of memory. [The fix](../patches/aros-camd-arena-segments.patch) skips
+end of memory. The fix (upstream `cb8c4c5f39`) skips
 hunks no larger than their header. A cleaner long-term design would be for
 a driver to export its `MidiDeviceData` through a symbol or a resident
 structure rather than being found by scanning memory.

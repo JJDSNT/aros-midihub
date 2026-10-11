@@ -19,8 +19,8 @@ empty reads.
 ## Prepare the SD card
 
 1. Build the image as in [the patch guide](../patches/README.md): AROS
-   `raspi-aarch64` with `aros-ble-midi-upstream-gaps.patch` and
-   `aros-raspi-bt-firmware.patch` applied, plus the `contrib-aros-midihub`
+   `raspi-aarch64` from upstream `a7102948cd` or later, which has the BLE MIDI
+   and Bluetooth firmware work that used to be patches here, plus the `contrib-aros-midihub`
    target.
 2. Check that the card has the Bluetooth patchram in `DEVS:Firmware/brcm/`
    (`BCM43430A1.hcd` for a Pi 3 or Zero W, `BCM4345C0.hcd` for a Pi 3B+).
