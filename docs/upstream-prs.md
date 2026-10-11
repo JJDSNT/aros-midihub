@@ -44,8 +44,12 @@ before merge: `net/sana2arp.c` still got the public `in_var.h`, so
 the PR made relevant: the hosted device did not free its multicast list,
 and `if_detach()` left the all-hosts membership of a removed interface, so
 after a reload that removes and re-adds an interface the queries were
-filtered out again. All four are fixed locally as four more commits on the
-branch and four more patches here. `tools/igmp-reload-hosted.sh` is new,
+filtered out again. All four are fixed as four more commits on the branch
+(`353adedb5d` to `e8dd882b53`), with
+[a reply](https://github.com/aros-development-team/AROS/pull/1543#issuecomment-6114458179),
+and four more patches here. `in_ifdetach()` does not free the entries that
+sockets hold, as he had suggested, but cuts them loose from the interface;
+the reply says why and asks whether he wants it otherwise. `tools/igmp-reload-hosted.sh` is new,
 with the tools `NetReload` and `McastJoin`: it removes an interface by a
 reload, adds it again, joins a group on it and plays the querier; it fails
 without `in_ifdetach()`. Both earlier tests still pass and the stack
