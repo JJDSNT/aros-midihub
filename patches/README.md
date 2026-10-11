@@ -201,6 +201,7 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-endpoint-input.patch` | input sessions: a driver port's receiver process hands each complete message to the port's receiving sessions beside its legacy cluster; `GetEndpointMidi()` reads a session's bounded queue and the opening task is signalled |
 | `aros-camd-endpoint-watch.patch` | `StartEndpointWatch()`, `GetEndpointWatchEvent()` and `EndEndpointWatch()`: a bounded queue of endpoint changes with a signal, reporting loss instead of blocking |
 | `aros-camd-identity-unreadable.patch` | identity files that hold no complete snapshot no longer switch endpoint publication off: that run gives temporary IDs and leaves the files untouched |
+| `aros-camd-endpoint-publish.patch` | a program publishes its own endpoint: `PublishEndpoint()`, `WithdrawEndpoint()`, `SetPublishedEndpointState()`, `PutPublishedMidi()`, `PutPublishedSysEx()` and `GetPublishedMidi()`; the name gives the stable ID, and a withdrawn endpoint waits for its clients' sessions to close |
 
 ```sh
 grep -v '^#' patches/camd-series | while read -r p; do
@@ -377,12 +378,14 @@ patches and with all of them:
 | up to `camd-part-notify` | 50 of 50 | skipped | 8 of 8 |
 | all patches | 65 of 65 | 34 of 34 | 13 of 13 |
 
-`MIDIHubCAMDCompat --v43` is a client of the provisional endpoint functions: 59
-checks on hosted AROS, and 59 again after `--v43-leak` exits with a session
+`MIDIHubCAMDCompat --v43` is a client of the provisional endpoint functions: 92
+checks on hosted AROS, and 92 again after `--v43-leak` exits with a session
 open and `Avail FLUSH` tries to expunge the library. Its session and a legacy link send to the same
 debugdriver port, and the runner compares the bytes the driver printed. Input
 sessions are tested on the loopback driver, in both directions between a
-session and the port's legacy clusters.
+session and the port's legacy clusters. The suite also publishes an endpoint
+and is its own client: both directions, offline and back with the same ID, and
+withdrawal while sessions are open.
 
 Use the build tree's `bin/raspi-aarch64/AROS` as `SD_DIR`; an older copy with a
 `debugdriver` from before `debugdriver-port-index` crashes on the first send.

@@ -1494,6 +1494,158 @@ static void test_rethink_watch(void)
     FreeSignal(rethink_bit);
 }
 
+static ULONG endpoint_state(const char *name)
+{
+    struct CAMDHandleV1 snapshot;
+    struct CAMDEndpointInfoV1 info;
+    ULONG count = 0, i, state = 0;
+
+    if (ObtainEndpointSnapshot(&snapshot, &count) != CAMD_REGISTRY_OK) return 0;
+    for (i = 0; i < count; i++) {
+        memset(&info, 0, sizeof(info));
+        info.Size = sizeof(info);
+        info.Version = 1;
+        if (GetEndpointInfo(&snapshot, i, &info) == CAMD_REGISTRY_OK && !strcmp(info.Name, name) &&
+            !strcmp(info.Transport, "camd-app"))
+            state = info.State;
+    }
+    ReleaseEndpointSnapshot(&snapshot);
+    return state;
+}
+
+/* An endpoint this program publishes, and this program as its client too. */
+static void test_published_endpoint(void)
+{
+    static char name[] = "camdcompat port";
+    static UBYTE sysex[] = { 0xf0, 0x7d, 0x21, 0x22, 0xf7 };
+    UBYTE buffer[16];
+    struct CAMDPublishRequestV1 publish;
+    struct CAMDSessionRequestV1 request;
+    struct CAMDHandleV1 port, again, to_port, from_port, late;
+    struct CAMDEndpointIDV1 id, found, republished;
+    struct CAMDMIDI1EventV1 event, events[2];
+    ULONG length = 99;
+    BYTE bit = AllocSignal(-1);
+    LONG result;
+
+    if (bit < 0) {
+        check(0, "publish: AllocSignal", NULL);
+        return;
+    }
+    memset(&publish, 0, sizeof(publish));
+    publish.Size = sizeof(publish);
+    publish.Version = 1;
+    publish.Directions = CAMD_DIRECTION_INPUT | CAMD_DIRECTION_OUTPUT;
+    publish.Signal = (ULONG)bit;
+    check(PublishEndpoint(&publish, &port, &id) == CAMD_REGISTRY_INVALID && port.generation == 0,
+          "an endpoint without a name is CAMD_REGISTRY_INVALID", NULL);
+    strcpy(publish.Name, name);
+    strcpy(publish.ProductInstance, "MIDIHubCAMDCompat");
+    memset(&id, 0, sizeof(id));
+    result = PublishEndpoint(&publish, &port, &id);
+    check(result == CAMD_REGISTRY_OK && (id.word[0] | id.word[1] | id.word[2] | id.word[3]) != 0,
+          "PublishEndpoint gives a handle and a stable ID", NULL);
+    if (result != CAMD_REGISTRY_OK) {
+        FreeSignal(bit);
+        return;
+    }
+    check(endpoint_state(name) == CAMD_ENDPOINT_AVAILABLE && find_endpoint(name, &found) && !memcmp(&found, &id, sizeof(id)),
+          "the published endpoint is in the snapshot with that ID", NULL);
+    check(PublishEndpoint(&publish, &again, NULL) == CAMD_REGISTRY_DUPLICATE && again.generation == 0,
+          "a second endpoint of the same name is CAMD_REGISTRY_DUPLICATE", NULL);
+    check(GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_EMPTY && length == 0,
+          "GetPublishedMidi is CAMD_REGISTRY_EMPTY with nothing sent", NULL);
+
+    memset(&request, 0, sizeof(request));
+    request.Size = sizeof(request);
+    request.Version = 1;
+    request.EndpointID = id;
+    request.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+    request.Protocol = CAMD_PROTOCOL_MIDI1;
+    request.QueueCapacity = 8;
+    request.Signal = CAMD_SIGNAL_NONE;
+    request.Direction = CAMD_DIRECTION_OUTPUT;
+    result = OpenEndpointSession(&request, &to_port, NULL);
+    request.Direction = CAMD_DIRECTION_INPUT;
+    if (result == CAMD_REGISTRY_OK) result = OpenEndpointSession(&request, &from_port, NULL);
+    check(result == CAMD_REGISTRY_OK, "clients open sessions with it in both directions", NULL);
+    if (result != CAMD_REGISTRY_OK) goto out;
+
+    /* Client to publisher. */
+    SetSignal(0, 1UL << bit);
+    events[0] = midi1(0x93, 0x45, 0x50);
+    events[1] = midi1(0x83, 0x45, 0x00);
+    check(PutEndpointMidi(&to_port, events, 2) == CAMD_REGISTRY_OK && PutEndpointSysEx(&to_port, sysex, sizeof(sysex)) == CAMD_REGISTRY_OK,
+          "a client sends two messages and SysEx", NULL);
+    check((SetSignal(0, 0) & (1UL << bit)) != 0, "the publisher was signalled", NULL);
+    memset(&event, 0, sizeof(event));
+    check(GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK && length == 0 &&
+          event.Bytes[0] == 0x93 && event.Bytes[1] == 0x45 && event.Bytes[2] == 0x50, "the publisher takes the first", NULL);
+    check(GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK && event.Bytes[0] == 0x83,
+          "and the second, in order", NULL);
+    check(GetPublishedMidi(&port, &event, buffer, 2, &length) == CAMD_REGISTRY_TOO_LARGE && length == sizeof(sysex),
+          "SysEx that does not fit is CAMD_REGISTRY_TOO_LARGE with its length", NULL);
+    memset(buffer, 0, sizeof(buffer));
+    check(GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK && length == sizeof(sysex) &&
+          !memcmp(buffer, sysex, sizeof(sysex)), "the publisher then takes the SysEx", NULL);
+    check(DrainEndpointSession(&to_port) == CAMD_REGISTRY_OK, "the client's session is drained", NULL);
+
+    /* Publisher to client: handed over at once, in this task. */
+    events[0] = midi1(0xb3, 0x0a, 0x7f);
+    check(PutPublishedMidi(&port, events, 1) == CAMD_REGISTRY_OK && PutPublishedSysEx(&port, sysex, sizeof(sysex)) == CAMD_REGISTRY_OK,
+          "the publisher sends a message and SysEx", NULL);
+    check(GetEndpointMidi(&from_port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK && length == 0 &&
+          event.Bytes[0] == 0xb3 && event.Bytes[1] == 0x0a, "the client receives the message", NULL);
+    memset(buffer, 0, sizeof(buffer));
+    check(GetEndpointMidi(&from_port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK && length == sizeof(sysex) &&
+          !memcmp(buffer, sysex, sizeof(sysex)), "and the SysEx", NULL);
+    events[0].Length = 0;
+    check(PutPublishedMidi(&port, events, 1) == CAMD_REGISTRY_INVALID, "the publisher cannot send a message without bytes", NULL);
+    events[0] = midi1(0x93, 0x46, 0x50);
+
+    /* Offline and back. */
+    check(SetPublishedEndpointState(&port, CAMD_ENDPOINT_RETIRED) == CAMD_REGISTRY_INVALID, "only available and offline can be set", NULL);
+    check(SetPublishedEndpointState(&port, CAMD_ENDPOINT_OFFLINE) == CAMD_REGISTRY_OK && endpoint_state(name) == CAMD_ENDPOINT_OFFLINE,
+          "the endpoint goes offline and stays in the snapshot", NULL);
+    check(PutEndpointMidi(&to_port, events, 1) == CAMD_REGISTRY_STATE, "a session to an offline endpoint is CAMD_REGISTRY_STATE", NULL);
+    request.Direction = CAMD_DIRECTION_OUTPUT;
+    check(OpenEndpointSession(&request, &late, NULL) == CAMD_REGISTRY_STATE, "no session opens with an offline endpoint", NULL);
+    check(SetPublishedEndpointState(&port, CAMD_ENDPOINT_AVAILABLE) == CAMD_REGISTRY_OK && find_endpoint(name, &found) &&
+          !memcmp(&found, &id, sizeof(id)), "it comes back with the same ID", NULL);
+    check(PutEndpointMidi(&to_port, events, 1) == CAMD_REGISTRY_OK &&
+          GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK && event.Bytes[1] == 0x46,
+          "and the open session carries messages again", NULL);
+
+    /* The publisher goes while its clients still hold sessions. */
+    WithdrawEndpoint(&port);
+    check(GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_STALE &&
+          PutPublishedMidi(&port, events, 1) == CAMD_REGISTRY_STALE, "a withdrawn endpoint's handle is CAMD_REGISTRY_STALE", NULL);
+    check(endpoint_state(name) != CAMD_ENDPOINT_AVAILABLE, "it is not available in the snapshot any more", NULL);
+    check(PutEndpointMidi(&to_port, events, 1) == CAMD_REGISTRY_RETIRED, "a client's session is CAMD_REGISTRY_RETIRED", NULL);
+    check(DrainEndpointSession(&to_port) != CAMD_REGISTRY_QUEUE_FULL, "draining it does not wait for the publisher", NULL);
+    check(OpenEndpointSession(&request, &late, NULL) != CAMD_REGISTRY_OK, "no session opens with it", NULL);
+    check(PublishEndpoint(&publish, &again, NULL) != CAMD_REGISTRY_OK, "the name cannot be published while clients hold the old one", NULL);
+    check(CloseEndpointSession(&to_port) == CAMD_REGISTRY_OK && CloseEndpointSession(&from_port) == CAMD_REGISTRY_OK,
+          "the clients close their sessions", NULL);
+    WithdrawEndpoint(&port);
+    check(1, "withdrawing twice returns", NULL);
+
+    memset(&republished, 0, sizeof(republished));
+    result = PublishEndpoint(&publish, &again, &republished);
+    check(result == CAMD_REGISTRY_OK && !memcmp(&republished, &id, sizeof(id)), "published again, the name has the same ID", NULL);
+    if (result == CAMD_REGISTRY_OK) {
+        request.Direction = CAMD_DIRECTION_OUTPUT;
+        check(OpenEndpointSession(&request, &late, NULL) == CAMD_REGISTRY_OK && CloseEndpointSession(&late) == CAMD_REGISTRY_OK,
+              "and a session opens with the ID a client kept", NULL);
+        WithdrawEndpoint(&again);
+    }
+    FreeSignal(bit);
+    return;
+out:
+    WithdrawEndpoint(&port);
+    FreeSignal(bit);
+}
+
 /* A client that exits with a snapshot and a session still open. CAMD must
    then stay loaded: the runner flushes memory and runs --v43 again. */
 static void test_endpoint_leak(void)
@@ -1525,6 +1677,18 @@ static void test_endpoint_leak(void)
         result = OpenEndpointSession(&request, &session, NULL);
     }
     check(result == CAMD_REGISTRY_OK, "a session and a snapshot are left open", NULL);
+    {
+        struct CAMDPublishRequestV1 publish;
+        struct CAMDHandleV1 port;
+
+        memset(&publish, 0, sizeof(publish));
+        publish.Size = sizeof(publish);
+        publish.Version = 1;
+        publish.Directions = CAMD_DIRECTION_OUTPUT;
+        publish.Signal = CAMD_SIGNAL_NONE;
+        strcpy(publish.Name, "camdcompat left behind");
+        check(PublishEndpoint(&publish, &port, NULL) == CAMD_REGISTRY_OK, "and so is a published endpoint", NULL);
+    }
 }
 
 static int copy_file(CONST_STRPTR from, CONST_STRPTR to)
@@ -1690,6 +1854,7 @@ int main(int argc, char **argv)
             RUN(test_endpoints);
             RUN(test_endpoint_input);
             RUN(test_endpoint_watch);
+            RUN(test_published_endpoint);
         }
     } else if (v42_mode) {
         if (CamdBase->lib_Version < 42) {

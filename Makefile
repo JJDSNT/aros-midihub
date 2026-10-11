@@ -18,7 +18,7 @@ HEADERS = include/midihub/applemidi.h include/midihub/rtpmidi.h \
 
 .PHONY: test check-patches test-network test-synth test-synth-fluid demo m68k synth-m68k clean
 
-test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test build/camd-identity-file-test build/camd-identity-store-recovery-test build/camd-legacy-identity-set-test
+test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test build/camd-identity-file-test build/camd-identity-store-recovery-test build/camd-legacy-identity-set-test build/camd-app-endpoint-test
 	./build/protocol-test
 	./build/ble-midi-test
 	./build/routes-test
@@ -37,6 +37,7 @@ test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test b
 	./build/camd-identity-file-test
 	./build/camd-identity-store-recovery-test
 	./build/camd-legacy-identity-set-test
+	./build/camd-app-endpoint-test
 
 check-patches:
 	tools/check-camd-patches.sh
@@ -206,6 +207,12 @@ build/camd-identity-store-recovery-test: \
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Iprototypes/camd -o $@ \
 		tests/camd_identity_store_recovery.c \
 		prototypes/camd/identity_store_recovery.c
+
+build/camd-app-endpoint-test: tests/camd_app_endpoint.c prototypes/camd/app_endpoint.c prototypes/camd/legacy_driver_adapter.c prototypes/camd/native_event_queue.c prototypes/camd/provider_contract.c prototypes/camd/endpoint_registry.c \
+		prototypes/camd/app_endpoint.h prototypes/camd/camdendpoint.h
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Iprototypes/camd -pthread -o $@ \
+		tests/camd_app_endpoint.c prototypes/camd/app_endpoint.c prototypes/camd/legacy_driver_adapter.c prototypes/camd/native_event_queue.c prototypes/camd/provider_contract.c prototypes/camd/endpoint_registry.c
 
 build/camd-legacy-identity-set-test: tests/camd_legacy_identity_set.c \
 		prototypes/camd/legacy_identity_set.c \

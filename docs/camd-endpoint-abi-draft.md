@@ -15,7 +15,8 @@ in this draft is exported as a public symbol.
 ## Provisional version 43 slice
 
 `patches/aros-camd-endpoint-client.patch`, `aros-camd-endpoint-input.patch` and
-`aros-camd-endpoint-watch.patch` append twelve ordinary vectors behind
+`aros-camd-endpoint-watch.patch` and `aros-camd-endpoint-publish.patch` append
+eighteen ordinary vectors behind
 `.version 43` and installs `midi/camdendpoint.h`, so that the endpoint core has
 a real client before review. Everything in it can still change.
 
@@ -32,6 +33,12 @@ a real client before review. Everything in it can still change.
 | `LONG StartEndpointWatch(watch, signal, generation)` | A0, D0, A1 | bounded queue of endpoint changes; signals the calling task |
 | `LONG GetEndpointWatchEvent(watch, event)` | A0, A1 | oldest `CAMDEndpointWatchEventV1`; `CAMD_ENDPOINT_EVENT_LOST` after overflow |
 | `void EndEndpointWatch(watch)` | A0 | |
+| `LONG PublishEndpoint(request, endpoint, id)` | A0, A1, A2 | a program's own endpoint; the name selects the stored ID |
+| `void WithdrawEndpoint(endpoint)` | A0 | clients' sessions report retired until they close |
+| `LONG SetPublishedEndpointState(endpoint, state)` | A0, D0 | available or offline, same ID |
+| `LONG PutPublishedMidi(endpoint, events, count)` | A0, A1, D0 | to every receiving client session |
+| `LONG PutPublishedSysEx(endpoint, bytes, length)` | A0, A1, D0 | |
+| `LONG GetPublishedMidi(endpoint, event, sysex, size, length)` | A0, A1, A2, D0, A3 | oldest message clients sent, clients served in turn |
 | `LONG CloseEndpointSession(session)` | A0 | |
 
 Results are `enum CAMDRegistryResult` values. The native MIDI 1.0 record for
@@ -42,6 +49,12 @@ the newest messages and `GetEndpointMidi()` reports that once with
 `CAMD_REGISTRY_QUEUE_FULL`. Not in the slice: Groups and Function
 Blocks, UMP, cancel, counters and timestamps (the event's time fields are
 carried but ignored).
+
+The publishing functions are a deliberately small public provider surface:
+one endpoint, native MIDI 1.0, with CAMD owning the queues, the sessions and
+the object's lifetime. The private operations table that drivers use is not
+exposed, so the section below about keeping the provider API private still
+holds for everything else.
 
 ## ABI strategy
 

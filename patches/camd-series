@@ -26,3 +26,4 @@ midi-loopback-driver
 camd-endpoint-input
 camd-endpoint-watch
 camd-identity-unreadable
+camd-endpoint-publish
