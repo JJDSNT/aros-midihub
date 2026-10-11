@@ -353,14 +353,20 @@ main(void)
         if (got & (sig.ms_Stop | SIGBREAKF_CTRL_C)) {
             running = FALSE;
         }
+        /*
+         * The stack signals the start and the end of a reconfiguration, and
+         * may well have finished before this task runs: then both signals
+         * are here at once, and the sockets are closed and opened again in
+         * one go. Between a start and an end that come apart the base is
+         * closed, which keeps the periodic look from opening anything.
+         */
         if (got & sig.ms_Begin) {
             net_down(tok);
         }
         if ((got & sig.ms_End) ||
             mdnsEngineNow() - lastScan >= MDNSD_RETRY_SECONDS) {
             lastScan = mdnsEngineNow();
-            if (!(got & sig.ms_Begin) &&
-                (tok->et_SocketBase != NULL || (got & sig.ms_End))) {
+            if (tok->et_SocketBase != NULL || (got & sig.ms_End)) {
                 net_up(tok);
             }
         }

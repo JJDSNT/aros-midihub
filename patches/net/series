@@ -14,3 +14,4 @@ arostcp-sana2arp-own-header
 arostcp-run-dhcp-softc
 arostcp-in-ifdetach
 eth-unix-multicast-free
+arostcp-close-frees-memberships

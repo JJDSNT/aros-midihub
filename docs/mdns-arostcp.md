@@ -81,7 +81,12 @@ AROSTCP service manager starts it with the stack and stops it with the
 stack. It registers with `netservices.library` and is signalled around a
 reconfiguration: at the start it says goodbye and closes
 `bsdsocket.library`, at the end it opens it again, finds the interfaces, and
-announces what applications had registered.
+announces what applications had registered. The stack does not wait for a
+service between the two signals and has usually finished reloading before
+mdnsd runs, so they mostly arrive together: mdnsd then closes and opens in
+one go. An interface that was removed and added again by the reload gets a
+new socket that way; comparing names and addresses alone would keep the old
+one, which belongs to an interface that no longer exists.
 
 The base and the sockets are the daemon's alone. mdnsd opens
 `bsdsocket.library` in its own task, keeps the base in its engine token and

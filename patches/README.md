@@ -309,5 +309,6 @@ for amiga-m68k and raspi-aarch64 as well.
 | `net/aros-arostcp-run-dhcp-softc.patch` | Second review, cosmetic: `run_dhcp()` cast the interface by hand with the softc in scope. |
 | `net/aros-arostcp-in-ifdetach.patch` | Second review: `if_detach()` left group memberships naming the freed interface, so one removed and added again by a reload looked joined to the all-hosts group and the device was never told. `in_ifdetach()` releases the interface's own membership and cuts the sockets' loose. `tools/igmp-reload-hosted.sh` tests it. |
 | `net/aros-eth-unix-multicast-free.patch` | Second review: the hosted `eth.device` did not free its multicast address list with the unit. |
+| `net/aros-arostcp-close-frees-memberships.patch` | Found with mdnsd: `in_pcbdetach()` freed a socket's multicast options under the misspelt `ENABLE_MUPTICAST`, so a closed socket never left its groups. Not in PR #1543 yet. |
 | `net/aros-arostcp-ipv4-multicast.patch` | IPv4 multicast on a SANA-II interface. `IFF_MULTICAST` was never set, and its bit was used for a private flag, now in `ss_cflags`; a group had no Ethernet address (RFC 1112 section 6.4); `ip_input()` had no case for a joined group; and a sender that chose its interface with `IP_MULTICAST_IF` still needed a route. |
 

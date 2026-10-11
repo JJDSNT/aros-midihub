@@ -55,10 +55,27 @@ reload, adds it again, joins a group on it and plays the querier; it fails
 without `in_ifdetach()`. Both earlier tests still pass and the stack
 builds for raspi-aarch64 and amiga-m68k.
 
-Seen while writing that test and not part of the PR: after a reload that
-removed and re-added an interface, mdnsd did not join 224.0.0.251 again on
-any interface. The same reload with the interface kept showed no such
-thing. Not looked into yet.
+Seen while writing that test: after a reload, mdnsd was gone from
+224.0.0.251 on an interface that had been removed and added again. Looked
+into on the same day, it was two defects:
+
+- **mdnsd, ours.** The stack signals the start and the end of a reload and
+  has usually finished before mdnsd runs, so both signals arrive at once.
+  mdnsd closed its sockets for the start and then skipped opening them
+  because the start was also set, and nothing opened them later: after its
+  first reload it had no socket at all. Fixed in `mdnsd.c`: both at once
+  means close and open.
+- **AROSTCP, upstream's.** `in_pcbdetach()` released a socket's multicast
+  options under `#ifdef ENABLE_MUPTICAST`, a misspelling, so a closed socket
+  never left its groups and the host went on answering IGMP queries for
+  them. That is why the first defect did not show on the interface that
+  stayed. Fixed as `net/aros-arostcp-close-frees-memberships.patch`, and as
+  a local commit on the PR branch (`4656837da6`) that is not pushed yet.
+
+`tools/igmp-reload-hosted.sh` now checks both: mdnsd has to be in its group
+on both interfaces after the reloads and to have announced it again, and a
+group must no longer be reported once the socket that joined it has closed.
+Each check fails with its fix taken out.
 
 The sections below are the PR bodies as first written, except the one about
 `btmidi.class`, which describes the class as it is after the review.
