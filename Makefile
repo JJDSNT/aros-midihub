@@ -43,7 +43,7 @@ check-patches:
 
 build/camd-endpoint-core-test: tests/camd_endpoint_core.c \
                                prototypes/camd/endpoint_registry.c \
-                               prototypes/camd/endpoint_registry.h \
+                               prototypes/camd/endpoint_registry.h prototypes/camd/camdendpoint.h \
                                prototypes/camd/native_event_queue.c \
                                prototypes/camd/native_event_queue.h \
                                prototypes/camd/provider_contract.c \
@@ -57,7 +57,7 @@ build/camd-endpoint-core-test: tests/camd_endpoint_core.c \
 build/camd-provider-contract-test: tests/camd_provider_contract.c \
                                    prototypes/camd/provider_contract.c \
                                    prototypes/camd/provider_contract.h \
-                                   prototypes/camd/endpoint_registry.h
+                                   prototypes/camd/endpoint_registry.h prototypes/camd/camdendpoint.h
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Iprototypes/camd -o $@ \
 		tests/camd_provider_contract.c prototypes/camd/provider_contract.c
@@ -66,7 +66,7 @@ build/camd-legacy-driver-adapter-test: tests/camd_legacy_driver_adapter.c \
                                        prototypes/camd/legacy_driver_adapter.c \
                                        prototypes/camd/legacy_driver_adapter.h \
                                        prototypes/camd/endpoint_registry.c \
-                                       prototypes/camd/endpoint_registry.h \
+                                       prototypes/camd/endpoint_registry.h prototypes/camd/camdendpoint.h \
                                        prototypes/camd/provider_contract.c \
                                        prototypes/camd/provider_contract.h
 	mkdir -p build
@@ -90,7 +90,7 @@ build/camd-native-event-queue-test: tests/camd_native_event_queue.c \
                                     prototypes/camd/native_event_queue.h \
                                     prototypes/camd/provider_contract.c \
                                     prototypes/camd/provider_contract.h \
-                                    prototypes/camd/endpoint_registry.h
+                                    prototypes/camd/endpoint_registry.h prototypes/camd/camdendpoint.h
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Iprototypes/camd -o $@ \
 		tests/camd_native_event_queue.c \
@@ -162,7 +162,7 @@ build/camd-legacy-output-backend-test: tests/camd_legacy_output_backend.c \
                                         prototypes/camd/native_event_queue.c \
                                         prototypes/camd/native_event_queue.h \
                                         prototypes/camd/endpoint_registry.c \
-                                        prototypes/camd/endpoint_registry.h \
+                                        prototypes/camd/endpoint_registry.h prototypes/camd/camdendpoint.h \
                                         prototypes/camd/provider_contract.c \
                                         prototypes/camd/provider_contract.h
 	mkdir -p build
@@ -182,7 +182,7 @@ build/camd-identity-map-test: tests/camd_identity_map.c \
                               prototypes/camd/identity_map.h \
                               prototypes/camd/legacy_identity_key.c \
                               prototypes/camd/legacy_identity_key.h \
-                              prototypes/camd/endpoint_registry.h
+                              prototypes/camd/endpoint_registry.h prototypes/camd/camdendpoint.h
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Iprototypes/camd -o $@ \
 		tests/camd_identity_map.c \
@@ -193,7 +193,7 @@ build/camd-identity-file-test: tests/camd_identity_file.c \
                                prototypes/camd/identity_file.c \
                                prototypes/camd/identity_file.h \
                                prototypes/camd/identity_map.h \
-                               prototypes/camd/endpoint_registry.h
+                               prototypes/camd/endpoint_registry.h prototypes/camd/camdendpoint.h
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Iprototypes/camd -o $@ \
 		tests/camd_identity_file.c prototypes/camd/identity_file.c

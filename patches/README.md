@@ -194,6 +194,8 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-identity-recovery.patch` | share the actual main/`.new`/`.bak` recovery state machine with the exhaustive host fault-injection model |
 | `aros-camd-legacy-identity-set.patch` | compile the legacy evidence keys and the all-or-nothing provider plus per-port ID resolution |
 | `aros-camd-driver-endpoints.patch` | `LoadDriver()` publishes each loaded driver's ports as private output endpoints with stored IDs, and `FreeDriverData()` retires them first; a failure leaves the driver's clusters working |
+| `aros-debugdriver-output.patch` | the debugdriver prints each byte it transmits, so a test can compare what reached a port |
+| `aros-camd-endpoint-client.patch` | provisional camd.library 43: `ObtainEndpointSnapshot()`, `GetEndpointInfo()`, `ReleaseEndpointSnapshot()`, `OpenEndpointSession()`, `PutEndpointMidi()`, `PutEndpointSysEx()`, `DrainEndpointSession()`, `CloseEndpointSession()` and the installed `midi/camdendpoint.h`; native MIDI 1.0 output sessions only |
 
 ```sh
 grep -v '^#' patches/camd-series | while read -r p; do
@@ -367,6 +369,10 @@ patches and with all of them:
 | first four patches | 50 of 50 | skipped | 4 of 8 (not implemented) |
 | up to `camd-part-notify` | 50 of 50 | skipped | 8 of 8 |
 | all patches | 60 of 60 | 34 of 34 | 8 of 8 |
+
+`MIDIHubCAMDCompat --v43` is a client of the provisional endpoint functions: 26
+checks on hosted AROS. Its session and a legacy link send to the same
+debugdriver port, and the runner compares the bytes the driver printed.
 
 Use the build tree's `bin/raspi-aarch64/AROS` as `SD_DIR`; an older copy with a
 `debugdriver` from before `debugdriver-port-index` crashes on the first send.

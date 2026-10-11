@@ -19,3 +19,5 @@ camd-identity-store
 camd-identity-recovery
 camd-legacy-identity-set
 camd-driver-endpoints
+debugdriver-output
+camd-endpoint-client

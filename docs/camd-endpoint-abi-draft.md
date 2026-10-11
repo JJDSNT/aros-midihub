@@ -1,6 +1,7 @@
 # CAMD endpoint ABI draft — gate U01
 
-**Status:** Draft for AROS upstream review; not implemented and not frozen.
+**Status:** Draft for AROS upstream review; not frozen. The native MIDI 1.0
+output slice is implemented as a provisional version 43 (see below).
 **Depends on:** [endpoint architecture decision](camd-endpoint-architecture-decision.md).
 **Purpose:** Make the ABI questions concrete without assigning public vector,
 tag or protocol-bit values prematurely.
@@ -10,6 +11,29 @@ The first executable evidence is the
 records, generations, snapshots, retirement rules and bounded watches on the
 host. The same private core is linked into the patched CAMD build, but nothing
 in this draft is exported as a public symbol.
+
+## Provisional version 43 slice
+
+`patches/aros-camd-endpoint-client.patch` appends eight ordinary vectors behind
+`.version 43` and installs `midi/camdendpoint.h`, so that the endpoint core has
+a real client before review. Everything in it can still change.
+
+| Function | Registers | Purpose |
+|---|---|---|
+| `LONG ObtainEndpointSnapshot(snapshot, count)` | A0, A1 | immutable copy of the registry; handle is slot + generation |
+| `LONG GetEndpointInfo(snapshot, index, info)` | A0, D0, A1 | copy at most the caller's `Size` bytes of `CAMDEndpointInfoV1` |
+| `void ReleaseEndpointSnapshot(snapshot)` | A0 | |
+| `LONG OpenEndpointSession(request, session, info)` | A0, A1, A2 | by stable ID; one direction, data format and protocol; no conversion |
+| `LONG PutEndpointMidi(session, events, count)` | A0, A1, D0 | atomic batch of `CAMDMIDI1EventV1`; never waits |
+| `LONG PutEndpointSysEx(session, bytes, length)` | A0, A1, D0 | one complete copied message; never waits |
+| `LONG DrainEndpointSession(session)` | A0 | wait until the queue is handed to the port |
+| `LONG CloseEndpointSession(session)` | A0 | |
+
+Results are `enum CAMDRegistryResult` values. The native MIDI 1.0 record for
+new sessions, left open below, is provisionally `CAMDMIDI1EventV1` plus a
+separate SysEx call. Not in the slice: input sessions, watches, Groups and
+Function Blocks, UMP, cancel, counters and timestamps (the event's time fields
+are carried but ignored).
 
 ## ABI strategy
 
