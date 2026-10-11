@@ -56,7 +56,7 @@ runs in a row):
 The test for these found two defects in the published endpoint's drain: it
 signalled the publisher for a message that was still being held, and it kept
 waiting on a withdrawn endpoint whose client had something queued. A drain on
-a withdrawn endpoint now returns `CAMD_REGISTRY_RETIRED` at once.
+a withdrawn endpoint now returns `CAMD_RESULT_RETIRED` (then `CAMD_REGISTRY_RETIRED`) at once.
 
 Found while doing it, on hosted AROS: the shell that executes `User-Startup`
 at boot runs each command with task switching disabled (`TDNestCnt` is 1 when
@@ -66,6 +66,18 @@ drain did exactly that, because the legacy `CamdWait()` only waits on its
 first call in such a context. The runners now start the suite with `Run`, and
 the suite refuses to start where task switching is off. Whether that state of
 the boot shell is intended is a question for AROS, not for CAMD.
+
+Closed in `aros-camd-endpoint-surface.patch` (217 v43 checks on hosted AROS,
+host tests, builds for raspi-aarch64):
+
+| # | What was done |
+|---|---|
+| B15 | `CAMDSessionRequestV1` and `CAMDPublishRequestV1` are accepted in an earlier layout, down to the first, and longer than today's when the extra bytes are zero. A publish record without `DataFormat` publishes a MIDI 1.0 endpoint; one that has the field must set it. Event records still have exactly their size: they travel in arrays. |
+| B17 | `CAMD_GROUP_FLAG_` and `CAMD_BLOCK_FLAG_` values for direction, active, static, UI hint and MIDI 1.0 port; undefined bits and 31.25 kbit/s without the MIDI 1.0 flag are refused. They are CAMD's own values and are not yet compared with the specification text. |
+| B18 | A UMP channel voice message of the other protocol is refused with `CAMD_RESULT_UNSUPPORTED`, sent by a client or emitted by the publisher; utility, system, data and stream messages pass on both. |
+| B21 | The public results are `enum CAMDResult`, `CAMD_RESULT_` names with fixed values; the registry's enum left the public header and `camd_public_result()` maps it in every library function. |
+| B23 | One rule: names compare without regard to ASCII case. A published name is folded for its stored ID and for the duplicate check, as a driver's file name already was. IDs stored earlier for names with capitals are not found again. |
+| B24 | `midi/camdendpoint.h` is in four parts: what every caller needs, looking at endpoints, sessions, publishing. It also states the two size rules for records. |
 
 ## P0 — can hurt as it is
 
@@ -80,20 +92,14 @@ Nothing open.
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
 | B14 | No way to see, remove or repair stored identities. A damaged store is only mentioned on the debug console. | Functions to list and remove stored identities and to report the store's state (complete, recovered from backup, unreadable), and a small shell command using them. | A removed identity gets a new ID on next use; the damaged-store case is visible to a program. |
-| B15 | Records the caller hands in must have exactly today's size. | Accept shorter request records of an earlier layout by the same `Size` rule CAMD uses for records it fills in; refuse longer ones whose extra bytes are not zero. | A request cut to an earlier size opens; tests for shorter, equal and longer. |
 | B16 | Fixed tables: 32 snapshots, 64 input sessions, 16 watches, 32 published endpoints, 32 sessions per endpoint, 64 records per queue. | Grow the system-wide tables on demand; keep per-session and per-endpoint bounds but let the request name them up to a maximum. | The suite opens more than today's limits without failure. |
-| B17 | Function Block and Group flags have no defined values (direction, active, static). | Define the values the UMP specification's Function Block Info carries, as CAMD's own flags, and check only their range. Needs the values confirmed against the specification text later. | Flags round-trip through topology and snapshot. |
-| B18 | Nothing keeps a MIDI 1.0-protocol UMP endpoint from carrying MIDI 2.0 channel voice messages, or the reverse. | Check the message type against the endpoint's protocol on send and emit, letting utility, system, data and stream types through. | A type-4 message on a MIDI 1.0-protocol endpoint is refused, with a test. |
 | B20 | Identity-file writes that fail half-way are covered only by the host model. | A debug-only switch in the store that fails a chosen DOS call, driven by the hosted runner. | The runner fails each write, flush, rename and delete once and the IDs survive. |
 
 ## P3 — polish
 
 | # | Limit or defect | What to do |
 |---|---|---|
-| B21 | The functions return the internal `enum CAMDRegistryResult`. | Give the public results their own names and values before review, and map internally. |
 | B22 | No example and no installed documentation beyond autodoc headers. | A short sender, receiver and publisher example in the suite's directory, and one page that walks through them. |
-| B23 | Published names compare exactly, driver file names without regard to case. | One rule for both, chosen with B04. |
-| B24 | `midi/camdendpoint.h` mixes client records, publisher records and constants. | Split or order it once the surface stops moving. |
 
 ## Raised by the upstream review of btmidi.class (2026-10-11)
 

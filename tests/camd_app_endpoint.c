@@ -218,6 +218,29 @@ static void test_ump(void)
     events[0] = ump(0x40903c00u, 0x80000000u, 1);
     assert(camd_registry_session_send_ump(registry, output, events, 1) ==
            CAMD_REGISTRY_INVALID);
+    /* A MIDI 1.0 channel voice message does not travel on an endpoint of
+     * the MIDI 2.0 protocol, in either direction; it takes no room. */
+    events[0] = ump(0x20903c40u, 0, 1);
+    assert(camd_registry_session_send_ump(registry, output, events, 1) ==
+           CAMD_REGISTRY_UNSUPPORTED);
+    assert(camd_app_endpoint_emit_ump(app, events, 1, NULL) ==
+           CAMD_PROVIDER_UNSUPPORTED);
+    assert(camd_provider_validate_ump_protocol(
+               events, 1, CAMD_PROVIDER_PROTOCOL_MIDI1) == CAMD_PROVIDER_OK);
+    events[0] = ump(0x40903c00u, 0x80000000u, 2);
+    assert(camd_provider_validate_ump_protocol(
+               events, 1, CAMD_PROVIDER_PROTOCOL_MIDI1) ==
+           CAMD_PROVIDER_UNSUPPORTED);
+    /* utility, system, data and stream messages pass on both */
+    events[1] = ump(0x10f80000u, 0, 1);
+    assert(camd_provider_validate_ump_protocol(
+               &events[1], 1, CAMD_PROVIDER_PROTOCOL_MIDI1) == CAMD_PROVIDER_OK &&
+           camd_provider_validate_ump_protocol(
+               &events[1], 1, CAMD_PROVIDER_PROTOCOL_MIDI2) == CAMD_PROVIDER_OK);
+    assert(camd_public_result(CAMD_REGISTRY_NOMEM) == CAMD_RESULT_NO_MEMORY &&
+           camd_public_result(CAMD_REGISTRY_CALLBACK_FAILED) == CAMD_RESULT_FAILED &&
+           camd_public_result((enum CAMDRegistryResult)99) == CAMD_RESULT_FAILED);
+
     events[0] = ump(0x40903c00u, 0x80000000u, 2);
     events[1] = ump(0x40803c00u, 0x11111111u, 2);
     events[2] = ump(0x40903d00u, 0x22222222u, 2);

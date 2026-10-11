@@ -52,12 +52,14 @@ a real client before review. Everything in it can still change.
 | `LONG GetPublishedEndpointStats(endpoint, stats)` | A0, A1 | records taken, emitted and lost on either side |
 | `LONG CloseEndpointSession(session)` | A0 | |
 
-Results are `enum CAMDRegistryResult` values. The native MIDI 1.0 record for
+Results are `enum CAMDResult` values, `CAMD_RESULT_OK` and thirteen others
+with fixed numbers; the registry's own result enum is private and mapped at
+each library function. The native MIDI 1.0 record for
 new sessions, left open below, is provisionally `CAMDMIDI1EventV1` plus a
 separate SysEx call. An input session names a signal number in its request;
 the opening task gets it when something arrives. A full input queue loses
 the newest messages and `GetEndpointMidi()` reports that once with
-`CAMD_REGISTRY_QUEUE_FULL`. An event sent to a driver's port with
+`CAMD_RESULT_QUEUE_FULL`. An event sent to a driver's port with
 `CAMD_EVENT_TIME_VALID` is handed over when `CamdTime()` reaches its `TimeLow`;
 received events carry the time of their arrival. A published endpoint
 names its data format and protocol; UMP ones carry complete `CAMDUMPEventV1`
@@ -86,7 +88,7 @@ These are deliberate or still open; each is what the code does today.
 
 - Nothing converts between MIDI 1.0 and UMP, in either direction or
   protocol. A session has to ask for exactly what its endpoint carries, or
-  it gets `CAMD_REGISTRY_UNSUPPORTED`; there is no conversion policy beyond
+  it gets `CAMD_RESULT_UNSUPPORTED`; there is no conversion policy beyond
   `CAMD_CONVERSION_NONE`.
 - UMP exists only for endpoints programs publish. No driver or transport
   provides a UMP endpoint, and a UMP endpoint has no legacy clusters, so
@@ -94,14 +96,19 @@ These are deliberate or still open; each is what the code does today.
 - CAMD carries UMP words and does not interpret them. The only check is that
   the word count fits the message type (UMP 1.1 table: 32 bits for types 0-2
   and 6-7, 64 for 3-4 and 8-A, 96 for B-C, 128 for 5 and D-F), reserved types
-  included. A MIDI 1.0-protocol endpoint is not kept from carrying MIDI 2.0
-  channel voice messages or the reverse; SysEx7/SysEx8 and Mixed Data Set
+  included, and that a channel voice message is of the endpoint's protocol:
+  type 4 on a MIDI 1.0-protocol endpoint and type 2 on a MIDI 2.0 one are
+  refused with `CAMD_RESULT_UNSUPPORTED`, sent or emitted. SysEx7/SysEx8 and
+  Mixed Data Set
   sequences are not checked for completeness; Stream, Utility, JR Timestamp
   and Flex Data messages pass like any other and start nothing.
 - Groups and Function Blocks are what the publisher declared, checked for
-  range and duplicates only. CAMD does not route, filter or project by Group,
-  does not discover or negotiate anything, and Function Block direction,
-  activity and UI hints have no defined flag values yet.
+  range, duplicates and defined flag bits only. CAMD does not route, filter or
+  project by Group and does not discover or negotiate anything. The flags
+  (`CAMD_GROUP_FLAG_`, `CAMD_BLOCK_FLAG_`: direction, active, static, UI
+  hint, MIDI 1.0 port) are CAMD's own values, not the bits of a Function
+  Block Info message, and still have to be compared with the specification
+  text.
 - Scheduling does not apply to UMP: a published endpoint gets the times as
   its clients gave them.
 - The UMP word table was written from memory of the specification and agrees
@@ -120,8 +127,7 @@ These are deliberate or still open; each is what the code does today.
   which runs at priority 35, one below a port's receiver process; nothing
   compensates for latency.
 - Names, registers, record layouts and result codes are not reviewed upstream
-  and can change. `enum CAMDRegistryResult` is the internal registry enum
-  exposed as it is.
+  and can change.
 - `midi/camdendpoint.h` stops the compiler when a record does not have its
   documented size. That check passes with the x86-64 and AArch64 AROS
   compilers, with `m68k-aros-gcc`, and with the x86-64 compiler in 32-bit
@@ -133,9 +139,12 @@ These are deliberate or still open; each is what the code does today.
   `CAMDSessionStatsV1`, `CAMDPublishedStatsV1`, Group and Function Block
   records) may be shorter or
   longer than CAMD's: at most the caller's `Size` is written and `Size`
-  returns as the full size. A record the caller hands in
-  (`CAMDSessionRequestV1`, `CAMDPublishRequestV1`, events) must have exactly
-  the current size; there is no older-version path yet.
+  returns as the full size. A request record the caller hands in
+  (`CAMDSessionRequestV1`, `CAMDPublishRequestV1`) may be of an earlier
+  layout, down to the first (before `MaxSysExBytes`, before `DataFormat`):
+  the missing fields mean their defaults. It may be longer than CAMD knows
+  if the extra bytes are zero. Event records travel in arrays and must have
+  exactly their size.
 
 **Behaviour a client has to know**
 
@@ -146,7 +155,7 @@ These are deliberate or still open; each is what the code does today.
   exists, as CAMD 41 does for a node left behind.
 - Nothing waits except `DrainEndpointSession()`, which waits at most the time
   it is given and is woken when the queue has been emptied or its endpoint
-  withdrawn; on a withdrawn endpoint it returns `CAMD_REGISTRY_RETIRED` at
+  withdrawn; on a withdrawn endpoint it returns `CAMD_RESULT_RETIRED` at
   once. It really blocks, so the session's worker runs also when the caller
   holds `Forbid()`. With more than 16 tasks draining at once, the others
   look every two milliseconds instead. Every other
@@ -188,8 +197,10 @@ These are deliberate or still open; each is what the code does today.
 
 - A driver port's ID follows the driver's file name and port number, a
   published endpoint's follows its name. Renaming either gives a new ID.
-- Published names are compared exactly, driver file names without regard to
-  ASCII case.
+- Names are compared without regard to ASCII case, a published endpoint's
+  as a driver's file name: `Synth` and `synth` are one endpoint with one
+  stored ID and cannot be published side by side. IDs stored for names with
+  capitals before this rule are not found again.
 - Damaged identity files with no complete copy give temporary IDs for that
   run and are left untouched; nothing repairs or reports them beyond a line on
   the debug console. Failing DOS calls in the middle of a write are covered
