@@ -68,7 +68,7 @@ make contrib-aros-midihub-mdnstools contrib-aros-midihub-mdnscx
 make contrib-aros-midihub-mdnsprobe
 ```
 
-The AROS tree needs the patches in `patches/net-series`; see
+The AROS tree needs the patches in `patches/net/series`; see
 `patches/README.md`. Without them AROSTCP delivers no IPv4 multicast on a
 SANA-II interface.
 

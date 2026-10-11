@@ -1,5 +1,5 @@
 #!/bin/sh
-# Applies patches/camd-series and patches/net-series to a clean index of the
+# Applies patches/camd-series and patches/net/series to a clean index of the
 # AROS tree's HEAD and compares the result with the AROS working tree.
 #
 #   tools/check-camd-patches.sh [AROS_DIR]
@@ -17,12 +17,15 @@ trap 'rm -f "$index"' EXIT
 
 export GIT_INDEX_FILE="$index"
 git -C "$aros" read-tree HEAD
-cat "$here/patches/camd-series" "$here/patches/net-series" | grep -v '^#' | while read -r name; do
-    [ -n "$name" ] || continue
-    git -C "$aros" apply --cached "$here/patches/aros-$name.patch" 2>/dev/null || {
-        echo "aros-$name.patch does not apply"
-        exit 1
-    }
+for series in camd-series net/series; do
+    dir=$(dirname "$here/patches/$series")
+    grep -v '^#' "$here/patches/$series" | while read -r name; do
+        [ -n "$name" ] || continue
+        git -C "$aros" apply --cached "$dir/aros-$name.patch" 2>/dev/null || {
+            echo "$series: aros-$name.patch does not apply"
+            exit 1
+        }
+    done
 done
 
 status=0

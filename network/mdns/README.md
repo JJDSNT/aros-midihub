@@ -32,7 +32,7 @@ resolving in both directions over two links, name conflicts, clients that
 go away, the tools, and the Envoy bridge. It compiles for amiga-m68k and
 raspi-aarch64 and has not been run on either.
 
-Three things had to change in AROS first, all in `patches/net-series`: a
+Three things had to change in AROS first, all in `patches/net/series`: a
 crash in AROSTCP's netdb parser, multicast in the hosted `eth.device`, and
 IPv4 multicast on SANA-II interfaces, which AROSTCP did not deliver.
 

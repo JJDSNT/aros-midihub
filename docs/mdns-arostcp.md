@@ -43,13 +43,13 @@ in upstream commit `28dd8854eae4ccc1325d600689790938dd0f7fba`.
 
 The first native run showed that IPv4 multicast did not work on a SANA-II
 interface, although the options were accepted. Three patches in
-`patches/net-series` fix what was found; none is specific to mDNS.
+`patches/net/series` fix what was found; none is specific to mDNS.
 
 | Patch | Fault |
 |---|---|
-| `aros-arostcp-ipv4-multicast.patch` | `IFF_MULTICAST` was never set and its bit carried a private flag; a group had no Ethernet address; `ip_input()` had no case for a joined group; a sender that had chosen its interface with `IP_MULTICAST_IF` still needed a route. |
-| `aros-eth-unix-multicast.patch` | The Linux-hosted `eth.device` dropped received multicast frames and refused the SANA-II multicast commands. |
-| `aros-arostcp-netdb-unknown-keyword.patch` | An unknown keyword in a netdb file crashed the stack. |
+| `net/aros-arostcp-ipv4-multicast.patch` | `IFF_MULTICAST` was never set and its bit carried a private flag; a group had no Ethernet address; `ip_input()` had no case for a joined group; a sender that had chosen its interface with `IP_MULTICAST_IF` still needed a route. |
+| `net/aros-eth-unix-multicast.patch` | The Linux-hosted `eth.device` dropped received multicast frames and refused the SANA-II multicast commands. |
+| `net/aros-arostcp-netdb-unknown-keyword.patch` | An unknown keyword in a netdb file crashed the stack. |
 
 One more fault is not patched: on amiga-m68k the stack does not build until
 `fd.library`'s headers exist, because its build file does not ask for them.
