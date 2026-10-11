@@ -380,8 +380,10 @@ int main(void)
     assert(camd_legacy_driver_adapter_release(adapter) == CAMD_REGISTRY_BUSY);
     assert(camd_registry_session_stop_receive(registry, input) ==
            CAMD_REGISTRY_OK);
+    assert(camd_registry_session_count(registry) == 2);
     assert(camd_registry_session_close(registry, input) == CAMD_REGISTRY_OK);
     assert(camd_registry_session_close(registry, output) == CAMD_REGISTRY_OK);
+    assert(camd_registry_session_count(registry) == 0);
     assert(camd_legacy_driver_adapter_release(adapter) == CAMD_REGISTRY_OK);
     assert(backend.opens == 2 && backend.closes == 2);
     assert(backend.receive_starts == 1 && backend.receive_stops == 1);

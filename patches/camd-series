@@ -21,3 +21,4 @@ camd-legacy-identity-set
 camd-driver-endpoints
 debugdriver-output
 camd-endpoint-client
+camd-endpoint-expunge

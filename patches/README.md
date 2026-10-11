@@ -196,6 +196,7 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-driver-endpoints.patch` | `LoadDriver()` publishes each loaded driver's ports as private output endpoints with stored IDs, and `FreeDriverData()` retires them first; a failure leaves the driver's clusters working |
 | `aros-debugdriver-output.patch` | the debugdriver prints each byte it transmits, so a test can compare what reached a port |
 | `aros-camd-endpoint-client.patch` | provisional camd.library 43: `ObtainEndpointSnapshot()`, `GetEndpointInfo()`, `ReleaseEndpointSnapshot()`, `OpenEndpointSession()`, `PutEndpointMidi()`, `PutEndpointSysEx()`, `DrainEndpointSession()`, `CloseEndpointSession()` and the installed `midi/camdendpoint.h`; native MIDI 1.0 output sessions only |
+| `aros-camd-endpoint-expunge.patch` | camd.library refuses to be expunged while a client has left an endpoint session or snapshot open, instead of freeing the drivers under it |
 
 ```sh
 grep -v '^#' patches/camd-series | while read -r p; do
@@ -371,7 +372,8 @@ patches and with all of them:
 | all patches | 60 of 60 | 34 of 34 | 8 of 8 |
 
 `MIDIHubCAMDCompat --v43` is a client of the provisional endpoint functions: 26
-checks on hosted AROS. Its session and a legacy link send to the same
+checks on hosted AROS, and 26 again after `--v43-leak` exits with a session
+open and `Avail FLUSH` tries to expunge the library. Its session and a legacy link send to the same
 debugdriver port, and the runner compares the bytes the driver printed.
 
 Use the build tree's `bin/raspi-aarch64/AROS` as `SD_DIR`; an older copy with a

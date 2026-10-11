@@ -1,0 +1,96 @@
+diff --git a/workbench/libs/camd/camd_init.c b/workbench/libs/camd/camd_init.c
+--- a/workbench/libs/camd/camd_init.c
++++ b/workbench/libs/camd/camd_init.c
+@@ -33,8 +33,18 @@ static int Expunge(struct CamdBase *CamdBase)
+ }
+ #endif
+ 
++/* A client that left an endpoint session or snapshot open still refers to
++   CAMD's drivers and registry, so CAMD stays loaded. */
++static int ExpungeCamd(struct CamdBase *CamdBase)
++{
++    if (EndpointClientsRemain(CamdBase))
++        return FALSE;
++    UninitCamd(CamdBase);
++    return TRUE;
++}
++
+ ADD2INITLIB(InitCamd, 0);
+-ADD2EXPUNGELIB(UninitCamd, 0);
++ADD2EXPUNGELIB(ExpungeCamd, 0);
+ 
+ #else
+ #  include "camd_aos4_init.c"
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -457,6 +457,7 @@ struct CAMDEndpointSnapshot *FindEndpointSnapshot(
+ void RemoveEndpointSnapshot(const struct CAMDHandleV1 *handle,
+ 	struct CamdBase *CamdBase);
+ void FreeEndpointSnapshots(struct CamdBase *CamdBase);
++BOOL EndpointClientsRemain(struct CamdBase *CamdBase);
+ 
+ void FreeDriverData(struct Drivers *driver,
+ 	struct CamdBase *CamdBase
+diff --git a/workbench/libs/camd/endpoint_client.c b/workbench/libs/camd/endpoint_client.c
+--- a/workbench/libs/camd/endpoint_client.c
++++ b/workbench/libs/camd/endpoint_client.c
+@@ -61,6 +61,20 @@ void RemoveEndpointSnapshot(const struct CAMDHandleV1 *handle,
+         camd_snapshot_destroy(snapshot);
+ }
+ 
++/* Called from expunge with the library closed, so no client is inside CAMD
++ * and the snapshot table needs no lock. */
++BOOL EndpointClientsRemain(struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    ULONG i;
++
++    for (i = 0; i < ENDPOINT_SNAPSHOTS; ++i) {
++        if (base->EndpointSnapshots[i] != NULL)
++            return TRUE;
++    }
++    return camd_registry_session_count(base->EndpointRegistry) != 0;
++}
++
+ /* Snapshots a client did not release. CAMD must be expunging. */
+ void FreeEndpointSnapshots(struct CamdBase *CamdBase)
+ {
+diff --git a/workbench/libs/camd/endpoint_registry.c b/workbench/libs/camd/endpoint_registry.c
+--- a/workbench/libs/camd/endpoint_registry.c
++++ b/workbench/libs/camd/endpoint_registry.c
+@@ -890,6 +890,21 @@ out:
+     return result;
+ }
+ 
++size_t camd_registry_session_count(struct CAMDEndpointRegistry *registry)
++{
++    size_t count = 0, i;
++
++    if (!registry)
++        return 0;
++    core_lock_acquire(&registry->lock);
++    for (i = 0; i < registry->session_count; ++i) {
++        if (registry->sessions[i].occupied)
++            ++count;
++    }
++    core_lock_release(&registry->lock);
++    return count;
++}
++
+ enum CAMDRegistryResult camd_registry_session_info(
+     struct CAMDEndpointRegistry *registry,
+     struct CAMDHandleV1 session_handle,
+diff --git a/workbench/libs/camd/endpoint_registry.h b/workbench/libs/camd/endpoint_registry.h
+--- a/workbench/libs/camd/endpoint_registry.h
++++ b/workbench/libs/camd/endpoint_registry.h
+@@ -98,6 +98,9 @@ enum CAMDRegistryResult camd_registry_session_open(
+     const struct CAMDProviderOpenRequestV1 *request,
+     struct CAMDHandleV1 *session);
+ 
++/* Sessions opened and not yet closed, including ones still closing. */
++size_t camd_registry_session_count(struct CAMDEndpointRegistry *registry);
++
+ enum CAMDRegistryResult camd_registry_session_info(
+     struct CAMDEndpointRegistry *registry,
+     struct CAMDHandleV1 session,

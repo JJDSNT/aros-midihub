@@ -13,6 +13,8 @@
    MIDIHubCAMDCompat --v43      the provisional endpoint functions of
                                 camd.library 43: snapshots and native
                                 MIDI 1.0 output sessions; skipped before 43
+   MIDIHubCAMDCompat --v43-leak exits with a snapshot and a session open,
+                                for the runner to flush memory afterwards
    MIDIHubCAMDCompat --router SOURCE DESTINATION
                                 how long MIDIHubRouter, routing SOURCE to
                                 DESTINATION, takes to forward a message
@@ -1197,6 +1199,38 @@ out:
     if (node) DeleteMidi(node);
 }
 
+/* A client that exits with a snapshot and a session still open. CAMD must
+   then stay loaded: the runner flushes memory and runs --v43 again. */
+static void test_endpoint_leak(void)
+{
+    struct CAMDHandleV1 snapshot, session;
+    struct CAMDEndpointInfoV1 info;
+    struct CAMDSessionRequestV1 request;
+    ULONG count = 0, i;
+    LONG result = CAMD_REGISTRY_INVALID;
+
+    if (ObtainEndpointSnapshot(&snapshot, &count) != CAMD_REGISTRY_OK) {
+        check(0, "leak: ObtainEndpointSnapshot", NULL);
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        memset(&info, 0, sizeof(info));
+        info.Size = sizeof(info);
+        info.Version = 1;
+        if (GetEndpointInfo(&snapshot, i, &info) != CAMD_REGISTRY_OK || strcmp(info.Name, "debugdriver.3")) continue;
+        memset(&request, 0, sizeof(request));
+        request.Size = sizeof(request);
+        request.Version = 1;
+        request.EndpointID = info.ID;
+        request.Direction = CAMD_DIRECTION_OUTPUT;
+        request.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+        request.Protocol = CAMD_PROTOCOL_MIDI1;
+        request.QueueCapacity = 4;
+        result = OpenEndpointSession(&request, &session, NULL);
+    }
+    check(result == CAMD_REGISTRY_OK, "a session and a snapshot are left open", NULL);
+}
+
 static int copy_file(CONST_STRPTR from, CONST_STRPTR to)
 {
     static UBYTE buffer[4096];
@@ -1326,12 +1360,13 @@ int main(int argc, char **argv)
     int rethink_mode = argc == 2 && !strcmp(argv[1], "--rethink");
     int v42_mode = argc == 2 && !strcmp(argv[1], "--v42");
     int v43_mode = argc == 2 && !strcmp(argv[1], "--v43");
+    int leak_mode = argc == 2 && !strcmp(argv[1], "--v43-leak");
     int router_mode = argc == 4 && !strcmp(argv[1], "--router");
 
     /* Unbuffered, so a crash still leaves the checks before it in the log. */
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (argc != 1 && !rethink_mode && !v42_mode && !v43_mode && !router_mode) {
-        puts("Usage: MIDIHubCAMDCompat [--v42 | --v43 | --rethink | --router SOURCE DESTINATION]");
+    if (argc != 1 && !rethink_mode && !v42_mode && !v43_mode && !leak_mode && !router_mode) {
+        puts("Usage: MIDIHubCAMDCompat [--v42 | --v43 | --v43-leak | --rethink | --router SOURCE DESTINATION]");
         return 20;
     }
     CamdBase = OpenLibrary((CONST_STRPTR)"camd.library", 0);
@@ -1344,6 +1379,12 @@ int main(int argc, char **argv)
         test_router(argv[2], argv[3]);
     } else if (rethink_mode) {
         RUN(test_rethink_load);
+    } else if (leak_mode) {
+        if (CamdBase->lib_Version < 43) {
+            skip("camd.library 43", "older library");
+        } else {
+            RUN(test_endpoint_leak);
+        }
     } else if (v43_mode) {
         if (CamdBase->lib_Version < 43) {
             skip("camd.library 43", "older library");

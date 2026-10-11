@@ -39,10 +39,12 @@ cmd=SYS:Extras/aros-midihub/C/MIDIHubCAMDCompat
 boot "$cmd >SYS:camdcompat-contract.log\n$cmd --v42 >SYS:camdcompat-v42.log\n$cmd --v43 >SYS:camdcompat-v43.log" contract "contract v42 v43"
 
 mv "$sys/Devs/Midi/debugdriver" "$sys/camdcompat-debugdriver"
-boot "$cmd --rethink >SYS:camdcompat-rethink.log" rethink rethink
+# After the rethink pass a client exits with a session open and memory is
+# flushed: camd.library must refuse to go, and then still work.
+boot "$cmd --rethink >SYS:camdcompat-rethink.log\n$cmd --v43-leak >SYS:camdcompat-leak.log\nAvail FLUSH >NIL:\n$cmd --v43 >SYS:camdcompat-flushed.log" rethink "rethink leak flushed"
 
 status=0
-for run in contract v42 v43 rethink; do
+for run in contract v42 v43 rethink leak flushed; do
     log="$work/camdcompat-$run.log"
     if [ ! -s "$log" ]; then
         echo "no $run log: AROS did not run the suite (see $work/serial-$run.log)"
