@@ -223,6 +223,11 @@ transport is a device, not a client. See
 
 ## Open work
 
+What the rewrite as a driver cost, the weak points of the code sent
+upstream and what is still untested are listed one by one, with a fix for
+each, in [the driver's limitations](ble-midi-driver-limitations.md). The
+summary:
+
 Besides a full build and tests with physical radios and iOS, these gaps remain.
 They are listed by impact, and each one is removed from this list once it is
 fixed.
