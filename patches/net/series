@@ -1,5 +1,5 @@
 # Network patches in apply order, one name per line: patches/net/aros-<name>.patch
-# Base: AROS upstream master a7102948cd (2026-10-10). Independent of camd-series.
+# Base: AROS upstream master 51bffe65a4 (2026-10-11). Independent of camd-series.
 arostcp-netdb-unknown-keyword
 eth-unix-multicast
 arostcp-ipv4-multicast

@@ -1,6 +1,6 @@
 # AROS patches
 
-**Base:** AROS upstream `master` at `a7102948cd` (10 October 2026). The AROS
+**Base:** AROS upstream `master` at `51bffe65a4` (11 October 2026). The AROS
 tree used here is `~/AROS`, branch `midihub/upstream-2026-10-11`.
 
 ## Now in upstream
