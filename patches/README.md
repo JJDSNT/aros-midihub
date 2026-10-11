@@ -205,6 +205,7 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-endpoint-projection.patch` | a published endpoint also takes part in the legacy clusters `<name>.out.0` and `<name>.in.0`, like a driver's port, so existing programs reach it by linking; complete messages pass between clusters and endpoint without a byte stream |
 | `aros-camd-endpoint-diagnostics.patch` | `CancelEndpointSession()` and `GetEndpointSessionStats()`; an offline published endpoint leaves its legacy clusters; a published endpoint and a driver cannot share a name |
 | `aros-camd-endpoint-time.patch` | received messages carry the `CamdTime()` of their arrival, and a message sent to a driver's port with a time waits in its session's queue until then: the session worker gains a timed retry on timer.device |
+| `aros-camd-endpoint-ump.patch` | native UMP without conversion for published endpoints: `PutEndpointUMP()`, `GetEndpointUMP()`, `PutPublishedUMP()`, `GetPublishedUMP()`; Groups and Function Blocks with `SetPublishedEndpointTopology()`, `GetEndpointGroup()` and `GetEndpointFunctionBlock()`; word counts checked against the message type |
 
 ```sh
 grep -v '^#' patches/camd-series | while read -r p; do
@@ -381,8 +382,8 @@ patches and with all of them:
 | up to `camd-part-notify` | 50 of 50 | skipped | 8 of 8 |
 | all patches | 65 of 65 | 34 of 34 | 13 of 13 |
 
-`MIDIHubCAMDCompat --v43` is a client of the provisional endpoint functions: 121
-checks on hosted AROS, and 121 again after `--v43-leak` exits with a session
+`MIDIHubCAMDCompat --v43` is a client of the provisional endpoint functions: 148
+checks on hosted AROS, and 148 again after `--v43-leak` exits with a session
 open and `Avail FLUSH` tries to expunge the library. Its session and a legacy link send to the same
 debugdriver port, and the runner compares the bytes the driver printed. Input
 sessions are tested on the loopback driver, in both directions between a

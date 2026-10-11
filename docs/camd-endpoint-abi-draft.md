@@ -15,8 +15,8 @@ in this draft is exported as a public symbol.
 ## Provisional version 43 slice
 
 `patches/aros-camd-endpoint-client.patch`, `aros-camd-endpoint-input.patch` and
-`aros-camd-endpoint-watch.patch` and `aros-camd-endpoint-publish.patch` `aros-camd-endpoint-diagnostics.patch` and `aros-camd-endpoint-time.patch`
-append twenty ordinary vectors behind
+`aros-camd-endpoint-watch.patch` and `aros-camd-endpoint-publish.patch` `aros-camd-endpoint-diagnostics.patch`, `aros-camd-endpoint-time.patch` and
+`aros-camd-endpoint-ump.patch` append twenty-seven ordinary vectors behind
 `.version 43` and installs `midi/camdendpoint.h`, so that the endpoint core has
 a real client before review. Everything in it can still change.
 
@@ -41,6 +41,13 @@ a real client before review. Everything in it can still change.
 | `LONG GetPublishedMidi(endpoint, event, sysex, size, length)` | A0, A1, A2, D0, A3 | oldest message clients sent, clients served in turn |
 | `LONG CancelEndpointSession(session)` | A0 | drop what an output session has not handed over yet |
 | `LONG GetEndpointSessionStats(session, stats)` | A0, A1 | records sent, rejected, received and dropped since open |
+| `LONG PutEndpointUMP(session, events, count)` | A0, A1, D0 | atomic batch of complete `CAMDUMPEventV1` messages |
+| `LONG GetEndpointUMP(session, event)` | A0, A1 | oldest received UMP message |
+| `LONG PutPublishedUMP(endpoint, events, count)` | A0, A1, D0 | to every receiving client session |
+| `LONG GetPublishedUMP(endpoint, event)` | A0, A1 | oldest UMP message clients sent |
+| `LONG SetPublishedEndpointTopology(endpoint, groups, groupcount, blocks, blockcount)` | A0, A1, D0, A2, D1 | replace Groups and Function Blocks as a whole |
+| `LONG GetEndpointGroup(snapshot, index, number, info)` | A0, D0, D1, A1 | one `CAMDGroupInfoV1` of an endpoint |
+| `LONG GetEndpointFunctionBlock(snapshot, index, number, info)` | A0, D0, D1, A1 | one `CAMDFunctionBlockInfoV1` of an endpoint |
 | `LONG CloseEndpointSession(session)` | A0 | |
 
 Results are `enum CAMDRegistryResult` values. The native MIDI 1.0 record for
@@ -50,8 +57,9 @@ the opening task gets it when something arrives. A full input queue loses
 the newest messages and `GetEndpointMidi()` reports that once with
 `CAMD_REGISTRY_QUEUE_FULL`. An event sent to a driver's port with
 `CAMD_EVENT_TIME_VALID` is handed over when `CamdTime()` reaches its `TimeLow`;
-received events carry the time of their arrival. Not in the slice: Groups and Function
-Blocks and UMP.
+received events carry the time of their arrival. A published endpoint
+names its data format and protocol; UMP ones carry complete `CAMDUMPEventV1`
+messages unconverted.
 
 A published endpoint also appears as the legacy clusters `<name>.out.0` (what
 is sent there reaches `GetPublishedMidi()`) and `<name>.in.0` (which gets what
@@ -71,8 +79,29 @@ These are deliberate or still open; each is what the code does today.
 
 **Scope**
 
-- Native MIDI 1.0 only. No UMP session opens, no Group or Function Block is
-  published or enumerable, and nothing converts between MIDI 1.0 and UMP.
+- Nothing converts between MIDI 1.0 and UMP, in either direction or
+  protocol. A session has to ask for exactly what its endpoint carries, or
+  it gets `CAMD_REGISTRY_UNSUPPORTED`; there is no conversion policy beyond
+  `CAMD_CONVERSION_NONE`.
+- UMP exists only for endpoints programs publish. No driver or transport
+  provides a UMP endpoint, and a UMP endpoint has no legacy clusters, so
+  programs written for CAMD 41 cannot reach it.
+- CAMD carries UMP words and does not interpret them. The only check is that
+  the word count fits the message type (UMP 1.1 table: 32 bits for types 0-2
+  and 6-7, 64 for 3-4 and 8-A, 96 for B-C, 128 for 5 and D-F), reserved types
+  included. A MIDI 1.0-protocol endpoint is not kept from carrying MIDI 2.0
+  channel voice messages or the reverse; SysEx7/SysEx8 and Mixed Data Set
+  sequences are not checked for completeness; Stream, Utility, JR Timestamp
+  and Flex Data messages pass like any other and start nothing.
+- Groups and Function Blocks are what the publisher declared, checked for
+  range and duplicates only. CAMD does not route, filter or project by Group,
+  does not discover or negotiate anything, and Function Block direction,
+  activity and UI hints have no defined flag values yet.
+- Scheduling does not apply to UMP: a published endpoint gets the times as
+  its clients gave them.
+- The UMP word table was written from memory of the specification and agrees
+  with `src/ump.c`; it has not been checked against the specification text
+  (gate U02), and nothing was tested against another UMP implementation.
 - One clock: `CAMD_CLOCK_CAMD`, which is `CamdTime()` in milliseconds and
   wraps after 49.7 days. A time more than 2^31 ms ahead counts as past.
 - Scheduling exists for sessions to a driver's port only. A published
@@ -118,6 +147,8 @@ These are deliberate or still open; each is what the code does today.
 
 **Fixed sizes**
 
+- A published endpoint has one data format and one protocol for its
+  lifetime.
 - 32 snapshots, 64 input sessions, 16 watches of 32 events and 32 published
   endpoints in the whole system; 32 sessions per endpoint; at most 64 records
   per session queue; 256 stored identities.

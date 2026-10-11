@@ -1,0 +1,1485 @@
+diff --git a/workbench/libs/camd/app_endpoint.c b/workbench/libs/camd/app_endpoint.c
+--- a/workbench/libs/camd/app_endpoint.c
++++ b/workbench/libs/camd/app_endpoint.c
+@@ -27,6 +27,7 @@ struct app_session {
+     struct app_session *next;
+     uint32_t direction;
+     struct CAMDNativeEventQueue *queue;         /* output sessions */
++    uint32_t capacity;                          /* of queue, in records */
+     struct CAMDProviderReceiveSinkV1 sink;      /* input sessions */
+     int receiving;
+ };
+@@ -133,6 +134,14 @@ static void notify(struct CAMDAppEndpoint *endpoint)
+         call(context);
+ }
+ 
++/* A UMP queue holds no MIDI 1.0 SysEx. */
++static uint32_t sysex_bytes(const struct CAMDAppEndpoint *endpoint)
++{
++    return endpoint->config.DataFormat == CAMD_PROVIDER_FORMAT_UMP
++               ? 0
++               : endpoint->config.MaxSysExBytes;
++}
++
+ static enum CAMDProviderResult app_open(
+     void *context, const struct CAMDProviderOpenRequestV1 *request,
+     struct CAMDProviderOpenResultV1 *result)
+@@ -146,8 +155,8 @@ static enum CAMDProviderResult app_open(
+     if ((request->Direction != CAMD_PROVIDER_DIRECTION_INPUT &&
+          request->Direction != CAMD_PROVIDER_DIRECTION_OUTPUT) ||
+         (request->Direction & ~endpoint->config.Directions) != 0 ||
+-        request->DataFormat != CAMD_PROVIDER_FORMAT_MIDI1 ||
+-        request->Protocol != CAMD_PROVIDER_PROTOCOL_MIDI1 ||
++        request->DataFormat != endpoint->config.DataFormat ||
++        request->Protocol != endpoint->config.Protocol ||
+         request->QueueCapacity == 0 ||
+         request->QueueCapacity > endpoint->config.MaxQueueCapacity)
+         return CAMD_PROVIDER_UNSUPPORTED;
+@@ -160,14 +169,15 @@ static enum CAMDProviderResult app_open(
+         memset(&queue_config, 0, sizeof(queue_config));
+         queue_config.Size = sizeof(queue_config);
+         queue_config.Version = 1;
+-        queue_config.DataFormat = CAMD_PROVIDER_FORMAT_MIDI1;
++        queue_config.DataFormat = endpoint->config.DataFormat;
+         queue_config.Capacity = request->QueueCapacity;
+-        queue_config.MaxSysExBytes = endpoint->config.MaxSysExBytes;
++        queue_config.MaxSysExBytes = sysex_bytes(endpoint);
+         if (camd_native_queue_create(&queue_config, &session->queue) !=
+             CAMD_NATIVE_QUEUE_OK) {
+             app_free(session);
+             return CAMD_PROVIDER_CALLBACK_FAILED;
+         }
++        session->capacity = request->QueueCapacity;
+     }
+     lock_acquire(&endpoint->lock);
+     if (endpoint->retiring ||
+@@ -185,7 +195,7 @@ static enum CAMDProviderResult app_open(
+     lock_release(&endpoint->lock);
+     result->SessionContext = session;
+     result->EffectiveQueueCapacity = request->QueueCapacity;
+-    result->MaxSysExBytes = endpoint->config.MaxSysExBytes;
++    result->MaxSysExBytes = sysex_bytes(endpoint);
+     return CAMD_PROVIDER_OK;
+ }
+ 
+@@ -262,6 +272,40 @@ static enum CAMDProviderResult app_send_sysex(
+     return CAMD_PROVIDER_OK;
+ }
+ 
++static enum CAMDProviderResult app_send_ump(
++    void *context, void *session_context,
++    const struct CAMDUMPEventV1 *events, size_t event_count)
++{
++    struct CAMDAppEndpoint *endpoint = context;
++    struct app_session *session = output_session(endpoint, session_context);
++    enum CAMDNativeQueueResult result;
++    size_t i;
++
++    if (!session)
++        return CAMD_PROVIDER_INVALID;
++    /* One item per message, so that the publisher takes them one by one;
++     * the room for all of them is checked first. */
++    {
++        struct CAMDNativeQueueStatsV1 stats;
++
++        memset(&stats, 0, sizeof(stats));
++        stats.Size = sizeof(stats);
++        stats.Version = 1;
++        if (camd_native_queue_stats(session->queue, &stats) !=
++            CAMD_NATIVE_QUEUE_OK)
++            return CAMD_PROVIDER_STATE;
++        if (event_count > session->capacity - stats.PendingRecords)
++            return CAMD_PROVIDER_QUEUE_FULL;
++    }
++    for (i = 0; i < event_count; ++i) {
++        result = camd_native_queue_enqueue_ump(session->queue, &events[i], 1);
++        if (result != CAMD_NATIVE_QUEUE_OK)
++            return queue_result(result);
++    }
++    notify(endpoint);
++    return CAMD_PROVIDER_OK;
++}
++
+ /* QUEUE_FULL while the publisher has not taken everything yet. */
+ static enum CAMDProviderResult app_drain(void *context, void *session_context)
+ {
+@@ -304,7 +348,9 @@ static enum CAMDProviderResult app_start_receive(
+     if (!endpoint || !session || session->endpoint != endpoint ||
+         session->direction != CAMD_PROVIDER_DIRECTION_INPUT || !sink ||
+         sink->Size != sizeof(*sink) || sink->Version != 1 ||
+-        !sink->SubmitMIDI1 || !sink->SubmitMIDI1SysEx)
++        (endpoint->config.DataFormat == CAMD_PROVIDER_FORMAT_UMP
++             ? !sink->SubmitUMP
++             : !sink->SubmitMIDI1 || !sink->SubmitMIDI1SysEx))
+         return CAMD_PROVIDER_INVALID;
+     lock_acquire(&endpoint->lock);
+     if (session->receiving) {
+@@ -371,7 +417,10 @@ enum CAMDProviderResult camd_app_endpoint_create(
+         config->Directions == 0 ||
+         (config->Directions & ~CAMD_PROVIDER_DIRECTION_ALL) != 0 ||
+         config->MaxQueueCapacity == 0 || config->MaxSysExBytes < 2 ||
+-        config->MaxSessions == 0)
++        config->MaxSessions == 0 ||
++        ((config->DataFormat || config->Protocol) &&
++         camd_provider_native_path(config->DataFormat, config->Protocol) ==
++             0))
+         return CAMD_PROVIDER_INVALID;
+     endpoint = app_alloc(sizeof(*endpoint));
+     if (!endpoint)
+@@ -381,7 +430,12 @@ enum CAMDProviderResult camd_app_endpoint_create(
+         return CAMD_PROVIDER_CALLBACK_FAILED;
+     }
+     endpoint->config = *config;
+-    if ((config->Directions & CAMD_PROVIDER_DIRECTION_OUTPUT) != 0) {
++    if (endpoint->config.DataFormat == 0) {
++        endpoint->config.DataFormat = CAMD_PROVIDER_FORMAT_MIDI1;
++        endpoint->config.Protocol = CAMD_PROVIDER_PROTOCOL_MIDI1;
++    }
++    if (endpoint->config.DataFormat == CAMD_PROVIDER_FORMAT_MIDI1 &&
++        (config->Directions & CAMD_PROVIDER_DIRECTION_OUTPUT) != 0) {
+         struct CAMDNativeQueueConfigV1 queue_config;
+ 
+         memset(&queue_config, 0, sizeof(queue_config));
+@@ -410,6 +464,7 @@ enum CAMDProviderResult camd_app_endpoint_create(
+     endpoint->ops.Close = app_close;
+     endpoint->ops.SendMIDI1 = app_send_midi1;
+     endpoint->ops.SendMIDI1SysEx = app_send_sysex;
++    endpoint->ops.SendUMP = app_send_ump;
+     endpoint->ops.StartReceive = app_start_receive;
+     endpoint->ops.StopReceive = app_stop_receive;
+     endpoint->ops.Drain = app_drain;
+@@ -441,7 +496,8 @@ enum CAMDProviderResult camd_app_endpoint_emit_midi1(
+ 
+     if (dropped)
+         *dropped = 0;
+-    if (!endpoint)
++    if (!endpoint ||
++        endpoint->config.DataFormat != CAMD_PROVIDER_FORMAT_MIDI1)
+         return CAMD_PROVIDER_INVALID;
+     valid = camd_provider_validate_midi1(events, event_count);
+     if (valid != CAMD_PROVIDER_OK)
+@@ -472,7 +528,8 @@ enum CAMDProviderResult camd_app_endpoint_emit_sysex(
+ 
+     if (dropped)
+         *dropped = 0;
+-    if (!endpoint)
++    if (!endpoint ||
++        endpoint->config.DataFormat != CAMD_PROVIDER_FORMAT_MIDI1)
+         return CAMD_PROVIDER_INVALID;
+     valid = camd_provider_validate_midi1_sysex(bytes, byte_count);
+     if (valid != CAMD_PROVIDER_OK)
+@@ -532,7 +589,8 @@ enum CAMDProviderResult camd_app_endpoint_take(
+     enum CAMDProviderResult result;
+     size_t count = 0;
+ 
+-    if (!endpoint || !event || !sysex_count || (!sysex && sysex_capacity))
++    if (!endpoint || !event || !sysex_count || (!sysex && sysex_capacity) ||
++        endpoint->config.DataFormat != CAMD_PROVIDER_FORMAT_MIDI1)
+         return CAMD_PROVIDER_INVALID;
+     *sysex_count = 0;
+     lock_acquire(&endpoint->lock);
+@@ -560,6 +618,58 @@ enum CAMDProviderResult camd_app_endpoint_take(
+     return result;
+ }
+ 
++enum CAMDProviderResult camd_app_endpoint_emit_ump(
++    struct CAMDAppEndpoint *endpoint, const struct CAMDUMPEventV1 *events,
++    size_t event_count, uint32_t *dropped)
++{
++    struct app_session *session;
++    enum CAMDProviderResult valid;
++    uint32_t lost = 0;
++
++    if (dropped)
++        *dropped = 0;
++    if (!endpoint || endpoint->config.DataFormat != CAMD_PROVIDER_FORMAT_UMP)
++        return CAMD_PROVIDER_INVALID;
++    valid = camd_provider_validate_ump(events, event_count);
++    if (valid != CAMD_PROVIDER_OK)
++        return valid;
++    lock_acquire(&endpoint->lock);
++    for (session = endpoint->sessions; session; session = session->next) {
++        if (session->receiving &&
++            session->sink.SubmitUMP(session->sink.Context, events,
++                                    event_count) != CAMD_PROVIDER_OK)
++            ++lost;
++    }
++    lock_release(&endpoint->lock);
++    if (dropped)
++        *dropped = lost;
++    return CAMD_PROVIDER_OK;
++}
++
++enum CAMDProviderResult camd_app_endpoint_take_ump(
++    struct CAMDAppEndpoint *endpoint, struct CAMDUMPEventV1 *event)
++{
++    struct app_session *session;
++    struct CAMDNativeQueueHeadV1 head;
++    enum CAMDProviderResult result;
++    size_t count = 0;
++
++    if (!endpoint || !event ||
++        endpoint->config.DataFormat != CAMD_PROVIDER_FORMAT_UMP)
++        return CAMD_PROVIDER_INVALID;
++    lock_acquire(&endpoint->lock);
++    session = next_with_message(endpoint, &head);
++    if (!session) {
++        result = CAMD_PROVIDER_QUEUE_FULL;
++    } else {
++        result = queue_result(camd_native_queue_dequeue_ump(
++            session->queue, event, 1, &count));
++        endpoint->last_taken = session;
++    }
++    lock_release(&endpoint->lock);
++    return result;
++}
++
+ enum CAMDProviderResult camd_app_endpoint_inject_midi1(
+     struct CAMDAppEndpoint *endpoint, const struct CAMDMIDI1EventV1 *event)
+ {
+diff --git a/workbench/libs/camd/app_endpoint.h b/workbench/libs/camd/app_endpoint.h
+--- a/workbench/libs/camd/app_endpoint.h
++++ b/workbench/libs/camd/app_endpoint.h
+@@ -23,6 +23,10 @@ struct CAMDAppEndpointConfigV1 {
+     uint32_t MaxQueueCapacity;  /* per output session */
+     uint32_t MaxSysExBytes;
+     uint32_t MaxSessions;
++    /* What every session carries. Both 0 for native MIDI 1.0; with UMP
++     * MaxSysExBytes is not used and there is no legacy side. */
++    uint32_t DataFormat;
++    uint32_t Protocol;
+     /* Called, outside the endpoint's lock, when a client queued something.
+      * May be NULL. */
+     void (*Notify)(void *context);
+@@ -55,6 +59,13 @@ enum CAMDProviderResult camd_app_endpoint_take(
+     struct CAMDAppEndpoint *endpoint, struct CAMDMIDI1EventV1 *event,
+     uint8_t *sysex, size_t sysex_capacity, size_t *sysex_count);
+ 
++/* The same for a UMP endpoint, one complete message at a time. */
++enum CAMDProviderResult camd_app_endpoint_emit_ump(
++    struct CAMDAppEndpoint *endpoint, const struct CAMDUMPEventV1 *events,
++    size_t event_count, uint32_t *dropped);
++enum CAMDProviderResult camd_app_endpoint_take_ump(
++    struct CAMDAppEndpoint *endpoint, struct CAMDUMPEventV1 *event);
++
+ /* The legacy side of the endpoint, for CAMD's cluster projection. inject
+  * queues what a legacy sender sent, on a queue of MaxQueueCapacity records of
+  * its own that take serves in turn with the sessions; it needs the output
+diff --git a/workbench/libs/camd/camd.conf b/workbench/libs/camd/camd.conf
+--- a/workbench/libs/camd/camd.conf
++++ b/workbench/libs/camd/camd.conf
+@@ -75,4 +75,11 @@ LONG PutPublishedSysEx(struct CAMDHandleV1 *endpoint, UBYTE *bytes, ULONG length
+ LONG GetPublishedMidi(struct CAMDHandleV1 *endpoint, struct CAMDMIDI1EventV1 *event, UBYTE *sysex, ULONG size, ULONG *length) (A0, A1, A2, D0, A3)
+ LONG CancelEndpointSession(struct CAMDHandleV1 *session) (A0)
+ LONG GetEndpointSessionStats(struct CAMDHandleV1 *session, struct CAMDSessionStatsV1 *stats) (A0, A1)
++LONG PutEndpointUMP(struct CAMDHandleV1 *session, struct CAMDUMPEventV1 *events, ULONG count) (A0, A1, D0)
++LONG GetEndpointUMP(struct CAMDHandleV1 *session, struct CAMDUMPEventV1 *event) (A0, A1)
++LONG PutPublishedUMP(struct CAMDHandleV1 *endpoint, struct CAMDUMPEventV1 *events, ULONG count) (A0, A1, D0)
++LONG GetPublishedUMP(struct CAMDHandleV1 *endpoint, struct CAMDUMPEventV1 *event) (A0, A1)
++LONG SetPublishedEndpointTopology(struct CAMDHandleV1 *endpoint, struct CAMDGroupInfoV1 *groups, ULONG groupcount, struct CAMDFunctionBlockInfoV1 *blocks, ULONG blockcount) (A0, A1, D0, A2, D1)
++LONG GetEndpointGroup(struct CAMDHandleV1 *snapshot, ULONG index, ULONG number, struct CAMDGroupInfoV1 *info) (A0, D0, D1, A1)
++LONG GetEndpointFunctionBlock(struct CAMDHandleV1 *snapshot, ULONG index, ULONG number, struct CAMDFunctionBlockInfoV1 *info) (A0, D0, D1, A1)
+ ##end functionlist
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -300,6 +300,7 @@ struct EndpointReceiver{
+ 	struct CAMDNativeEventQueue *queue;
+ 	struct Task *task;
+ 	ULONG signal;			// signal number, or CAMD_SIGNAL_NONE
++	ULONG format;			// CAMD_DATA_FORMAT_MIDI1 or _UMP
+ 	BOOL lost;			// the queue was full since the last read
+ };
+ struct CAMDIdentityStoreAROS;
+@@ -522,8 +523,11 @@ void RemoveEndpointSnapshot(const struct CAMDHandleV1 *handle,
+ void FreeEndpointSnapshots(struct CamdBase *CamdBase);
+ BOOL EndpointClientsRemain(struct CamdBase *CamdBase);
+ struct CAMDMIDI1EventV1;
+-LONG StartEndpointReceiver(const struct CAMDHandleV1 *session,ULONG capacity,
+-	ULONG maxsysex,ULONG signal,struct CamdBase *CamdBase);
++LONG StartEndpointReceiver(const struct CAMDHandleV1 *session,ULONG format,
++	ULONG capacity,ULONG maxsysex,ULONG signal,struct CamdBase *CamdBase);
++struct CAMDUMPEventV1;
++LONG ReadEndpointReceiverUMP(const struct CAMDHandleV1 *session,
++	struct CAMDUMPEventV1 *event,struct CamdBase *CamdBase);
+ void StopEndpointReceiver(const struct CAMDHandleV1 *session,
+ 	struct CamdBase *CamdBase);
+ LONG ReadEndpointReceiver(const struct CAMDHandleV1 *session,
+@@ -555,6 +559,16 @@ LONG GetAppEndpointMidi(const struct CAMDHandleV1 *handle,
+ 	struct CAMDMIDI1EventV1 *event,UBYTE *sysex,ULONG size,ULONG *length,
+ 	struct CamdBase *CamdBase);
+ BOOL AppEndpointsRemain(struct CamdBase *CamdBase);
++struct CAMDGroupInfoV1;
++struct CAMDFunctionBlockInfoV1;
++LONG PutAppEndpointUMP(const struct CAMDHandleV1 *handle,
++	const struct CAMDUMPEventV1 *events,ULONG count,struct CamdBase *CamdBase);
++LONG GetAppEndpointUMP(const struct CAMDHandleV1 *handle,
++	struct CAMDUMPEventV1 *event,struct CamdBase *CamdBase);
++LONG SetAppEndpointTopology(const struct CAMDHandleV1 *handle,
++	struct CAMDGroupInfoV1 *groups,ULONG group_count,
++	struct CAMDFunctionBlockInfoV1 *blocks,ULONG block_count,
++	struct CamdBase *CamdBase);
+ struct EndpointProjection *CreateEndpointProjection(
+ 	struct CAMDAppEndpoint *app,const char *name,ULONG directions,
+ 	struct CamdBase *CamdBase);
+diff --git a/workbench/libs/camd/camdendpoint.h b/workbench/libs/camd/camdendpoint.h
+--- a/workbench/libs/camd/camdendpoint.h
++++ b/workbench/libs/camd/camdendpoint.h
+@@ -20,6 +20,7 @@ typedef uint8_t UBYTE;
+ #define CAMD_ENDPOINT_NAME_BYTES       128u
+ #define CAMD_ENDPOINT_PRODUCT_BYTES    128u
+ #define CAMD_ENDPOINT_TRANSPORT_BYTES   32u
++#define CAMD_TOPOLOGY_NAME_BYTES        64u
+ 
+ /* The container a session carries, fixed when it is opened. */
+ #define CAMD_DATA_FORMAT_MIDI1           (1u << 0)
+@@ -149,6 +150,45 @@ struct CAMDMIDI1EventV1 {
+ /* CAMDSessionRequestV1.Signal when the opener wants no signal. */
+ #define CAMD_SIGNAL_NONE                 0xffffffffu
+ 
++/* One complete Universal MIDI Packet message of WordCount words, each in
++ * the machine's byte order. WordCount has to be what the message type in the
++ * top four bits of Words[0] calls for. Flags and the time fields are as in
++ * CAMDMIDI1EventV1. CAMD carries the words and does not interpret them. */
++struct CAMDUMPEventV1 {
++    ULONG Size;
++    ULONG Version;
++    ULONG WordCount;
++    ULONG Flags;
++    ULONG Words[4];
++    ULONG TimeHigh;
++    ULONG TimeLow;
++    ULONG ClockDomain;
++};
++
++/* The Groups a UMP endpoint uses, and its Function Blocks: FirstGroup and
++ * GroupCount name the Groups a block spans. A publisher sets them with
++ * SetPublishedEndpointTopology(); CAMD checks their ranges and nothing else. */
++struct CAMDGroupInfoV1 {
++    ULONG Size;
++    ULONG Version;
++    struct CAMDEndpointIDV1 EndpointID;
++    ULONG Group;
++    ULONG Flags;
++    ULONG Protocol;
++    char Name[CAMD_TOPOLOGY_NAME_BYTES];
++};
++
++struct CAMDFunctionBlockInfoV1 {
++    ULONG Size;
++    ULONG Version;
++    struct CAMDEndpointIDV1 EndpointID;
++    ULONG Number;
++    ULONG Flags;
++    ULONG FirstGroup;
++    ULONG GroupCount;
++    char Name[CAMD_TOPOLOGY_NAME_BYTES];
++};
++
+ /* QueueCapacity is the least number of native records to reserve. Signal is
+  * for an input session: the number of the signal the opening task gets when
+  * something arrives, or CAMD_SIGNAL_NONE. */
+@@ -179,7 +219,9 @@ struct CAMDSessionStatsV1 {
+ 
+ /* A program's own endpoint. Directions are as its clients see them:
+  * CAMD_DIRECTION_OUTPUT when they can send to it, CAMD_DIRECTION_INPUT when
+- * they can receive from it. Name identifies it: the same Name gets the same
++ * they can receive from it. DataFormat and Protocol are what every session
++ * with it carries; only a MIDI 1.0 endpoint gets legacy clusters. Name
++ * identifies it: the same Name gets the same
+  * stable ID again, and only one endpoint of a Name is published at a time.
+  * Signal is the number of the signal the publishing task gets when a client
+  * sent something, or CAMD_SIGNAL_NONE. */
+@@ -190,6 +232,8 @@ struct CAMDPublishRequestV1 {
+     ULONG Signal;
+     char Name[CAMD_ENDPOINT_NAME_BYTES];
+     char ProductInstance[CAMD_ENDPOINT_PRODUCT_BYTES];
++    ULONG DataFormat;   /* CAMD_DATA_FORMAT_MIDI1 or CAMD_DATA_FORMAT_UMP */
++    ULONG Protocol;     /* CAMD_PROTOCOL_MIDI1, or _MIDI2 with UMP */
+ };
+ 
+ /* What an open session got. MaxSysExBytes is zero for UMP. */
+diff --git a/workbench/libs/camd/endpoint_client.c b/workbench/libs/camd/endpoint_client.c
+--- a/workbench/libs/camd/endpoint_client.c
++++ b/workbench/libs/camd/endpoint_client.c
+@@ -167,6 +167,30 @@ static enum CAMDProviderResult receiver_sysex(
+     return queue_to_provider(result);
+ }
+ 
++static enum CAMDProviderResult receiver_ump(
++    void *context, const struct CAMDUMPEventV1 *events, size_t event_count)
++{
++    struct EndpointReceiver *receiver = context;
++    struct CAMDUMPEventV1 event;
++    enum CAMDNativeQueueResult result = CAMD_NATIVE_QUEUE_OK, queued;
++    size_t i;
++
++    for (i = 0; i < event_count; ++i) {
++        event = events[i];
++        if ((event.Flags & CAMD_EVENT_TIME_VALID) == 0) {
++            event.Flags |= CAMD_EVENT_TIME_VALID;
++            event.TimeHigh = 0;
++            event.TimeLow = CamdClock();
++            event.ClockDomain = CAMD_CLOCK_CAMD;
++        }
++        queued = camd_native_queue_enqueue_ump(receiver->queue, &event, 1);
++        if (queued != CAMD_NATIVE_QUEUE_OK)
++            result = queued;
++    }
++    receiver_arrived(receiver, result);
++    return queue_to_provider(result);
++}
++
+ /* EndpointClientSemaphore must be held. */
+ static struct EndpointReceiver *find_receiver(
+     const struct CAMDHandleV1 *session, struct CamdBase *CamdBase)
+@@ -187,8 +211,8 @@ static struct EndpointReceiver *find_receiver(
+ 
+ /* Gives an open input session its queue and starts it receiving. The
+  * calling task is the one that gets the signal. */
+-LONG StartEndpointReceiver(const struct CAMDHandleV1 *session, ULONG capacity,
+-                           ULONG maxsysex, ULONG signal,
++LONG StartEndpointReceiver(const struct CAMDHandleV1 *session, ULONG format,
++                           ULONG capacity, ULONG maxsysex, ULONG signal,
+                            struct CamdBase *CamdBase)
+ {
+     struct CamdBase_intern *base = CB(CamdBase);
+@@ -215,7 +239,7 @@ LONG StartEndpointReceiver(const struct CAMDHandleV1 *session, ULONG capacity,
+     memset(&config, 0, sizeof(config));
+     config.Size = sizeof(config);
+     config.Version = 1;
+-    config.DataFormat = CAMD_PROVIDER_FORMAT_MIDI1;
++    config.DataFormat = format;
+     config.Capacity = capacity;
+     config.MaxSysExBytes = maxsysex;
+     if (camd_native_queue_create(&config, &receiver->queue) !=
+@@ -225,6 +249,7 @@ LONG StartEndpointReceiver(const struct CAMDHandleV1 *session, ULONG capacity,
+     }
+     receiver->task = FindTask(NULL);
+     receiver->signal = signal;
++    receiver->format = format;
+     receiver->lost = FALSE;
+     receiver->session = *session;
+ 
+@@ -234,6 +259,7 @@ LONG StartEndpointReceiver(const struct CAMDHandleV1 *session, ULONG capacity,
+     sink.Context = receiver;
+     sink.SubmitMIDI1 = receiver_midi1;
+     sink.SubmitMIDI1SysEx = receiver_sysex;
++    sink.SubmitUMP = receiver_ump;
+     result = camd_registry_session_start_receive(base->EndpointRegistry,
+                                                  *session, &sink);
+     if (result != CAMD_REGISTRY_OK) {
+@@ -282,6 +308,8 @@ LONG ReadEndpointReceiver(const struct CAMDHandleV1 *session,
+     receiver = find_receiver(session, CamdBase);
+     if (receiver == NULL) {
+         result = CAMD_REGISTRY_STALE;
++    } else if (receiver->format != CAMD_DATA_FORMAT_MIDI1) {
++        result = CAMD_REGISTRY_UNSUPPORTED;
+     } else if (receiver->lost) {
+         receiver->lost = FALSE;
+         result = CAMD_REGISTRY_QUEUE_FULL;
+@@ -425,3 +453,32 @@ void EndEndpointWatcher(const struct CAMDHandleV1 *handle,
+     }
+     ReleaseSemaphore(&base->EndpointClientSemaphore);
+ }
++
++LONG ReadEndpointReceiverUMP(const struct CAMDHandleV1 *session,
++                             struct CAMDUMPEventV1 *event,
++                             struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    struct EndpointReceiver *receiver;
++    size_t count = 0;
++    LONG result;
++
++    ObtainSemaphoreShared(&base->EndpointClientSemaphore);
++    receiver = find_receiver(session, CamdBase);
++    if (receiver == NULL) {
++        result = CAMD_REGISTRY_STALE;
++    } else if (receiver->format != CAMD_DATA_FORMAT_UMP) {
++        result = CAMD_REGISTRY_UNSUPPORTED;
++    } else if (receiver->lost) {
++        receiver->lost = FALSE;
++        result = CAMD_REGISTRY_QUEUE_FULL;
++    } else {
++        result = camd_native_queue_dequeue_ump(receiver->queue, event, 1,
++                                               &count) ==
++                         CAMD_NATIVE_QUEUE_OK && count == 1
++                     ? CAMD_REGISTRY_OK
++                     : CAMD_REGISTRY_EMPTY;
++    }
++    ReleaseSemaphore(&base->EndpointClientSemaphore);
++    return result;
++}
+diff --git a/workbench/libs/camd/endpoint_publish.c b/workbench/libs/camd/endpoint_publish.c
+--- a/workbench/libs/camd/endpoint_publish.c
++++ b/workbench/libs/camd/endpoint_publish.c
+@@ -164,7 +164,9 @@ LONG PublishAppEndpoint(const struct CAMDPublishRequestV1 *request,
+         !terminated(request->Name, sizeof(request->Name)) ||
+         request->Name[0] == '\0' ||
+         !terminated(request->ProductInstance,
+-                    sizeof(request->ProductInstance)))
++                    sizeof(request->ProductInstance)) ||
++        camd_provider_native_path(request->DataFormat, request->Protocol) ==
++            0)
+         return CAMD_REGISTRY_INVALID;
+     /* Without the identity store there is no stable ID to give. */
+     map = camd_identity_store_aros_map(base->EndpointIdentity);
+@@ -213,6 +215,8 @@ LONG PublishAppEndpoint(const struct CAMDPublishRequestV1 *request,
+     config.MaxQueueCapacity = ENDPOINT_OUTPUT_QUEUE;
+     config.MaxSysExBytes = ENDPOINT_OUTPUT_SYSEX;
+     config.MaxSessions = ENDPOINT_OUTPUT_SESSIONS;
++    config.DataFormat = request->DataFormat;
++    config.Protocol = request->Protocol;
+     config.Notify = publisher_notify;
+     config.NotifyContext = publisher;
+     if (camd_app_endpoint_create(&config, &publisher->app) !=
+@@ -228,7 +232,9 @@ LONG PublishAppEndpoint(const struct CAMDPublishRequestV1 *request,
+         ++publisher->generation;
+ 
+     descriptor.IdentityKind = endpoint_kind;
+-    descriptor.ProtocolCapabilities = CAMD_PROVIDER_PROTOCOL_MIDI1;
++    descriptor.ProtocolCapabilities = request->Protocol;
++    descriptor.DataFormat = request->DataFormat;
++    descriptor.Protocol = request->Protocol;
+     descriptor.BackendContext = camd_app_endpoint_context(publisher->app);
+     descriptor.BackendOps = camd_app_endpoint_ops(publisher->app);
+     descriptor.Ports = &port;
+@@ -247,11 +253,14 @@ LONG PublishAppEndpoint(const struct CAMDPublishRequestV1 *request,
+         reap_publishers(CamdBase);
+         goto out;
+     }
+-    /* Its legacy clusters. Without them old programs could not reach it,
+-     * so the endpoint is not left published half-way. */
+-    publisher->projection = CreateEndpointProjection(
+-        publisher->app, request->Name, request->Directions, CamdBase);
+-    if (publisher->projection == NULL) {
++    /* A MIDI 1.0 endpoint's legacy clusters. Without them old programs
++     * could not reach it, so it is not left published half-way. UMP has no
++     * cluster form. */
++    if (request->DataFormat == CAMD_DATA_FORMAT_MIDI1)
++        publisher->projection = CreateEndpointProjection(
++            publisher->app, request->Name, request->Directions, CamdBase);
++    if (request->DataFormat == CAMD_DATA_FORMAT_MIDI1 &&
++        publisher->projection == NULL) {
+         camd_app_endpoint_detach(publisher->app);
+         camd_legacy_driver_adapter_begin_retire(publisher->adapter);
+         publisher->withdrawn = TRUE;
+@@ -379,12 +388,71 @@ LONG GetAppEndpointMidi(const struct CAMDHandleV1 *handle,
+         else if (taken == CAMD_PROVIDER_QUEUE_FULL)
+             result = CAMD_REGISTRY_EMPTY;
+         else
+-            result = CAMD_REGISTRY_INVALID;
++            result = CAMD_REGISTRY_UNSUPPORTED;
+     }
+     ReleaseSemaphore(&base->EndpointClientSemaphore);
+     return result;
+ }
+ 
++LONG PutAppEndpointUMP(const struct CAMDHandleV1 *handle,
++                       const struct CAMDUMPEventV1 *events, ULONG count,
++                       struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    struct EndpointPublisher *publisher;
++    LONG result = CAMD_REGISTRY_STALE;
++
++    ObtainSemaphoreShared(&base->EndpointClientSemaphore);
++    publisher = find_publisher(handle, CamdBase);
++    if (publisher != NULL)
++        result = emit_result(camd_app_endpoint_emit_ump(
++            publisher->app, events, count, NULL));
++    ReleaseSemaphore(&base->EndpointClientSemaphore);
++    return result;
++}
++
++LONG GetAppEndpointUMP(const struct CAMDHandleV1 *handle,
++                       struct CAMDUMPEventV1 *event,
++                       struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    struct EndpointPublisher *publisher;
++    enum CAMDProviderResult taken;
++    LONG result = CAMD_REGISTRY_STALE;
++
++    ObtainSemaphoreShared(&base->EndpointClientSemaphore);
++    publisher = find_publisher(handle, CamdBase);
++    if (publisher != NULL) {
++        taken = camd_app_endpoint_take_ump(publisher->app, event);
++        if (taken == CAMD_PROVIDER_OK)
++            result = CAMD_REGISTRY_OK;
++        else if (taken == CAMD_PROVIDER_QUEUE_FULL)
++            result = CAMD_REGISTRY_EMPTY;
++        else
++            result = CAMD_REGISTRY_UNSUPPORTED;
++    }
++    ReleaseSemaphore(&base->EndpointClientSemaphore);
++    return result;
++}
++
++LONG SetAppEndpointTopology(const struct CAMDHandleV1 *handle,
++                            struct CAMDGroupInfoV1 *groups, ULONG group_count,
++                            struct CAMDFunctionBlockInfoV1 *blocks,
++                            ULONG block_count, struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    struct EndpointPublisher *publisher;
++    LONG result = CAMD_REGISTRY_STALE;
++
++    ObtainSemaphoreShared(&base->EndpointClientSemaphore);
++    publisher = find_publisher(handle, CamdBase);
++    if (publisher != NULL)
++        result = camd_legacy_driver_adapter_set_topology(
++            publisher->adapter, 0, groups, group_count, blocks, block_count);
++    ReleaseSemaphore(&base->EndpointClientSemaphore);
++    return result;
++}
++
+ /* Called from expunge with the library closed. A published endpoint, or a
+  * withdrawn one a client still has a session with, keeps CAMD loaded. */
+ BOOL AppEndpointsRemain(struct CamdBase *CamdBase)
+diff --git a/workbench/libs/camd/endpoint_registry.h b/workbench/libs/camd/endpoint_registry.h
+--- a/workbench/libs/camd/endpoint_registry.h
++++ b/workbench/libs/camd/endpoint_registry.h
+@@ -13,30 +13,8 @@
+ #include <stddef.h>
+ #include <stdint.h>
+ 
+-#define CAMD_TOPOLOGY_NAME_BYTES        64u
+ #define CAMD_ENDPOINT_WATCH_MAX_EVENTS  32u
+ 
+-struct CAMDGroupInfoV1 {
+-    uint32_t Size;
+-    uint32_t Version;
+-    struct CAMDEndpointIDV1 EndpointID;
+-    uint32_t Group;
+-    uint32_t Flags;
+-    uint32_t Protocol;
+-    char Name[CAMD_TOPOLOGY_NAME_BYTES];
+-};
+-
+-struct CAMDFunctionBlockInfoV1 {
+-    uint32_t Size;
+-    uint32_t Version;
+-    struct CAMDEndpointIDV1 EndpointID;
+-    uint32_t Number;
+-    uint32_t Flags;
+-    uint32_t FirstGroup;
+-    uint32_t GroupCount;
+-    char Name[CAMD_TOPOLOGY_NAME_BYTES];
+-};
+-
+ struct CAMDEndpointRegistry;
+ struct CAMDEndpointSnapshot;
+ struct CAMDEndpointWatch;
+diff --git a/workbench/libs/camd/getendpointfunctionblock.c b/workbench/libs/camd/getendpointfunctionblock.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/getendpointfunctionblock.c
+@@ -0,0 +1,95 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++#include "provider_contract.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH4(LONG, GetEndpointFunctionBlock,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDHandleV1 *, snapshot, A0),
++	AROS_LHA(ULONG, index, D0),
++	AROS_LHA(ULONG, number, D1),
++	AROS_LHA(struct CAMDFunctionBlockInfoV1 *, info, A1),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 72, Camd)
++
++/*  FUNCTION
++		Copies the record of one Function Block of an endpoint in a
++		snapshot.
++
++    INPUTS
++		snapshot - from ObtainEndpointSnapshot().
++		index - the endpoint, as for GetEndpointInfo().
++		number - 0 up to the endpoint's number of Function Block
++		    records; this counts the records, it is not the block's
++		    own number.
++		info - Size and Version set by the caller. At most Size bytes
++		    are written, and Size is then the size of the full record.
++
++    RESULT
++		CAMD_REGISTRY_OK, CAMD_REGISTRY_RANGE past the last endpoint or
++		the last block, CAMD_REGISTRY_STALE for a released snapshot, or
++		another CAMD_REGISTRY_ value.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		GetEndpointGroup(), GetEndpointInfo()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	struct CAMDEndpointSnapshot *taken;
++	const struct CAMDEndpointInfoV1 *endpoint;
++	const struct CAMDGroupInfoV1 *groups;
++	const struct CAMDFunctionBlockInfoV1 *blocks;
++	size_t groupcount,blockcount;
++	ULONG size;
++	LONG result;
++
++	if(snapshot==NULL || info==NULL || info->Size<2*sizeof(ULONG) ||
++	   info->Version!=1){
++		return CAMD_REGISTRY_INVALID;
++	}
++
++	ObtainSemaphoreShared(&CB(CamdBase)->EndpointClientSemaphore);
++	taken=FindEndpointSnapshot(snapshot,CamdBase);
++	if(taken==NULL){
++		result=CAMD_REGISTRY_STALE;
++	}else{
++		result=camd_snapshot_endpoint(taken,index,&endpoint,&groups,
++			&groupcount,&blocks,&blockcount);
++		if(result==CAMD_REGISTRY_OK && number>=blockcount){
++			result=CAMD_REGISTRY_RANGE;
++		}
++		if(result==CAMD_REGISTRY_OK){
++			size=info->Size<sizeof(blocks[number]) ? info->Size : sizeof(blocks[number]);
++			CopyMem((APTR)&blocks[number],info,size);
++			info->Size=sizeof(blocks[number]);
++		}
++	}
++	ReleaseSemaphore(&CB(CamdBase)->EndpointClientSemaphore);
++
++	return result;
++
++    AROS_LIBFUNC_EXIT
++}
+diff --git a/workbench/libs/camd/getendpointgroup.c b/workbench/libs/camd/getendpointgroup.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/getendpointgroup.c
+@@ -0,0 +1,93 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++#include "provider_contract.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH4(LONG, GetEndpointGroup,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDHandleV1 *, snapshot, A0),
++	AROS_LHA(ULONG, index, D0),
++	AROS_LHA(ULONG, number, D1),
++	AROS_LHA(struct CAMDGroupInfoV1 *, info, A1),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 71, Camd)
++
++/*  FUNCTION
++		Copies the record of one Group of an endpoint in a snapshot.
++
++    INPUTS
++		snapshot - from ObtainEndpointSnapshot().
++		index - the endpoint, as for GetEndpointInfo().
++		number - 0 up to the endpoint's number of Group records; this
++		    counts the records, it is not the Group's own number.
++		info - Size and Version set by the caller. At most Size bytes
++		    are written, and Size is then the size of the full record.
++
++    RESULT
++		CAMD_REGISTRY_OK, CAMD_REGISTRY_RANGE past the last endpoint or
++		the last Group, CAMD_REGISTRY_STALE for a released snapshot, or
++		another CAMD_REGISTRY_ value.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change. A MIDI 1.0 endpoint has no Groups.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		GetEndpointFunctionBlock(), GetEndpointInfo()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	struct CAMDEndpointSnapshot *taken;
++	const struct CAMDEndpointInfoV1 *endpoint;
++	const struct CAMDGroupInfoV1 *groups;
++	const struct CAMDFunctionBlockInfoV1 *blocks;
++	size_t groupcount,blockcount;
++	ULONG size;
++	LONG result;
++
++	if(snapshot==NULL || info==NULL || info->Size<2*sizeof(ULONG) ||
++	   info->Version!=1){
++		return CAMD_REGISTRY_INVALID;
++	}
++
++	ObtainSemaphoreShared(&CB(CamdBase)->EndpointClientSemaphore);
++	taken=FindEndpointSnapshot(snapshot,CamdBase);
++	if(taken==NULL){
++		result=CAMD_REGISTRY_STALE;
++	}else{
++		result=camd_snapshot_endpoint(taken,index,&endpoint,&groups,
++			&groupcount,&blocks,&blockcount);
++		if(result==CAMD_REGISTRY_OK && number>=groupcount){
++			result=CAMD_REGISTRY_RANGE;
++		}
++		if(result==CAMD_REGISTRY_OK){
++			size=info->Size<sizeof(groups[number]) ? info->Size : sizeof(groups[number]);
++			CopyMem((APTR)&groups[number],info,size);
++			info->Size=sizeof(groups[number]);
++		}
++	}
++	ReleaseSemaphore(&CB(CamdBase)->EndpointClientSemaphore);
++
++	return result;
++
++    AROS_LIBFUNC_EXIT
++}
+diff --git a/workbench/libs/camd/getendpointump.c b/workbench/libs/camd/getendpointump.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/getendpointump.c
+@@ -0,0 +1,60 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++#include "provider_contract.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH2(LONG, GetEndpointUMP,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDHandleV1 *, session, A0),
++	AROS_LHA(struct CAMDUMPEventV1 *, event, A1),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 67, Camd)
++
++/*  FUNCTION
++		Takes the oldest Universal MIDI Packet message a UMP input
++		session received.
++
++    INPUTS
++		session - from OpenEndpointSession() with CAMD_DATA_FORMAT_UMP.
++		event - filled in with the message.
++
++    RESULT
++		CAMD_REGISTRY_OK with a message, CAMD_REGISTRY_EMPTY when
++		there is none, CAMD_REGISTRY_QUEUE_FULL once after messages
++		were lost, CAMD_REGISTRY_UNSUPPORTED on a MIDI 1.0 session, or
++		another CAMD_REGISTRY_ value.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change. Does not wait.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		PutEndpointUMP(), GetEndpointMidi()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	if(session==NULL || event==NULL) return CAMD_REGISTRY_INVALID;
++
++	return ReadEndpointReceiverUMP(session,event,CamdBase);
++
++    AROS_LIBFUNC_EXIT
++}
+diff --git a/workbench/libs/camd/getpublishedump.c b/workbench/libs/camd/getpublishedump.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/getpublishedump.c
+@@ -0,0 +1,60 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++#include "provider_contract.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH2(LONG, GetPublishedUMP,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDHandleV1 *, endpoint, A0),
++	AROS_LHA(struct CAMDUMPEventV1 *, event, A1),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 69, Camd)
++
++/*  FUNCTION
++		Takes the oldest Universal MIDI Packet message a client sent
++		to a published UMP endpoint. Clients are served in turn.
++
++    INPUTS
++		endpoint - from PublishEndpoint() with CAMD_DATA_FORMAT_UMP.
++		event - filled in with the message.
++
++    RESULT
++		CAMD_REGISTRY_OK with a message, CAMD_REGISTRY_EMPTY when
++		there is none, CAMD_REGISTRY_UNSUPPORTED for a MIDI 1.0
++		endpoint, CAMD_REGISTRY_STALE for a withdrawn one, or another
++		CAMD_REGISTRY_ value.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change. Does not wait.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		PutPublishedUMP(), GetPublishedMidi()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	if(endpoint==NULL || event==NULL) return CAMD_REGISTRY_INVALID;
++
++	return GetAppEndpointUMP(endpoint,event,CamdBase);
++
++    AROS_LIBFUNC_EXIT
++}
+diff --git a/workbench/libs/camd/legacy_driver_adapter.c b/workbench/libs/camd/legacy_driver_adapter.c
+--- a/workbench/libs/camd/legacy_driver_adapter.c
++++ b/workbench/libs/camd/legacy_driver_adapter.c
+@@ -12,6 +12,7 @@
+ 
+ struct legacy_port {
+     struct CAMDLegacyPortDescriptorV1 descriptor;
++    struct CAMDEndpointInfoV1 info;     /* as published; State kept current */
+     struct CAMDHandleV1 owner_lease;
+     int owner_lease_live;
+ };
+@@ -87,8 +88,8 @@ static enum CAMDProviderResult adapter_open(
+     port = find_port(adapter, &request->EndpointID);
+     if (!port)
+         return CAMD_PROVIDER_INVALID;
+-    if (request->DataFormat != CAMD_PROVIDER_FORMAT_MIDI1 ||
+-        request->Protocol != CAMD_PROVIDER_PROTOCOL_MIDI1 ||
++    if (request->DataFormat != adapter->descriptor.DataFormat ||
++        request->Protocol != adapter->descriptor.Protocol ||
+         request->Direction == 0 ||
+         (request->Direction & ~port->Directions) != 0)
+         return CAMD_PROVIDER_UNSUPPORTED;
+@@ -128,6 +129,16 @@ static enum CAMDProviderResult adapter_send_midi1_sysex(
+         byte_count, time_high, time_low, clock_domain, flags);
+ }
+ 
++static enum CAMDProviderResult adapter_send_ump(
++    void *context, void *session_context,
++    const struct CAMDUMPEventV1 *events, size_t event_count)
++{
++    struct CAMDLegacyDriverAdapter *adapter = context;
++
++    return adapter->backend_ops.SendUMP(adapter->descriptor.BackendContext,
++                                        session_context, events, event_count);
++}
++
+ static enum CAMDProviderResult adapter_start_receive(
+     void *context, void *session_context,
+     const struct CAMDProviderReceiveSinkV1 *sink)
+@@ -221,9 +232,17 @@ static int validate_descriptor(
+                 return 0;
+         }
+     }
++    if (camd_provider_native_path(
++            descriptor->DataFormat ? descriptor->DataFormat
++                                   : CAMD_PROVIDER_FORMAT_MIDI1,
++            descriptor->Protocol ? descriptor->Protocol
++                                 : CAMD_PROVIDER_PROTOCOL_MIDI1) == 0)
++        return 0;
+     if ((directions & CAMD_PROVIDER_DIRECTION_OUTPUT) != 0 &&
+-        (!ops->SendMIDI1 || !ops->SendMIDI1SysEx || !ops->Drain ||
+-         !ops->Cancel))
++        (!ops->Drain || !ops->Cancel ||
++         (descriptor->DataFormat == CAMD_PROVIDER_FORMAT_UMP
++              ? !ops->SendUMP
++              : !ops->SendMIDI1 || !ops->SendMIDI1SysEx)))
+         return 0;
+     if ((directions & CAMD_PROVIDER_DIRECTION_INPUT) != 0 &&
+         (!ops->StartReceive || !ops->StopReceive))
+@@ -241,6 +260,7 @@ static void initialize_provider_ops(struct CAMDLegacyDriverAdapter *adapter)
+     ops->Close = adapter_close;
+     ops->SendMIDI1 = adapter_send_midi1;
+     ops->SendMIDI1SysEx = adapter_send_midi1_sysex;
++    ops->SendUMP = adapter_send_ump;
+     ops->StartReceive = adapter_start_receive;
+     ops->StopReceive = adapter_stop_receive;
+     ops->Drain = adapter_drain;
+@@ -305,6 +325,10 @@ enum CAMDRegistryResult camd_legacy_driver_adapter_create(
+     adapter->descriptor.BackendOps = &adapter->backend_ops;
+     adapter->descriptor.Ports = NULL;
+     adapter->descriptor.Transport = NULL;
++    if (adapter->descriptor.DataFormat == 0)
++        adapter->descriptor.DataFormat = CAMD_PROVIDER_FORMAT_MIDI1;
++    if (adapter->descriptor.Protocol == 0)
++        adapter->descriptor.Protocol = CAMD_PROVIDER_PROTOCOL_MIDI1;
+     adapter->port_count = descriptor->PortCount;
+     for (i = 0; i < adapter->port_count; ++i) {
+         adapter->ports[i].descriptor = descriptor->Ports[i];
+@@ -315,7 +339,8 @@ enum CAMDRegistryResult camd_legacy_driver_adapter_create(
+     provider.Size = sizeof(provider);
+     provider.Version = 1;
+     provider.ProviderID = descriptor->ProviderID;
+-    provider.NativePaths = CAMD_PROVIDER_PATH_MIDI1;
++    provider.NativePaths = camd_provider_native_path(
++        adapter->descriptor.DataFormat, adapter->descriptor.Protocol);
+     provider.Directions = directions;
+     provider.Context = adapter;
+     provider.Ops = &adapter->provider_ops;
+@@ -335,9 +360,9 @@ enum CAMDRegistryResult camd_legacy_driver_adapter_create(
+         endpoint.State = CAMD_ENDPOINT_AVAILABLE;
+         endpoint.Flags = adapter->ports[i].descriptor.Flags;
+         endpoint.IdentityKind = descriptor->IdentityKind;
+-        endpoint.NativeDataFormats = CAMD_DATA_FORMAT_MIDI1;
++        endpoint.NativeDataFormats = adapter->descriptor.DataFormat;
+         endpoint.ProtocolCapabilities = descriptor->ProtocolCapabilities;
+-        endpoint.CurrentProtocol = CAMD_PROVIDER_PROTOCOL_MIDI1;
++        endpoint.CurrentProtocol = adapter->descriptor.Protocol;
+         memcpy(endpoint.Name, adapter->ports[i].descriptor.Name,
+                sizeof(endpoint.Name));
+         memcpy(endpoint.ProductInstance,
+@@ -359,6 +384,7 @@ enum CAMDRegistryResult camd_legacy_driver_adapter_create(
+             goto fail;
+         }
+         adapter->ports[i].owner_lease_live = 1;
++        adapter->ports[i].info = endpoint;
+     }
+     *adapter_out = adapter;
+     return CAMD_REGISTRY_OK;
+@@ -373,14 +399,42 @@ enum CAMDRegistryResult camd_legacy_driver_adapter_set_state(
+     struct CAMDLegacyDriverAdapter *adapter, size_t port_index,
+     uint32_t state)
+ {
++    enum CAMDRegistryResult result;
++
+     if (!adapter || port_index >= adapter->port_count ||
+         (state != CAMD_ENDPOINT_AVAILABLE && state != CAMD_ENDPOINT_OFFLINE))
+         return CAMD_REGISTRY_INVALID;
+     if (adapter->retiring || !adapter->ports[port_index].owner_lease_live)
+         return CAMD_REGISTRY_RETIRED;
+-    return camd_registry_set_state(adapter->registry,
+-                                   adapter->ports[port_index].owner_lease,
+-                                   state);
++    result = camd_registry_set_state(adapter->registry,
++                                     adapter->ports[port_index].owner_lease,
++                                     state);
++    if (result == CAMD_REGISTRY_OK)
++        adapter->ports[port_index].info.State = state;
++    return result;
++}
++
++enum CAMDRegistryResult camd_legacy_driver_adapter_set_topology(
++    struct CAMDLegacyDriverAdapter *adapter, size_t port_index,
++    struct CAMDGroupInfoV1 *groups, size_t group_count,
++    struct CAMDFunctionBlockInfoV1 *blocks, size_t block_count)
++{
++    struct legacy_port *port;
++    size_t i;
++
++    if (!adapter || port_index >= adapter->port_count ||
++        (group_count && !groups) || (block_count && !blocks))
++        return CAMD_REGISTRY_INVALID;
++    port = &adapter->ports[port_index];
++    if (adapter->retiring || !port->owner_lease_live)
++        return CAMD_REGISTRY_RETIRED;
++    for (i = 0; i < group_count; ++i)
++        groups[i].EndpointID = port->info.ID;
++    for (i = 0; i < block_count; ++i)
++        blocks[i].EndpointID = port->info.ID;
++    return camd_registry_replace(adapter->registry, port->owner_lease,
++                                 &port->info, groups, group_count, blocks,
++                                 block_count);
+ }
+ 
+ enum CAMDRegistryResult camd_legacy_driver_adapter_begin_retire(
+diff --git a/workbench/libs/camd/legacy_driver_adapter.h b/workbench/libs/camd/legacy_driver_adapter.h
+--- a/workbench/libs/camd/legacy_driver_adapter.h
++++ b/workbench/libs/camd/legacy_driver_adapter.h
+@@ -38,6 +38,9 @@ struct CAMDLegacyDriverDescriptorV1 {
+     /* NULL for "camd-legacy"; at most CAMD_ENDPOINT_TRANSPORT_BYTES - 1
+      * characters, copied. */
+     const char *Transport;
++    /* What every port carries. Both 0 for native MIDI 1.0. */
++    uint32_t DataFormat;
++    uint32_t Protocol;
+ };
+ 
+ struct CAMDLegacyDriverAdapter;
+@@ -56,6 +59,13 @@ enum CAMDRegistryResult camd_legacy_driver_adapter_set_state(
+     struct CAMDLegacyDriverAdapter *adapter, size_t port_index,
+     uint32_t state);
+ 
++/* Replaces one port's Groups and Function Blocks as a whole. EndpointID in
++ * the records is filled in here. */
++enum CAMDRegistryResult camd_legacy_driver_adapter_set_topology(
++    struct CAMDLegacyDriverAdapter *adapter, size_t port_index,
++    struct CAMDGroupInfoV1 *groups, size_t group_count,
++    struct CAMDFunctionBlockInfoV1 *blocks, size_t block_count);
++
+ enum CAMDRegistryResult camd_legacy_driver_adapter_begin_retire(
+     struct CAMDLegacyDriverAdapter *adapter);
+ 
+diff --git a/workbench/libs/camd/mmakefile.src b/workbench/libs/camd/mmakefile.src
+--- a/workbench/libs/camd/mmakefile.src
++++ b/workbench/libs/camd/mmakefile.src
+@@ -75,7 +75,14 @@ FUNCS := \
+     putpublishedsysex \
+     getpublishedmidi \
+     cancelendpointsession \
+-    getendpointsessionstats
++    getendpointsessionstats \
++    putendpointump \
++    getendpointump \
++    putpublishedump \
++    getpublishedump \
++    setpublishedendpointtopology \
++    getendpointgroup \
++    getendpointfunctionblock
+ 
+ #MM workbench-libs-camd-includes : \
+ #MM     kernel-exec-includes \
+diff --git a/workbench/libs/camd/openendpointsession.c b/workbench/libs/camd/openendpointsession.c
+--- a/workbench/libs/camd/openendpointsession.c
++++ b/workbench/libs/camd/openendpointsession.c
+@@ -40,8 +40,9 @@
+ 
+     NOTES
+ 		New in V43 and provisional: the endpoint functions can still
+-		change. Only CAMD_DATA_FORMAT_MIDI1 sessions
+-		open so far. Existing clusters and links keep working on the
++		change. Nothing converts between MIDI 1.0
++		and UMP: the request has to name what the endpoint carries.
++		Existing clusters and links keep working on the
+ 		same port, which is opened once. An input session gets what
+ 		the port receives from then on; read it with
+ 		GetEndpointMidi(). The task that opens an input session is
+@@ -100,8 +101,9 @@
+ 	result=camd_registry_session_info(CB(CamdBase)->EndpointRegistry,
+ 		handle,&got);
+ 	if(result==CAMD_REGISTRY_OK && got.Direction==CAMD_DIRECTION_INPUT){
+-		result=StartEndpointReceiver(&handle,got.EffectiveQueueCapacity,
+-			got.MaxSysExBytes,request->Signal,CamdBase);
++		result=StartEndpointReceiver(&handle,got.DataFormat,
++			got.EffectiveQueueCapacity,got.MaxSysExBytes,request->Signal,
++			CamdBase);
+ 	}
+ 	if(result!=CAMD_REGISTRY_OK){
+ 		camd_registry_session_close(CB(CamdBase)->EndpointRegistry,handle);
+diff --git a/workbench/libs/camd/provider_contract.c b/workbench/libs/camd/provider_contract.c
+--- a/workbench/libs/camd/provider_contract.c
++++ b/workbench/libs/camd/provider_contract.c
+@@ -80,8 +80,14 @@ enum CAMDProviderResult camd_provider_validate_ump(
+     if (!events || event_count == 0)
+         return CAMD_PROVIDER_INVALID;
+     for (i = 0; i < event_count; ++i) {
++        /* Words per message type, UMP 1.1: 32-bit types 0-2 and 6-7, 64-bit
++         * 3-4 and 8-A, 96-bit B-C, 128-bit 5 and D-F. */
++        static const uint8_t words[16] = {
++            1, 1, 1, 2, 2, 4, 1, 1, 2, 2, 2, 3, 3, 4, 4, 4
++        };
++
+         if (events[i].Size != sizeof(events[i]) || events[i].Version != 1 ||
+-            events[i].WordCount == 0 || events[i].WordCount > 4)
++            events[i].WordCount != words[events[i].Words[0] >> 28])
+             return CAMD_PROVIDER_INVALID;
+     }
+     return CAMD_PROVIDER_OK;
+diff --git a/workbench/libs/camd/provider_contract.h b/workbench/libs/camd/provider_contract.h
+--- a/workbench/libs/camd/provider_contract.h
++++ b/workbench/libs/camd/provider_contract.h
+@@ -47,18 +47,6 @@ enum CAMDProviderResult {
+     CAMD_PROVIDER_TOO_LARGE
+ };
+ 
+-/* A complete host-endian Universal MIDI Packet plus CAMD timing envelope. */
+-struct CAMDUMPEventV1 {
+-    uint32_t Size;
+-    uint32_t Version;
+-    uint32_t WordCount;
+-    uint32_t Flags;
+-    uint32_t Words[4];
+-    uint32_t TimeHigh;
+-    uint32_t TimeLow;
+-    uint32_t ClockDomain;
+-};
+-
+ struct CAMDProviderOpenRequestV1 {
+     uint32_t Size;
+     uint32_t Version;
+diff --git a/workbench/libs/camd/putendpointump.c b/workbench/libs/camd/putendpointump.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/putendpointump.c
+@@ -0,0 +1,66 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++#include "provider_contract.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH3(LONG, PutEndpointUMP,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDHandleV1 *, session, A0),
++	AROS_LHA(struct CAMDUMPEventV1 *, events, A1),
++	AROS_LHA(ULONG, count, D0),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 66, Camd)
++
++/*  FUNCTION
++		Queues complete Universal MIDI Packet messages on a UMP
++		output session. Either all of them are queued, in order, or
++		none.
++
++    INPUTS
++		session - from OpenEndpointSession() with CAMD_DATA_FORMAT_UMP.
++		events - count records, each with Size, Version and WordCount
++		    set.
++		count - at least 1.
++
++    RESULT
++		CAMD_REGISTRY_OK, CAMD_REGISTRY_QUEUE_FULL, CAMD_REGISTRY_INVALID
++		for a WordCount that does not fit the message type,
++		CAMD_REGISTRY_UNSUPPORTED on a MIDI 1.0 session, or another
++		CAMD_REGISTRY_ value.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change. Does not wait. CAMD carries the
++		words as they are and converts nothing.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		GetEndpointUMP(), PutEndpointMidi()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	if(session==NULL) return CAMD_REGISTRY_INVALID;
++
++	return camd_registry_session_send_ump(CB(CamdBase)->EndpointRegistry,
++		*session,events,count);
++
++    AROS_LIBFUNC_EXIT
++}
+diff --git a/workbench/libs/camd/putpublishedump.c b/workbench/libs/camd/putpublishedump.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/putpublishedump.c
+@@ -0,0 +1,62 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++#include "provider_contract.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH3(LONG, PutPublishedUMP,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDHandleV1 *, endpoint, A0),
++	AROS_LHA(struct CAMDUMPEventV1 *, events, A1),
++	AROS_LHA(ULONG, count, D0),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 68, Camd)
++
++/*  FUNCTION
++		Gives complete Universal MIDI Packet messages to every client
++		that receives from a published UMP endpoint.
++
++    INPUTS
++		endpoint - from PublishEndpoint() with CAMD_DATA_FORMAT_UMP.
++		events - count records, each with Size, Version and WordCount
++		    set.
++		count - at least 1.
++
++    RESULT
++		CAMD_REGISTRY_OK, CAMD_REGISTRY_STALE for a withdrawn endpoint,
++		CAMD_REGISTRY_INVALID also for a MIDI 1.0 endpoint, or another
++		CAMD_REGISTRY_ value.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change. Does not wait.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		GetPublishedUMP(), PutPublishedMidi()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	if(endpoint==NULL) return CAMD_REGISTRY_INVALID;
++
++	return PutAppEndpointUMP(endpoint,events,count,CamdBase);
++
++    AROS_LIBFUNC_EXIT
++}
+diff --git a/workbench/libs/camd/setpublishedendpointtopology.c b/workbench/libs/camd/setpublishedendpointtopology.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/setpublishedendpointtopology.c
+@@ -0,0 +1,72 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++#include "provider_contract.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH5(LONG, SetPublishedEndpointTopology,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDHandleV1 *, endpoint, A0),
++	AROS_LHA(struct CAMDGroupInfoV1 *, groups, A1),
++	AROS_LHA(ULONG, groupcount, D0),
++	AROS_LHA(struct CAMDFunctionBlockInfoV1 *, blocks, A2),
++	AROS_LHA(ULONG, blockcount, D1),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 70, Camd)
++
++/*  FUNCTION
++		Replaces a published endpoint's Groups and Function Blocks as
++		a whole. Clients see the old set or the new one in a snapshot,
++		never a mixture, and their watches get an update.
++
++    INPUTS
++		endpoint - from PublishEndpoint().
++		groups - groupcount records with Size, Version, Group and Name
++		    set; EndpointID is filled in. NULL with a count of 0.
++		groupcount - the number of Groups.
++		blocks - blockcount records with Size, Version, Number,
++		    FirstGroup, GroupCount and Name set; EndpointID is filled
++		    in. NULL with a count of 0.
++		blockcount - the number of Function Blocks.
++
++    RESULT
++		CAMD_REGISTRY_OK, CAMD_REGISTRY_INVALID for a Group past 15 or
++		a block that spans past it, CAMD_REGISTRY_DUPLICATE for a
++		Group or block number given twice, or another CAMD_REGISTRY_
++		value. A refused set leaves the earlier one.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change. CAMD checks the ranges only; it
++		does not route by Group.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		GetEndpointGroup(), GetEndpointFunctionBlock()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	if(endpoint==NULL) return CAMD_REGISTRY_INVALID;
++
++	return SetAppEndpointTopology(endpoint,groups,groupcount,blocks,
++		blockcount,CamdBase);
++
++    AROS_LIBFUNC_EXIT
++}

@@ -1635,6 +1635,8 @@ static void test_published_endpoint(void)
     publish.Version = 1;
     publish.Directions = CAMD_DIRECTION_INPUT | CAMD_DIRECTION_OUTPUT;
     publish.Signal = (ULONG)bit;
+    publish.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+    publish.Protocol = CAMD_PROTOCOL_MIDI1;
     check(PublishEndpoint(&publish, &port, &id) == CAMD_REGISTRY_INVALID && port.generation == 0,
           "an endpoint without a name is CAMD_REGISTRY_INVALID", NULL);
     strcpy(publish.Name, name);
@@ -1815,6 +1817,178 @@ out:
     FreeSignal(bit);
 }
 
+static struct CAMDUMPEventV1 ump(ULONG word0, ULONG word1, ULONG words)
+{
+    struct CAMDUMPEventV1 event;
+
+    memset(&event, 0, sizeof(event));
+    event.Size = sizeof(event);
+    event.Version = 1;
+    event.WordCount = words;
+    event.Words[0] = word0;
+    event.Words[1] = word1;
+    return event;
+}
+
+/* The place of a named endpoint in a snapshot, or -1. */
+static LONG endpoint_index(struct CAMDHandleV1 *snapshot, ULONG count, const char *name, struct CAMDEndpointInfoV1 *info)
+{
+    ULONG i;
+
+    for (i = 0; i < count; i++) {
+        memset(info, 0, sizeof(*info));
+        info->Size = sizeof(*info);
+        info->Version = 1;
+        if (GetEndpointInfo(snapshot, i, info) == CAMD_REGISTRY_OK && !strcmp(info->Name, name)) return (LONG)i;
+    }
+    return -1;
+}
+
+/* A published UMP endpoint: complete packets end to end, nothing converted. */
+static void test_ump_endpoint(void)
+{
+    static char name[] = "camdcompat ump";
+    UBYTE buffer[8];
+    struct CAMDPublishRequestV1 publish;
+    struct CAMDSessionRequestV1 request;
+    struct CAMDHandleV1 port, snapshot, to_port, from_port, refused;
+    struct CAMDEndpointIDV1 id;
+    struct CAMDEndpointInfoV1 info;
+    struct CAMDGroupInfoV1 groups[2], group;
+    struct CAMDFunctionBlockInfoV1 block, got_block;
+    struct CAMDUMPEventV1 events[3], event;
+    struct CAMDMIDI1EventV1 midi;
+    ULONG count = 0, length = 0;
+    LONG index, result;
+
+    memset(&publish, 0, sizeof(publish));
+    publish.Size = sizeof(publish);
+    publish.Version = 1;
+    publish.Directions = CAMD_DIRECTION_INPUT | CAMD_DIRECTION_OUTPUT;
+    publish.Signal = CAMD_SIGNAL_NONE;
+    strcpy(publish.Name, name);
+    check(PublishEndpoint(&publish, &port, NULL) == CAMD_REGISTRY_INVALID, "an endpoint without a data format is CAMD_REGISTRY_INVALID", NULL);
+    publish.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+    publish.Protocol = CAMD_PROTOCOL_MIDI2;
+    check(PublishEndpoint(&publish, &port, NULL) == CAMD_REGISTRY_INVALID, "MIDI 2.0 protocol without UMP is CAMD_REGISTRY_INVALID", NULL);
+    publish.DataFormat = CAMD_DATA_FORMAT_UMP;
+    result = PublishEndpoint(&publish, &port, &id);
+    check(result == CAMD_REGISTRY_OK, "PublishEndpoint publishes a UMP endpoint", NULL);
+    if (result != CAMD_REGISTRY_OK) return;
+    check(!FindCluster("camdcompat ump.out.0") && !FindCluster("camdcompat ump.in.0"), "a UMP endpoint has no legacy clusters", NULL);
+
+    /* Groups and Function Blocks. */
+    memset(groups, 0, sizeof(groups));
+    groups[0].Size = groups[1].Size = sizeof(groups[0]);
+    groups[0].Version = groups[1].Version = 1;
+    groups[0].Group = 0;
+    groups[1].Group = 5;
+    strcpy(groups[0].Name, "Main");
+    strcpy(groups[1].Name, "Aux");
+    memset(&block, 0, sizeof(block));
+    block.Size = sizeof(block);
+    block.Version = 1;
+    block.Number = 3;
+    block.FirstGroup = 5;
+    block.GroupCount = 1;
+    strcpy(block.Name, "Synth");
+    check(SetPublishedEndpointTopology(&port, groups, 2, &block, 1) == CAMD_REGISTRY_OK, "SetPublishedEndpointTopology sets Groups and a Function Block", NULL);
+    block.FirstGroup = 15;
+    block.GroupCount = 2;
+    check(SetPublishedEndpointTopology(&port, groups, 2, &block, 1) == CAMD_REGISTRY_INVALID, "a block that spans past Group 15 is CAMD_REGISTRY_INVALID", NULL);
+    groups[1].Group = 0;
+    check(SetPublishedEndpointTopology(&port, groups, 2, NULL, 0) == CAMD_REGISTRY_DUPLICATE, "the same Group twice is CAMD_REGISTRY_DUPLICATE", NULL);
+
+    if (ObtainEndpointSnapshot(&snapshot, &count) == CAMD_REGISTRY_OK) {
+        index = endpoint_index(&snapshot, count, name, &info);
+        check(index >= 0 && info.NativeDataFormats == CAMD_DATA_FORMAT_UMP && info.CurrentProtocol == CAMD_PROTOCOL_MIDI2,
+              "the snapshot shows it as UMP with the MIDI 2.0 protocol", NULL);
+        if (index >= 0) {
+            memset(&group, 0, sizeof(group));
+            group.Size = sizeof(group);
+            group.Version = 1;
+            check(GetEndpointGroup(&snapshot, (ULONG)index, 1, &group) == CAMD_REGISTRY_OK && group.Group == 5 &&
+                  !strcmp(group.Name, "Aux") && !memcmp(&group.EndpointID, &id, sizeof(id)),
+                  "GetEndpointGroup reads the Groups that were set before the refused ones", NULL);
+            group.Size = sizeof(group);
+            check(GetEndpointGroup(&snapshot, (ULONG)index, 2, &group) == CAMD_REGISTRY_RANGE, "past the last Group is CAMD_REGISTRY_RANGE", NULL);
+            memset(&got_block, 0, sizeof(got_block));
+            got_block.Size = sizeof(got_block);
+            got_block.Version = 1;
+            check(GetEndpointFunctionBlock(&snapshot, (ULONG)index, 0, &got_block) == CAMD_REGISTRY_OK && got_block.Number == 3 &&
+                  got_block.FirstGroup == 5 && got_block.GroupCount == 1 && !strcmp(got_block.Name, "Synth"),
+                  "GetEndpointFunctionBlock reads the block", NULL);
+            got_block.Size = sizeof(got_block);
+            check(GetEndpointFunctionBlock(&snapshot, (ULONG)index, 1, &got_block) == CAMD_REGISTRY_RANGE, "past the last block is CAMD_REGISTRY_RANGE", NULL);
+        }
+        index = endpoint_index(&snapshot, count, "loopback.0", &info);
+        group.Size = sizeof(group);
+        check(index < 0 || GetEndpointGroup(&snapshot, (ULONG)index, 0, &group) == CAMD_REGISTRY_RANGE, "a MIDI 1.0 port has no Groups", NULL);
+        ReleaseEndpointSnapshot(&snapshot);
+    }
+
+    memset(&request, 0, sizeof(request));
+    request.Size = sizeof(request);
+    request.Version = 1;
+    request.EndpointID = id;
+    request.QueueCapacity = 8;
+    request.Signal = CAMD_SIGNAL_NONE;
+    request.Direction = CAMD_DIRECTION_OUTPUT;
+    request.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+    request.Protocol = CAMD_PROTOCOL_MIDI1;
+    check(OpenEndpointSession(&request, &refused, NULL) == CAMD_REGISTRY_UNSUPPORTED, "a MIDI 1.0 session on a UMP endpoint is CAMD_REGISTRY_UNSUPPORTED", NULL);
+    request.DataFormat = CAMD_DATA_FORMAT_UMP;
+    request.Protocol = CAMD_PROTOCOL_MIDI2;
+    result = OpenEndpointSession(&request, &to_port, NULL);
+    request.Direction = CAMD_DIRECTION_INPUT;
+    if (result == CAMD_REGISTRY_OK) {
+        result = OpenEndpointSession(&request, &from_port, NULL);
+        if (result != CAMD_REGISTRY_OK) CloseEndpointSession(&to_port);
+    }
+    check(result == CAMD_REGISTRY_OK, "UMP sessions open in both directions", NULL);
+    if (result != CAMD_REGISTRY_OK) goto out;
+
+    /* Client to publisher: a MIDI 2.0 note on and off, 64 bits each. */
+    events[0] = ump(0x40903c00UL, 0xc0000000UL, 2);
+    events[1] = ump(0x40803c00UL, 0x40000000UL, 2);
+    check(PutEndpointUMP(&to_port, events, 2) == CAMD_REGISTRY_OK, "PutEndpointUMP queues two messages", NULL);
+    memset(&event, 0, sizeof(event));
+    check(GetPublishedUMP(&port, &event) == CAMD_REGISTRY_OK && event.WordCount == 2 && event.Words[0] == 0x40903c00UL &&
+          event.Words[1] == 0xc0000000UL, "GetPublishedUMP takes the first, word for word", NULL);
+    check(GetPublishedUMP(&port, &event) == CAMD_REGISTRY_OK && event.Words[0] == 0x40803c00UL && event.Words[1] == 0x40000000UL &&
+          GetPublishedUMP(&port, &event) == CAMD_REGISTRY_EMPTY, "and the second, then nothing", NULL);
+    events[0].WordCount = 1;
+    check(PutEndpointUMP(&to_port, events, 1) == CAMD_REGISTRY_INVALID, "a word count that does not fit the message type is CAMD_REGISTRY_INVALID", NULL);
+    midi = midi1(0x90, 0x3c, 0x40);
+    check(PutEndpointMidi(&to_port, &midi, 1) == CAMD_REGISTRY_UNSUPPORTED &&
+          GetPublishedMidi(&port, &midi, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_UNSUPPORTED,
+          "MIDI 1.0 messages do not pass a UMP session or endpoint", NULL);
+
+    /* Publisher to client, with a 128-bit and a 32-bit message too. */
+    events[0] = ump(0x40b00740UL, 0x12345678UL, 2);
+    events[1] = ump(0xf0010000UL, 0x00000001UL, 4);
+    events[1].Words[2] = 0xaabbccddUL;
+    events[1].Words[3] = 0x11223344UL;
+    events[2] = ump(0x10f80000UL, 0, 1);
+    check(PutPublishedUMP(&port, events, 3) == CAMD_REGISTRY_OK, "PutPublishedUMP sends 64, 128 and 32 bit messages", NULL);
+    memset(&event, 0, sizeof(event));
+    check(GetEndpointUMP(&from_port, &event) == CAMD_REGISTRY_OK && event.WordCount == 2 && event.Words[1] == 0x12345678UL &&
+          (event.Flags & CAMD_EVENT_TIME_VALID) && event.ClockDomain == CAMD_CLOCK_CAMD,
+          "GetEndpointUMP receives the first, with its arrival time", NULL);
+    check(GetEndpointUMP(&from_port, &event) == CAMD_REGISTRY_OK && event.WordCount == 4 && event.Words[0] == 0xf0010000UL &&
+          event.Words[2] == 0xaabbccddUL && event.Words[3] == 0x11223344UL, "the 128-bit message keeps all four words", NULL);
+    check(GetEndpointUMP(&from_port, &event) == CAMD_REGISTRY_OK && event.WordCount == 1 && event.Words[0] == 0x10f80000UL &&
+          GetEndpointUMP(&from_port, &event) == CAMD_REGISTRY_EMPTY, "and the 32-bit one follows, then nothing", NULL);
+    check(GetEndpointMidi(&from_port, &midi, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_UNSUPPORTED,
+          "GetEndpointMidi on a UMP session is CAMD_REGISTRY_UNSUPPORTED", NULL);
+    check(PutPublishedMidi(&port, &midi, 1) == CAMD_REGISTRY_INVALID, "the publisher cannot send MIDI 1.0 messages on it", NULL);
+
+    check(CloseEndpointSession(&to_port) == CAMD_REGISTRY_OK && CloseEndpointSession(&from_port) == CAMD_REGISTRY_OK,
+          "the UMP sessions close", NULL);
+out:
+    WithdrawEndpoint(&port);
+}
+
 /* A client that exits with a snapshot and a session still open. CAMD must
    then stay loaded: the runner flushes memory and runs --v43 again. */
 static void test_endpoint_leak(void)
@@ -1855,6 +2029,8 @@ static void test_endpoint_leak(void)
         publish.Version = 1;
         publish.Directions = CAMD_DIRECTION_OUTPUT;
         publish.Signal = CAMD_SIGNAL_NONE;
+        publish.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+        publish.Protocol = CAMD_PROTOCOL_MIDI1;
         strcpy(publish.Name, "camdcompat left behind");
         check(PublishEndpoint(&publish, &port, NULL) == CAMD_REGISTRY_OK, "and so is a published endpoint", NULL);
     }
@@ -2025,6 +2201,7 @@ int main(int argc, char **argv)
             RUN(test_endpoint_time);
             RUN(test_endpoint_watch);
             RUN(test_published_endpoint);
+            RUN(test_ump_endpoint);
         }
     } else if (v42_mode) {
         if (CamdBase->lib_Version < 42) {
