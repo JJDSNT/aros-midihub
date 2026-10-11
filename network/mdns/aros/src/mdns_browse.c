@@ -88,21 +88,42 @@ mdnsBrowseRetick(struct MDNSEngineToken *tok)
     for (n = tok->et_BrowseSessions.lh_Head; n != NULL && n->ln_Succ != NULL;
         n = n->ln_Succ) {
         bs = (struct MDNSBrowseSession *)n;
-        if (now - bs->bs_LastQuery >= 3) {
-            mdnsBrowseSendQuery(tok, bs->bs_Type);
+        if (now - bs->bs_LastQuery >= bs->bs_Interval) {
+            mdnsBrowseSendQuery(tok, bs->bs_Type, FALSE);
             bs->bs_LastQuery = now;
+            bs->bs_Interval *= 2;
+            if (bs->bs_Interval > MDNS_BROWSE_INTERVAL_MAX) {
+                bs->bs_Interval = MDNS_BROWSE_INTERVAL_MAX;
+            }
         }
     }
     ReleaseSemaphore(&tok->et_SessionLock);
 }
 
+/* Asks the link one question. The first time something is asked the answer
+ * may come by unicast (RFC 6762 section 5.4). */
 void
-mdnsBrowseSendQuery(struct MDNSEngineToken *tok, const char *type)
+mdnsSendQuestion(struct MDNSEngineToken *tok, const char *name, UWORD qtype,
+    BOOL unicast)
 {
     UBYTE pkt[512];
-    char qname[256];
     LONG pktlen;
-    UWORD qid;
+
+    if (tok == NULL || name == NULL) {
+        return;
+    }
+    if (mdnsBuildQuery(pkt, (LONG)sizeof(pkt), 0, name, qtype,
+            (UWORD)(DNS_CLASS_IN | (unicast ? DNS_QU_BIT : 0)),
+            &pktlen) == 0) {
+        mdnsNetSendMulticast(tok, pkt, pktlen);
+    }
+}
+
+void
+mdnsBrowseSendQuery(struct MDNSEngineToken *tok, const char *type,
+    BOOL unicast)
+{
+    char qname[256];
 
     if (tok == NULL || type == NULL) {
         return;
@@ -112,20 +133,7 @@ mdnsBrowseSendQuery(struct MDNSEngineToken *tok, const char *type)
     qname[sizeof(qname) - 1] = '\0';
     strncat(qname, ".", sizeof(qname) - 1 - strlen(qname));
     strncat(qname, MDNS_DOMAIN_LOCAL, sizeof(qname) - 1 - strlen(qname));
-
-    qid = tok->et_QueryId++;
-    /*
-     * Set the QU (unicast-response) bit.  We bind an ephemeral source port
-     * (see MDNSReadPort / mdnsNetOpen), so responders treat this as an RFC 6762
-     * legacy-unicast query and send the answer by unicast straight back to our
-     * port.  That is a plain unicast datagram our socket receives directly,
-     * bypassing the multicast-group / co-bound-5353 delivery problems that make
-     * multicast answers invisible to us under the host bsdsocket emulation.
-     */
-    if (mdnsBuildQuery(pkt, (LONG)sizeof(pkt), qid, qname, DNS_TYPE_PTR,
-            (UWORD)(DNS_CLASS_IN | DNS_QU_BIT), &pktlen) == 0) {
-        mdnsNetSendMulticast(tok, pkt, pktlen);
-    }
+    mdnsSendQuestion(tok, qname, DNS_TYPE_PTR, unicast);
 }
 
 void
@@ -276,6 +284,12 @@ mdnsCacheExpire(struct MDNSEngineToken *tok)
         ce = (struct MDNSCacheEntry *)n;
         if ((ce->ce_Flags & MDNS_CE_LOCAL) == 0 && ce->ce_Expire <= now) {
             mdnsCacheDrop(tok, ce);
+        } else if (ce->ce_Flags & MDNS_CE_ASKED) {
+            /* Known by its PTR record only, a second later: ask. */
+            ce->ce_Flags &= ~MDNS_CE_ASKED;
+            if (ce->ce_Host[0] == '\0' && ce->ce_Name[0] != '\0') {
+                mdnsSendQuestion(tok, ce->ce_Name, DNS_TYPE_ANY, FALSE);
+            }
         }
     }
 }
@@ -441,6 +455,10 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
         if (ce != NULL && isNew) {
             ce->ce_Flags |= MDNS_CE_ANNOUNCED;
             mdnsBrowseNotifyAll(tok, ce);
+            /* The responder usually adds the rest; if it did not, the
+             * instance's own records are asked for. */
+            strncpy(ce->ce_Name, ptrname, sizeof(ce->ce_Name) - 1);
+            ce->ce_Flags |= MDNS_CE_ASKED;
         }
         return;
     }
@@ -526,6 +544,9 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
             if (he != NULL && ce->ce_HostAddr != he->he_Addr) {
                 ce->ce_HostAddr = he->he_Addr;
                 changed = TRUE;
+            }
+            if (he == NULL) {
+                mdnsSendQuestion(tok, ce->ce_Host, DNS_TYPE_A, FALSE);
             }
         }
     } else if (r->type == DNS_TYPE_TXT && r->rdlength > 0) {
@@ -651,6 +672,9 @@ mdnsBrowseDeliverExisting(struct MDNSEngineToken *tok,
     for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
         n = n->ln_Succ) {
         rs = (struct MDNSRegisteredService *)n;
+        if (rs->rs_State != MDNS_RS_ANNOUNCED) {
+            continue;       /* still probing: announced when it has its name */
+        }
         if (meta) {
             ce = mdnsCacheAddType(tok, rs->rs_Type, &isNew);
             if (ce != NULL) {
@@ -699,6 +723,7 @@ MDNSEngineBrowse(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
     bs->bs_Task = msg->bim_Task;
     bs->bs_Expire = mdnsEngineNow() + 120;
     bs->bs_LastQuery = mdnsEngineNow();
+    bs->bs_Interval = 1;
     bs->bs_MaxResponses = 64;
     bs->bs_Responses = 0;
 
@@ -708,7 +733,7 @@ MDNSEngineBrowse(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
 
     /* Report services this machine already offers, then query the network. */
     mdnsBrowseDeliverExisting(tok, bs);
-    mdnsBrowseSendQuery(tok, msg->bim_ServiceType);
+    mdnsBrowseSendQuery(tok, msg->bim_ServiceType, TRUE);
     msg->bim_Handle = ref;
     return MDNS_OK;
 }
@@ -772,7 +797,7 @@ MDNSEngineResolve(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
 
     ce = mdnsCacheFind(tok, msg->bim_Name, msg->bim_ServiceType);
     if (ce == NULL) {
-        mdnsBrowseSendQuery(tok, msg->bim_ServiceType);
+        mdnsBrowseSendQuery(tok, msg->bim_ServiceType, TRUE);
         return MDNSERR_NOTFOUND;
     }
 

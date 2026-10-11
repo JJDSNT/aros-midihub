@@ -46,6 +46,17 @@ mdnsEngineNow(void)
         (ULONG)(ds.ds_Tick / 50);
 }
 
+/* Fiftieths of a second; only differences mean anything. */
+ULONG
+mdnsEngineTicks(void)
+{
+    struct DateStamp ds;
+
+    DateStamp(&ds);
+    return (ULONG)ds.ds_Days * 4320000UL + (ULONG)ds.ds_Minute * 3000UL +
+        (ULONG)ds.ds_Tick;
+}
+
 APTR
 mdnsEngineNextHandle(struct MDNSEngineToken *tok)
 {
@@ -154,9 +165,10 @@ net_up(struct MDNSEngineToken *tok)
     }
 }
 
-/* Waits for a signal, a datagram, or a second to pass. */
+/* Waits for a signal, a datagram, or a second to pass: a quarter of one
+ * while a name is being probed. */
 static ULONG
-wait_and_receive(struct MDNSEngineToken *tok, ULONG sigmask)
+wait_and_receive(struct MDNSEngineToken *tok, ULONG sigmask, BOOL probing)
 {
     struct Library *SocketBase = tok->et_SocketBase;
     struct sockaddr_in from;
@@ -180,6 +192,10 @@ wait_and_receive(struct MDNSEngineToken *tok, ULONG sigmask)
         return sigmask;
     }
 
+    if (probing) {
+        tv.tv_sec = 0;
+        tv.tv_usec = 250000;
+    }
     FD_SET(sock, &readfds);
     if (WaitSelect(sock + 1, &readfds, NULL, NULL, &tv, &sigmask) > 0 &&
         FD_ISSET(sock, &readfds)) {
@@ -204,6 +220,7 @@ main(void)
     struct MsgPort *port;
     ULONG portmask, got;
     BOOL running = TRUE;
+    BOOL probing = FALSE;
 
     /* One responder owns the host's names. */
     Forbid();
@@ -239,7 +256,7 @@ main(void)
     while (running) {
         got = wait_and_receive(tok,
             portmask | sig.ms_Stop | sig.ms_Begin | sig.ms_End |
-            SIGBREAKF_CTRL_C);
+            SIGBREAKF_CTRL_C, probing);
 
         if (got & (sig.ms_Stop | SIGBREAKF_CTRL_C)) {
             running = FALSE;
@@ -257,8 +274,10 @@ main(void)
             ReplyMsg(&msg->bim_Msg);
         }
 
+        probing = FALSE;
         if (running && tok->et_Socket >= 0) {
             MDNSEngineTick(tok);
+            probing = mdnsRegTick(tok);
         }
     }
 

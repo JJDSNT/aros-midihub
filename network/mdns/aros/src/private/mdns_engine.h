@@ -48,8 +48,23 @@ struct MDNSRegisteredService
     UWORD           rs_Pad;
     APTR            rs_ClientRef;
     struct Task    *rs_Task;        /* the client that registered it */
+    UWORD           rs_State;       /* MDNS_RS_* */
+    UWORD           rs_Step;        /* probes or announcements sent so far */
+    ULONG           rs_NextTick;    /* mdnsEngineTicks() of the next step */
+    ULONG           rs_Answered;    /* et_PacketSerial it last answered */
     ULONG           rs_HostAddr;
 };
+
+/* A name is asked for three times, 250 ms apart, before it is announced
+ * (RFC 6762 section 8.1), and then announced twice, a second apart. */
+#define MDNS_RS_PROBING         0
+#define MDNS_RS_ANNOUNCED       1
+#define MDNS_PROBE_COUNT        3
+#define MDNS_PROBE_TICKS        13      /* 250 ms in 1/50 s */
+#define MDNS_ANNOUNCE_COUNT     2
+
+/* A browse asks after 1, 2, 4... seconds, then once a minute. */
+#define MDNS_BROWSE_INTERVAL_MAX 60
 
 struct MDNSBrowseSession
 {
@@ -60,6 +75,7 @@ struct MDNSBrowseSession
     struct Task    *bs_Task;
     ULONG           bs_Expire;
     ULONG           bs_LastQuery;   /* mdnsEngineNow() of last PTR query */
+    ULONG           bs_Interval;    /* seconds until the next one */
     ULONG           bs_MaxResponses;
     ULONG           bs_Responses;
     BOOL            bs_NIPCMode;
@@ -87,6 +103,7 @@ struct MDNSInquirySession
  */
 #define MDNS_CE_ANNOUNCED       0x0001  /* MEVENT_ADD already delivered */
 #define MDNS_CE_LOCAL           0x0002  /* registered on this host: never expires */
+#define MDNS_CE_ASKED           0x0004  /* ask for its SRV and TXT if they do not come */
 
 struct MDNSCacheEntry
 {
@@ -150,6 +167,7 @@ struct MDNSEngineToken
     volatile BOOL           et_Running;
     volatile BOOL           et_Ready;
     ULONG                   et_NextHandle;
+    ULONG                   et_PacketSerial; /* counts received queries */
     UWORD                   et_QueryId;
     UWORD                   et_Pad;
 };
@@ -179,9 +197,16 @@ LONG mdnsNetSendMulticast(struct MDNSEngineToken *tok, const UBYTE *pkt,
 void mdnsRegAnnounceAll(struct MDNSEngineToken *tok);
 void mdnsRegHostChanged(struct MDNSEngineToken *tok);
 void mdnsRegGoodbyeAll(struct MDNSEngineToken *tok);
-void mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q);
+void mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
+    char (*known)[256], LONG knownCount);
+void mdnsRegHandleAnswerName(struct MDNSEngineToken *tok, const char *name,
+    ULONG srcaddr);
+BOOL mdnsRegTick(struct MDNSEngineToken *tok);
 
-void mdnsBrowseSendQuery(struct MDNSEngineToken *tok, const char *type);
+void mdnsBrowseSendQuery(struct MDNSEngineToken *tok, const char *type,
+    BOOL unicast);
+void mdnsSendQuestion(struct MDNSEngineToken *tok, const char *name,
+    UWORD qtype, BOOL unicast);
 void mdnsBrowseRetick(struct MDNSEngineToken *tok);
 void mdnsCacheExpire(struct MDNSEngineToken *tok);
 void mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
@@ -197,5 +222,6 @@ void mdnsInquiryFireNIPC(struct MDNSEngineToken *tok, struct MDNSInquirySession 
 
 APTR mdnsEngineNextHandle(struct MDNSEngineToken *tok);
 ULONG mdnsEngineNow(void);
+ULONG mdnsEngineTicks(void);
 
 #endif /* BONAMI_PRIVATE_MDNS_ENGINE_H */

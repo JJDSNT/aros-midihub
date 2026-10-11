@@ -11,6 +11,10 @@
 #define MDNS_MCAST_ADDR         "224.0.0.251"
 #define MDNS_MAX_PACKET         8972
 #define MDNS_DEFAULT_TTL        120
+/* RFC 6762 section 10: records that name a host live two minutes, the
+ * others 75 minutes. */
+#define MDNS_TTL_HOST           120
+#define MDNS_TTL_OTHER          4500
 
 #define DNS_TYPE_A              1
 #define DNS_TYPE_PTR            12

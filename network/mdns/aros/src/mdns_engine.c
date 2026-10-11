@@ -18,21 +18,34 @@
 #include "private/mdns_dns.h"
 #include "private/bonami_ipc.h"
 
+#define MDNS_QUESTIONS_MAX  8
+#define MDNS_KNOWN_MAX      16
+
+/* One packet at a time is taken apart, in mdnsd's only task. */
+static struct MDNSQuestion questions[MDNS_QUESTIONS_MAX];
+static char known[MDNS_KNOWN_MAX][256];
+static struct MDNSRecord record;
+
 void
 MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
     const UBYTE *pkt, LONG pktlen, ULONG srcaddr)
 {
     struct MDNSHeader *hdr;
     struct MDNSQuestion q;
-    struct MDNSRecord r;
+    struct MDNSRecord *r = &record;
     LONG offset;
     LONG consumed;
+    LONG nq = 0, nknown = 0;
     UWORD i;
     UWORD flags;
 
-    (void)srcaddr;
-
     if (tok == NULL || pkt == NULL || pktlen < (LONG)sizeof(struct MDNSHeader)) {
+        return;
+    }
+
+    /* The group's traffic is looped back to the sender. What this host said
+     * it knows, and what it asked the link it does not ask itself. */
+    if (srcaddr == tok->et_HostAddr) {
         return;
     }
 
@@ -41,15 +54,34 @@ MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
     offset = (LONG)sizeof(struct MDNSHeader);
 
     if ((flags & DNS_FLAG_QR) == 0) {
-        UWORD qd;
-
-        qd = ntohs(hdr->qdcount);
-        for (i = 0; i < qd; i++) {
+        for (i = 0; i < ntohs(hdr->qdcount); i++) {
             if (mdnsParseQuestion(pkt, pktlen, offset, &q, &consumed) != 0) {
                 return;
             }
-            mdnsRegHandleQuery(tok, &q);
+            if (nq < MDNS_QUESTIONS_MAX) {
+                questions[nq++] = q;
+            }
             offset += consumed;
+        }
+        /*
+         * The answers of a query are what the asker already knows (RFC 6762
+         * section 7.1): a PTR record it holds need not be sent again.
+         */
+        for (i = 0; i < ntohs(hdr->ancount); i++) {
+            if (mdnsParseRecord(pkt, pktlen, offset, r, &consumed) != 0) {
+                break;
+            }
+            if (r->type == DNS_TYPE_PTR && r->ttl >= MDNS_TTL_OTHER / 2 &&
+                nknown < MDNS_KNOWN_MAX &&
+                mdnsWireToName(pkt, pktlen, r->rdoffset, pkt, pktlen,
+                    known[nknown], (LONG)sizeof(known[nknown])) >= 0) {
+                nknown++;
+            }
+            offset += consumed;
+        }
+        tok->et_PacketSerial++;
+        for (i = 0; i < nq; i++) {
+            mdnsRegHandleQuery(tok, &questions[i], known, nknown);
         }
         return;
     }
@@ -62,33 +94,33 @@ MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
     }
 
     for (i = 0; i < ntohs(hdr->ancount); i++) {
-        if (mdnsParseRecord(pkt, pktlen, offset, &r, &consumed) != 0) {
+        if (mdnsParseRecord(pkt, pktlen, offset, r, &consumed) != 0) {
             return;
         }
         tok->et_RxAnswers++;
-        mdnsBrowseHandleRecord(tok, &r, pkt, pktlen);
+        mdnsRegHandleAnswerName(tok, r->name, srcaddr);
+        mdnsBrowseHandleRecord(tok, r, pkt, pktlen);
         offset += consumed;
     }
 
     /*
-     * Authority section is not useful to us, but we must still walk it to reach
-     * the additional section, where responders normally place the SRV/TXT/A
-     * records that accompany a PTR answer (especially in legacy-unicast
-     * replies).  Feeding the additionals through the same record handler lets a
-     * single response yield a fully-populated cache entry (host + port + txt).
+     * The authority section is walked only to reach the additional one, where
+     * responders put the SRV, TXT and address records that go with a PTR
+     * answer.
      */
     for (i = 0; i < ntohs(hdr->nscount); i++) {
-        if (mdnsParseRecord(pkt, pktlen, offset, &r, &consumed) != 0) {
+        if (mdnsParseRecord(pkt, pktlen, offset, r, &consumed) != 0) {
             return;
         }
         offset += consumed;
     }
 
     for (i = 0; i < ntohs(hdr->arcount); i++) {
-        if (mdnsParseRecord(pkt, pktlen, offset, &r, &consumed) != 0) {
+        if (mdnsParseRecord(pkt, pktlen, offset, r, &consumed) != 0) {
             return;
         }
-        mdnsBrowseHandleRecord(tok, &r, pkt, pktlen);
+        mdnsRegHandleAnswerName(tok, r->name, srcaddr);
+        mdnsBrowseHandleRecord(tok, r, pkt, pktlen);
         offset += consumed;
     }
 }
@@ -150,8 +182,6 @@ MDNSEngineDispatch(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
 void
 MDNSEngineTick(struct MDNSEngineToken *tok)
 {
-    static ULONG lastAnnounce;
-
     if (tok == NULL) {
         return;
     }
@@ -159,9 +189,4 @@ MDNSEngineTick(struct MDNSEngineToken *tok)
     MDNSEngineInquiryTick(tok);
     mdnsBrowseRetick(tok);
     mdnsCacheExpire(tok);
-
-    if (mdnsEngineNow() - lastAnnounce > 60) {
-        mdnsRegAnnounceAll(tok);
-        lastAnnounce = mdnsEngineNow();
-    }
 }

@@ -17,10 +17,11 @@
 #
 # mdnsd is started by the AROSTCP service manager. BonamiProbe registers
 # ArosSvc, browses, and ends without withdrawing anything; the host publishes
-# HostSvc and browses. Needs a running avahi-daemon, avahi-utils, ethtool and
+# HostSvc and browses. The host also publishes ArosDup, a name a second
+# BonamiProbe then asks for. Needs a running avahi-daemon, avahi-utils, ethtool and
 # xvfb-run.
 # Exit status: 0 when each side saw the other's service with its address and
-# the host saw the AROS one leave.
+# the host saw the AROS one leave, and AROS took another name for ArosDup.
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -66,6 +67,7 @@ Path C S ADD QUIET
 Run >NIL: QUIET AROSTCP
 WaitForPort AROSTCP
 Wait 3
+Run >NIL: SYS:Extras/aros-midihub/C/BonamiProbe REGISTER ArosDup TYPE $type PORT 5005 SECONDS 12
 SYS:Extras/aros-midihub/C/BonamiProbe REGISTER ArosSvc TYPE $type PORT 5004 BROWSE $type SECONDS 12 LEAK >SYS:bonami-probe.log
 Wait 4
 Shutdown
@@ -73,6 +75,7 @@ EOF
 printf 'Run >NIL: Execute S:bonami-run\n' > "$sys/S/User-Startup"
 
 (timeout 40 avahi-publish -s HostSvc "$type" 6000 k=v > "$work/publish.log" 2>&1 || true) &
+(timeout 40 avahi-publish -s ArosDup "$type" 6001 > "$work/publish-dup.log" 2>&1 || true) &
 (sleep 6; timeout 30 avahi-browse -rp "$type" > "$work/browse.log" 2>&1 || true) &
 sleep 1
 (cd "$sys" && timeout 60 xvfb-run -a boot/linux/AROSBootstrap \
@@ -95,5 +98,8 @@ check browse.log "^=;aroshost;IPv4;ArosSvc;$type;local;arosbox\.local;192\.168\.
     "Avahi resolved the AROS service"
 check browse.log "^-;aroshost;IPv4;ArosSvc;$type;local" \
     "Avahi saw the AROS service leave when its program closed the library"
+# avahi-browse -p writes "ArosDup (2)" as ArosDup\032\0402\041.
+check browse.log "^=;aroshost;IPv4;ArosDup.032.0402.041;$type;local;arosbox\.local;192\.168\.166\.2;5005;" \
+    "AROS found the name ArosDup taken and announced ArosDup (2)"
 echo "logs: $work"
 exit $status

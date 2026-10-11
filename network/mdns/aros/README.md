@@ -48,7 +48,8 @@ announces an instance and prints what a browse reports.
 `tools/bonami-hosted.sh` runs it on Linux-hosted AROS against the host's
 Avahi over a veth pair and checks that each side resolves the other's
 service and that the host sees the AROS service leave when its program
-only closes the library. It passed on 2026-10-11 on x86-64. It needs the AROS network
+only closes the library, and that a name the host already has is taken as
+"Name (2)". It passed on 2026-10-11 on x86-64. It needs the AROS network
 patches in `patches/net-series`: before them AROSTCP delivered no IPv4
 multicast on a SANA-II interface and the hosted `eth.device` dropped it.
 
@@ -63,11 +64,28 @@ drops it on a goodbye, and hands what it knows to a browse that starts
 later. It keeps host addresses by name, so an address record may come before
 the SRV record that names the host.
 
-Still missing, and next: probing and conflict handling before a name is
-announced, known-answer suppression, a query for an instance's SRV, TXT and
-address when only its PTR is known, more than one interface, following an
-address that changes without a reconfiguration, and IPv6. The cross-build for
-AArch64 has not been repeated since the split.
+Of RFC 6762 and 6763 mdnsd does this much:
+
+- A name is probed three times before it is announced, then announced
+  twice. If another host answers for it, the service becomes "Name (2)",
+  "Name (3)" and so on, and is probed again. `RegisterServiceA()` returns
+  before that; the client is not told the final name, a browse is.
+- It answers PTR questions for a type, SRV, TXT and ANY questions for an
+  instance, A questions for the host, and the `_services._dns-sd._udp`
+  enumeration. A PTR record the asker lists as known is not sent again.
+- PTR and TXT records live 75 minutes, SRV and address records two; a
+  withdrawn service says goodbye.
+- A browse asks after 1, 2, 4... seconds and then once a minute, the first
+  time allowing a unicast answer. An instance known only by its PTR record
+  is asked for its other records, and a host without a known address for
+  its address.
+
+Still missing: defending a name that is already announced, the tie-break
+between two hosts probing the same name at once, probing the host name,
+known answers in mdnsd's own questions, delayed and aggregated responses,
+more than one interface, following an address that changes without a
+reconfiguration, and IPv6. The cross-build for AArch64 has not been repeated
+since the split.
 
 AROS now provides a clean-room Envoy-compatible `nipc.library` and public
 `<envoy/nipc.h>` API. This initial port does not yet build Bonami's optional
