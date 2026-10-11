@@ -298,5 +298,12 @@ for amiga-m68k and raspi-aarch64 as well.
 |---|---|
 | `net/aros-arostcp-netdb-unknown-keyword.patch` | An unknown keyword in a netdb file crashed the stack: `FindArg()`'s -1 was kept in an enum the compiler made unsigned and then used as an index into the table of parsers. |
 | `net/aros-eth-unix-multicast.patch` | The hosted `eth.device` dropped every received multicast frame and refused `S2_MULTICAST`, `S2_ADDMULTICASTADDRESS` and `S2_DELMULTICASTADDRESS`. The host interface is opened promiscuous, so there is no filter to program. |
+| `net/aros-arostcp-sana-cflags-only.patch` | Review of PR #1543: the configuration flags moved to `ss_cflags` were written through a cast into tunnel interfaces, which are a `struct stf_softc`. `sana_softc_of()` gives the SANA-II interface or NULL. |
+| `net/aros-arostcp-ether-mcast-test.patch` | Review: three different tests for "Ethernet" decided where a group has a link address. One, `sana_ether_mcast()`; `IFF_MULTICAST` on Ethernet only; `arpresolve()` uses the exported `in_mcast_macaddr()`. |
+| `net/aros-arostcp-all-hosts-group.patch` | Review: nothing joined 224.0.0.1, so IGMP General Queries were dropped and a membership timed out at the switch. `in_ifinit()` joins it. `tools/igmp-hosted.sh` tests it. |
+| `net/aros-arostcp-s2-multicast.patch` | Review: a group's frames went out as `CMD_WRITE`; they now use `S2_MULTICAST` and count in `if_omcasts`. |
+| `net/aros-arostcp-multicast-no-route.patch` | Review: a socket that only joined a group could not send without a route. The first membership's interface is used when there is none. |
+| `net/aros-net-if-flags-unsigned.patch` | Review: `if_flags` and `ifr_flags` were `short`, so `IFF_MULTICAST` (0x8000) was the sign bit. |
+| `net/aros-eth-unix-multicast-filter.patch` | Review: the hosted `eth.device` passed every group on the host's network up to the stack. It keeps the addresses its clients asked for and filters by them. |
 | `net/aros-arostcp-ipv4-multicast.patch` | IPv4 multicast on a SANA-II interface. `IFF_MULTICAST` was never set, and its bit was used for a private flag, now in `ss_cflags`; a group had no Ethernet address (RFC 1112 section 6.4); `ip_input()` had no case for a joined group; and a sender that chose its interface with `IP_MULTICAST_IF` still needed a route. |
 

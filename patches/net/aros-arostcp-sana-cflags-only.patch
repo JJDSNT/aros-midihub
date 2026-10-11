@@ -1,0 +1,103 @@
+diff --git a/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_dhcp.c b/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_dhcp.c
+index 21dd1978bd..aef4e3e03d 100644
+--- a/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_dhcp.c
++++ b/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_dhcp.c
+@@ -45,11 +45,13 @@ void run_dhcp(void)
+     struct ifnet *ifp;
+ 
+     for(ifp = ifnet; ifp; ifp = ifp->if_next) {
++        struct sana_softc *ssc = sana_softc_of(ifp);
++
+         /* only a SANA-II interface is ever marked */
+-        if(ifp->if_output != sana_output)
++        if(ssc == NULL)
+             continue;
+-        if(((struct sana_softc *)ifp)->ss_cflags & SSF_DELAYUP) {
+-            ((struct sana_softc *)ifp)->ss_cflags &= ~SSF_DELAYUP;
++        if(ssc->ss_cflags & SSF_DELAYUP) {
++            ssc->ss_cflags &= ~SSF_DELAYUP;
+             if(!ifp->if_data.ifi_aros_usedhcp &&
+                     ((struct sana_softc *)ifp)->ss_ipaddr.s_addr == INADDR_ANY)
+                 autoip_start(ifp);  /* no DHCPv4 and no address assigned */
+diff --git a/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_netdb.c b/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_netdb.c
+index e58e1a031a..0ed195fb96 100644
+--- a/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_netdb.c
++++ b/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_netdb.c
+@@ -127,6 +127,20 @@ STRPTR WITH_TEMPLATE =
+ #define WITHARGS 2
+ enum witharg { WITH_FILE, WITH_PREFIX };
+ 
++/*
++ * Marks an interface that is being configured. Only a SANA-II interface
++ * has these flags and anything that looks at them (sana_ioctl(),
++ * run_dhcp()); a tunnel is a struct stf_softc and has neither.
++ */
++static void
++ifconf_mark(struct ifnet *ifp, UWORD flags)
++{
++    struct sana_softc *ssc = sana_softc_of(ifp);
++
++    if(ssc != NULL)
++        ssc->ss_cflags |= flags;
++}
++
+ /* prototypes for the netdb parsing functions */
+ 
+ LONG addwith(struct NetDataBase *ndb,
+@@ -766,7 +780,7 @@ addifent(struct NetDataBase *ndb,
+                 if(ssc->args->a_ip) {
+                     if(!ssc->args->a_up) {
+                         DIFCONF(Printf("> No auto-online\n");)
+-                        ((struct sana_softc *)ifp)->ss_cflags |= SSF_NOUP;
++                        ifconf_mark(ifp, SSF_NOUP);
+                     }
+                     DIFCONF(Printf("> IP address: %s\n", ssc->args->a_ip);)
+                     if(stricmp(ssc->args->a_ip, "DHCP") == 0) {
+@@ -776,7 +790,7 @@ addifent(struct NetDataBase *ndb,
+                             if(api_state == API_SHOWN)
+                                 run_dhclient(ifp);
+                             else
+-                                ((struct sana_softc *)ifp)->ss_cflags |= SSF_DELAYUP;
++                                ifconf_mark(ifp, SSF_DELAYUP);
+                         }
+                     } else if(stricmp(ssc->args->a_ip, "AUTO") == 0) {
+                         /* Automatic: use IPv4LL (RFC 3927) to assign 169.254.x.x */
+@@ -786,7 +800,7 @@ addifent(struct NetDataBase *ndb,
+                             if(api_state == API_SHOWN)
+                                 autoip_start(ifp);
+                             else
+-                                ((struct sana_softc *)ifp)->ss_cflags |= SSF_DELAYUP;
++                                ifconf_mark(ifp, SSF_DELAYUP);
+                         }
+                     } else {
+                         ifp->if_data.ifi_aros_usedhcp = 0;
+@@ -823,7 +837,7 @@ addifent(struct NetDataBase *ndb,
+                         if(api_state == API_SHOWN)
+                             run_dhclient6(ifp);
+                         else
+-                            ((struct sana_softc *)ifp)->ss_cflags |= SSF_DELAYUP;
++                            ifconf_mark(ifp, SSF_DELAYUP);
+                     }
+ #endif
+                 } else {
+diff --git a/workbench/network/stacks/AROSTCP/bsdsocket/net/if_sana.h b/workbench/network/stacks/AROSTCP/bsdsocket/net/if_sana.h
+index efa3b24b6a..26acd669e8 100644
+--- a/workbench/network/stacks/AROSTCP/bsdsocket/net/if_sana.h
++++ b/workbench/network/stacks/AROSTCP/bsdsocket/net/if_sana.h
+@@ -157,6 +157,16 @@ struct sana_softc {
+ int sana_output(struct ifnet *ifp, struct mbuf *m0,
+ 			struct sockaddr *dst, struct rtentry *rt);
+ int sana_ioctl(register struct ifnet *ifp, int cmd, caddr_t data);
++
++/*
++ * The SANA-II interface behind an ifnet, or NULL for any other kind: a
++ * tunnel and the loopback are a struct ifnet with something else behind it.
++ */
++static inline struct sana_softc *
++sana_softc_of(struct ifnet *ifp)
++{
++    return (ifp->if_output == sana_output) ? (struct sana_softc *)ifp : NULL;
++}
+ /* queue for sana network interfaces */
+ extern struct sana_softc *ssq;
+ #endif /* of IF_SANA_H */

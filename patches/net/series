@@ -3,3 +3,10 @@
 arostcp-netdb-unknown-keyword
 eth-unix-multicast
 arostcp-ipv4-multicast
+arostcp-sana-cflags-only
+arostcp-ether-mcast-test
+arostcp-all-hosts-group
+arostcp-s2-multicast
+arostcp-multicast-no-route
+net-if-flags-unsigned
+eth-unix-multicast-filter

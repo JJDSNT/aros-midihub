@@ -17,8 +17,26 @@ Branches of `JJDSNT/AROS` opened against `aros-development-team/AROS`
 #1543 is `patches/net/series` as three commits on upstream `51bffe65a4`
 (worktree `~/AROS-net`). Before it was sent, AROSTCP and the mDNS components
 were rebuilt on hosted AROS against that head and `tools/bonami-hosted.sh`
-passed against Avahi. When it is merged, remove the three patches and the
+passed against Avahi. When it is merged, remove the patches and the
 series.
+
+The maintainer reviewed it the same day
+([comment](https://github.com/aros-development-team/AROS/pull/1543#issuecomment-6112929373)
+and following): nine findings, four of them correctness problems that a
+test on hosted AROS against Avahi alone could not show. A tunnel interface
+was written through as a SANA-II one; IGMP queries were dropped because
+nothing joined the all-hosts group, so a membership would time out at a
+switch after about 260 seconds; the stack never sent `S2_MULTICAST`; and
+three different tests decided what counts as Ethernet. All nine were fixed
+in further commits on the branch (`79ea1ce688` to `3e28b45c24`), carried
+here as seven more patches in the series, with
+[a reply](https://github.com/aros-development-team/AROS/pull/1543#issuecomment-6113185978)
+point by point. `tools/igmp-hosted.sh` is new: the host plays an IGMP
+querier and AROS has to answer each query; it fails without the all-hosts
+join. The stack was also built for raspi-aarch64 and amiga-m68k. Still
+untested: a real SANA-II driver, a `TUNNEL` line, an unknown wire type.
+Open question put to him: the first membership's interface as the
+route-free fallback, or a 224.0.0.0/4 interface route.
 
 The sections below are the PR bodies as first written, except the one about
 `btmidi.class`, which describes the class as it is after the review.

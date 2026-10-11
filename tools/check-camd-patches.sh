@@ -11,7 +11,8 @@ set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 aros=$(realpath "${1:-$HOME/AROS}")
 paths="workbench/libs/camd workbench/devs/midi rom/usb/classes/camdmidi compiler/include/midi
-    arch/all-unix/devs/networks/eth workbench/network/stacks/AROSTCP"
+    arch/all-unix/devs/networks/eth workbench/network/stacks/AROSTCP
+    workbench/network/common/include/net"
 index=$(mktemp)
 trap 'rm -f "$index"' EXIT
 
