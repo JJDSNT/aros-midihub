@@ -90,29 +90,34 @@ These are ordered dependencies, not a new subsystem:
 - Projected clusters neither duplicate nor change name across offline/reconnect;
   endpoint-wide or unrepresentable UMP traffic is not silently projected.
 
-### U01 blockers at this audit point
+### U01 status after the provisional slice
 
-Host prototypes already cover record-size assertions on the host compiler,
-stale-handle reuse, snapshot/update races, watch overflow/resynchronization,
-topology rollback, provider callback lock exclusion and substantial retirement
-behavior. They do **not** close U01. The remaining blockers are:
+The provisional version 43 slice now exists in the patch series and runs on
+hosted AROS; `camd-endpoint-abi-draft.md` lists its functions and, under
+"Known limits of the provisional slice", what it does not do. Against the
+earlier blocker list:
 
-- exact public function names, vector order, proposed version 43, m68k register
-  assignments, numeric namespaces and generated interfaces;
-- the final public native MIDI 1.0 record/stream shape and whether it ships in
-  the first v43 surface;
-- session format/conversion policy and the shared timestamp validity/envelope;
-- compile-time layout checks on m68k, i386, AArch64 and x86-64, including every
-  shorter/equal/longer `Size` case;
-- native AROS races for open/offline/retire, provider shutdown with live
-  callbacks/queues/sessions, and unchanged legacy-driver operation;
-- real MIDI 1.0→MIDI 1.0 and UMP→UMP zero-conversion tests, plus exactly-once
-  boundary conversion with reject/drop/approximate loss policy;
-- Function Block versus GTB precedence with normative vectors; and
-- final identity-database packaging/recovery policy and administrative tooling.
+- **Done provisionally, awaiting upstream review:** function names, vector
+  order behind `.version 43`, m68k register assignments as written in
+  `camd.conf`, the native MIDI 1.0 record (`CAMDMIDI1EventV1` plus a separate
+  SysEx call), the timestamp envelope (`CAMD_EVENT_TIME_VALID`,
+  `CAMD_CLOCK_CAMD`) and a conversion policy that only has "none".
+- **Done:** compile-time record sizes on x86-64, AArch64, m68k and 32-bit
+  x86; shorter and longer `Size` for records CAMD fills in; MIDI 1.0→MIDI 1.0
+  and UMP→UMP sessions with nothing converted; offline, withdrawal and
+  retirement with live sessions on hosted AROS; unchanged legacy drivers and
+  programs beside endpoint sessions; recovery of damaged identity files.
+- **Still open:** upstream review of all of the above; building and running
+  the library on m68k and i386, and running the slice on raspi-aarch64 and on
+  hardware; older-version request records; any MIDI 1.0↔UMP conversion with a
+  loss policy; UMP from a driver or transport; Function Block versus Group
+  Terminal Block precedence; checking the UMP type table and every other UMP
+  rule against the specification text (U02–U14); identity administration
+  (listing, removing, repairing stored identities); concurrency stress beyond
+  the single-task suite.
 
-No public v43 header, tag, vector or numeric constant is frozen until these
-items receive upstream review and the acceptance evidence is recorded.
+No public v43 header, vector or numeric constant is frozen until upstream
+review; the slice exists to make that review concrete.
 
 ### Radium feasibility backlog (not a CAMD dependency)
 

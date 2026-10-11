@@ -206,6 +206,7 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-endpoint-diagnostics.patch` | `CancelEndpointSession()` and `GetEndpointSessionStats()`; an offline published endpoint leaves its legacy clusters; a published endpoint and a driver cannot share a name |
 | `aros-camd-endpoint-time.patch` | received messages carry the `CamdTime()` of their arrival, and a message sent to a driver's port with a time waits in its session's queue until then: the session worker gains a timed retry on timer.device |
 | `aros-camd-endpoint-ump.patch` | native UMP without conversion for published endpoints: `PutEndpointUMP()`, `GetEndpointUMP()`, `PutPublishedUMP()`, `GetPublishedUMP()`; Groups and Function Blocks with `SetPublishedEndpointTopology()`, `GetEndpointGroup()` and `GetEndpointFunctionBlock()`; word counts checked against the message type |
+| `aros-camd-endpoint-layout.patch` | `midi/camdendpoint.h` checks every record's size at compile time |
 
 ```sh
 grep -v '^#' patches/camd-series | while read -r p; do

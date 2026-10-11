@@ -118,9 +118,19 @@ These are deliberate or still open; each is what the code does today.
 - Names, registers, record layouts and result codes are not reviewed upstream
   and can change. `enum CAMDRegistryResult` is the internal registry enum
   exposed as it is.
-- Layouts are checked on x86-64 only. The patches build for raspi-aarch64;
-  nothing after driver endpoint publication has been run there, and m68k and
-  i386 are not built.
+- `midi/camdendpoint.h` stops the compiler when a record does not have its
+  documented size. That check passes with the x86-64 and AArch64 AROS
+  compilers, with `m68k-aros-gcc`, and with the x86-64 compiler in 32-bit
+  mode standing in for i386. The library itself is built and run on hosted
+  x86-64 only: it builds for raspi-aarch64, where nothing after driver
+  endpoint publication has been run, and it is not built for m68k or i386, so
+  the register assignments are untested there.
+- A record CAMD fills in (`CAMDEndpointInfoV1`, `CAMDSessionInfoV1`,
+  `CAMDSessionStatsV1`, Group and Function Block records) may be shorter or
+  longer than CAMD's: at most the caller's `Size` is written and `Size`
+  returns as the full size. A record the caller hands in
+  (`CAMDSessionRequestV1`, `CAMDPublishRequestV1`, events) must have exactly
+  the current size; there is no older-version path yet.
 
 **Behaviour a client has to know**
 
