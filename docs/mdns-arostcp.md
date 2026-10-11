@@ -95,9 +95,15 @@ it. A daemon was chosen because the cache and the host's names outlive any
 one client, and because the stack needs to tell the responder when it goes
 away.
 
-`<libraries/netservice.h>` is published under the GNU GPL version 2. The
-daemon includes it in one file. Whether that is meant to bind a BSD-licensed
-service that only registers is open and has to be settled with AROS.
+`<libraries/netservice.h>` used to carry a GNU GPL version 2 banner, which
+left open whether a BSD-licensed service that only registers was bound by
+it. AROS settled that on 2026-10-11: commit `43328bc8f2` gives the header
+the plain AROS Development Team notice that public SDK headers carry, saying
+the GPL banner had come from the stack sources it was written beside, and
+`95ed7cd53c` puts the BSD-derived network headers back under Berkeley's
+notice. No header in `workbench/network/common/include` has a GPL banner
+since. The stack's own sources remain GPL; the daemon includes only the
+public headers, and `netservice.h` in one file.
 
 ## Public service contract
 

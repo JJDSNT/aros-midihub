@@ -4,8 +4,7 @@
  *
  * mdnsd_service.c - registers mdnsd with netservices.library.
  *
- * This is the only file that uses <libraries/netservice.h>, which AROS
- * publishes under the GNU General Public License version 2. Nothing else in
+ * This is the only file that uses <libraries/netservice.h>. Nothing else in
  * the daemon or in bonami.library depends on it.
  */
 

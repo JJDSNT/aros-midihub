@@ -82,8 +82,9 @@ Around it:
 4. Send it upstream: the three AROS patches to AROS, the byte-order fixes,
    protocol work and API additions to Bonami, and then the AROS-specific
    parts (the daemon, the service entry, the build files) to the AROS tree
-   with Bonami's notices kept. The license of AROS's `netservice.h` has to be
-   settled for the last of these.
+   with Bonami's notices kept. The license of AROS's `netservice.h`, once
+   open for the last of these, was settled upstream on 2026-10-11 (see
+   [the AROS port](aros/README.md)).
 
 How the service relates to the TCP/IP stack is described in
 [`docs/mdns-arostcp.md`](../../docs/mdns-arostcp.md).

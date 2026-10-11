@@ -251,8 +251,10 @@ Tools and commodity:
 
 License:
 
-- `<libraries/netservice.h>` is published by AROS under the GNU GPL
-  version 2, while Bonami is BSD 2-Clause. Only `src/mdnsd_service.c`
-  includes it. Whether that header's license is meant to bind a daemon that
-  merely registers is a question to settle with AROS before this goes
-  upstream.
+- Bonami is BSD 2-Clause. `<libraries/netservice.h>`, which only
+  `src/mdnsd_service.c` includes, carried a GNU GPL version 2 banner until
+  AROS commit `43328bc8f2` (2026-10-11) gave it the plain AROS notice of a
+  public SDK header. With that, and `95ed7cd53c` for the BSD-derived
+  network headers, nothing the port includes is under the GPL, and the
+  question that was to be settled before going upstream is closed. Build
+  against AROS at `51bffe65a4` or later.
