@@ -34,6 +34,8 @@
 #define MDNS_TYPE_ENVOY_NIPC    "_envoy-nipc._tcp"
 
 #define MDNS_TXTKEY_ENTITY      "entity"
+#define MDNS_TXTKEY_SERVICE     "service"
+#define MDNS_TXTKEY_OWNER       "owner"
 #define MDNS_TXTKEY_VERSION     "vers"
 #define MDNS_TXTKEY_HOST        "host"
 

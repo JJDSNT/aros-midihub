@@ -19,7 +19,8 @@
 # ArosSvc, browses, and ends without withdrawing anything; the host publishes
 # HostSvc and browses. The host also publishes ArosDup, a name a second
 # BonamiProbe then asks for. Then the ported tools run: Share, Nearby,
-# Handshake and dnssd's proxy, lookup and query modes. Needs a running avahi-daemon, avahi-utils, ethtool and
+# Handshake and dnssd's proxy, lookup and query modes, and the Envoy
+# bridge publishes this host and inquires for an entity the host has. Needs a running avahi-daemon, avahi-utils, ethtool and
 # xvfb-run.
 # Exit status: 0 when each side saw the other's service with its address and
 # the host saw the AROS one leave, AROS took another name for ArosDup, and
@@ -82,6 +83,7 @@ $c/Nearby $type TIME 5 PORTS >SYS:bonami-nearby.log
 $c/Handshake HostSvc $type TIME 5 >SYS:bonami-handshake.log
 $c/dnssd -G v4 $hostname >SYS:bonami-lookup.log
 $c/dnssd -G v4 nobody-has-this-name >SYS:bonami-nolookup.log
+$c/BonamiProbe PUBLISH ArosEntity INQUIRE Filesystem SECONDS 8 >SYS:bonami-envoy.log
 Run >SYS:bonami-query.log $c/dnssd -q HostSvc.$type.local SRV
 Wait 4
 Break \`Status COMMAND=$c/Share\` C
@@ -92,11 +94,14 @@ Shutdown
 EOF
 printf 'Run >NIL: Execute S:bonami-run\n' > "$sys/S/User-Startup"
 
-(timeout 75 avahi-publish -s HostSvc "$type" 6000 k=v > "$work/publish.log" 2>&1 || true) &
-(timeout 75 avahi-publish -s ArosDup "$type" 6001 > "$work/publish-dup.log" 2>&1 || true) &
-(sleep 6; timeout 60 avahi-browse -rp "$type" > "$work/browse.log" 2>&1 || true) &
+(timeout 85 avahi-publish -s HostSvc "$type" 6000 k=v > "$work/publish.log" 2>&1 || true) &
+(timeout 85 avahi-publish -s ArosDup "$type" 6001 > "$work/publish-dup.log" 2>&1 || true) &
+(timeout 85 avahi-publish -s amigaone _envoy-nipc._tcp 376 vers=1 \
+    entity=Filesystem service=Printer owner=Jaime > "$work/publish-envoy.log" 2>&1 || true) &
+(sleep 6; timeout 70 avahi-browse -rp "$type" > "$work/browse.log" 2>&1 || true) &
+(sleep 6; timeout 70 avahi-browse -rp _envoy-nipc._tcp > "$work/browse-envoy.log" 2>&1 || true) &
 sleep 1
-(cd "$sys" && timeout 120 xvfb-run -a boot/linux/AROSBootstrap \
+(cd "$sys" && timeout 140 xvfb-run -a boot/linux/AROSBootstrap \
     > "$work/serial.log" 2>&1) || true
 wait
 cp "$sys"/bonami-*.log "$work/" 2>/dev/null || true
@@ -137,5 +142,16 @@ check bonami-query.log "type 33 .* 0 0 6000 $hostname\." \
     "dnssd -q printed the host service's SRV record"
 check browse.log "^-;aroshost;IPv4;$share;$type;local" \
     "Share said goodbye on Ctrl-C"
+hostlabel=${hostname%%.*}
+check bonami-envoy.log "envoy host=$hostlabel ip=192\.168\.166\.1 entity=Filesystem service=Printer owner=Jaime" \
+    "Envoy bridge: an inquiry for an entity found the host that announces it"
+check bonami-envoy.log "envoy end" \
+    "Envoy bridge: the inquiry ended with a last call"
+check browse-envoy.log "^=;aroshost;IPv4;arosbox;_envoy-nipc._tcp;local;arosbox\.local;192\.168\.166\.2;376;.*entity=ArosEntity" \
+    "Envoy bridge: Avahi resolved this host's Envoy publication"
+if grep -q "entity=ArosEntity" "$work/bonami-envoy.log" 2>/dev/null; then
+    echo "FAILED: Envoy bridge: the inquiry answered for a host without the entity"
+    status=1
+fi
 echo "logs: $work"
 exit $status

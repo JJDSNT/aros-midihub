@@ -2,7 +2,7 @@
 
 ## Status
 
-**Upstream capability available; integration and interoperability remain future work.**
+**Bonami's side of the bridge works (2026-10-11); `nipc.library` does not use it yet.**
 
 AROS now contains a clean-room `nipc.library` implementation of the Envoy NIPC
 API over `bsdsocket.library`, added upstream in commit
@@ -98,24 +98,60 @@ NIPC entities across hosts. Conversely, NIPC must not become a
 dependency of Bonami's core register/browse/resolve API: AppleMIDI, Network
 MIDI 2.0, printing, and other mDNS clients should work without Envoy.
 
+## What works now
+
+Tested by `tools/bonami-hosted.sh` on hosted AROS against Avahi, which plays
+the other Envoy host:
+
+- `PublishNIPCEntitiesA()` announces this host as an instance of
+  `_envoy-nipc._tcp` whose TXT record lists its entities, services and owner;
+  Avahi resolves it.
+- `InquiryFromNIPCTagsA()` with `MATCH_ENTITY` finds the host that announces
+  the entity and hands the hook the tag list `NIPCInquiryA()` would, then
+  ends with the NULL call. A host without the entity is not reported.
+
+The type is `_envoy-nipc._tcp`, as Bonami's headers have it; earlier notes
+here said `_nipc._tcp`.
+
+## Joining nipc.library to it
+
+Nothing in AROS calls the bridge. Two changes in `nipc.library` would, both
+optional at run time (no `bonami.library` or no mdnsd: nothing happens):
+
+1. **Publishing.** When the set of public entities or offered services
+   changes, the library's own process calls `PublishNIPCEntitiesA()` with
+   the current lists. It is the process that owns the publication, so it
+   lasts as long as the library runs. mdnsd may start later than
+   `nipc.library`, so the call is repeated from the inquiry heartbeat until
+   it succeeds.
+2. **Inquiry.** `NIPCInquiryA()` of the plain kind (not through a Realm
+   Server) also starts a Bonami inquiry. Bonami's hook runs in mdnsd's
+   process; it must only copy the answer and send it to the library's
+   process, which treats it as one more reply to the same `struct Inquiry`.
+   That keeps what the application sees unchanged: one hook, called in the
+   library's process, one NULL call at the end, one response count. The
+   library must drop an mDNS answer for an address that already answered by
+   broadcast, and the reverse, or an AROS host that speaks both is reported
+   twice.
+
+Open points for that work: which of the two answers wins when they differ
+(the broadcast reply carries more, such as versions and memory); whether a
+host name from mDNS (`amiga1`) and one from Envoy (`realm:amiga1`) are the
+same host; and whether a classic Envoy host can be published by proxy
+(`MDNS_HostName` with `MDNS_HostAddr`) by an AROS host that hears it.
+
 ## Remaining validation
 
-The next work is integration rather than implementing NIPC from scratch:
-
-1. build the pinned Bonami revision against the upstream AROS Envoy headers;
-2. identify any source/ABI assumptions in Bonami that still require AROS port
-   changes;
-3. enable and test Bonami's NIPC inquiry bridge;
-4. verify publication and browsing of `_nipc._tcp`;
-5. compare Bonami discovery results with AROS `NIPCInquiryA()` semantics and
-   the Services Manager service list;
-6. determine the ownership boundary between native NIPC inquiry and Bonami
-   DNS-SD discovery, avoiding duplicate or conflicting discovery state;
-7. test entity discovery, service lookup, Accounts Server access, and
-   transactions between two AROS systems;
-8. separately test interoperability with classic Envoy releases;
-9. upstream generally useful Bonami fixes and keep AROS-specific build/service
-   glue in the AROS tree.
+1. make the two `nipc.library` changes above and test them between two AROS
+   systems, with and without mdnsd;
+2. compare what an application sees from `NIPCInquiryA()` before and after;
+3. test entity discovery, service lookup, Accounts Server access, and
+   transactions between two AROS systems found through mDNS only (different
+   broadcast domains are out: mDNS is link-local too);
+4. separately test interoperability with classic Envoy releases and with
+   amigazen's Bonami and nipc on a classic system;
+5. offer the tag definitions and the TXT layout to Bonami upstream, which
+   has `PublishNIPCEntitiesA()` as a stub.
 
 ## Classic Envoy interoperability
 

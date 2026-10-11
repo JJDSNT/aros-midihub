@@ -146,12 +146,17 @@ MDNSEngineDispatch(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
         MDNSEngineReleaseServices(tok, msg->bim_Task);
         MDNSEngineReleaseBrowses(tok, msg->bim_Task);
         MDNSEngineReleaseQueries(tok, msg->bim_Task);
+        MDNSEngineReleaseInquiries(tok, msg->bim_Task);
         msg->bim_Result = MDNS_OK;
         break;
     case BONAMI_MSG_LOOKUP:
         return MDNSEngineLookup(tok, msg);
     case BONAMI_MSG_QUERY:
         msg->bim_Result = MDNSEngineQuery(tok, msg);
+        break;
+    case BONAMI_MSG_UNPUBLISH:
+        MDNSEngineUnpublishNIPC(tok, msg->bim_Task);
+        msg->bim_Result = MDNS_OK;
         break;
     case BONAMI_MSG_STOPQUERY:
         MDNSEngineStopQuery(tok, msg->bim_Handle);

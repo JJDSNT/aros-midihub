@@ -53,6 +53,7 @@ struct MDNSRegisteredService
     ULONG           rs_NextTick;    /* mdnsEngineTicks() of the next step */
     ULONG           rs_Answered;    /* et_PacketSerial it last answered */
     BOOL            rs_Proxy;       /* host and address given by the client */
+    BOOL            rs_NIPC;        /* the host's Envoy publication */
     ULONG           rs_HostAddr;
 };
 
@@ -84,16 +85,34 @@ struct MDNSBrowseSession
     ULONG           bs_NIPCTagCount;
 };
 
+/* What an Envoy inquiry asks to be told; bits of is_Want. */
+#define MDNS_NIPC_WANT_HOSTNAME 0x01
+#define MDNS_NIPC_WANT_IPADDR   0x02
+#define MDNS_NIPC_WANT_ENTITY   0x04
+#define MDNS_NIPC_WANT_SERVICE  0x08
+#define MDNS_NIPC_WANT_OWNER    0x10
+#define MDNS_NIPC_ANSWERED_MAX  32
+
 struct MDNSInquirySession
 {
     struct Node     is_Node;
+    APTR            is_Ref;
     struct Hook    *is_Hook;
     struct Task    *is_Task;
     ULONG           is_Expire;
     ULONG           is_MaxResponses;
     ULONG           is_Responses;
-    struct TagItem  is_QueryTags[16];
-    ULONG           is_QueryCount;
+    ULONG           is_Want;
+    ULONG           is_MatchAddr;
+    ULONG           is_LastQuery;
+    ULONG           is_Interval;
+    char            is_MatchEntity[MDNS_MAX_NAME + 1];
+    char            is_MatchService[MDNS_MAX_NAME + 1];
+    char            is_MatchOwner[MDNS_MAX_NAME + 1];
+    char            is_MatchHost[MDNS_MAX_HOST + 1];
+    /* each host answers an inquiry once */
+    ULONG           is_AnsweredCount;
+    char            is_Answered[MDNS_NIPC_ANSWERED_MAX][MDNS_MAX_NAME + 1];
 };
 
 /*
@@ -203,6 +222,8 @@ void MDNSEngineReleaseBrowses(struct MDNSEngineToken *tok, struct Task *task);
 LONG MDNSEngineResolve(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
 LONG MDNSEngineInquiryNIPC(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
 void MDNSEngineInquiryTick(struct MDNSEngineToken *tok);
+void MDNSEngineReleaseInquiries(struct MDNSEngineToken *tok, struct Task *task);
+void MDNSEngineUnpublishNIPC(struct MDNSEngineToken *tok, struct Task *task);
 
 LONG mdnsNetOpen(struct MDNSEngineToken *tok);
 void mdnsNetClose(struct MDNSEngineToken *tok);

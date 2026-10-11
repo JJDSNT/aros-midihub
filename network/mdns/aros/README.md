@@ -133,11 +133,35 @@ more than one interface, following an address that changes without a
 reconfiguration, and IPv6. The cross-build for AArch64 has not been repeated
 since the split.
 
-AROS now provides a clean-room Envoy-compatible `nipc.library` and public
-`<envoy/nipc.h>` API. This initial port does not yet build Bonami's optional
-inquiry bridge against them: the three NIPC compatibility functions remain in
-the ABI and return `MDNSERR_NOTREADY` until that separate integration is
-implemented and validated. Core mDNS/DNS-SD does not depend on NIPC.
+## Envoy bridge
+
+Bonami's three Envoy entry points work in this port, on Bonami's side only:
+
+- `PublishNIPCEntitiesA(tags)` announces this host as one instance of
+  `_envoy-nipc._tcp`, named after the host, on port 376 unless
+  `MDNS_NIPC_Port` says otherwise. Its TXT record lists `MDNS_NIPC_Entity`,
+  `MDNS_NIPC_Service` and `MDNS_NIPC_Owner` as `entity=`, `service=` and
+  `owner=`. A task has one publication; a second call replaces it and
+  `UnpublishNIPCEntitiesA()` or the task's last close withdraws it. A name
+  with a space, or more names than the 256 characters of text hold, is
+  refused.
+- `InquiryFromNIPCTagsA(hook, maxTime, maxResponses, tags)` takes the tags of
+  `NIPCInquiryA()`. It matches `MATCH_ENTITY`, `MATCH_SERVICE`, `MATCH_OWNER`,
+  `MATCH_HOSTNAME` and `MATCH_IPADDR` and answers `QUERY_HOSTNAME`,
+  `QUERY_IPADDR`, `QUERY_ENTITY`, `QUERY_SERVICE` and `QUERY_OWNER`; what
+  DNS-SD cannot tell (memory, versions, realms) is neither matched nor
+  answered. Each host answers once. The hook is called as `nipc.library`
+  calls it: a tag list per host, a zero return ends the inquiry, and a last
+  call with NULL comes at the response limit or when the time is up. A
+  `maxTime` of zero gives up the oldest inquiry with that hook.
+
+mdnsd repeats the Envoy tag values instead of including `<envoy/nipc.h>`, so
+core mDNS still builds and runs without Envoy.
+
+What is missing is the other half: AROS's `nipc.library` does not call these
+functions. Its `NIPCInquiryA()` asks by broadcast on UDP port 376 and it
+announces nothing over DNS-SD. See `docs/nipc-envoy-future.md` for how the
+two can be joined.
 
 The protocol limitations and remaining interoperability work are listed in
 the parent [README](../README.md).

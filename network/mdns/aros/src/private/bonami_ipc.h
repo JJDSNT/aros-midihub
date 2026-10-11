@@ -14,7 +14,7 @@
 #include "private/bonami_limits.h"
 
 #define BONAMI_ENGINE_PORT  "BonAmi"
-#define BONAMI_IPC_VERSION  3
+#define BONAMI_IPC_VERSION  4
 
 #define BONAMI_MSG_REGISTER     1
 #define BONAMI_MSG_UNREGISTER   2
@@ -32,6 +32,11 @@
                                          * when known or after bim_Flags s */
 #define BONAMI_MSG_QUERY        14      /* bim_QName, bim_Port = record type */
 #define BONAMI_MSG_STOPQUERY    15
+#define BONAMI_MSG_UNPUBLISH    16      /* withdraw bim_Task's Envoy publication */
+
+/* bim_Flags of BONAMI_MSG_REGISTER: the host's Envoy publication. The
+ * instance is named after the host and replaces the task's earlier one. */
+#define BONAMI_REGF_NIPC        0x80000000UL
 
 struct MDNSIPCMsg
 {

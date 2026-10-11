@@ -519,6 +519,21 @@ MDNSEngineRegister(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
         return MDNSERR_BADPARAM;
     }
 
+    if (msg->bim_Flags & BONAMI_REGF_NIPC) {
+        char *dot;
+
+        /* Named after the host; the task's earlier publication goes. */
+        MDNSEngineUnpublishNIPC(tok, msg->bim_Task);
+        strncpy(msg->bim_Name, tok->et_HostName, MDNS_MAX_NAME);
+        msg->bim_Name[MDNS_MAX_NAME] = '\0';
+        if ((dot = strchr(msg->bim_Name, '.')) != NULL) {
+            *dot = '\0';
+        }
+        if (msg->bim_Name[0] == '\0') {
+            return MDNSERR_NETWORK;
+        }
+    }
+
     /* One instance name per type on this host. */
     for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
         n = n->ln_Succ) {
@@ -543,6 +558,7 @@ MDNSEngineRegister(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
     rs->rs_Port = msg->bim_Port;
     rs->rs_HostAddr = tok->et_HostAddr;
     rs->rs_Task = msg->bim_Task;
+    rs->rs_NIPC = (msg->bim_Flags & BONAMI_REGF_NIPC) ? TRUE : FALSE;
     if (msg->bim_HostName[0] != '\0' && msg->bim_HostAddr != 0) {
         /* Announced on behalf of a host that does not speak mDNS itself. */
         rs->rs_Proxy = TRUE;
@@ -656,4 +672,20 @@ mdnsRegHostChanged(struct MDNSEngineToken *tok)
         }
     }
     mdnsRegAnnounceAll(tok);
+}
+
+void
+MDNSEngineUnpublishNIPC(struct MDNSEngineToken *tok, struct Task *task)
+{
+    struct MDNSRegisteredService *rs;
+    struct Node *n;
+
+    for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
+        n = n->ln_Succ) {
+        rs = (struct MDNSRegisteredService *)n;
+        if (rs->rs_NIPC && rs->rs_Task == task) {
+            MDNSEngineDeregister(tok, rs->rs_ClientRef);
+            return;
+        }
+    }
 }

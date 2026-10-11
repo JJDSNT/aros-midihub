@@ -64,7 +64,7 @@ MDNSD_FILES := \
     $(BONAMI_SRC)/mdns_reg \
     $(BONAMI_SRC)/mdns_browse \
     $(BONAMI_SRC)/mdns_query \
-    $(BONAMI_SRC)/mdns_inquiry_stub
+    $(BONAMI_SRC)/mdns_inquiry
 
 # Incubating system mDNS/DNS-SD library. It installs in LIBS: for package
 # testing and is intended to move to workbench/network when upstreamed.

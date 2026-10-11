@@ -250,6 +250,26 @@ AROS_LH1(LONG, GetMDNSStatusA,
     AROS_LIBFUNC_EXIT
 }
 
+/* The tags of <envoy/nipc.h> this bridge understands. */
+#define NIPC_QUERY_IPADDR       (TAG_USER + 0x2000)
+#define NIPC_MATCH_IPADDR       (TAG_USER + 0x2001)
+#define NIPC_QUERY_HOSTNAME     (TAG_USER + 0x2004)
+#define NIPC_MATCH_HOSTNAME     (TAG_USER + 0x2005)
+#define NIPC_QUERY_SERVICE      (TAG_USER + 0x2006)
+#define NIPC_MATCH_SERVICE      (TAG_USER + 0x2007)
+#define NIPC_QUERY_ENTITY       (TAG_USER + 0x2008)
+#define NIPC_MATCH_ENTITY       (TAG_USER + 0x2009)
+#define NIPC_QUERY_OWNER        (TAG_USER + 0x200A)
+#define NIPC_MATCH_OWNER        (TAG_USER + 0x200B)
+
+static void copy_match(char *to, ULONG size, IPTR from)
+{
+    if (from != 0) {
+        strncpy(to, (STRPTR)from, size - 1);
+        to[size - 1] = '\0';
+    }
+}
+
 AROS_LH4(LONG, InquiryFromNIPCTagsA,
     AROS_LHA(struct Hook *, hook, A0),
     AROS_LHA(ULONG, maxTime, D0),
@@ -258,13 +278,64 @@ AROS_LH4(LONG, InquiryFromNIPCTagsA,
     struct BonamiPrivate *, BonamiBase, 17, Bonami)
 {
     AROS_LIBFUNC_INIT
-    (void)hook;
-    (void)maxTime;
-    (void)maxResponses;
-    (void)tags;
-    (void)BonamiBase;
-    return MDNSERR_NOTREADY;
+    struct MDNSIPCMsg msg;
+    struct TagItem *state = tags;
+    struct TagItem *tag;
+
+    if (hook == NULL)
+        return MDNSERR_BADPARAM;
+    memset(&msg, 0, sizeof(msg));
+    msg.bim_Command = BONAMI_MSG_INQUIRY;
+    msg.bim_Hook = hook;
+    msg.bim_Flags = maxTime > 3600 ? 3600 : maxTime;
+    msg.bim_Port = (UWORD)(maxResponses > 65535 ? 65535 : maxResponses);
+    while ((tag = NextTagItem(&state)) != NULL) {
+        switch (tag->ti_Tag) {
+        case NIPC_QUERY_HOSTNAME: msg.bim_Dbg0 |= 0x01; break;
+        case NIPC_QUERY_IPADDR:   msg.bim_Dbg0 |= 0x02; break;
+        case NIPC_QUERY_ENTITY:   msg.bim_Dbg0 |= 0x04; break;
+        case NIPC_QUERY_SERVICE:  msg.bim_Dbg0 |= 0x08; break;
+        case NIPC_QUERY_OWNER:    msg.bim_Dbg0 |= 0x10; break;
+        case NIPC_MATCH_IPADDR:   msg.bim_HostAddr = (ULONG)tag->ti_Data; break;
+        case NIPC_MATCH_ENTITY:
+            copy_match(msg.bim_QName, MDNS_MAX_NAME + 1, tag->ti_Data);
+            break;
+        case NIPC_MATCH_SERVICE:
+            copy_match(msg.bim_Name, sizeof(msg.bim_Name), tag->ti_Data);
+            break;
+        case NIPC_MATCH_OWNER:
+            copy_match(msg.bim_TXT, MDNS_MAX_NAME + 1, tag->ti_Data);
+            break;
+        case NIPC_MATCH_HOSTNAME:
+            copy_match(msg.bim_HostName, sizeof(msg.bim_HostName),
+                tag->ti_Data);
+            break;
+        default:
+            /* What DNS-SD cannot tell is neither matched nor answered. */
+            break;
+        }
+    }
+    return MDNSSendIPC(BonamiBase, &msg);
     AROS_LIBFUNC_EXIT
+}
+
+/* Appends " key=value" if it fits and the value has no space in it. */
+static BOOL add_txt(char *txt, const char *key, IPTR value)
+{
+    STRPTR s = (STRPTR)value;
+    size_t len;
+
+    if (s == NULL || s[0] == '\0' || strchr(s, ' ') != NULL)
+        return FALSE;
+    len = strlen(txt);
+    if (len + 1 + strlen(key) + 1 + strlen(s) > MDNS_MAX_TXT)
+        return FALSE;
+    if (len != 0)
+        txt[len++] = ' ';
+    strcpy(txt + len, key);
+    strcat(txt, "=");
+    strcat(txt, s);
+    return TRUE;
 }
 
 AROS_LH1(LONG, PublishNIPCEntitiesA,
@@ -272,9 +343,41 @@ AROS_LH1(LONG, PublishNIPCEntitiesA,
     struct BonamiPrivate *, BonamiBase, 18, Bonami)
 {
     AROS_LIBFUNC_INIT
-    (void)tags;
-    (void)BonamiBase;
-    return MDNSERR_NOTREADY;
+    struct MDNSIPCMsg msg;
+    struct TagItem *state = tags;
+    struct TagItem *tag;
+    BOOL fits = TRUE;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.bim_Command = BONAMI_MSG_REGISTER;
+    msg.bim_Flags = BONAMI_REGF_NIPC;
+    msg.bim_Port = MDNS_NIPC_DEFAULT_PORT;
+    strcpy(msg.bim_ServiceType, MDNS_TYPE_ENVOY_NIPC);
+    strcpy(msg.bim_Domain, MDNS_DOMAIN_LOCAL);
+    strcpy(msg.bim_TXT, MDNS_TXTKEY_VERSION "=1");
+    while ((tag = NextTagItem(&state)) != NULL) {
+        switch (tag->ti_Tag) {
+        case MDNS_NIPC_Entity:
+            fits &= add_txt(msg.bim_TXT, MDNS_TXTKEY_ENTITY, tag->ti_Data);
+            break;
+        case MDNS_NIPC_Service:
+            fits &= add_txt(msg.bim_TXT, MDNS_TXTKEY_SERVICE, tag->ti_Data);
+            break;
+        case MDNS_NIPC_Owner:
+            fits &= add_txt(msg.bim_TXT, MDNS_TXTKEY_OWNER, tag->ti_Data);
+            break;
+        case MDNS_NIPC_Port:
+            msg.bim_Port = (UWORD)tag->ti_Data;
+            break;
+        default:
+            break;
+        }
+    }
+    /* A name with a space, or more names than one TXT record of this
+     * library holds, cannot be published. */
+    if (!fits)
+        return MDNSERR_BADPARAM;
+    return MDNSSendIPC(BonamiBase, &msg);
     AROS_LIBFUNC_EXIT
 }
 
@@ -282,7 +385,11 @@ AROS_LH0(void, UnpublishNIPCEntitiesA,
     struct BonamiPrivate *, BonamiBase, 19, Bonami)
 {
     AROS_LIBFUNC_INIT
-    (void)BonamiBase;
+    struct MDNSIPCMsg msg;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.bim_Command = BONAMI_MSG_UNPUBLISH;
+    MDNSSendIPC(BonamiBase, &msg);
     AROS_LIBFUNC_EXIT
 }
 
