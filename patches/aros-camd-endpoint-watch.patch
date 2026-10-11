@@ -1,0 +1,512 @@
+diff --git a/workbench/libs/camd/camd.conf b/workbench/libs/camd/camd.conf
+--- a/workbench/libs/camd/camd.conf
++++ b/workbench/libs/camd/camd.conf
+@@ -64,4 +64,7 @@ LONG PutEndpointMidi(struct CAMDHandleV1 *session, struct CAMDMIDI1EventV1 *even
+ LONG PutEndpointSysEx(struct CAMDHandleV1 *session, UBYTE *bytes, ULONG length) (A0, A1, D0)
+ LONG DrainEndpointSession(struct CAMDHandleV1 *session) (A0)
+ LONG GetEndpointMidi(struct CAMDHandleV1 *session, struct CAMDMIDI1EventV1 *event, UBYTE *sysex, ULONG size, ULONG *length) (A0, A1, A2, D0, A3)
++LONG StartEndpointWatch(struct CAMDHandleV1 *watch, ULONG signal, struct CAMDGenerationV1 *generation) (A0, D0, A1)
++LONG GetEndpointWatchEvent(struct CAMDHandleV1 *watch, struct CAMDEndpointWatchEventV1 *event) (A0, A1)
++void EndEndpointWatch(struct CAMDHandleV1 *watch) (A0)
+ ##end functionlist
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -86,6 +86,8 @@
+ #define ENDPOINT_OUTPUT_BUDGET 16
+ #define ENDPOINT_SNAPSHOTS 32
+ #define ENDPOINT_RECEIVERS 64
++#define ENDPOINT_WATCHES 16
++#define ENDPOINT_WATCH_EVENTS 32
+ #define NUMBEROFSYSEXSTORECEIVE 1025
+ 
+ struct MyMidiMessage2{
+@@ -259,6 +261,15 @@ struct ClusterWatch{
+ struct CAMDEndpointRegistry;
+ struct CAMDEndpointSnapshot;
+ struct CAMDNativeEventQueue;
++struct CAMDEndpointWatch;
++
++/* A StartEndpointWatch() handle. */
++struct EndpointWatcher{
++	struct CAMDEndpointWatch *watch;	// NULL while the slot is free
++	ULONG generation;
++	struct Task *task;
++	ULONG signal;			// signal number, or CAMD_SIGNAL_NONE
++};
+ 
+ /* The client side of an open input session. */
+ struct EndpointReceiver{
+@@ -314,6 +325,9 @@ struct CamdBase_intern{
+     /* Input sessions' queues, also under EndpointClientSemaphore. */
+     struct EndpointReceiver EndpointReceivers[ENDPOINT_RECEIVERS];
+ 
++    /* Endpoint watches, also under EndpointClientSemaphore. */
++    struct EndpointWatcher EndpointWatchers[ENDPOINT_WATCHES];
++
+ 
+ };
+ 
+@@ -489,6 +503,14 @@ void StopEndpointReceiver(const struct CAMDHandleV1 *session,
+ LONG ReadEndpointReceiver(const struct CAMDHandleV1 *session,
+ 	struct CAMDMIDI1EventV1 *event,UBYTE *sysex,ULONG size,ULONG *length,
+ 	struct CamdBase *CamdBase);
++struct CAMDGenerationV1;
++struct CAMDEndpointWatchEventV1;
++LONG StartEndpointWatcher(struct CAMDHandleV1 *handle,ULONG signal,
++	struct CAMDGenerationV1 *generation,struct CamdBase *CamdBase);
++LONG ReadEndpointWatcher(const struct CAMDHandleV1 *handle,
++	struct CAMDEndpointWatchEventV1 *event,struct CamdBase *CamdBase);
++void EndEndpointWatcher(const struct CAMDHandleV1 *handle,
++	struct CamdBase *CamdBase);
+ void DeliverDriverEndpointMidi(struct DriverData *driverdata,
+ 	struct MyMidiMessage2 *msg2);
+ void DeliverDriverEndpointSysEx(struct DriverData *driverdata,UBYTE data);
+diff --git a/workbench/libs/camd/camdendpoint.h b/workbench/libs/camd/camdendpoint.h
+--- a/workbench/libs/camd/camdendpoint.h
++++ b/workbench/libs/camd/camdendpoint.h
+@@ -81,6 +81,24 @@ struct CAMDEndpointInfoV1 {
+     char Transport[CAMD_ENDPOINT_TRANSPORT_BYTES];
+ };
+ 
++/* A change to the endpoints, read from a watch. After CAMD_ENDPOINT_EVENT_LOST
++ * events are missing: take a new snapshot. */
++enum CAMDEndpointWatchEventTypeV1 {
++    CAMD_ENDPOINT_EVENT_ADDED = 1,
++    CAMD_ENDPOINT_EVENT_UPDATED,
++    CAMD_ENDPOINT_EVENT_OFFLINE,
++    CAMD_ENDPOINT_EVENT_RETIRED,
++    CAMD_ENDPOINT_EVENT_LOST
++};
++
++struct CAMDEndpointWatchEventV1 {
++    ULONG Size;
++    ULONG Version;
++    struct CAMDGenerationV1 Generation;
++    struct CAMDEndpointIDV1 EndpointID;
++    ULONG Type;
++};
++
+ /* What the endpoint functions return. */
+ enum CAMDRegistryResult {
+     CAMD_REGISTRY_OK = 0,
+diff --git a/workbench/libs/camd/endendpointwatch.c b/workbench/libs/camd/endendpointwatch.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/endendpointwatch.c
+@@ -0,0 +1,54 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++#include "provider_contract.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH1(void, EndEndpointWatch,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDHandleV1 *, watch, A0),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 57, Camd)
++
++/*  FUNCTION
++		Ends a watch from StartEndpointWatch(). Its signal is not
++		sent any more once this returns.
++
++    INPUTS
++		watch - the watch's handle. NULL and a handle already ended
++		    are ignored.
++
++    RESULT
++		None.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		StartEndpointWatch()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	if(watch!=NULL) EndEndpointWatcher(watch,CamdBase);
++
++    AROS_LIBFUNC_EXIT
++}
+diff --git a/workbench/libs/camd/endpoint_client.c b/workbench/libs/camd/endpoint_client.c
+--- a/workbench/libs/camd/endpoint_client.c
++++ b/workbench/libs/camd/endpoint_client.c
+@@ -76,6 +76,10 @@ BOOL EndpointClientsRemain(struct CamdBase *CamdBase)
+         if (base->EndpointSnapshots[i] != NULL)
+             return TRUE;
+     }
++    for (i = 0; i < ENDPOINT_WATCHES; ++i) {
++        if (base->EndpointWatchers[i].watch != NULL)
++            return TRUE;
++    }
+     return camd_registry_session_count(base->EndpointRegistry) != 0;
+ }
+ 
+@@ -289,3 +293,104 @@ LONG ReadEndpointReceiver(const struct CAMDHandleV1 *session,
+     ReleaseSemaphore(&base->EndpointClientSemaphore);
+     return result;
+ }
++
++/* Runs with the registry locked, in whatever task changed an endpoint. */
++static void watcher_notify(void *context)
++{
++    struct EndpointWatcher *watcher = context;
++
++    if (watcher->signal != CAMD_SIGNAL_NONE)
++        Signal(watcher->task, 1UL << watcher->signal);
++}
++
++/* The calling task is the one that gets the signal. */
++LONG StartEndpointWatcher(struct CAMDHandleV1 *handle, ULONG signal,
++                          struct CAMDGenerationV1 *generation,
++                          struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    struct EndpointWatcher *watcher = NULL;
++    struct CAMDGenerationV1 started;
++    LONG result;
++    ULONG i;
++
++    if (signal != CAMD_SIGNAL_NONE && signal > 31)
++        return CAMD_REGISTRY_INVALID;
++
++    ObtainSemaphore(&base->EndpointClientSemaphore);
++    for (i = 0; i < ENDPOINT_WATCHES; ++i) {
++        if (base->EndpointWatchers[i].watch == NULL) {
++            watcher = &base->EndpointWatchers[i];
++            break;
++        }
++    }
++    if (watcher == NULL) {
++        ReleaseSemaphore(&base->EndpointClientSemaphore);
++        return CAMD_REGISTRY_NOMEM;
++    }
++    result = camd_registry_watch_start(base->EndpointRegistry,
++                                       ENDPOINT_WATCH_EVENTS,
++                                       &watcher->watch, &started);
++    if (result == CAMD_REGISTRY_OK) {
++        if (++watcher->generation == 0)
++            ++watcher->generation;
++        watcher->task = FindTask(NULL);
++        watcher->signal = signal;
++        camd_endpoint_watch_set_notify(watcher->watch, watcher_notify,
++                                       watcher);
++        handle->slot = i;
++        handle->generation = watcher->generation;
++        if (generation != NULL)
++            *generation = started;
++    } else {
++        watcher->watch = NULL;
++    }
++    ReleaseSemaphore(&base->EndpointClientSemaphore);
++    return result;
++}
++
++/* EndpointClientSemaphore must be held. */
++static struct EndpointWatcher *find_watcher(
++    const struct CAMDHandleV1 *handle, struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++
++    if (handle->slot >= ENDPOINT_WATCHES || handle->generation == 0 ||
++        base->EndpointWatchers[handle->slot].watch == NULL ||
++        base->EndpointWatchers[handle->slot].generation != handle->generation)
++        return NULL;
++    return &base->EndpointWatchers[handle->slot];
++}
++
++LONG ReadEndpointWatcher(const struct CAMDHandleV1 *handle,
++                         struct CAMDEndpointWatchEventV1 *event,
++                         struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    struct EndpointWatcher *watcher;
++    LONG result = CAMD_REGISTRY_STALE;
++
++    ObtainSemaphoreShared(&base->EndpointClientSemaphore);
++    watcher = find_watcher(handle, CamdBase);
++    if (watcher != NULL)
++        result = camd_endpoint_watch_read(watcher->watch, event);
++    ReleaseSemaphore(&base->EndpointClientSemaphore);
++    return result;
++}
++
++void EndEndpointWatcher(const struct CAMDHandleV1 *handle,
++                        struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    struct EndpointWatcher *watcher;
++
++    ObtainSemaphore(&base->EndpointClientSemaphore);
++    watcher = find_watcher(handle, CamdBase);
++    if (watcher != NULL) {
++        /* Ending it takes the registry lock, so no notify is running or
++         * comes afterwards. */
++        camd_endpoint_watch_end(watcher->watch);
++        watcher->watch = NULL;
++    }
++    ReleaseSemaphore(&base->EndpointClientSemaphore);
++}
+diff --git a/workbench/libs/camd/endpoint_registry.c b/workbench/libs/camd/endpoint_registry.c
+--- a/workbench/libs/camd/endpoint_registry.c
++++ b/workbench/libs/camd/endpoint_registry.c
+@@ -171,6 +171,8 @@ struct CAMDEndpointWatch {
+     size_t count;
+     int lost;
+     struct CAMDGenerationV1 lost_generation;
++    void (*notify)(void *context);
++    void *notify_context;
+ };
+ 
+ typedef char endpoint_size_must_be_360[
+@@ -221,6 +223,8 @@ static void notify_watches(struct CAMDEndpointRegistry *registry,
+         if (watch->lost || watch->count == watch->capacity) {
+             watch->lost = 1;
+             watch->lost_generation = registry->generation;
++            if (watch->notify)
++                watch->notify(watch->notify_context);
+             continue;
+         }
+         tail = (watch->head + watch->count) % watch->capacity;
+@@ -232,6 +236,8 @@ static void notify_watches(struct CAMDEndpointRegistry *registry,
+         event->EndpointID = *id;
+         event->Type = type;
+         ++watch->count;
++        if (watch->notify)
++            watch->notify(watch->notify_context);
+     }
+ }
+ 
+@@ -2035,6 +2041,22 @@ enum CAMDRegistryResult camd_endpoint_watch_read(
+     return result;
+ }
+ 
++enum CAMDRegistryResult camd_endpoint_watch_set_notify(
++    struct CAMDEndpointWatch *watch, void (*notify)(void *context),
++    void *context)
++{
++    struct CAMDEndpointRegistry *registry;
++
++    if (!watch || !watch->registry)
++        return CAMD_REGISTRY_INVALID;
++    registry = watch->registry;
++    core_lock_acquire(&registry->lock);
++    watch->notify = notify;
++    watch->notify_context = context;
++    core_lock_release(&registry->lock);
++    return CAMD_REGISTRY_OK;
++}
++
+ void camd_endpoint_watch_end(struct CAMDEndpointWatch *watch)
+ {
+     struct CAMDEndpointRegistry *registry;
+diff --git a/workbench/libs/camd/endpoint_registry.h b/workbench/libs/camd/endpoint_registry.h
+--- a/workbench/libs/camd/endpoint_registry.h
++++ b/workbench/libs/camd/endpoint_registry.h
+@@ -37,22 +37,6 @@ struct CAMDFunctionBlockInfoV1 {
+     char Name[CAMD_TOPOLOGY_NAME_BYTES];
+ };
+ 
+-enum CAMDEndpointWatchEventTypeV1 {
+-    CAMD_ENDPOINT_EVENT_ADDED = 1,
+-    CAMD_ENDPOINT_EVENT_UPDATED,
+-    CAMD_ENDPOINT_EVENT_OFFLINE,
+-    CAMD_ENDPOINT_EVENT_RETIRED,
+-    CAMD_ENDPOINT_EVENT_LOST
+-};
+-
+-struct CAMDEndpointWatchEventV1 {
+-    uint32_t Size;
+-    uint32_t Version;
+-    struct CAMDGenerationV1 Generation;
+-    struct CAMDEndpointIDV1 EndpointID;
+-    uint32_t Type;
+-};
+-
+ struct CAMDEndpointRegistry;
+ struct CAMDEndpointSnapshot;
+ struct CAMDEndpointWatch;
+@@ -200,6 +184,12 @@ enum CAMDRegistryResult camd_endpoint_watch_read(
+     struct CAMDEndpointWatch *watch,
+     struct CAMDEndpointWatchEventV1 *event);
+ 
++/* notify runs with the registry locked each time the watch gains an event or
++ * loses one: it may signal a task and must not call the registry. */
++enum CAMDRegistryResult camd_endpoint_watch_set_notify(
++    struct CAMDEndpointWatch *watch, void (*notify)(void *context),
++    void *context);
++
+ void camd_endpoint_watch_end(struct CAMDEndpointWatch *watch);
+ 
+ void camd_snapshot_destroy(struct CAMDEndpointSnapshot *snapshot);
+diff --git a/workbench/libs/camd/getendpointwatchevent.c b/workbench/libs/camd/getendpointwatchevent.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/getendpointwatchevent.c
+@@ -0,0 +1,60 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++#include "provider_contract.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH2(LONG, GetEndpointWatchEvent,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDHandleV1 *, watch, A0),
++	AROS_LHA(struct CAMDEndpointWatchEventV1 *, event, A1),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 56, Camd)
++
++/*  FUNCTION
++		Takes the oldest change from an endpoint watch.
++
++    INPUTS
++		watch - from StartEndpointWatch().
++		event - filled in with the change.
++
++    RESULT
++		CAMD_REGISTRY_OK with a change, CAMD_REGISTRY_EMPTY when none
++		is left, CAMD_REGISTRY_STALE for an ended watch, or another
++		CAMD_REGISTRY_ value.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change. Read until CAMD_REGISTRY_EMPTY after
++		each signal. CAMD_ENDPOINT_EVENT_LOST means that changes were
++		dropped: take a new snapshot.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		StartEndpointWatch()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	if(watch==NULL || event==NULL) return CAMD_REGISTRY_INVALID;
++
++	return ReadEndpointWatcher(watch,event,CamdBase);
++
++    AROS_LIBFUNC_EXIT
++}
+diff --git a/workbench/libs/camd/mmakefile.src b/workbench/libs/camd/mmakefile.src
+--- a/workbench/libs/camd/mmakefile.src
++++ b/workbench/libs/camd/mmakefile.src
+@@ -63,7 +63,10 @@ FUNCS := \
+     putendpointmidi \
+     putendpointsysex \
+     drainendpointsession \
+-    getendpointmidi
++    getendpointmidi \
++    startendpointwatch \
++    getendpointwatchevent \
++    endendpointwatch
+ 
+ #MM workbench-libs-camd-includes : \
+ #MM     kernel-exec-includes \
+diff --git a/workbench/libs/camd/startendpointwatch.c b/workbench/libs/camd/startendpointwatch.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/startendpointwatch.c
+@@ -0,0 +1,65 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++#include "provider_contract.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH3(LONG, StartEndpointWatch,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDHandleV1 *, watch, A0),
++	AROS_LHA(ULONG, signal, D0),
++	AROS_LHA(struct CAMDGenerationV1 *, generation, A1),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 55, Camd)
++
++/*  FUNCTION
++		Starts collecting the changes to CAMD's endpoints: endpoints
++		added, updated, gone offline or retired.
++
++    INPUTS
++		watch - filled in with the watch's handle.
++		signal - the number of the signal the calling task gets at
++		    each change, or CAMD_SIGNAL_NONE.
++		generation - NULL, or filled in with the generation of the
++		    endpoints when the watch started.
++
++    RESULT
++		CAMD_REGISTRY_OK, or another CAMD_REGISTRY_ value.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change. Start the watch first and take a
++		snapshot afterwards, so that no change falls between the two.
++		End every watch before closing camd.library.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		GetEndpointWatchEvent(), EndEndpointWatch(), ObtainEndpointSnapshot()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	if(watch==NULL) return CAMD_REGISTRY_INVALID;
++	watch->slot=0;
++	watch->generation=0;
++
++	return StartEndpointWatcher(watch,signal,generation,CamdBase);
++
++    AROS_LIBFUNC_EXIT
++}

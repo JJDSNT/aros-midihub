@@ -1432,6 +1432,68 @@ out:
     FreeSignal(bit);
 }
 
+static void test_endpoint_watch(void)
+{
+    struct CAMDHandleV1 watch, other;
+    struct CAMDGenerationV1 generation;
+    struct CAMDEndpointWatchEventV1 event;
+
+    check(StartEndpointWatch(&watch, 32, NULL) == CAMD_REGISTRY_INVALID && watch.generation == 0,
+          "a watch signal number past 31 is CAMD_REGISTRY_INVALID", NULL);
+    generation.high = generation.low = 0xffffffffUL;
+    check(StartEndpointWatch(&watch, CAMD_SIGNAL_NONE, &generation) == CAMD_REGISTRY_OK &&
+          (generation.high != 0xffffffffUL || generation.low != 0xffffffffUL),
+          "StartEndpointWatch gives the current generation", NULL);
+    check(StartEndpointWatch(&other, CAMD_SIGNAL_NONE, NULL) == CAMD_REGISTRY_OK &&
+          (other.slot != watch.slot || other.generation != watch.generation), "a second watch has its own handle", NULL);
+    memset(&event, 0, sizeof(event));
+    check(GetEndpointWatchEvent(&watch, &event) == CAMD_REGISTRY_EMPTY, "a watch is empty while nothing changes", NULL);
+    EndEndpointWatch(&other);
+    EndEndpointWatch(&watch);
+    check(GetEndpointWatchEvent(&watch, &event) == CAMD_REGISTRY_STALE, "an ended watch is CAMD_REGISTRY_STALE", NULL);
+    EndEndpointWatch(&watch);
+    check(1, "ending a watch twice returns", NULL);
+}
+
+/* Around test_rethink_load(): the driver RethinkCAMD() loads adds endpoints. */
+static struct CAMDHandleV1 rethink_watch;
+static BYTE rethink_bit = -1;
+static int rethink_watching;
+
+static void start_rethink_watch(void)
+{
+    rethink_bit = AllocSignal(-1);
+    if (rethink_bit < 0) return;
+    SetSignal(0, 1UL << rethink_bit);
+    rethink_watching = StartEndpointWatch(&rethink_watch, (ULONG)rethink_bit, NULL) == CAMD_REGISTRY_OK;
+}
+
+static void test_rethink_watch(void)
+{
+    struct CAMDEndpointWatchEventV1 event, first;
+    struct CAMDEndpointIDV1 port;
+    int added = 0, ordered = 1, matched = 0;
+
+    check(rethink_watching, "a watch was started before RethinkCAMD", NULL);
+    if (!rethink_watching) return;
+    check((SetSignal(0, 0) & (1UL << rethink_bit)) != 0, "loading a driver signals the watch", NULL);
+    memset(&first, 0, sizeof(first));
+    while (GetEndpointWatchEvent(&rethink_watch, &event) == CAMD_REGISTRY_OK) {
+        if (event.Type != CAMD_ENDPOINT_EVENT_ADDED) continue;
+        if (added == 0) first = event;
+        else if (event.Generation.high < first.Generation.high ||
+                 (event.Generation.high == first.Generation.high && event.Generation.low <= first.Generation.low))
+            ordered = 0;
+        if (find_endpoint("debugdriver.0", &port) && !memcmp(&port, &event.EndpointID, sizeof(port))) matched = 1;
+        added++;
+    }
+    check(added == 4, "the watch has one CAMD_ENDPOINT_EVENT_ADDED per port", NULL);
+    check(ordered, "later events have later generations", NULL);
+    check(matched, "an event carries the ID the snapshot shows", NULL);
+    EndEndpointWatch(&rethink_watch);
+    FreeSignal(rethink_bit);
+}
+
 /* A client that exits with a snapshot and a session still open. CAMD must
    then stay loaded: the runner flushes memory and runs --v43 again. */
 static void test_endpoint_leak(void)
@@ -1612,7 +1674,9 @@ int main(int argc, char **argv)
     if (router_mode) {
         test_router(argv[2], argv[3]);
     } else if (rethink_mode) {
+        if (CamdBase->lib_Version >= 43) start_rethink_watch();
         RUN(test_rethink_load);
+        if (CamdBase->lib_Version >= 43) RUN(test_rethink_watch);
     } else if (leak_mode) {
         if (CamdBase->lib_Version < 43) {
             skip("camd.library 43", "older library");
@@ -1625,6 +1689,7 @@ int main(int argc, char **argv)
         } else {
             RUN(test_endpoints);
             RUN(test_endpoint_input);
+            RUN(test_endpoint_watch);
         }
     } else if (v42_mode) {
         if (CamdBase->lib_Version < 42) {

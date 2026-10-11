@@ -199,6 +199,7 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-endpoint-expunge.patch` | camd.library refuses to be expunged while a client has left an endpoint session or snapshot open, instead of freeing the drivers under it |
 | `aros-midi-loopback-driver.patch` | new `DEVS:Midi/loopback` driver with two ports: what is sent to `loopback.out.<n>` is received from `loopback.in.<n>` |
 | `aros-camd-endpoint-input.patch` | input sessions: a driver port's receiver process hands each complete message to the port's receiving sessions beside its legacy cluster; `GetEndpointMidi()` reads a session's bounded queue and the opening task is signalled |
+| `aros-camd-endpoint-watch.patch` | `StartEndpointWatch()`, `GetEndpointWatchEvent()` and `EndEndpointWatch()`: a bounded queue of endpoint changes with a signal, reporting loss instead of blocking |
 
 ```sh
 grep -v '^#' patches/camd-series | while read -r p; do
@@ -373,10 +374,10 @@ patches and with all of them:
 |---|---|---|---|
 | first four patches | 50 of 50 | skipped | 4 of 8 (not implemented) |
 | up to `camd-part-notify` | 50 of 50 | skipped | 8 of 8 |
-| all patches | 65 of 65 | 34 of 34 | 8 of 8 |
+| all patches | 65 of 65 | 34 of 34 | 13 of 13 |
 
-`MIDIHubCAMDCompat --v43` is a client of the provisional endpoint functions: 53
-checks on hosted AROS, and 53 again after `--v43-leak` exits with a session
+`MIDIHubCAMDCompat --v43` is a client of the provisional endpoint functions: 59
+checks on hosted AROS, and 59 again after `--v43-leak` exits with a session
 open and `Avail FLUSH` tries to expunge the library. Its session and a legacy link send to the same
 debugdriver port, and the runner compares the bytes the driver printed. Input
 sessions are tested on the loopback driver, in both directions between a

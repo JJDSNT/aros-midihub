@@ -608,6 +608,11 @@ static void expect_watch_event(struct CAMDEndpointWatch *watch,
     *previous = event.Generation;
 }
 
+static void count_notify(void *context)
+{
+    ++*(unsigned int *)context;
+}
+
 static void test_watches(void)
 {
     struct CAMDEndpointRegistry *registry = camd_registry_create();
@@ -620,6 +625,7 @@ static void test_watches(void)
     struct CAMDHandleV1 provider_owner, provider, client;
     struct CAMDGenerationV1 generation;
     struct CAMDEndpointWatchEventV1 event;
+    unsigned int notified = 0;
 
     assert(registry != NULL);
     provider_owner = register_test_provider(registry, &provider_context);
@@ -628,10 +634,15 @@ static void test_watches(void)
            CAMD_REGISTRY_OK);
     assert(generation.high == 0 && generation.low == 0);
     assert(camd_endpoint_watch_read(watch, &event) == CAMD_REGISTRY_EMPTY);
+    assert(camd_endpoint_watch_set_notify(watch, count_notify,
+                                          &notified) == CAMD_REGISTRY_OK);
 
     assert(camd_registry_publish(registry, provider_owner, &endpoint, &group,
                                  1, &block, 1,
                                  &provider) == CAMD_REGISTRY_OK);
+    assert(notified == 1);
+    assert(camd_endpoint_watch_set_notify(watch, NULL, NULL) ==
+           CAMD_REGISTRY_OK);
     expect_watch_event(watch, CAMD_ENDPOINT_EVENT_ADDED, &endpoint.ID,
                        &generation);
     strcpy(endpoint.Name, "Watched update");

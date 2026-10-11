@@ -14,8 +14,8 @@ in this draft is exported as a public symbol.
 
 ## Provisional version 43 slice
 
-`patches/aros-camd-endpoint-client.patch` and `aros-camd-endpoint-input.patch`
-append nine ordinary vectors behind
+`patches/aros-camd-endpoint-client.patch`, `aros-camd-endpoint-input.patch` and
+`aros-camd-endpoint-watch.patch` append twelve ordinary vectors behind
 `.version 43` and installs `midi/camdendpoint.h`, so that the endpoint core has
 a real client before review. Everything in it can still change.
 
@@ -29,6 +29,9 @@ a real client before review. Everything in it can still change.
 | `LONG PutEndpointSysEx(session, bytes, length)` | A0, A1, D0 | one complete copied message; never waits |
 | `LONG DrainEndpointSession(session)` | A0 | wait until the queue is handed to the port |
 | `LONG GetEndpointMidi(session, event, sysex, size, length)` | A0, A1, A2, D0, A3 | oldest received short message or complete SysEx; never waits |
+| `LONG StartEndpointWatch(watch, signal, generation)` | A0, D0, A1 | bounded queue of endpoint changes; signals the calling task |
+| `LONG GetEndpointWatchEvent(watch, event)` | A0, A1 | oldest `CAMDEndpointWatchEventV1`; `CAMD_ENDPOINT_EVENT_LOST` after overflow |
+| `void EndEndpointWatch(watch)` | A0 | |
 | `LONG CloseEndpointSession(session)` | A0 | |
 
 Results are `enum CAMDRegistryResult` values. The native MIDI 1.0 record for
@@ -36,7 +39,7 @@ new sessions, left open below, is provisionally `CAMDMIDI1EventV1` plus a
 separate SysEx call. An input session names a signal number in its request;
 the opening task gets it when something arrives. A full input queue loses
 the newest messages and `GetEndpointMidi()` reports that once with
-`CAMD_REGISTRY_QUEUE_FULL`. Not in the slice: watches, Groups and Function
+`CAMD_REGISTRY_QUEUE_FULL`. Not in the slice: Groups and Function
 Blocks, UMP, cancel, counters and timestamps (the event's time fields are
 carried but ignored).
 
