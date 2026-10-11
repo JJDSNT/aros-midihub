@@ -1523,7 +1523,12 @@ static void test_published_endpoint(void)
     struct CAMDSessionRequestV1 request;
     struct CAMDHandleV1 port, again, to_port, from_port, late;
     struct CAMDEndpointIDV1 id, found, republished;
+    static char out_cluster[] = "camdcompat port.out.0";
+    static char in_cluster[] = "camdcompat port.in.0";
     struct CAMDMIDI1EventV1 event, events[2];
+    struct MidiNode *node = NULL;
+    struct MidiLink *sender = NULL, *receiver = NULL;
+    MidiMsg msg;
     ULONG length = 99;
     BYTE bit = AllocSignal(-1);
     LONG result;
@@ -1603,6 +1608,38 @@ static void test_published_endpoint(void)
     check(PutPublishedMidi(&port, events, 1) == CAMD_REGISTRY_INVALID, "the publisher cannot send a message without bytes", NULL);
     events[0] = midi1(0x93, 0x46, 0x50);
 
+    /* Its legacy clusters: old programs reach it by linking, as to a port. */
+    check(count_clusters(out_cluster) == 1 && count_clusters(in_cluster) == 1, "the endpoint has legacy clusters named after it", NULL);
+    node = new_node("camdcompat published", 32, 256);
+    sender = node ? link_to(node, MLTYPE_Sender, out_cluster) : NULL;
+    receiver = node ? link_to(node, MLTYPE_Receiver, in_cluster) : NULL;
+    check(sender && receiver && MidiLinkConnected(sender) && MidiLinkConnected(receiver), "legacy links to them are connected", NULL);
+    if (sender && receiver) {
+        SetSignal(0, 1UL << bit);
+        PutMidi(sender, 0x94373300UL);
+        check((SetSignal(0, 0) & (1UL << bit)) != 0 &&
+              GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK && length == 0 &&
+              event.Length == 3 && event.Bytes[0] == 0x94 && event.Bytes[1] == 0x37 && event.Bytes[2] == 0x33,
+              "the publisher takes what a legacy link sent", NULL);
+        PutMidi(sender, 0xc4090000UL);
+        check(GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK && event.Length == 2 &&
+              event.Bytes[0] == 0xc4 && event.Bytes[1] == 0x09, "a two-byte message keeps its length", NULL);
+        PutSysEx(sender, sysex);
+        memset(buffer, 0, sizeof(buffer));
+        check(GetPublishedMidi(&port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK && length == sizeof(sysex) &&
+              !memcmp(buffer, sysex, sizeof(sysex)), "and legacy SysEx", NULL);
+        events[0] = midi1(0x95, 0x38, 0x44);
+        check(PutPublishedMidi(&port, events, 1) == CAMD_REGISTRY_OK && GetMidi(node, &msg) && msg.mm_Status == 0x95 &&
+              msg.mm_Data1 == 0x38 && msg.mm_Data2 == 0x44, "a legacy receiver gets what the publisher sent", NULL);
+        memset(buffer, 0, sizeof(buffer));
+        check(PutPublishedSysEx(&port, sysex, sizeof(sysex)) == CAMD_REGISTRY_OK && GetMidi(node, &msg) && msg.mm_Status == 0xf0 &&
+              QuerySysEx(node) == sizeof(sysex) && GetSysEx(node, buffer, sizeof(buffer)) == sizeof(sysex) &&
+              !memcmp(buffer, sysex, sizeof(sysex)), "and the publisher's SysEx", NULL);
+        /* The client session that receives got both as well. */
+        while (GetEndpointMidi(&from_port, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK);
+    }
+    events[0] = midi1(0x93, 0x46, 0x50);
+
     /* Offline and back. */
     check(SetPublishedEndpointState(&port, CAMD_ENDPOINT_RETIRED) == CAMD_REGISTRY_INVALID, "only available and offline can be set", NULL);
     check(SetPublishedEndpointState(&port, CAMD_ENDPOINT_OFFLINE) == CAMD_REGISTRY_OK && endpoint_state(name) == CAMD_ENDPOINT_OFFLINE,
@@ -1629,6 +1666,11 @@ static void test_published_endpoint(void)
           "the clients close their sessions", NULL);
     WithdrawEndpoint(&port);
     check(1, "withdrawing twice returns", NULL);
+    if (sender) {
+        check(FindCluster(out_cluster) != NULL, "a legacy link keeps the withdrawn endpoint's cluster", NULL);
+        PutMidi(sender, 0x94010100UL);
+        check(1, "sending to it returns", NULL);
+    }
 
     memset(&republished, 0, sizeof(republished));
     result = PublishEndpoint(&publish, &again, &republished);
@@ -1637,8 +1679,17 @@ static void test_published_endpoint(void)
         request.Direction = CAMD_DIRECTION_OUTPUT;
         check(OpenEndpointSession(&request, &late, NULL) == CAMD_REGISTRY_OK && CloseEndpointSession(&late) == CAMD_REGISTRY_OK,
               "and a session opens with the ID a client kept", NULL);
+        if (sender) {
+            PutMidi(sender, 0x94020200UL);
+            check(GetPublishedMidi(&again, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK &&
+                  event.Bytes[0] == 0x94 && event.Bytes[1] == 0x02, "the waiting legacy link reaches it without linking again", NULL);
+        }
         WithdrawEndpoint(&again);
     }
+    if (sender) RemoveMidiLink(sender);
+    if (receiver) RemoveMidiLink(receiver);
+    if (node) DeleteMidi(node);
+    check(!FindCluster(out_cluster) && !FindCluster(in_cluster), "its clusters go with the last link", NULL);
     FreeSignal(bit);
     return;
 out:

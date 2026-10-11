@@ -232,6 +232,62 @@ int main(void)
            CAMD_PROVIDER_INVALID);
     events[0] = note(31);
 
+    /* The legacy side: injected messages are taken like a session's, and the
+     * projection sink gets what the publisher emits. */
+    {
+        struct consumer legacy;
+        struct CAMDProviderReceiveSinkV1 projection = sink;
+
+        memset(&legacy, 0, sizeof(legacy));
+        projection.Context = &legacy;
+        events[0] = note(40);
+        assert(camd_app_endpoint_inject_midi1(app, events) ==
+               CAMD_PROVIDER_OK);
+        assert(camd_app_endpoint_inject_sysex(app, sysex, sizeof(sysex)) ==
+               CAMD_PROVIDER_OK);
+        assert(camd_app_endpoint_take(app, &taken, buffer, sizeof(buffer),
+                                      &sysex_count) == CAMD_PROVIDER_OK &&
+               sysex_count == 0 && taken.Bytes[1] == 40);
+        assert(camd_app_endpoint_take(app, &taken, buffer, sizeof(buffer),
+                                      &sysex_count) == CAMD_PROVIDER_OK &&
+               sysex_count == sizeof(sysex));
+        events[0] = note(41);
+        events[1] = note(42);
+        events[2] = note(43);
+        assert(camd_app_endpoint_inject_midi1(app, &events[0]) ==
+                   CAMD_PROVIDER_OK &&
+               camd_app_endpoint_inject_midi1(app, &events[1]) ==
+                   CAMD_PROVIDER_OK &&
+               camd_app_endpoint_inject_midi1(app, &events[2]) ==
+                   CAMD_PROVIDER_OK &&
+               camd_app_endpoint_inject_midi1(app, &events[0]) ==
+                   CAMD_PROVIDER_OK &&
+               camd_app_endpoint_inject_midi1(app, &events[0]) ==
+                   CAMD_PROVIDER_QUEUE_FULL);
+        while (camd_app_endpoint_take(app, &taken, buffer, sizeof(buffer),
+                                      &sysex_count) == CAMD_PROVIDER_OK)
+            ;
+        projection.SubmitMIDI1 = NULL;
+        assert(camd_app_endpoint_set_projection(app, &projection) ==
+               CAMD_PROVIDER_INVALID);
+        projection.SubmitMIDI1 = consume_midi1;
+        assert(camd_app_endpoint_set_projection(app, &projection) ==
+               CAMD_PROVIDER_OK);
+        events[0] = note(50);
+        assert(camd_app_endpoint_emit_midi1(app, events, 1, &dropped) ==
+               CAMD_PROVIDER_OK && dropped == 0);
+        assert(legacy.events == 1 && legacy.last == 50 &&
+               consumer.last == 50);
+        assert(camd_app_endpoint_emit_sysex(app, sysex, sizeof(sysex),
+                                            NULL) == CAMD_PROVIDER_OK &&
+               legacy.sysex == 1);
+        assert(camd_app_endpoint_set_projection(app, NULL) ==
+               CAMD_PROVIDER_OK);
+        assert(camd_app_endpoint_emit_midi1(app, events, 1, NULL) ==
+               CAMD_PROVIDER_OK && legacy.events == 1);
+    }
+    events[0] = note(31);
+
     /* Offline: sessions stay but carry nothing, and none opens. */
     assert(camd_legacy_driver_adapter_set_state(
                adapter, 0, CAMD_ENDPOINT_OFFLINE) == CAMD_REGISTRY_OK);

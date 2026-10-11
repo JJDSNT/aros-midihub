@@ -1,0 +1,507 @@
+diff --git a/workbench/libs/camd/app_endpoint.c b/workbench/libs/camd/app_endpoint.c
+--- a/workbench/libs/camd/app_endpoint.c
++++ b/workbench/libs/camd/app_endpoint.c
+@@ -36,6 +36,11 @@ struct CAMDAppEndpoint {
+     struct CAMDAppEndpointConfigV1 config;
+     struct app_session *sessions;       /* under lock */
+     struct app_session *last_taken;     /* under lock; for taking in turn */
++    /* What legacy senders sent: always the last in sessions, never counted
++     * and never closed. NULL without the output direction. */
++    struct app_session *projected;
++    struct CAMDProviderReceiveSinkV1 projection;    /* under lock */
++    int projecting;
+     uint32_t session_count;
+     int retiring;
+     struct CAMDProviderOpsV1 ops;
+@@ -376,6 +381,29 @@ enum CAMDProviderResult camd_app_endpoint_create(
+         return CAMD_PROVIDER_CALLBACK_FAILED;
+     }
+     endpoint->config = *config;
++    if ((config->Directions & CAMD_PROVIDER_DIRECTION_OUTPUT) != 0) {
++        struct CAMDNativeQueueConfigV1 queue_config;
++
++        memset(&queue_config, 0, sizeof(queue_config));
++        queue_config.Size = sizeof(queue_config);
++        queue_config.Version = 1;
++        queue_config.DataFormat = CAMD_PROVIDER_FORMAT_MIDI1;
++        queue_config.Capacity = config->MaxQueueCapacity;
++        queue_config.MaxSysExBytes = config->MaxSysExBytes;
++        endpoint->projected = app_alloc(sizeof(*endpoint->projected));
++        if (!endpoint->projected ||
++            camd_native_queue_create(&queue_config,
++                                     &endpoint->projected->queue) !=
++                CAMD_NATIVE_QUEUE_OK) {
++            app_free(endpoint->projected);
++            lock_destroy(&endpoint->lock);
++            app_free(endpoint);
++            return CAMD_PROVIDER_CALLBACK_FAILED;
++        }
++        endpoint->projected->endpoint = endpoint;
++        endpoint->projected->direction = CAMD_PROVIDER_DIRECTION_OUTPUT;
++        endpoint->sessions = endpoint->projected;
++    }
+     endpoint->ops.Size = sizeof(endpoint->ops);
+     endpoint->ops.Version = 1;
+     endpoint->ops.Open = app_open;
+@@ -425,6 +453,9 @@ enum CAMDProviderResult camd_app_endpoint_emit_midi1(
+                                       event_count) != CAMD_PROVIDER_OK)
+             ++lost;
+     }
++    if (endpoint->projecting)
++        endpoint->projection.SubmitMIDI1(endpoint->projection.Context,
++                                         events, event_count);
+     lock_release(&endpoint->lock);
+     if (dropped)
+         *dropped = lost;
+@@ -456,6 +487,9 @@ enum CAMDProviderResult camd_app_endpoint_emit_sysex(
+                 CAMD_PROVIDER_OK)
+             ++lost;
+     }
++    if (endpoint->projecting)
++        endpoint->projection.SubmitMIDI1SysEx(endpoint->projection.Context,
++                                              bytes, byte_count, 0, 0, 0, 0);
+     lock_release(&endpoint->lock);
+     if (dropped)
+         *dropped = lost;
+@@ -526,6 +560,53 @@ enum CAMDProviderResult camd_app_endpoint_take(
+     return result;
+ }
+ 
++enum CAMDProviderResult camd_app_endpoint_inject_midi1(
++    struct CAMDAppEndpoint *endpoint, const struct CAMDMIDI1EventV1 *event)
++{
++    enum CAMDNativeQueueResult result;
++
++    if (!endpoint || !endpoint->projected)
++        return CAMD_PROVIDER_INVALID;
++    result = camd_native_queue_enqueue_midi1_items(
++        endpoint->projected->queue, event, 1);
++    if (result != CAMD_NATIVE_QUEUE_OK)
++        return queue_result(result);
++    notify(endpoint);
++    return CAMD_PROVIDER_OK;
++}
++
++enum CAMDProviderResult camd_app_endpoint_inject_sysex(
++    struct CAMDAppEndpoint *endpoint, const uint8_t *bytes,
++    size_t byte_count)
++{
++    enum CAMDNativeQueueResult result;
++
++    if (!endpoint || !endpoint->projected)
++        return CAMD_PROVIDER_INVALID;
++    result = camd_native_queue_enqueue_midi1_sysex(
++        endpoint->projected->queue, bytes, byte_count, 0, 0, 0, 0);
++    if (result != CAMD_NATIVE_QUEUE_OK)
++        return queue_result(result);
++    notify(endpoint);
++    return CAMD_PROVIDER_OK;
++}
++
++enum CAMDProviderResult camd_app_endpoint_set_projection(
++    struct CAMDAppEndpoint *endpoint,
++    const struct CAMDProviderReceiveSinkV1 *sink)
++{
++    if (!endpoint ||
++        (sink && (sink->Size != sizeof(*sink) || sink->Version != 1 ||
++                  !sink->SubmitMIDI1 || !sink->SubmitMIDI1SysEx)))
++        return CAMD_PROVIDER_INVALID;
++    lock_acquire(&endpoint->lock);
++    if (sink)
++        endpoint->projection = *sink;
++    endpoint->projecting = sink != NULL;
++    lock_release(&endpoint->lock);
++    return CAMD_PROVIDER_OK;
++}
++
+ void camd_app_endpoint_detach(struct CAMDAppEndpoint *endpoint)
+ {
+     if (!endpoint)
+@@ -547,6 +628,10 @@ enum CAMDProviderResult camd_app_endpoint_destroy(
+         return CAMD_PROVIDER_STATE;
+     }
+     lock_release(&endpoint->lock);
++    if (endpoint->projected) {
++        camd_native_queue_destroy(endpoint->projected->queue);
++        app_free(endpoint->projected);
++    }
+     lock_destroy(&endpoint->lock);
+     app_free(endpoint);
+     return CAMD_PROVIDER_OK;
+diff --git a/workbench/libs/camd/app_endpoint.h b/workbench/libs/camd/app_endpoint.h
+--- a/workbench/libs/camd/app_endpoint.h
++++ b/workbench/libs/camd/app_endpoint.h
+@@ -55,6 +55,20 @@ enum CAMDProviderResult camd_app_endpoint_take(
+     struct CAMDAppEndpoint *endpoint, struct CAMDMIDI1EventV1 *event,
+     uint8_t *sysex, size_t sysex_capacity, size_t *sysex_count);
+ 
++/* The legacy side of the endpoint, for CAMD's cluster projection. inject
++ * queues what a legacy sender sent, on a queue of MaxQueueCapacity records of
++ * its own that take serves in turn with the sessions; it needs the output
++ * direction. The projection sink gets everything emit gives to the input
++ * sessions, with the endpoint locked; NULL removes it. */
++enum CAMDProviderResult camd_app_endpoint_inject_midi1(
++    struct CAMDAppEndpoint *endpoint, const struct CAMDMIDI1EventV1 *event);
++enum CAMDProviderResult camd_app_endpoint_inject_sysex(
++    struct CAMDAppEndpoint *endpoint, const uint8_t *bytes,
++    size_t byte_count);
++enum CAMDProviderResult camd_app_endpoint_set_projection(
++    struct CAMDAppEndpoint *endpoint,
++    const struct CAMDProviderReceiveSinkV1 *sink);
++
+ /* The publisher is gone: Notify is not called any more. */
+ void camd_app_endpoint_detach(struct CAMDAppEndpoint *endpoint);
+ 
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -109,6 +109,8 @@ struct MyMidiCluster{
+ 	ULONG recverrors;	// driver receive errors and overruns
+ };
+ 
++struct CAMDAppEndpoint;
++
+ struct DriverData{
+ 	struct Node outnode;								// Used for the outcluster's receiverlist
+ 	struct Node innode;								// Used for the incluster's senderlist
+@@ -183,6 +185,10 @@ struct DriverData{
+ 	BOOL EndpointSysExOverflow;
+ 	ULONG EndpointInputDropped;	// messages an input session had no room for
+ 
++	/* Set on the port that stands for a published endpoint in its legacy
++	   clusters: what is sent to it goes to that endpoint, not to a driver. */
++	struct CAMDAppEndpoint *Projection;
++
+ 	UWORD *re_start;
+ 	UWORD *re_write;
+ 	UWORD *re_end;
+@@ -264,13 +270,15 @@ struct CAMDEndpointSnapshot;
+ struct CAMDNativeEventQueue;
+ struct CAMDEndpointWatch;
+ 
+-struct CAMDAppEndpoint;
+ struct CAMDLegacyDriverAdapter;
+ 
++struct EndpointProjection;
++
+ /* A PublishEndpoint() handle. The slot is free while app is NULL; withdrawn
+    marks one whose publisher has gone and that waits for its clients. */
+ struct EndpointPublisher{
+ 	struct CAMDAppEndpoint *app;
++	struct EndpointProjection *projection;	// its legacy clusters
+ 	struct CAMDLegacyDriverAdapter *adapter;
+ 	ULONG generation;
+ 	BOOL withdrawn;
+@@ -547,6 +555,16 @@ LONG GetAppEndpointMidi(const struct CAMDHandleV1 *handle,
+ 	struct CAMDMIDI1EventV1 *event,UBYTE *sysex,ULONG size,ULONG *length,
+ 	struct CamdBase *CamdBase);
+ BOOL AppEndpointsRemain(struct CamdBase *CamdBase);
++struct EndpointProjection *CreateEndpointProjection(
++	struct CAMDAppEndpoint *app,const char *name,ULONG directions,
++	struct CamdBase *CamdBase);
++void DeleteEndpointProjection(struct EndpointProjection *projection);
++BOOL ProjectMidiToEndpoint(struct DriverData *driverdata,ULONG msg);
++BOOL ProjectSysExToEndpoint(struct DriverData *driverdata,UBYTE *buffer);
++void Receiver_SuperTreat2(struct DriverData *driverdata,
++	struct MyMidiMessage2 *msg2);
++BOOL AllocDriverData(struct Drivers *driver,
++	struct MidiDeviceData *mididevicedata,struct CamdBase *CamdBase);
+ void DeliverDriverEndpointMidi(struct DriverData *driverdata,
+ 	struct MyMidiMessage2 *msg2);
+ void DeliverDriverEndpointSysEx(struct DriverData *driverdata,UBYTE data);
+diff --git a/workbench/libs/camd/endpoint_projection.c b/workbench/libs/camd/endpoint_projection.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/endpoint_projection.c
+@@ -0,0 +1,223 @@
++/*
++ * Legacy clusters of an endpoint a program publishes.
++ *
++ * The endpoint takes part in <name>.out.0 and <name>.in.0 the way a driver's
++ * port does, through a DriverData of its own, so every existing program
++ * reaches it by linking to those clusters. No driver is behind it: complete
++ * messages pass between the clusters and the endpoint without becoming a byte
++ * stream.
++ */
++
++#include <proto/exec.h>
++#include <exec/memory.h>
++#include <midi/camddevices.h>
++
++#include <string.h>
++
++#include "camd_intern.h"
++#include "app_endpoint.h"
++
++struct EndpointProjection {
++    struct Drivers driver;
++    struct MidiDeviceData device;
++    struct CAMDAppEndpoint *app;
++    struct CamdBase *CamdBase;
++    char name[CAMD_ENDPOINT_NAME_BYTES];
++};
++
++/* CAMD opens and closes the port as links come and go; nothing to do. */
++static SAVEDS ASM void projection_activate(REG(a2) APTR userdata,
++                                           REG(d0) ULONG portnum)
++{
++    (void)userdata;
++    (void)portnum;
++}
++
++static struct MidiPortData projection_port = {
++    projection_activate
++};
++
++static SAVEDS ASM struct MidiPortData *projection_open(
++    REG(a3) struct MidiDeviceData *data,
++    REG(d0) LONG portnum,
++    REG(a0) ULONG (* ASM transmitfunc)(APTR REG(a2) userdata),
++    REG(a1) void (* ASM receivefunc)(UWORD REG(d0) input,APTR REG(a2) userdata),
++    REG(a2) APTR userdata)
++{
++    (void)data;
++    (void)portnum;
++    (void)transmitfunc;
++    (void)receivefunc;
++    (void)userdata;
++    return &projection_port;
++}
++
++static ASM void projection_close(REG(a3) struct MidiDeviceData *data,
++                                 REG(d0) LONG portnum)
++{
++    (void)data;
++    (void)portnum;
++}
++
++/* What the publisher emits, for the receivers linked to <name>.in.0. Runs in
++ * the publisher's task with the endpoint locked, so one message at a time. */
++static enum CAMDProviderResult project_midi1(
++    void *context, const struct CAMDMIDI1EventV1 *events, size_t event_count)
++{
++    struct DriverData *driverdata = context;
++    struct MyMidiMessage2 msg2;
++    size_t i;
++
++    for (i = 0; i < event_count; ++i) {
++        msg2.status = events[i].Bytes[0];
++        msg2.data1 = events[i].Bytes[1];
++        msg2.data2 = events[i].Bytes[2];
++        msg2.len = (UBYTE)events[i].Length;
++        Receiver_SuperTreat2(driverdata, &msg2);
++    }
++    return CAMD_PROVIDER_OK;
++}
++
++static enum CAMDProviderResult project_sysex(
++    void *context, const uint8_t *bytes, size_t byte_count,
++    uint32_t time_high, uint32_t time_low, uint32_t clock_domain,
++    uint32_t flags)
++{
++    struct DriverData *driverdata = context;
++    size_t i;
++
++    (void)time_high;
++    (void)time_low;
++    (void)clock_domain;
++    (void)flags;
++    for (i = 0; i < byte_count; ++i)
++        Receiver_SysExSuperTreat(driverdata, bytes[i]);
++    return CAMD_PROVIDER_OK;
++}
++
++/* The bytes of a channel or system message, 0 for what is not one. */
++static ULONG message_length(UBYTE status)
++{
++    if (status < 0x80)
++        return 0;
++    if (status >= 0xf8)
++        return 1;
++    if (status >= 0xf0) {
++        if (status == 0xf1 || status == 0xf3)
++            return 2;
++        if (status == 0xf2)
++            return 3;
++        return status == 0xf6 ? 1 : 0;
++    }
++    return (status & 0xe0) == 0xc0 ? 2 : 3;
++}
++
++/* What a legacy sender put in <name>.out.0, from Midi2Driver_internal(). A
++ * publisher that does not read loses messages; senders are never held up. */
++BOOL ProjectMidiToEndpoint(struct DriverData *driverdata, ULONG msg)
++{
++    struct CAMDMIDI1EventV1 event;
++
++    memset(&event, 0, sizeof(event));
++    event.Size = sizeof(event);
++    event.Version = 1;
++    event.Bytes[0] = (UBYTE)(msg >> 24);
++    event.Bytes[1] = (UBYTE)(msg >> 16);
++    event.Bytes[2] = (UBYTE)(msg >> 8);
++    event.Length = message_length(event.Bytes[0]);
++    if (event.Length == 0)
++        return TRUE;
++    if (event.Length < 3)
++        event.Bytes[2] = 0;
++    if (event.Length < 2)
++        event.Bytes[1] = 0;
++    if (camd_app_endpoint_inject_midi1(driverdata->Projection, &event) !=
++        CAMD_PROVIDER_OK)
++        ++driverdata->EndpointInputDropped;
++    return TRUE;
++}
++
++/* A complete SysEx message from SysEx2Driver(). */
++BOOL ProjectSysExToEndpoint(struct DriverData *driverdata, UBYTE *buffer)
++{
++    if (camd_app_endpoint_inject_sysex(driverdata->Projection, buffer,
++                                       (size_t)GetSysXLen(buffer)) !=
++        CAMD_PROVIDER_OK)
++        ++driverdata->EndpointInputDropped;
++    driverdata->issending_sx = 0;
++    return TRUE;
++}
++
++/* Must not hold CLSemaphore. */
++struct EndpointProjection *CreateEndpointProjection(
++    struct CAMDAppEndpoint *app, const char *name, ULONG directions,
++    struct CamdBase *CamdBase)
++{
++    struct EndpointProjection *projection;
++    struct CAMDProviderReceiveSinkV1 sink;
++    BOOL attached;
++
++    projection = AllocMem(sizeof(*projection),
++                          MEMF_ANY | MEMF_CLEAR | MEMF_PUBLIC);
++    if (projection == NULL)
++        return NULL;
++    strcpy(projection->name, name);
++    projection->app = app;
++    projection->CamdBase = CamdBase;
++    projection->device.Magic = MDD_Magic;
++    projection->device.Name = projection->name;
++    projection->device.IDString = projection->name;
++    projection->device.OpenPort = projection_open;
++    projection->device.ClosePort = projection_close;
++    projection->device.NPorts = 1;
++    projection->device.Flags = 1;
++    projection->driver.mididevicedata = &projection->device;
++    projection->driver.numports = 1;
++    if (AllocDriverData(&projection->driver, &projection->device,
++                        CamdBase) == FALSE) {
++        FreeDriverData(&projection->driver, CamdBase);
++        FreeMem(projection, sizeof(*projection));
++        return NULL;
++    }
++    projection->driver.driverdatas[0]->Projection = app;
++
++    ObtainSemaphore(CB(CamdBase)->CLSemaphore);
++    attached = AttachDriverData(&projection->driver, CamdBase);
++    ReleaseSemaphore(CB(CamdBase)->CLSemaphore);
++    if (attached == FALSE) {
++        FreeDriverData(&projection->driver, CamdBase);
++        FreeMem(projection, sizeof(*projection));
++        return NULL;
++    }
++
++    if ((directions & CAMD_DIRECTION_INPUT) != 0) {
++        memset(&sink, 0, sizeof(sink));
++        sink.Size = sizeof(sink);
++        sink.Version = 1;
++        sink.Context = projection->driver.driverdatas[0];
++        sink.SubmitMIDI1 = project_midi1;
++        sink.SubmitMIDI1SysEx = project_sysex;
++        camd_app_endpoint_set_projection(app, &sink);
++    }
++    return projection;
++}
++
++/* Takes the endpoint out of its clusters. Links of other programs stay there
++ * and wait, as they do for an unplugged port. Must not hold CLSemaphore. */
++void DeleteEndpointProjection(struct EndpointProjection *projection)
++{
++    struct CamdBase *CamdBase;
++
++    if (projection == NULL)
++        return;
++    CamdBase = projection->CamdBase;
++    /* No emit is in the sink once this returns. */
++    camd_app_endpoint_set_projection(projection->app, NULL);
++    /* A sender inside ProjectMidiToEndpoint() holds its cluster's semaphore,
++     * which detaching waits for. */
++    ObtainSemaphore(CB(CamdBase)->CLSemaphore);
++    DetachDriverData(&projection->driver, CamdBase);
++    ReleaseSemaphore(CB(CamdBase)->CLSemaphore);
++    FreeDriverData(&projection->driver, CamdBase);
++    FreeMem(projection, sizeof(*projection));
++}
+diff --git a/workbench/libs/camd/endpoint_publish.c b/workbench/libs/camd/endpoint_publish.c
+--- a/workbench/libs/camd/endpoint_publish.c
++++ b/workbench/libs/camd/endpoint_publish.c
+@@ -203,6 +203,18 @@ LONG PublishAppEndpoint(const struct CAMDPublishRequestV1 *request,
+         reap_publishers(CamdBase);
+         goto out;
+     }
++    /* Its legacy clusters. Without them old programs could not reach it,
++     * so the endpoint is not left published half-way. */
++    publisher->projection = CreateEndpointProjection(
++        publisher->app, request->Name, request->Directions, CamdBase);
++    if (publisher->projection == NULL) {
++        camd_app_endpoint_detach(publisher->app);
++        camd_legacy_driver_adapter_begin_retire(publisher->adapter);
++        publisher->withdrawn = TRUE;
++        reap_publishers(CamdBase);
++        result = CAMD_REGISTRY_NOMEM;
++        goto out;
++    }
+     handle->slot = i;
+     handle->generation = publisher->generation;
+     if (id != NULL)
+@@ -222,6 +234,8 @@ void WithdrawAppEndpoint(const struct CAMDHandleV1 *handle,
+     ObtainSemaphore(&base->EndpointClientSemaphore);
+     publisher = find_publisher(handle, CamdBase);
+     if (publisher != NULL) {
++        DeleteEndpointProjection(publisher->projection);
++        publisher->projection = NULL;
+         camd_app_endpoint_detach(publisher->app);
+         camd_legacy_driver_adapter_begin_retire(publisher->adapter);
+         publisher->withdrawn = TRUE;
+diff --git a/workbench/libs/camd/miditodriver.c b/workbench/libs/camd/miditodriver.c
+--- a/workbench/libs/camd/miditodriver.c
++++ b/workbench/libs/camd/miditodriver.c
+@@ -280,6 +280,10 @@ BOOL Midi2Driver_internal(
+ 	ULONG maxbuff
+ ){
+ 
++	if(driverdata->Projection!=NULL){
++		return ProjectMidiToEndpoint(driverdata,msg);
++	}
++
+ #ifdef __AMIGAOS__
+ 	if((driverdata->mididevicedata->Flags&1)==0){
+ 		return Midi2Driver_internal_oldformat(driverdata,msg,maxbuff);
+@@ -320,6 +324,10 @@ BOOL Midi2Driver_internal(
+ 
+ BOOL SysEx2Driver(struct DriverData *driverdata,UBYTE *buffer){
+ 
++	if(driverdata->Projection!=NULL){
++		return ProjectSysExToEndpoint(driverdata,buffer);
++	}
++
+ #ifdef __AMIGAOS__
+ 	if((driverdata->mididevicedata->Flags&1)==0){
+ 		return SysEx2Driver_oldformat(driverdata,buffer);
+diff --git a/workbench/libs/camd/mmakefile.src b/workbench/libs/camd/mmakefile.src
+--- a/workbench/libs/camd/mmakefile.src
++++ b/workbench/libs/camd/mmakefile.src
+@@ -12,7 +12,7 @@ FILES :=    drivers clusters init camdwait mididistr midifromdriver \
+ 	    legacy_driver_output_backend identity_map identity_file \
+ 	    identity_store_recovery identity_store_aros legacy_identity_key \
+ 	    legacy_identity_set driver_endpoints endpoint_client \
+-	    app_endpoint endpoint_publish
++	    app_endpoint endpoint_publish endpoint_projection
+ 
+ FUNCS := \
+     lockcamd \

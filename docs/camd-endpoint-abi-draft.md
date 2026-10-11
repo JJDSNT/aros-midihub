@@ -50,6 +50,12 @@ the newest messages and `GetEndpointMidi()` reports that once with
 Blocks, UMP, cancel, counters and timestamps (the event's time fields are
 carried but ignored).
 
+A published endpoint also appears as the legacy clusters `<name>.out.0` (what
+is sent there reaches `GetPublishedMidi()`) and `<name>.in.0` (which gets what
+`PutPublishedMidi()` and `PutPublishedSysEx()` send), so programs written for
+CAMD 41 reach it by linking. A legacy sender is never held up: when the
+publisher does not read, the newest messages are lost.
+
 The publishing functions are a deliberately small public provider surface:
 one endpoint, native MIDI 1.0, with CAMD owning the queues, the sessions and
 the object's lifetime. The private operations table that drivers use is not

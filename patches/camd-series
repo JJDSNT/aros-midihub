@@ -27,3 +27,4 @@ camd-endpoint-input
 camd-endpoint-watch
 camd-identity-unreadable
 camd-endpoint-publish
+camd-endpoint-projection
