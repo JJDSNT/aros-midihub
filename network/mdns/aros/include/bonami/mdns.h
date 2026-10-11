@@ -64,6 +64,12 @@
 #define MDNS_RegisterRef        (MDNS_Dummy + 11)  /* MDNSRegisterRef output */
 #define MDNS_BrowseRef          (MDNS_Dummy + 12)  /* MDNSBrowseRef output */
 #define MDNS_ResolveRef         (MDNS_Dummy + 13)  /* MDNSResolveRef output */
+#define MDNS_HostAddr           (MDNS_Dummy + 14)  /* ULONG IPv4, network order:
+                                                    * with MDNS_HostName,
+                                                    * registers for another
+                                                    * host (proxy) */
+#define MDNS_QueryRef           (MDNS_Dummy + 15)  /* MDNSQueryRef output */
+#define MDNS_Timeout            (MDNS_Dummy + 16)  /* ULONG seconds, LookupHostA */
 
 /* GetMDNSStatusA output counters (ti_Data = ULONG *) */
 #define MDNS_StatusRxPackets    (MDNS_Dummy + 20)  /* ULONG * RX datagram count */
@@ -87,6 +93,7 @@
 #define MEVENT_REMOVE           2
 #define MEVENT_RESOLVED         3
 #define MEVENT_RESOLVE_FAILED   4
+#define MEVENT_RECORD           5   /* QueryRecordA: one answer record */
 
 /*------------------------------------------------------------------------*/
 /* Return codes (0 = success, negative = MDNSERR_*) */
@@ -136,6 +143,24 @@ struct MDNSResolveMsg
 {
     ULONG                   rm_Code;    /* MEVENT_RESOLVED / MEVENT_RESOLVE_FAILED */
     struct MDNSServiceInstance rm_Instance;
+};
+
+/*
+ * QueryRecordA hook packet: one resource record that answers the question.
+ * Names inside the data of PTR and SRV records are written out in full, so
+ * the data can be read without the packet it came in.
+ */
+#define MDNS_MAX_RDATA          512
+
+struct MDNSRecordMsg
+{
+    ULONG   qm_Code;            /* MEVENT_RECORD */
+    char    qm_Name[256];       /* owner name, labels joined by '.' */
+    UWORD   qm_Type;            /* DNS record type */
+    UWORD   qm_Class;           /* DNS class, without the cache-flush bit */
+    ULONG   qm_TTL;             /* seconds; 0 withdraws the record */
+    UWORD   qm_Length;
+    UBYTE   qm_Data[MDNS_MAX_RDATA];
 };
 
 /*------------------------------------------------------------------------*/

@@ -38,8 +38,38 @@ Build from an AROS build tree:
 
 ```sh
 make contrib-aros-midihub-bonami contrib-aros-midihub-mdnsd
-make contrib-aros-midihub-mdnsprobe
+make contrib-aros-midihub-mdnstools contrib-aros-midihub-mdnsprobe
 ```
+
+## Additions to the Bonami API
+
+The AROS library is version 40.2 and adds, after the existing functions:
+
+| Addition | What it does |
+|---|---|
+| `LookupHostA(host, &addr, tags)` | Waits for a host's IPv4 address, at most `MDNS_Timeout` seconds (default 3). `addr` is in network byte order. A name without a dot is taken in `.local`. |
+| `QueryRecordA(name, rrtype, hook, tags)`, `StopQuery(ref)` | A standing question for any record. Each answer goes to the hook as a `struct MDNSRecordMsg`; names inside PTR and SRV data are written out in full. |
+| `MDNS_HostName` with `MDNS_HostAddr` in `RegisterServiceA()` | Registers a service for another host, which need not speak mDNS itself. |
+
+They close the three "dns-sd feature gaps" of Bonami's `TODO.md` and are
+meant to be offered to Bonami, not to stay an AROS dialect. mdnsd does not
+hear its own answers, so a question about one of this host's own services
+gets none; `LookupHostA()` does know this host's name.
+
+## Tools
+
+`tools/` holds Bonami's command-line front ends, ported from
+`SDK/Examples` of the pinned revision: `Nearby` (browse), `Handshake`
+(resolve), `Share` (advertise) and `dnssd`, which gains `-P`, `-q` and `-G`
+from the additions above. They install in `Extras/aros-midihub/C` for now.
+What changed for AROS is in `ba_common.h`: hooks are declared with
+`BA_HOOK()`, output goes through `VNewRawDoFmt()`, and addresses are printed
+byte by byte, so the same source builds for every AROS architecture.
+
+In the shell a `key=value` argument of `Share` needs quotes
+(`Share Name web 80 "path=/"`): `ReadArgs()` otherwise takes the `=` as a
+separator. Each pair becomes a TXT string of its own; a value cannot contain
+a space.
 
 `BonamiProbe` without arguments opens the engine and prints its counters.
 `BonamiProbe REGISTER name [TYPE type] [PORT n] [BROWSE type] [SECONDS n]`
@@ -48,8 +78,9 @@ announces an instance and prints what a browse reports.
 `tools/bonami-hosted.sh` runs it on Linux-hosted AROS against the host's
 Avahi over a veth pair and checks that each side resolves the other's
 service and that the host sees the AROS service leave when its program
-only closes the library, and that a name the host already has is taken as
-"Name (2)". It passed on 2026-10-11 on x86-64. It needs the AROS network
+only closes the library, that a name the host already has is taken as
+"Name (2)", and that each tool does its part: 13 checks. It passed on
+2026-10-11 on x86-64. It needs the AROS network
 patches in `patches/net-series`: before them AROSTCP delivered no IPv4
 multicast on a SANA-II interface and the hosted `eth.device` dropped it.
 

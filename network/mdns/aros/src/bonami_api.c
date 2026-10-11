@@ -12,6 +12,7 @@
 #include <proto/exec.h>
 #include <proto/utility.h>
 #include <aros/libcall.h>
+#include <aros/macros.h>
 #include <string.h>
 
 #include <bonami/mdns.h>
@@ -282,5 +283,67 @@ AROS_LH0(void, UnpublishNIPCEntitiesA,
 {
     AROS_LIBFUNC_INIT
     (void)BonamiBase;
+    AROS_LIBFUNC_EXIT
+}
+
+AROS_LH3(LONG, LookupHostA,
+    AROS_LHA(STRPTR, host, A0),
+    AROS_LHA(ULONG *, addr, A1),
+    AROS_LHA(struct TagItem *, tags, A2),
+    struct BonamiPrivate *, BonamiBase, 20, Bonami)
+{
+    AROS_LIBFUNC_INIT
+    struct MDNSIPCMsg msg;
+    LONG rc;
+
+    if (host == NULL || addr == NULL)
+        return MDNSERR_BADPARAM;
+    memset(&msg, 0, sizeof(msg));
+    msg.bim_Command = BONAMI_MSG_LOOKUP;
+    msg.bim_Flags = (ULONG)GetTagData(MDNS_Timeout, 3, tags);
+    strncpy(msg.bim_QName, host, sizeof(msg.bim_QName) - 1);
+    rc = MDNSSendIPC(BonamiBase, &msg);
+    if (rc == MDNS_OK)
+        *addr = AROS_LONG2BE(msg.bim_HostAddr);
+    return rc;
+    AROS_LIBFUNC_EXIT
+}
+
+AROS_LH4(LONG, QueryRecordA,
+    AROS_LHA(STRPTR, name, A0),
+    AROS_LHA(ULONG, rrtype, D0),
+    AROS_LHA(struct Hook *, hook, A1),
+    AROS_LHA(struct TagItem *, tags, A2),
+    struct BonamiPrivate *, BonamiBase, 21, Bonami)
+{
+    AROS_LIBFUNC_INIT
+    struct MDNSIPCMsg msg;
+    LONG rc;
+
+    if (name == NULL || hook == NULL || rrtype == 0 || rrtype > 0xffff)
+        return MDNSERR_BADPARAM;
+    memset(&msg, 0, sizeof(msg));
+    msg.bim_Command = BONAMI_MSG_QUERY;
+    msg.bim_Hook = hook;
+    msg.bim_Port = (UWORD)rrtype;
+    strncpy(msg.bim_QName, name, sizeof(msg.bim_QName) - 1);
+    rc = MDNSSendIPC(BonamiBase, &msg);
+    if (rc == MDNS_OK)
+        store_ref(tags, MDNS_QueryRef, msg.bim_Handle);
+    return rc;
+    AROS_LIBFUNC_EXIT
+}
+
+AROS_LH1(void, StopQuery,
+    AROS_LHA(MDNSQueryRef, ref, A0),
+    struct BonamiPrivate *, BonamiBase, 22, Bonami)
+{
+    AROS_LIBFUNC_INIT
+    struct MDNSIPCMsg msg;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.bim_Command = BONAMI_MSG_STOPQUERY;
+    msg.bim_Handle = ref;
+    MDNSSendIPC(BonamiBase, &msg);
     AROS_LIBFUNC_EXIT
 }

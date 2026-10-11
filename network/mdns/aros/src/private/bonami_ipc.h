@@ -14,7 +14,7 @@
 #include "private/bonami_limits.h"
 
 #define BONAMI_ENGINE_PORT  "BonAmi"
-#define BONAMI_IPC_VERSION  2
+#define BONAMI_IPC_VERSION  3
 
 #define BONAMI_MSG_REGISTER     1
 #define BONAMI_MSG_UNREGISTER   2
@@ -28,6 +28,10 @@
 #define BONAMI_MSG_SHUTDOWN     10
 #define BONAMI_MSG_INQUIRY      11
 #define BONAMI_MSG_RELEASE      12      /* drop everything bim_Task owns */
+#define BONAMI_MSG_LOOKUP       13      /* bim_QName -> bim_HostAddr; answered
+                                         * when known or after bim_Flags s */
+#define BONAMI_MSG_QUERY        14      /* bim_QName, bim_Port = record type */
+#define BONAMI_MSG_STOPQUERY    15
 
 struct MDNSIPCMsg
 {
@@ -42,6 +46,7 @@ struct MDNSIPCMsg
     char            bim_Domain[MDNS_MAX_DOMAIN + 1];
     char            bim_HostName[MDNS_MAX_HOST + 1];
     char            bim_TXT[MDNS_MAX_TXT + 1];
+    char            bim_QName[256];
     UWORD           bim_Port;
     UWORD           bim_Pad;
     ULONG           bim_HostAddr;

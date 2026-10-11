@@ -88,6 +88,7 @@ token_free(struct MDNSEngineToken *tok)
     free_list(&tok->et_InquirySessions, sizeof(struct MDNSInquirySession));
     free_list(&tok->et_Cache, sizeof(struct MDNSCacheEntry));
     free_list(&tok->et_Hosts, sizeof(struct MDNSHostEntry));
+    free_list(&tok->et_Queries, sizeof(struct MDNSQuerySession));
     if (tok->et_RxBuf != NULL) {
         FreeMem(tok->et_RxBuf, MDNS_MAX_PACKET);
     }
@@ -114,6 +115,8 @@ token_create(void)
     NewList(&tok->et_InquirySessions);
     NewList(&tok->et_Cache);
     NewList(&tok->et_Hosts);
+    NewList(&tok->et_Queries);
+    NewList(&tok->et_Lookups);
     tok->et_Socket = -1;
     tok->et_NextHandle = 1;
     tok->et_QueryId = 1;
@@ -270,20 +273,24 @@ main(void)
         }
 
         while ((msg = (struct MDNSIPCMsg *)GetMsg(port)) != NULL) {
-            MDNSEngineDispatch(tok, msg);
-            ReplyMsg(&msg->bim_Msg);
+            if (MDNSEngineDispatch(tok, msg)) {
+                ReplyMsg(&msg->bim_Msg);
+            }
         }
 
         probing = FALSE;
         if (running && tok->et_Socket >= 0) {
             MDNSEngineTick(tok);
             probing = mdnsRegTick(tok);
+        } else if (running) {
+            mdnsQueryTick(tok);     /* lookups still run out of time */
         }
     }
 
     /* No client may find the port any more; whoever already sent is told
      * that the engine is gone. */
     RemPort(port);
+    mdnsLookupAbort(tok);
     while ((msg = (struct MDNSIPCMsg *)GetMsg(port)) != NULL) {
         msg->bim_Result = MDNSERR_NOENGINE;
         ReplyMsg(&msg->bim_Msg);

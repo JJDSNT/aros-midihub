@@ -149,46 +149,52 @@ mdnsRegSendService(struct MDNSEngineToken *tok,
         DNS_TYPE_SRV, DNS_CLASS_IN | 0x8000, hostttl, srvdata,
         (UWORD)srvlen);
 
+    /*
+     * The client's text is "key=value" pairs separated by spaces; DNS-SD
+     * wants each pair as a string of its own (RFC 6763 section 6). An
+     * instance always has a TXT record: one empty string when it has nothing
+     * to say. A value cannot contain a space.
+     */
     txtlen = 0;
-    if (rs->rs_TXT[0] != '\0') {
-        /*
-         * A single DNS TXT character-string is length-prefixed by one byte, so
-         * it can hold at most 255 bytes.  Clamp before copying: an unclamped
-         * strcpy of a 256-byte rs_TXT would both overrun txtdata[] by one byte
-         * (heap/stack corruption) and truncate the length prefix to 0.
-         */
-        txtsl = (LONG)strlen(rs->rs_TXT);
-        if (txtsl > 255) {
-            txtsl = 255;
+    for (txtsl = 0; rs->rs_TXT[txtsl] != '\0'; ) {
+        LONG start, len;
+
+        while (rs->rs_TXT[txtsl] == ' ') {
+            txtsl++;
         }
-        txtdata[0] = (UBYTE)txtsl;
-        memcpy(txtdata + 1, rs->rs_TXT, (size_t)txtsl);
-        txtlen = 1 + txtsl;
-        mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, instfqdn,
-            DNS_TYPE_TXT, DNS_CLASS_IN | 0x8000, ttl, txtdata,
-            (UWORD)txtlen);
-    } else {
-        /* RFC 6763 section 6.1: an instance always has a TXT record; one
-         * empty string when it has nothing to say. */
-        txtdata[0] = 0;
-        mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, instfqdn,
-            DNS_TYPE_TXT, DNS_CLASS_IN | 0x8000, ttl, txtdata,
-            (UWORD)1);
+        start = txtsl;
+        while (rs->rs_TXT[txtsl] != '\0' && rs->rs_TXT[txtsl] != ' ') {
+            txtsl++;
+        }
+        len = txtsl - start;
+        if (len > 255) {
+            len = 255;
+        }
+        if (len > 0 && txtlen + 1 + len <= (LONG)sizeof(txtdata)) {
+            txtdata[txtlen++] = (UBYTE)len;
+            memcpy(txtdata + txtlen, rs->rs_TXT + start, (size_t)len);
+            txtlen += len;
+        }
     }
+    if (txtlen == 0) {
+        txtdata[txtlen++] = 0;
+    }
+    mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, instfqdn,
+        DNS_TYPE_TXT, DNS_CLASS_IN | 0x8000, ttl, txtdata, (UWORD)txtlen);
 
     /*
      * Advertise an A record mapping the host FQDN (the SRV target) to our IP,
      * so a resolver that receives this announcement can finish the lookup
-     * without a separate query.  et_HostAddr is the ULONG from gethostid()
+     * without a separate query.  rs_HostAddr is the host's address
      * arranged as 0xAABBCCDD == A.B.C.D; emit it big-endian to match the wire
      * order (and our own A-record decoder in mdns_browse.c).  Skip when the
      * address is unknown (0).
      */
-    if (tok->et_HostAddr != 0) {
-        addrdata[0] = (UBYTE)((tok->et_HostAddr >> 24) & 0xFF);
-        addrdata[1] = (UBYTE)((tok->et_HostAddr >> 16) & 0xFF);
-        addrdata[2] = (UBYTE)((tok->et_HostAddr >> 8) & 0xFF);
-        addrdata[3] = (UBYTE)(tok->et_HostAddr & 0xFF);
+    if (rs->rs_HostAddr != 0) {
+        addrdata[0] = (UBYTE)((rs->rs_HostAddr >> 24) & 0xFF);
+        addrdata[1] = (UBYTE)((rs->rs_HostAddr >> 16) & 0xFF);
+        addrdata[2] = (UBYTE)((rs->rs_HostAddr >> 8) & 0xFF);
+        addrdata[3] = (UBYTE)(rs->rs_HostAddr & 0xFF);
         mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, hostfqdn,
             DNS_TYPE_A, DNS_CLASS_IN | 0x8000, hostttl, addrdata,
             (UWORD)4);
@@ -537,6 +543,14 @@ MDNSEngineRegister(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
     rs->rs_Port = msg->bim_Port;
     rs->rs_HostAddr = tok->et_HostAddr;
     rs->rs_Task = msg->bim_Task;
+    if (msg->bim_HostName[0] != '\0' && msg->bim_HostAddr != 0) {
+        /* Announced on behalf of a host that does not speak mDNS itself. */
+        rs->rs_Proxy = TRUE;
+        mdnsRegBuildHostFqdn(rs->rs_HostTarget,
+            (LONG)sizeof(rs->rs_HostTarget), msg->bim_HostName,
+            MDNS_DOMAIN_LOCAL);
+        rs->rs_HostAddr = msg->bim_HostAddr;
+    }
 
     ref = mdnsEngineNextHandle(tok);
     rs->rs_ClientRef = ref;
@@ -631,9 +645,12 @@ mdnsRegHostChanged(struct MDNSEngineToken *tok)
     for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
         n = n->ln_Succ) {
         rs = (struct MDNSRegisteredService *)n;
-        mdnsRegBuildHostFqdn(rs->rs_HostTarget, (LONG)sizeof(rs->rs_HostTarget),
-        tok->et_HostName, MDNS_DOMAIN_LOCAL);
-        rs->rs_HostAddr = tok->et_HostAddr;
+        if (!rs->rs_Proxy) {
+            mdnsRegBuildHostFqdn(rs->rs_HostTarget,
+                (LONG)sizeof(rs->rs_HostTarget), tok->et_HostName,
+                MDNS_DOMAIN_LOCAL);
+            rs->rs_HostAddr = tok->et_HostAddr;
+        }
         if (rs->rs_State == MDNS_RS_ANNOUNCED) {
             mdnsBrowseAnnounceLocal(tok, rs);
         }

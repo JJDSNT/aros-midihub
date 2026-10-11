@@ -100,6 +100,7 @@ MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
         tok->et_RxAnswers++;
         mdnsRegHandleAnswerName(tok, r->name, srcaddr);
         mdnsBrowseHandleRecord(tok, r, pkt, pktlen);
+        mdnsQueryHandleRecord(tok, r, pkt, pktlen);
         offset += consumed;
     }
 
@@ -121,20 +122,22 @@ MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
         }
         mdnsRegHandleAnswerName(tok, r->name, srcaddr);
         mdnsBrowseHandleRecord(tok, r, pkt, pktlen);
+        mdnsQueryHandleRecord(tok, r, pkt, pktlen);
         offset += consumed;
     }
 }
 
-void
+/* Returns FALSE when the message is kept and answered later. */
+BOOL
 MDNSEngineDispatch(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
 {
     if (tok == NULL || msg == NULL) {
-        return;
+        return TRUE;
     }
 
     if (msg->bim_Version != BONAMI_IPC_VERSION) {
         msg->bim_Result = MDNSERR_BADPARAM;
-        return;
+        return TRUE;
     }
 
     switch (msg->bim_Command) {
@@ -142,6 +145,16 @@ MDNSEngineDispatch(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
         /* A client is gone: nothing of its may be announced or called. */
         MDNSEngineReleaseServices(tok, msg->bim_Task);
         MDNSEngineReleaseBrowses(tok, msg->bim_Task);
+        MDNSEngineReleaseQueries(tok, msg->bim_Task);
+        msg->bim_Result = MDNS_OK;
+        break;
+    case BONAMI_MSG_LOOKUP:
+        return MDNSEngineLookup(tok, msg);
+    case BONAMI_MSG_QUERY:
+        msg->bim_Result = MDNSEngineQuery(tok, msg);
+        break;
+    case BONAMI_MSG_STOPQUERY:
+        MDNSEngineStopQuery(tok, msg->bim_Handle);
         msg->bim_Result = MDNS_OK;
         break;
     case BONAMI_MSG_REGISTER:
@@ -177,6 +190,7 @@ MDNSEngineDispatch(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
         msg->bim_Result = MDNSERR_BADPARAM;
         break;
     }
+    return TRUE;
 }
 
 void
@@ -189,4 +203,5 @@ MDNSEngineTick(struct MDNSEngineToken *tok)
     MDNSEngineInquiryTick(tok);
     mdnsBrowseRetick(tok);
     mdnsCacheExpire(tok);
+    mdnsQueryTick(tok);
 }

@@ -201,7 +201,7 @@ mdnsBrowseNotifyAll(struct MDNSEngineToken *tok, struct MDNSCacheEntry *ce)
     ReleaseSemaphore(&tok->et_SessionLock);
 }
 
-static struct MDNSHostEntry *
+struct MDNSHostEntry *
 mdnsHostFind(struct MDNSEngineToken *tok, const char *name)
 {
     struct Node *n;
@@ -239,6 +239,7 @@ mdnsHostStore(struct MDNSEngineToken *tok, const char *name, ULONG addr)
     he->he_Name[MDNS_MAX_HOST] = '\0';
     he->he_Addr = addr;
     AddTail(&tok->et_Hosts, &he->he_Node);
+    mdnsLookupHostKnown(tok, name, addr);
 }
 
 /* Tells the browses of its type that an instance is gone and forgets it. */
@@ -550,13 +551,25 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
             }
         }
     } else if (r->type == DNS_TYPE_TXT && r->rdlength > 0) {
-        if (r->rdata[0] < r->rdlength) {
-            memcpy(newtxt, r->rdata + 1, (size_t)r->rdata[0]);
-            newtxt[r->rdata[0]] = '\0';
-            if (strcmp(ce->ce_TXT, newtxt) != 0) {
-                memcpy(ce->ce_TXT, newtxt, (size_t)r->rdata[0] + 1);
-                changed = TRUE;
+        /* The record's strings, joined by spaces, as a client gave them. */
+        LONG in = 0, out = 0, len;
+
+        while (in < r->rdlength) {
+            len = r->rdata[in++];
+            if (in + len > r->rdlength || out + len + 1 > MDNS_MAX_TXT) {
+                break;
             }
+            if (len > 0 && out > 0) {
+                newtxt[out++] = ' ';
+            }
+            memcpy(newtxt + out, r->rdata + in, (size_t)len);
+            out += len;
+            in += len;
+        }
+        newtxt[out] = '\0';
+        if (strcmp(ce->ce_TXT, newtxt) != 0) {
+            strcpy(ce->ce_TXT, newtxt);
+            changed = TRUE;
         }
     } else {
         return;
@@ -797,7 +810,15 @@ MDNSEngineResolve(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
 
     ce = mdnsCacheFind(tok, msg->bim_Name, msg->bim_ServiceType);
     if (ce == NULL) {
+        char fqdn[256];
+
         mdnsBrowseSendQuery(tok, msg->bim_ServiceType, TRUE);
+        strncpy(fqdn, msg->bim_Name, sizeof(fqdn) - 1);
+        fqdn[sizeof(fqdn) - 1] = '\0';
+        strncat(fqdn, ".", sizeof(fqdn) - 1 - strlen(fqdn));
+        strncat(fqdn, msg->bim_ServiceType, sizeof(fqdn) - 1 - strlen(fqdn));
+        strncat(fqdn, "." MDNS_DOMAIN_LOCAL, sizeof(fqdn) - 1 - strlen(fqdn));
+        mdnsSendQuestion(tok, fqdn, DNS_TYPE_ANY, FALSE);
         return MDNSERR_NOTFOUND;
     }
 

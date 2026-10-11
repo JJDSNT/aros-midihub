@@ -52,6 +52,7 @@ struct MDNSRegisteredService
     UWORD           rs_Step;        /* probes or announcements sent so far */
     ULONG           rs_NextTick;    /* mdnsEngineTicks() of the next step */
     ULONG           rs_Answered;    /* et_PacketSerial it last answered */
+    BOOL            rs_Proxy;       /* host and address given by the client */
     ULONG           rs_HostAddr;
 };
 
@@ -119,6 +120,20 @@ struct MDNSCacheEntry
     ULONG           ce_Expire;
 };
 
+/* A QueryRecordA question: every record that answers it goes to the hook. */
+struct MDNSQuerySession
+{
+    struct Node     qs_Node;
+    APTR            qs_Ref;
+    char            qs_Name[256];
+    UWORD           qs_Type;
+    UWORD           qs_Pad;
+    struct Hook    *qs_Hook;
+    struct Task    *qs_Task;
+    ULONG           qs_LastQuery;
+    ULONG           qs_Interval;
+};
+
 /* A host's address, kept apart from the instances: the address record may
  * arrive before the SRV record that names the host. */
 #define MDNS_HOSTS_MAX          64
@@ -161,6 +176,8 @@ struct MDNSEngineToken
     struct List             et_InquirySessions;
     struct List             et_Cache;
     struct List             et_Hosts;
+    struct List             et_Queries;
+    struct List             et_Lookups;     /* MDNSIPCMsg not yet answered */
     ULONG                   et_HostCount;
     struct SignalSemaphore  et_ServiceLock;
     struct SignalSemaphore  et_SessionLock;
@@ -172,7 +189,7 @@ struct MDNSEngineToken
     UWORD                   et_Pad;
 };
 
-void MDNSEngineDispatch(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
+BOOL MDNSEngineDispatch(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
 void MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
     const UBYTE *pkt, LONG pktlen, ULONG srcaddr);
 void MDNSEngineTick(struct MDNSEngineToken *tok);
@@ -209,6 +226,19 @@ void mdnsSendQuestion(struct MDNSEngineToken *tok, const char *name,
     UWORD qtype, BOOL unicast);
 void mdnsBrowseRetick(struct MDNSEngineToken *tok);
 void mdnsCacheExpire(struct MDNSEngineToken *tok);
+struct MDNSHostEntry *mdnsHostFind(struct MDNSEngineToken *tok,
+    const char *name);
+
+BOOL MDNSEngineLookup(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
+void mdnsLookupHostKnown(struct MDNSEngineToken *tok, const char *name,
+    ULONG addr);
+void mdnsLookupAbort(struct MDNSEngineToken *tok);
+LONG MDNSEngineQuery(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
+void MDNSEngineStopQuery(struct MDNSEngineToken *tok, APTR ref);
+void MDNSEngineReleaseQueries(struct MDNSEngineToken *tok, struct Task *task);
+void mdnsQueryHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
+    const UBYTE *pkt, LONG pktlen);
+void mdnsQueryTick(struct MDNSEngineToken *tok);
 void mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
     const UBYTE *pkt, LONG pktlen);
 void mdnsBrowseFireHook(struct MDNSEngineToken *tok, struct MDNSBrowseSession *bs,

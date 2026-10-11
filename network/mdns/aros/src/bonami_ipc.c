@@ -13,6 +13,7 @@
 
 #include <proto/exec.h>
 #include <proto/utility.h>
+#include <aros/macros.h>
 
 #include <bonami/mdns.h>
 #include "private/bonami_internal.h"
@@ -57,6 +58,8 @@ MDNSTagsToRegisterMsg(struct TagItem *tags, struct MDNSIPCMsg *msg)
     msg->bim_ServiceType[0] = '\0';
     msg->bim_TXT[0] = '\0';
     msg->bim_Port = 0;
+    msg->bim_HostName[0] = '\0';
+    msg->bim_HostAddr = 0;
     strcpy(msg->bim_Domain, MDNS_DOMAIN_LOCAL);
 
     cur = tags;
@@ -85,6 +88,17 @@ MDNSTagsToRegisterMsg(struct TagItem *tags, struct MDNSIPCMsg *msg)
                 strncpy(msg->bim_TXT, s, MDNS_MAX_TXT);
                 msg->bim_TXT[MDNS_MAX_TXT] = '\0';
             }
+            break;
+        case MDNS_HostName:
+            s = (STRPTR)tag->ti_Data;
+            if (s != NULL) {
+                strncpy(msg->bim_HostName, s, MDNS_MAX_HOST);
+                msg->bim_HostName[MDNS_MAX_HOST] = '\0';
+            }
+            break;
+        case MDNS_HostAddr:
+            /* the engine keeps addresses as 0xAABBCCDD == A.B.C.D */
+            msg->bim_HostAddr = AROS_BE2LONG((ULONG)tag->ti_Data);
             break;
         case MDNS_Domain:
             s = (STRPTR)tag->ti_Data;

@@ -18,6 +18,7 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-btmidi \
 #MM      contrib-aros-midihub-bonami \
 #MM      contrib-aros-midihub-mdnsd \
+#MM      contrib-aros-midihub-mdnstools \
 #MM      contrib-aros-midihub-mdnsprobe
 #MM contrib-aros-midihub-program : linklibs-arosmidihub
 #MM contrib-aros-midihub-selftest : linklibs-arosmidihub
@@ -61,6 +62,7 @@ MDNSD_FILES := \
     $(BONAMI_SRC)/mdns_engine \
     $(BONAMI_SRC)/mdns_reg \
     $(BONAMI_SRC)/mdns_browse \
+    $(BONAMI_SRC)/mdns_query \
     $(BONAMI_SRC)/mdns_inquiry_stub
 
 # Incubating system mDNS/DNS-SD library. It installs in LIBS: for package
@@ -106,6 +108,33 @@ contrib-aros-midihub-bonami-clean ::
 %copy_files_q mmake=contrib-aros-midihub-mdnsd-svccfg \
     files="mdns" src=$(BONAMI_AROS)/services.d \
     dst=$(AROS_SYSTEM)/Network/AROSTCP/db/services.d
+
+# Bonami's command-line tools, ported from its SDK examples.
+BONAMI_TOOLS := $(BONAMI_AROS)/tools
+BONAMI_TOOL_CFLAGS := -Wall -Wextra -Wno-unused-parameter -Wno-pointer-sign
+
+#MM- contrib-aros-midihub-mdnstools : \
+#MM      contrib-aros-midihub-mdnstools-nearby \
+#MM      contrib-aros-midihub-mdnstools-handshake \
+#MM      contrib-aros-midihub-mdnstools-share \
+#MM      contrib-aros-midihub-mdnstools-dnssd
+#MM contrib-aros-midihub-mdnstools-nearby : contrib-aros-midihub-bonami
+#MM contrib-aros-midihub-mdnstools-handshake : contrib-aros-midihub-bonami
+#MM contrib-aros-midihub-mdnstools-share : contrib-aros-midihub-bonami
+#MM contrib-aros-midihub-mdnstools-dnssd : contrib-aros-midihub-bonami
+
+%build_prog mmake=contrib-aros-midihub-mdnstools-nearby progname=Nearby \
+    files="$(BONAMI_TOOLS)/nearby $(BONAMI_TOOLS)/ba_common $(BONAMI_TOOLS)/ba_types" \
+    targetdir=$(MIDIHUB_PACKAGE)/C cflags="$(BONAMI_TOOL_CFLAGS)"
+%build_prog mmake=contrib-aros-midihub-mdnstools-handshake progname=Handshake \
+    files="$(BONAMI_TOOLS)/handshake $(BONAMI_TOOLS)/ba_common $(BONAMI_TOOLS)/ba_types" \
+    targetdir=$(MIDIHUB_PACKAGE)/C cflags="$(BONAMI_TOOL_CFLAGS)"
+%build_prog mmake=contrib-aros-midihub-mdnstools-share progname=Share \
+    files="$(BONAMI_TOOLS)/share $(BONAMI_TOOLS)/ba_common $(BONAMI_TOOLS)/ba_types" \
+    targetdir=$(MIDIHUB_PACKAGE)/C cflags="$(BONAMI_TOOL_CFLAGS)"
+%build_prog mmake=contrib-aros-midihub-mdnstools-dnssd progname=dnssd \
+    files="$(BONAMI_TOOLS)/dnssd $(BONAMI_TOOLS)/ba_common" \
+    targetdir=$(MIDIHUB_PACKAGE)/C cflags="$(BONAMI_TOOL_CFLAGS)"
 
 #MM contrib-aros-midihub-mdnsprobe : \
 #MM      contrib-aros-midihub-bonami
