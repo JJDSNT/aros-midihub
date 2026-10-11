@@ -285,3 +285,16 @@ The private endpoint core also compiles with the existing hosted
 The patch was generated and `git apply --check` verified against a clean
 worktree containing the preceding thirteen patches; the worktree itself is
 disposable and is not a build dependency.
+
+## Network patches
+
+`patches/net-series` lists patches that are independent of CAMD and of each
+other in purpose. `make check-patches` applies both series. They were found
+while running Bonami on hosted AROS (`tools/bonami-hosted.sh`).
+
+| Patch | What it fixes |
+|---|---|
+| `aros-arostcp-netdb-unknown-keyword.patch` | An unknown keyword in a netdb file crashed the stack: `FindArg()`'s -1 was kept in an enum the compiler made unsigned and then used as an index into the table of parsers. |
+| `aros-eth-unix-multicast.patch` | The hosted `eth.device` dropped every received multicast frame and refused `S2_MULTICAST`, `S2_ADDMULTICASTADDRESS` and `S2_DELMULTICASTADDRESS`. The host interface is opened promiscuous, so there is no filter to program. |
+| `aros-arostcp-ipv4-multicast.patch` | IPv4 multicast on a SANA-II interface. `IFF_MULTICAST` was never set, and its bit was used for a private flag, now in `ss_cflags`; a group had no Ethernet address (RFC 1112 section 6.4); `ip_input()` had no case for a joined group; and a sender that chose its interface with `IP_MULTICAST_IF` still needed a route. |
+

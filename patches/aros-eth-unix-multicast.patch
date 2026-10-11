@@ -1,0 +1,56 @@
+diff --git a/arch/all-unix/devs/networks/eth/command.c b/arch/all-unix/devs/networks/eth/command.c
+--- a/arch/all-unix/devs/networks/eth/command.c
++++ b/arch/all-unix/devs/networks/eth/command.c
+@@ -18,6 +18,9 @@ static const UWORD eth_supported_commands[] = {
+     S2_ONLINE,
+     S2_OFFLINE,
+     S2_BROADCAST,
++    S2_MULTICAST,
++    S2_ADDMULTICASTADDRESS,
++    S2_DELMULTICASTADDRESS,
+     CMD_READ,
+     CMD_WRITE,
+     CMD_FLUSH,
+@@ -319,6 +322,26 @@ void eth_handle_request(struct IOSana2Req *req) {
+             completed = eth_broadcast(req, unit);
+             break;
+ 
++        case S2_MULTICAST:
++            /* the caller filled in the group's address: write as normal */
++            D(bug("[eth] [%d] S2_MULTICAST\n", unit->num));
++            completed = eth_write(req, unit);
++            break;
++
++        case S2_ADDMULTICASTADDRESS:
++        case S2_DELMULTICASTADDRESS:
++            /* the host interface is opened promiscuous, so every group
++             * already arrives and there is no filter to program. the
++             * address must still be a multicast one */
++            D(bug("[eth] [%d] S2_%sMULTICASTADDRESS\n", unit->num,
++                  req->ios2_Req.io_Command == S2_ADDMULTICASTADDRESS ? "ADD" : "DEL"));
++            if ((req->ios2_SrcAddr[0] & 0x1) == 0) {
++                req->ios2_Req.io_Error = S2ERR_BAD_ADDRESS;
++                req->ios2_WireError = S2WERR_BAD_MULTICAST;
++            }
++            completed = TRUE;
++            break;
++
+         case S2_TRACKTYPE:
+             D(bug("[eth] [%d] S2_TRACKTYPE\n", unit->num));
+             completed = eth_track_type(req, unit);
+diff --git a/arch/all-unix/devs/networks/eth/iotask.c b/arch/all-unix/devs/networks/eth/iotask.c
+--- a/arch/all-unix/devs/networks/eth/iotask.c
++++ b/arch/all-unix/devs/networks/eth/iotask.c
+@@ -70,12 +70,6 @@ static void eth_receive(struct eth_base *ETHBase, struct eth_unit *unit)
+         mcast = TRUE;
+     }
+ 
+-    /* drop multicast packets (until we have support for them) */
+-    if (mcast) {
+-        D(bug("[eth] [io:%d] no support for multicast packets, dropping it\n", unit->num));
+-        return;
+-    }
+-
+     /* now we loop through our openers, seeing if anyone wants the packet */
+     ForeachNodeSafe(&(unit->openers), opener, opener_next) {
+ 

@@ -86,8 +86,21 @@ mdnsNetOpen(struct MDNSEngineToken *tok)
 
     memset(&mreq, 0, sizeof(mreq));
     mreq.imr_multiaddr.s_addr = inet_addr(MDNS_MCAST_ADDR);
-    mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-    setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *)&mreq, sizeof(mreq));
+    /*
+     * Join and send on the interface that owns the host's primary address.
+     * With INADDR_ANY the stack picks the interface from its route to the
+     * group, and a host without a default route has none.
+     */
+    mreq.imr_interface.s_addr = (in_addr_t)gethostid();
+    if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *)&mreq,
+            sizeof(mreq)) < 0) {
+        baDbgPutLong("bonami: mdnsNetOpen join failed errno=%ld\n",
+            (LONG)Errno());
+    }
+    if (mreq.imr_interface.s_addr != htonl(INADDR_ANY)) {
+        setsockopt(sock, IPPROTO_IP, IP_MULTICAST_IF,
+            (char *)&mreq.imr_interface, sizeof(mreq.imr_interface));
+    }
 
     on = 255;
     setsockopt(sock, IPPROTO_IP, IP_MULTICAST_TTL, (char *)&on, sizeof(on));
@@ -104,7 +117,9 @@ mdnsNetOpen(struct MDNSEngineToken *tok)
 #endif
 
     tok->et_Socket = (LONG)sock;
-    tok->et_HostAddr = (ULONG)gethostid();
+    /* gethostid() is in network byte order; the engine keeps addresses as
+     * 0xAABBCCDD == A.B.C.D. */
+    tok->et_HostAddr = (ULONG)ntohl((unsigned long)gethostid());
 
     tok->et_HostName[0] = '\0';
     if (gethostname(tok->et_HostName, MDNS_MAX_HOST) != 0) {
@@ -170,7 +185,7 @@ mdnsNetSendMulticast(struct MDNSEngineToken *tok, const UBYTE *pkt, LONG pktlen)
     }
 
     SocketBase = tok->et_SocketBase;
-    mcast = (ULONG)inet_addr(MDNS_MCAST_ADDR);
+    mcast = (ULONG)ntohl((unsigned long)inet_addr(MDNS_MCAST_ADDR));
     /*
      * The destination is always the well-known mDNS group port (5353); only
      * our own source/bind port is ephemeral.  Sending queries to 5353 from a

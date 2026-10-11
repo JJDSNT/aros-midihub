@@ -49,8 +49,9 @@ mdnsRegBuildTypeFqdn(char *buf, LONG buflen, const char *type, const char *domai
  * Build the host's fully-qualified name for the SRV target and A record.  The
  * engine stores only the bare host label (e.g. "amiga1" from gethostname());
  * wire-encoding that alone yields "amiga1." (one label + root), which is not
- * resolvable.  Append the mDNS domain to make "amiga1.local" unless the host
- * name already carries a dotted domain.
+ * resolvable.  Append the mDNS domain to make "amiga1.local".  A host name
+ * with a unicast DNS domain ("amiga1.example.org") keeps only its first
+ * label: a name answered over mDNS must be in the mDNS domain.
  */
 static void
 mdnsRegBuildHostFqdn(char *buf, LONG buflen, const char *host,
@@ -61,10 +62,11 @@ mdnsRegBuildHostFqdn(char *buf, LONG buflen, const char *host,
     }
     strncpy(buf, host, buflen - 1);
     buf[buflen - 1] = '\0';
-    if (strchr(buf, '.') == NULL) {
-        strncat(buf, ".", buflen - 1 - strlen(buf));
-        strncat(buf, domain, buflen - 1 - strlen(buf));
+    if (strchr(buf, '.') != NULL) {
+        *strchr(buf, '.') = '\0';
     }
+    strncat(buf, ".", buflen - 1 - strlen(buf));
+    strncat(buf, domain, buflen - 1 - strlen(buf));
 }
 
 static LONG
@@ -131,8 +133,10 @@ mdnsRegAnnounceService(struct MDNSEngineToken *tok, struct MDNSRegisteredService
     if (mdnsNameToWire(instfqdn, ptrtarget, (LONG)sizeof(ptrtarget), &ptrlen) != 0) {
         return;
     }
+    /* A PTR record is shared by every instance of the type, so it must not
+     * carry the cache-flush bit (RFC 6762 section 10.2). */
     mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, typefqdn,
-        DNS_TYPE_PTR, DNS_CLASS_IN | 0x8000, MDNS_DEFAULT_TTL, ptrtarget,
+        DNS_TYPE_PTR, DNS_CLASS_IN, MDNS_DEFAULT_TTL, ptrtarget,
         (UWORD)ptrlen);
 
     srvlen = mdnsRegAppendSrv(srvdata, hostwire, hostwirelen, rs->rs_Port);
@@ -158,6 +162,13 @@ mdnsRegAnnounceService(struct MDNSEngineToken *tok, struct MDNSRegisteredService
         mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, instfqdn,
             DNS_TYPE_TXT, DNS_CLASS_IN | 0x8000, MDNS_DEFAULT_TTL, txtdata,
             (UWORD)txtlen);
+    } else {
+        /* RFC 6763 section 6.1: an instance always has a TXT record; one
+         * empty string when it has nothing to say. */
+        txtdata[0] = 0;
+        mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, instfqdn,
+            DNS_TYPE_TXT, DNS_CLASS_IN | 0x8000, MDNS_DEFAULT_TTL, txtdata,
+            (UWORD)1);
     }
 
     /*

@@ -1,0 +1,220 @@
+diff --git a/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_netdb.c b/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_netdb.c
+--- a/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_netdb.c
++++ b/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_netdb.c
+@@ -766,7 +766,7 @@ addifent(struct NetDataBase *ndb,
+                 if(ssc->args->a_ip) {
+                     if(!ssc->args->a_up) {
+                         DIFCONF(Printf("> No auto-online\n");)
+-                        ifp->if_flags |= IFF_NOUP;
++                        ((struct sana_softc *)ifp)->ss_cflags |= SSF_NOUP;
+                     }
+                     DIFCONF(Printf("> IP address: %s\n", ssc->args->a_ip);)
+                     if(stricmp(ssc->args->a_ip, "DHCP") == 0) {
+@@ -776,7 +776,7 @@ addifent(struct NetDataBase *ndb,
+                             if(api_state == API_SHOWN)
+                                 run_dhclient(ifp);
+                             else
+-                                ifp->if_flags |= IFF_DELAYUP;
++                                ((struct sana_softc *)ifp)->ss_cflags |= SSF_DELAYUP;
+                         }
+                     } else if(stricmp(ssc->args->a_ip, "AUTO") == 0) {
+                         /* Automatic: use IPv4LL (RFC 3927) to assign 169.254.x.x */
+@@ -786,7 +786,7 @@ addifent(struct NetDataBase *ndb,
+                             if(api_state == API_SHOWN)
+                                 autoip_start(ifp);
+                             else
+-                                ifp->if_flags |= IFF_DELAYUP;
++                                ((struct sana_softc *)ifp)->ss_cflags |= SSF_DELAYUP;
+                         }
+                     } else {
+                         ifp->if_data.ifi_aros_usedhcp = 0;
+@@ -823,7 +823,7 @@ addifent(struct NetDataBase *ndb,
+                         if(api_state == API_SHOWN)
+                             run_dhclient6(ifp);
+                         else
+-                            ifp->if_flags |= IFF_DELAYUP;
++                            ((struct sana_softc *)ifp)->ss_cflags |= SSF_DELAYUP;
+                     }
+ #endif
+                 } else {
+diff --git a/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_dhcp.c b/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_dhcp.c
+--- a/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_dhcp.c
++++ b/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_dhcp.c
+@@ -45,8 +45,11 @@ void run_dhcp(void)
+     struct ifnet *ifp;
+ 
+     for(ifp = ifnet; ifp; ifp = ifp->if_next) {
+-        if(ifp->if_flags & IFF_DELAYUP) {
+-            ifp->if_flags &= ~IFF_DELAYUP;
++        /* only a SANA-II interface is ever marked */
++        if(ifp->if_output != sana_output)
++            continue;
++        if(((struct sana_softc *)ifp)->ss_cflags & SSF_DELAYUP) {
++            ((struct sana_softc *)ifp)->ss_cflags &= ~SSF_DELAYUP;
+             if(!ifp->if_data.ifi_aros_usedhcp &&
+                     ((struct sana_softc *)ifp)->ss_ipaddr.s_addr == INADDR_ANY)
+                 autoip_start(ifp);  /* no DHCPv4 and no address assigned */
+diff --git a/workbench/network/stacks/AROSTCP/bsdsocket/net/if_sana.c b/workbench/network/stacks/AROSTCP/bsdsocket/net/if_sana.c
+--- a/workbench/network/stacks/AROSTCP/bsdsocket/net/if_sana.c
++++ b/workbench/network/stacks/AROSTCP/bsdsocket/net/if_sana.c
+@@ -858,9 +858,9 @@ sana_ioctl(register struct ifnet *ifp, int cmd, caddr_t data)
+          * does not mean sana_up() (CmdOnline + CmdRead) has been called.
+          */
+         if((ssc->ss_if.if_flags & IFF_DRV_RUNNING) && (ssc->ss_ip.sent == 0)) {
+-            if(ssc->ss_if.if_flags & IFF_NOUP) {
++            if(ssc->ss_cflags & SSF_NOUP) {
+                 D(bug("[AROSTCP:SANA] %s: SIFADDR Clearing interface NOUP flag .. \n", __func__));
+-                ssc->ss_if.if_flags &= ~IFF_NOUP;
++                ssc->ss_cflags &= ~SSF_NOUP;
+             } else {
+                 D(bug("[AROSTCP:SANA] %s: SIFADDR bringing interface UP .. \n", __func__));
+                 sana_up(ssc);
+@@ -891,9 +891,9 @@ sana_ioctl(register struct ifnet *ifp, int cmd, caddr_t data)
+             sana_run(ssc, ssc->ss_reqno, ifa);
+         }
+         if((ssc->ss_if.if_flags & IFF_DRV_RUNNING) && (ssc->ss_ip.sent == 0)) {
+-            if(ssc->ss_if.if_flags & IFF_NOUP) {
++            if(ssc->ss_cflags & SSF_NOUP) {
+                 D(bug("[AROSTCP:SANA] %s: SIOCAIFADDR_IN6 Clearing interface NOUP flag ..\n", __func__));
+-                ssc->ss_if.if_flags &= ~IFF_NOUP;
++                ssc->ss_cflags &= ~SSF_NOUP;
+             } else {
+                 D(bug("[AROSTCP:SANA] %s: SIOCAIFADDR_IN6 bringing interface UP ..\n", __func__));
+                 sana_up(ssc);
+diff --git a/workbench/network/stacks/AROSTCP/bsdsocket/net/if_sana.h b/workbench/network/stacks/AROSTCP/bsdsocket/net/if_sana.h
+--- a/workbench/network/stacks/AROSTCP/bsdsocket/net/if_sana.h
++++ b/workbench/network/stacks/AROSTCP/bsdsocket/net/if_sana.h
+@@ -141,13 +141,16 @@ struct sana_softc {
+ #define SSF_TRACK (1<<0)	      /* Should we track packets? */
+ #define SSB_TRACK 0
+ 
++/*
++ * Set while the interface is being configured. They are not in if_flags:
++ * every bit there has a meaning of its own (0x8000 is IFF_MULTICAST).
++ */
++#define SSF_NOUP    (1<<1)	      /* do not put online with the address */
++#define SSF_DELAYUP (1<<2)	      /* configure once the API is shown */
++
+ /* Default configuration flags */
+ #define SS_CFLAGS (SSF_TRACK)
+ 
+-/* Private Interface Config flags */
+-#define IFF_NOUP     0x8000
+-#define IFF_DELAYUP  0x4000
+-
+ /*
+  * Global functions defined in if_sana.c
+  */
+diff --git a/workbench/network/stacks/AROSTCP/bsdsocket/net/sana2arp.c b/workbench/network/stacks/AROSTCP/bsdsocket/net/sana2arp.c
+--- a/workbench/network/stacks/AROSTCP/bsdsocket/net/sana2arp.c
++++ b/workbench/network/stacks/AROSTCP/bsdsocket/net/sana2arp.c
+@@ -585,6 +585,23 @@ arpresolve(register struct sana_softc *ssc,
+         return 1;
+     }
+ 
++    /*
++     * A group has no ARP entry: RFC 1112 section 6.4 gives its Ethernet
++     * address, 01:00:5e and the low 23 bits of the group.
++     */
++    if(ssc->ss_hwtype == S2WireType_Ethernet &&
++            IN_MULTICAST(ntohl(destip->s_addr))) {
++        u_long group = ntohl(destip->s_addr);
++
++        desten[0] = 0x01;
++        desten[1] = 0x00;
++        desten[2] = 0x5e;
++        desten[3] = (group >> 16) & 0x7f;
++        desten[4] = (group >> 8) & 0xff;
++        desten[5] = group & 0xff;
++        return 1;
++    }
++
+     /* if for us, use software loopback driver if up */
+     for(register struct in_ifaddr *ia = in_ifaddr; ia; ia = ia->ia_next)
+         if((ia->ia_ifp == &ssc->ss_if) &&
+diff --git a/workbench/network/stacks/AROSTCP/bsdsocket/net/sana2config.c b/workbench/network/stacks/AROSTCP/bsdsocket/net/sana2config.c
+--- a/workbench/network/stacks/AROSTCP/bsdsocket/net/sana2config.c
++++ b/workbench/network/stacks/AROSTCP/bsdsocket/net/sana2config.c
+@@ -160,14 +160,14 @@ static const struct wire_defaults {
+     WORD  wd_arphdr;		/* ARP hardware type */
+     LONG  wd_ip6type;		/* IPv6 packet type (0 = no IPv6) */
+     WORD  wd_ip6no;		/* minimum IPv6 read requests */
+-    WORD  wd_ifflags;		/* Interface flags */
++    UWORD wd_ifflags;		/* Interface flags */
+ } wire_defaults[] = {
+     {
+         S2WireType_Ethernet,
+         ETHERTYPE_IP, 16, SANA2_DEF_WRITENO,
+         ETHERTYPE_ARP, 4, 1,
+         ETHERTYPE_IPV6, 16,
+-        IFF_BROADCAST | IFF_SIMPLEX,
++        IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST,
+     },
+     {
+         S2WireType_Arcnet,
+@@ -203,7 +203,7 @@ static const struct wire_defaults {
+         ETHERTYPE_IP, 16, SANA2_DEF_WRITENO,
+         ETHERTYPE_ARP, 4, 1,
+         ETHERTYPE_IPV6, 16,
+-        IFF_BROADCAST | IFF_SIMPLEX,
++        IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST,
+     },
+ };
+ 
+diff --git a/workbench/network/stacks/AROSTCP/bsdsocket/netinet/ip_input.c b/workbench/network/stacks/AROSTCP/bsdsocket/netinet/ip_input.c
+--- a/workbench/network/stacks/AROSTCP/bsdsocket/netinet/ip_input.c
++++ b/workbench/network/stacks/AROSTCP/bsdsocket/netinet/ip_input.c
+@@ -80,7 +80,7 @@
+ #include <netinet/in_systm.h>
+ #include <netinet/ip.h>
+ #include <netinet/in_pcb.h>
+-#include <netinet/in_var.h>
++#include "in_var.h"
+ #include <netinet/ip_var.h>
+ #include <netinet/ip_icmp.h>
+ 
+@@ -335,6 +335,23 @@ next:
+                 goto ours;
+         }
+     }
++#ifdef ENABLE_MULTICAST
++    if(IN_MULTICAST(ntohl(ip->ip_dst.s_addr))) {
++        struct in_multi *inm;
++
++        /*
++         * A group is ours if a socket joined it on the interface the
++         * packet arrived on. This host does not forward multicast.
++         */
++        IN_LOOKUP_MULTI(ip->ip_dst, m->m_pkthdr.rcvif, inm);
++        if(inm == NULL) {
++            ipstat.ips_cantforward++;
++            m_freem(m);
++            goto next;
++        }
++        goto ours;
++    }
++#endif
+     if(ip->ip_dst.s_addr == (u_long)INADDR_BROADCAST)
+         goto ours;
+     if(ip->ip_dst.s_addr == INADDR_ANY)
+diff --git a/workbench/network/stacks/AROSTCP/bsdsocket/netinet/ip_output.c b/workbench/network/stacks/AROSTCP/bsdsocket/netinet/ip_output.c
+--- a/workbench/network/stacks/AROSTCP/bsdsocket/netinet/ip_output.c
++++ b/workbench/network/stacks/AROSTCP/bsdsocket/netinet/ip_output.c
+@@ -243,6 +243,17 @@ int	STKARGFUN ip_output(void *args, ...)
+         }
+         ifp = ia->ia_ifp;
+         ip->ip_ttl = 1;
++#ifdef ENABLE_MULTICAST
++    } else if(IN_MULTICAST(ntohl(ip->ip_dst.s_addr)) && imo != NULL &&
++              imo->imo_multicast_ifp != NULL) {
++        /*
++         * The sender chose the interface with IP_MULTICAST_IF, so the
++         * group needs no route. A host with no default route can then
++         * still send to the link.
++         */
++        ifp = imo->imo_multicast_ifp;
++        IFP_TO_IA(ifp, ia);
++#endif
+     } else {
+         if(ro->ro_rt == 0)
+             rtalloc(ro);

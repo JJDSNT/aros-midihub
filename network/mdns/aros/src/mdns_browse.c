@@ -13,6 +13,8 @@
 #include <proto/exec.h>
 #include <proto/utility.h>
 
+#include <netinet/in.h>
+
 #include <bonami/mdns.h>
 #include "private/mdns_engine.h"
 #include "private/mdns_dns.h"
@@ -153,7 +155,7 @@ mdnsBrowseFireHook(struct MDNSEngineToken *tok, struct MDNSBrowseSession *bs,
     strncpy(msg.bm_Instance.si_Type, ce->ce_Type, MDNS_MAX_TYPE);
     strcpy(msg.bm_Instance.si_Domain, MDNS_DOMAIN_LOCAL);
     strncpy(msg.bm_Instance.si_HostName, ce->ce_Host, MDNS_MAX_HOST);
-    msg.bm_Instance.si_HostAddr = ce->ce_HostAddr;
+    msg.bm_Instance.si_HostAddr = htonl(ce->ce_HostAddr);
     msg.bm_Instance.si_Port = ce->ce_Port;
     msg.bm_Instance.si_TXTLength = (UWORD)strlen(ce->ce_TXT);
     strncpy((char *)msg.bm_Instance.si_TXT, ce->ce_TXT, MDNS_MAX_TXT);
@@ -341,7 +343,37 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
         return;
     }
 
-    /* SRV / TXT / A: owner name is "instance.<type>.local". */
+    /*
+     * An address record is owned by a host, not by an instance: give it to
+     * every instance whose SRV record named that host.
+     */
+    if (r->type == DNS_TYPE_A) {
+        struct Node *n;
+
+        if (r->rdlength != 4) {
+            return;
+        }
+        addr = (ULONG)r->rdata[0] << 24;
+        addr |= (ULONG)r->rdata[1] << 16;
+        addr |= (ULONG)r->rdata[2] << 8;
+        addr |= (ULONG)r->rdata[3];
+        for (n = tok->et_Cache.lh_Head; n != NULL && n->ln_Succ != NULL;
+            n = n->ln_Succ) {
+            ce = (struct MDNSCacheEntry *)n;
+            if (ce->ce_Host[0] != '\0' && ce->ce_HostAddr != addr &&
+                Stricmp(ce->ce_Host, r->name) == 0) {
+                ce->ce_HostAddr = addr;
+                ce->ce_Flags |= MDNS_CE_ANNOUNCED;
+                mdnsBrowseNotifyAll(tok, ce);
+            }
+        }
+        return;
+    }
+    if (r->type != DNS_TYPE_SRV && r->type != DNS_TYPE_TXT) {
+        return;
+    }
+
+    /* SRV / TXT: owner name is "instance.<type>.local". */
     dot = strchr(r->name, '.');
     if (dot == NULL) {
         return;
@@ -384,15 +416,6 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
                 ce->ce_Host[MDNS_MAX_HOST] = '\0';
                 changed = TRUE;
             }
-        }
-    } else if (r->type == DNS_TYPE_A && r->rdlength == 4) {
-        addr = (ULONG)r->rdata[0] << 24;
-        addr |= (ULONG)r->rdata[1] << 16;
-        addr |= (ULONG)r->rdata[2] << 8;
-        addr |= (ULONG)r->rdata[3];
-        if (ce->ce_HostAddr != addr) {
-            ce->ce_HostAddr = addr;
-            changed = TRUE;
         }
     } else if (r->type == DNS_TYPE_TXT && r->rdlength > 0) {
         if (r->rdata[0] < r->rdlength) {
@@ -628,7 +651,7 @@ MDNSEngineResolve(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
     strncpy(rmsg.rm_Instance.si_Type, ce->ce_Type, MDNS_MAX_TYPE);
     strcpy(rmsg.rm_Instance.si_Domain, MDNS_DOMAIN_LOCAL);
     strncpy(rmsg.rm_Instance.si_HostName, ce->ce_Host, MDNS_MAX_HOST);
-    rmsg.rm_Instance.si_HostAddr = ce->ce_HostAddr;
+    rmsg.rm_Instance.si_HostAddr = htonl(ce->ce_HostAddr);
     rmsg.rm_Instance.si_Port = ce->ce_Port;
     rmsg.rm_Instance.si_TXTLength = (UWORD)strlen(ce->ce_TXT);
     strncpy((char *)rmsg.rm_Instance.si_TXT, ce->ce_TXT, MDNS_MAX_TXT);

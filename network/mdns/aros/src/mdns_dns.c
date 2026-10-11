@@ -16,8 +16,8 @@ void
 mdnsInitHeader(struct MDNSHeader *hdr, UWORD flags, UWORD qdcount)
 {
     hdr->id = 0;
-    hdr->flags = flags;
-    hdr->qdcount = qdcount;
+    hdr->flags = htons(flags);
+    hdr->qdcount = htons(qdcount);
     hdr->ancount = 0;
     hdr->nscount = 0;
     hdr->arcount = 0;

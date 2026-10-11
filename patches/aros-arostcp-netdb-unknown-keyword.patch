@@ -1,0 +1,12 @@
+diff --git a/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_netdb.c b/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_netdb.c
+--- a/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_netdb.c
++++ b/workbench/network/stacks/AROSTCP/bsdsocket/kern/amiga_netdb.c
+@@ -1494,7 +1494,7 @@ addndbent(struct NetDataBase *ndb,
+ {
+     if(NDB) {
+         LONG item;
+-        enum ndbtype which;
++        LONG which;                     /* FindArg() returns -1; an enum may be unsigned */
+         UBYTE Buffer[KEYWORDLEN];
+ 
+ #if defined(__AROS__)
