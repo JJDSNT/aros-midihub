@@ -15,8 +15,8 @@ in this draft is exported as a public symbol.
 ## Provisional version 43 slice
 
 `patches/aros-camd-endpoint-client.patch`, `aros-camd-endpoint-input.patch` and
-`aros-camd-endpoint-watch.patch` and `aros-camd-endpoint-publish.patch` and
-`aros-camd-endpoint-diagnostics.patch` append twenty ordinary vectors behind
+`aros-camd-endpoint-watch.patch` and `aros-camd-endpoint-publish.patch` `aros-camd-endpoint-diagnostics.patch` and `aros-camd-endpoint-time.patch`
+append twenty ordinary vectors behind
 `.version 43` and installs `midi/camdendpoint.h`, so that the endpoint core has
 a real client before review. Everything in it can still change.
 
@@ -48,9 +48,10 @@ new sessions, left open below, is provisionally `CAMDMIDI1EventV1` plus a
 separate SysEx call. An input session names a signal number in its request;
 the opening task gets it when something arrives. A full input queue loses
 the newest messages and `GetEndpointMidi()` reports that once with
-`CAMD_REGISTRY_QUEUE_FULL`. Not in the slice: Groups and Function
-Blocks, UMP, cancel, counters and timestamps (the event's time fields are
-carried but ignored).
+`CAMD_REGISTRY_QUEUE_FULL`. An event sent to a driver's port with
+`CAMD_EVENT_TIME_VALID` is handed over when `CamdTime()` reaches its `TimeLow`;
+received events carry the time of their arrival. Not in the slice: Groups and Function
+Blocks and UMP.
 
 A published endpoint also appears as the legacy clusters `<name>.out.0` (what
 is sent there reaches `GetPublishedMidi()`) and `<name>.in.0` (which gets what
@@ -72,8 +73,19 @@ These are deliberate or still open; each is what the code does today.
 
 - Native MIDI 1.0 only. No UMP session opens, no Group or Function Block is
   published or enumerable, and nothing converts between MIDI 1.0 and UMP.
-- The time fields of `CAMDMIDI1EventV1` are carried and ignored: output is
-  immediate and received messages are not stamped.
+- One clock: `CAMD_CLOCK_CAMD`, which is `CamdTime()` in milliseconds and
+  wraps after 49.7 days. A time more than 2^31 ms ahead counts as past.
+- Scheduling exists for sessions to a driver's port only. A published
+  endpoint gets its clients' times as given and has to keep them itself, and
+  legacy links carry no time.
+- A session is one queue in order: a message that waits for its time holds
+  back the messages queued after it, even overdue ones. Nothing is reordered.
+- `PutEndpointSysEx()` takes no time; SysEx is always sent at once, in its
+  place in the queue.
+- A received message's time is when it reached the session's queue, taken in
+  the port's receiver process, not when the hardware saw it.
+- Scheduling is as exact as timer.device and the session's worker process,
+  which runs at priority 0; nothing compensates for latency.
 - Names, registers, record layouts and result codes are not reviewed upstream
   and can change. `enum CAMDRegistryResult` is the internal registry enum
   exposed as it is.

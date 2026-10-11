@@ -1432,6 +1432,99 @@ out:
     FreeSignal(bit);
 }
 
+/* Times: received messages are stamped with CamdTime(), and a message sent
+   with a time waits for it. On the loopback driver's second port. */
+static void test_endpoint_time(void)
+{
+    static UBYTE sysex[] = { 0xf0, 0x7d, 0x31, 0xf7 };
+    UBYTE buffer[16];
+    struct CAMDEndpointIDV1 id;
+    struct CAMDSessionRequestV1 request;
+    struct CAMDHandleV1 input, output;
+    struct CAMDMIDI1EventV1 event, events[3];
+    ULONG length, before, after, target, waited;
+    LONG result;
+
+    if (!find_endpoint("loopback.1", &id)) {
+        skip("endpoint times", "no DEVS:Midi/loopback");
+        return;
+    }
+    memset(&request, 0, sizeof(request));
+    request.Size = sizeof(request);
+    request.Version = 1;
+    request.EndpointID = id;
+    request.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+    request.Protocol = CAMD_PROTOCOL_MIDI1;
+    request.QueueCapacity = 16;
+    request.Signal = CAMD_SIGNAL_NONE;
+    request.Direction = CAMD_DIRECTION_INPUT;
+    result = OpenEndpointSession(&request, &input, NULL);
+    request.Direction = CAMD_DIRECTION_OUTPUT;
+    if (result == CAMD_REGISTRY_OK) {
+        result = OpenEndpointSession(&request, &output, NULL);
+        if (result != CAMD_REGISTRY_OK) CloseEndpointSession(&input);
+    }
+    check(result == CAMD_REGISTRY_OK, "time: sessions open on a loopback port", NULL);
+    if (result != CAMD_REGISTRY_OK) return;
+
+    before = CamdTime();
+    events[0] = midi1(0x96, 0x10, 0x40);
+    check(PutEndpointMidi(&output, events, 1) == CAMD_REGISTRY_OK, "a message without a time is sent", NULL);
+    memset(&event, 0, sizeof(event));
+    result = read_soon(&input, &event, buffer, sizeof(buffer), &length);
+    after = CamdTime();
+    check(result == CAMD_REGISTRY_OK && (event.Flags & CAMD_EVENT_TIME_VALID) && event.ClockDomain == CAMD_CLOCK_CAMD &&
+          event.TimeHigh == 0 && (LONG)(event.TimeLow - before) >= 0 && (LONG)(after - event.TimeLow) >= 0,
+          "a received message carries the CamdTime() of its arrival", NULL);
+    check(PutEndpointSysEx(&output, sysex, sizeof(sysex)) == CAMD_REGISTRY_OK &&
+          read_soon(&input, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_OK && length == sizeof(sysex) &&
+          event.Length == 0 && (event.Flags & CAMD_EVENT_TIME_VALID) && (LONG)(event.TimeLow - before) >= 0,
+          "received SysEx carries its time in the event", NULL);
+
+    events[0].Flags = CAMD_EVENT_TIME_VALID;
+    events[0].ClockDomain = 99;
+    check(PutEndpointMidi(&output, events, 1) == CAMD_REGISTRY_INVALID, "a time in an unknown clock is CAMD_REGISTRY_INVALID", NULL);
+
+    /* One at once, one in 300 ms, and an overdue one queued behind it. */
+    target = CamdTime() + 300;
+    events[0] = midi1(0x96, 0x20, 0x40);
+    events[1] = midi1(0x96, 0x21, 0x40);
+    events[1].Flags = CAMD_EVENT_TIME_VALID;
+    events[1].ClockDomain = CAMD_CLOCK_CAMD;
+    events[1].TimeLow = target;
+    events[2] = midi1(0x96, 0x22, 0x40);
+    events[2].Flags = CAMD_EVENT_TIME_VALID;
+    events[2].ClockDomain = CAMD_CLOCK_CAMD;
+    events[2].TimeLow = target - 5000;
+    check(PutEndpointMidi(&output, events, 3) == CAMD_REGISTRY_OK, "three messages are queued, the second for 300 ms later", NULL);
+    result = read_soon(&input, &event, buffer, sizeof(buffer), &length);
+    check(result == CAMD_REGISTRY_OK && event.Bytes[1] == 0x20, "the first arrives at once", NULL);
+    Delay(5);
+    check(GetEndpointMidi(&input, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_EMPTY &&
+          (LONG)(target - CamdTime()) > 0, "the second has not arrived before its time", NULL);
+    result = read_soon(&input, &event, buffer, sizeof(buffer), &length);
+    waited = event.TimeLow - target;
+    check(result == CAMD_REGISTRY_OK && event.Bytes[1] == 0x21 && (LONG)waited >= 0 && waited < 250,
+          "it arrives when its time has come", NULL);
+    result = read_soon(&input, &event, buffer, sizeof(buffer), &length);
+    check(result == CAMD_REGISTRY_OK && event.Bytes[1] == 0x22, "and the one queued behind it follows", NULL);
+
+    /* A message that waits can be cancelled, and does not hold up closing. */
+    events[0] = midi1(0x96, 0x30, 0x40);
+    events[0].Flags = CAMD_EVENT_TIME_VALID;
+    events[0].ClockDomain = CAMD_CLOCK_CAMD;
+    events[0].TimeLow = CamdTime() + 60000;
+    check(PutEndpointMidi(&output, events, 1) == CAMD_REGISTRY_OK && CancelEndpointSession(&output) == CAMD_REGISTRY_OK &&
+          DrainEndpointSession(&output) == CAMD_REGISTRY_OK, "a waiting message is cancelled", NULL);
+    events[0].TimeLow = CamdTime() + 60000;
+    before = CamdTime();
+    check(PutEndpointMidi(&output, events, 1) == CAMD_REGISTRY_OK && CloseEndpointSession(&output) == CAMD_REGISTRY_OK &&
+          CamdTime() - before < 2000, "closing does not wait for a message's time", NULL);
+    Delay(5);
+    check(GetEndpointMidi(&input, &event, buffer, sizeof(buffer), &length) == CAMD_REGISTRY_EMPTY, "and neither was sent", NULL);
+    CloseEndpointSession(&input);
+}
+
 static void test_endpoint_watch(void)
 {
     struct CAMDHandleV1 watch, other;
@@ -1929,6 +2022,7 @@ int main(int argc, char **argv)
         } else {
             RUN(test_endpoints);
             RUN(test_endpoint_input);
+            RUN(test_endpoint_time);
             RUN(test_endpoint_watch);
             RUN(test_published_endpoint);
         }

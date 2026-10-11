@@ -374,6 +374,206 @@ static void test_input_sessions(void)
     camd_registry_destroy(registry);
 }
 
+struct timed_port {
+    pthread_mutex_t lock;
+    unsigned int written;
+    uint8_t notes[8];
+    uint32_t when[8];
+};
+
+static uint32_t clock_ms(void *context)
+{
+    struct timespec now;
+
+    (void)context;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint32_t)(now.tv_sec * 1000u + now.tv_nsec / 1000000);
+}
+
+static enum CAMDProviderResult timed_ok(void *context)
+{
+    (void)context;
+    return CAMD_PROVIDER_OK;
+}
+
+static enum CAMDProviderResult timed_midi1(
+    void *context, const struct CAMDMIDI1EventV1 *event)
+{
+    struct timed_port *port = context;
+
+    pthread_mutex_lock(&port->lock);
+    assert(port->written < sizeof(port->notes));
+    port->notes[port->written] = event->Bytes[1];
+    port->when[port->written++] = clock_ms(NULL);
+    pthread_mutex_unlock(&port->lock);
+    return CAMD_PROVIDER_OK;
+}
+
+static unsigned int timed_written(struct timed_port *port)
+{
+    unsigned int written;
+
+    pthread_mutex_lock(&port->lock);
+    written = port->written;
+    pthread_mutex_unlock(&port->lock);
+    return written;
+}
+
+static void sleep_ms(long milliseconds)
+{
+    struct timespec pause = { milliseconds / 1000,
+                              (milliseconds % 1000) * 1000000L };
+
+    nanosleep(&pause, NULL);
+}
+
+/* A message with a time waits for it, and those behind it wait with it. */
+static void test_scheduled_output(void)
+{
+    struct CAMDEndpointRegistry *registry = camd_registry_create();
+    struct CAMDNativeWorkerFanout *fanout = NULL;
+    struct CAMDLegacyOutputBackend *backend = NULL;
+    struct CAMDLegacyDriverAdapter *adapter = NULL;
+    struct CAMDLegacyOutputBackendConfigV1 config;
+    struct CAMDLegacyOutputPortV1 port;
+    struct CAMDLegacyPortDescriptorV1 adapter_port;
+    struct CAMDLegacyDriverDescriptorV1 descriptor;
+    struct CAMDProviderOpenRequestV1 request;
+    struct CAMDMIDI1EventV1 events[3];
+    struct CAMDHandleV1 session;
+    struct timed_port physical;
+    uint32_t start, target;
+    int tries;
+
+    assert(registry);
+    memset(&physical, 0, sizeof(physical));
+    assert(pthread_mutex_init(&physical.lock, NULL) == 0);
+    assert(camd_native_worker_fanout_create(1, &fanout) ==
+           CAMD_NATIVE_WORKER_FANOUT_OK);
+    memset(&port, 0, sizeof(port));
+    port.Size = sizeof(port);
+    port.Version = 1;
+    port.EndpointID = make_id(70);
+    port.Context = &physical;
+    port.CapacityFanout = fanout;
+    memset(&config, 0, sizeof(config));
+    config.Size = sizeof(config);
+    config.Version = 1;
+    config.Callbacks.Size = sizeof(config.Callbacks);
+    config.Callbacks.Version = 1;
+    config.Callbacks.Acquire = timed_ok;
+    config.Callbacks.Release = timed_ok;
+    config.Callbacks.SubmitMIDI1 = timed_midi1;
+    config.Callbacks.SubmitMIDI1SysEx = input_no_sysex;
+    config.Callbacks.Now = clock_ms;
+    config.Ports = &port;
+    config.PortCount = 1;
+    config.MaxQueueCapacity = 8;
+    config.MaxSysExBytes = 16;
+    config.WorkerItemBudget = 4;
+    assert(camd_legacy_output_backend_create(&config, &backend) ==
+           CAMD_PROVIDER_OK);
+    memset(&adapter_port, 0, sizeof(adapter_port));
+    adapter_port.Size = sizeof(adapter_port);
+    adapter_port.Version = 1;
+    adapter_port.EndpointID = port.EndpointID;
+    adapter_port.Directions = CAMD_PROVIDER_DIRECTION_OUTPUT;
+    strcpy(adapter_port.Name, "Timed output");
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.Size = sizeof(descriptor);
+    descriptor.Version = 1;
+    descriptor.ProviderID = make_id(170);
+    descriptor.IdentityKind = 3;
+    descriptor.ProtocolCapabilities = 1;
+    descriptor.BackendContext = camd_legacy_output_backend_context(backend);
+    descriptor.BackendOps = camd_legacy_output_backend_ops(backend);
+    descriptor.Ports = &adapter_port;
+    descriptor.PortCount = 1;
+    assert(camd_legacy_driver_adapter_create(registry, &descriptor,
+                                             &adapter) == CAMD_REGISTRY_OK);
+    memset(&request, 0, sizeof(request));
+    request.Size = sizeof(request);
+    request.Version = 1;
+    request.EndpointID = port.EndpointID;
+    request.Direction = CAMD_PROVIDER_DIRECTION_OUTPUT;
+    request.DataFormat = CAMD_PROVIDER_FORMAT_MIDI1;
+    request.Protocol = CAMD_PROVIDER_PROTOCOL_MIDI1;
+    request.QueueCapacity = 8;
+    assert(camd_registry_session_open(registry, &request, &session) ==
+           CAMD_REGISTRY_OK);
+
+    /* A time in an unknown clock is refused whole. */
+    events[0] = note_event(1);
+    events[0].Flags = CAMD_EVENT_TIME_VALID;
+    events[0].ClockDomain = 99;
+    assert(camd_registry_session_send_midi1(registry, session, events, 1) ==
+           CAMD_REGISTRY_INVALID);
+
+    start = clock_ms(NULL);
+    target = start + 150;
+    events[0] = note_event(10);                 /* at once */
+    events[1] = note_event(11);                 /* at target */
+    events[1].Flags = CAMD_EVENT_TIME_VALID;
+    events[1].ClockDomain = CAMD_CLOCK_CAMD;
+    events[1].TimeLow = target;
+    events[2] = note_event(12);                 /* overdue, but behind 11 */
+    events[2].Flags = CAMD_EVENT_TIME_VALID;
+    events[2].ClockDomain = CAMD_CLOCK_CAMD;
+    events[2].TimeLow = start - 1000;
+    assert(camd_registry_session_send_midi1(registry, session, events, 3) ==
+           CAMD_REGISTRY_OK);
+    sleep_ms(40);
+    assert(timed_written(&physical) == 1 && physical.notes[0] == 10);
+    assert(camd_registry_session_drain(registry, session) ==
+           CAMD_REGISTRY_QUEUE_FULL);
+    for (tries = 0; tries < 200 && timed_written(&physical) < 3; ++tries)
+        sleep_ms(5);
+    assert(timed_written(&physical) == 3);
+    assert(physical.notes[1] == 11 && physical.notes[2] == 12);
+    /* Not early, and not much later than asked on an idle machine. */
+    assert((int32_t)(physical.when[1] - target) >= 0);
+    assert((int32_t)(physical.when[1] - target) < 500);
+    assert(camd_registry_session_drain(registry, session) == CAMD_REGISTRY_OK);
+
+    /* Cancelling drops a message that still waits for its time. */
+    events[0] = note_event(20);
+    events[0].Flags = CAMD_EVENT_TIME_VALID;
+    events[0].ClockDomain = CAMD_CLOCK_CAMD;
+    events[0].TimeLow = clock_ms(NULL) + 60000;
+    assert(camd_registry_session_send_midi1(registry, session, events, 1) ==
+           CAMD_REGISTRY_OK);
+    sleep_ms(30);
+    assert(timed_written(&physical) == 3);
+    assert(camd_registry_session_cancel(registry, session) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_registry_session_drain(registry, session) == CAMD_REGISTRY_OK);
+    events[0] = note_event(21);
+    assert(camd_registry_session_send_midi1(registry, session, events, 1) ==
+           CAMD_REGISTRY_OK);
+    for (tries = 0; tries < 200 && timed_written(&physical) < 4; ++tries)
+        sleep_ms(5);
+    assert(timed_written(&physical) == 4 && physical.notes[3] == 21);
+
+    /* Closing does not wait for a message's time either. */
+    events[0] = note_event(22);
+    events[0].Flags = CAMD_EVENT_TIME_VALID;
+    events[0].ClockDomain = CAMD_CLOCK_CAMD;
+    events[0].TimeLow = clock_ms(NULL) + 60000;
+    assert(camd_registry_session_send_midi1(registry, session, events, 1) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_registry_session_close(registry, session) == CAMD_REGISTRY_OK);
+    assert(timed_written(&physical) == 4);
+
+    assert(camd_legacy_driver_adapter_begin_retire(adapter) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_legacy_driver_adapter_release(adapter) == CAMD_REGISTRY_OK);
+    assert(camd_legacy_output_backend_destroy(backend) == CAMD_PROVIDER_OK);
+    assert(camd_native_worker_fanout_destroy(fanout) ==
+           CAMD_NATIVE_WORKER_FANOUT_OK);
+    camd_registry_destroy(registry);
+    pthread_mutex_destroy(&physical.lock);
+}
+
 int main(void)
 {
     struct CAMDEndpointRegistry *registry = camd_registry_create();
@@ -514,6 +714,7 @@ int main(void)
     pthread_cond_destroy(&physical.condition);
     pthread_mutex_destroy(&physical.lock);
     test_input_sessions();
+    test_scheduled_output();
     puts("CAMD legacy output backend OK");
     return 0;
 }

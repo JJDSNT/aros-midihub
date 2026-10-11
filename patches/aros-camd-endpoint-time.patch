@@ -1,0 +1,399 @@
+diff --git a/workbench/libs/camd/camdendpoint.h b/workbench/libs/camd/camdendpoint.h
+--- a/workbench/libs/camd/camdendpoint.h
++++ b/workbench/libs/camd/camdendpoint.h
+@@ -117,8 +117,24 @@ enum CAMDRegistryResult {
+     CAMD_REGISTRY_TOO_LARGE
+ };
+ 
++/* CAMDMIDI1EventV1.Flags: the time fields hold a time. */
++#define CAMD_EVENT_TIME_VALID            (1u << 0)
++
++/* ClockDomain: TimeLow is CamdTime(), milliseconds that wrap after 2^32, and
++ * TimeHigh is 0. The only clock so far. */
++#define CAMD_CLOCK_CAMD                  1u
++
+ /* A complete non-SysEx MIDI 1.0 message. Bytes are in wire order and Length
+- * is 1..3. Running status never crosses an event boundary. */
++ * is 1..3. Running status never crosses an event boundary.
++ *
++ * Sent to a driver's port with CAMD_EVENT_TIME_VALID, the message is handed
++ * to the port when CamdTime() reaches TimeLow, or at once when that time has
++ * passed; without the flag it is handed over at once. A session's messages
++ * keep their order, so one that waits holds back those queued after it.
++ * A published endpoint gets the time as the client gave it.
++ *
++ * A received message has the flag set and the time it reached the session,
++ * unless its sender already gave it a time. */
+ struct CAMDMIDI1EventV1 {
+     ULONG Size;
+     ULONG Version;
+diff --git a/workbench/libs/camd/endpoint_client.c b/workbench/libs/camd/endpoint_client.c
+--- a/workbench/libs/camd/endpoint_client.c
++++ b/workbench/libs/camd/endpoint_client.c
+@@ -123,10 +123,25 @@ static enum CAMDProviderResult receiver_midi1(
+     void *context, const struct CAMDMIDI1EventV1 *events, size_t event_count)
+ {
+     struct EndpointReceiver *receiver = context;
+-    enum CAMDNativeQueueResult result;
+-
+-    result = camd_native_queue_enqueue_midi1_items(receiver->queue, events,
+-                                                   event_count);
++    struct CAMDMIDI1EventV1 event;
++    enum CAMDNativeQueueResult result = CAMD_NATIVE_QUEUE_OK, queued;
++    size_t i;
++
++    /* One at a time, so that each can get its arrival time; what does not
++     * fit is lost, as the newest always is on input. */
++    for (i = 0; i < event_count; ++i) {
++        event = events[i];
++        if ((event.Flags & CAMD_EVENT_TIME_VALID) == 0) {
++            event.Flags |= CAMD_EVENT_TIME_VALID;
++            event.TimeHigh = 0;
++            event.TimeLow = CamdClock();
++            event.ClockDomain = CAMD_CLOCK_CAMD;
++        }
++        queued = camd_native_queue_enqueue_midi1_items(receiver->queue,
++                                                       &event, 1);
++        if (queued != CAMD_NATIVE_QUEUE_OK)
++            result = queued;
++    }
+     receiver_arrived(receiver, result);
+     return queue_to_provider(result);
+ }
+@@ -139,6 +154,12 @@ static enum CAMDProviderResult receiver_sysex(
+     struct EndpointReceiver *receiver = context;
+     enum CAMDNativeQueueResult result;
+ 
++    if ((flags & CAMD_EVENT_TIME_VALID) == 0) {
++        flags |= CAMD_EVENT_TIME_VALID;
++        time_high = 0;
++        time_low = CamdClock();
++        clock_domain = CAMD_CLOCK_CAMD;
++    }
+     result = camd_native_queue_enqueue_midi1_sysex(
+         receiver->queue, bytes, byte_count, time_high, time_low,
+         clock_domain, flags);
+@@ -283,6 +304,14 @@ LONG ReadEndpointReceiver(const struct CAMDHandleV1 *session,
+                     receiver->queue, sysex, size, &info);
+                 result = got == CAMD_NATIVE_QUEUE_OK ? CAMD_REGISTRY_OK
+                                                      : CAMD_REGISTRY_EMPTY;
++                /* The message's time, in an event without bytes. */
++                memset(event, 0, sizeof(*event));
++                event->Size = sizeof(*event);
++                event->Version = 1;
++                event->Flags = info.Flags;
++                event->TimeHigh = info.TimeHigh;
++                event->TimeLow = info.TimeLow;
++                event->ClockDomain = info.ClockDomain;
+             }
+         } else {
+             got = camd_native_queue_dequeue_midi1(receiver->queue, event, 1,
+diff --git a/workbench/libs/camd/getendpointmidi.c b/workbench/libs/camd/getendpointmidi.c
+--- a/workbench/libs/camd/getendpointmidi.c
++++ b/workbench/libs/camd/getendpointmidi.c
+@@ -31,7 +31,8 @@
+ 
+     INPUTS
+ 		session - from OpenEndpointSession().
+-		event - filled in with a short message.
++		event - filled in with a short message, or with the time of
++		    a System Exclusive message and a Length of 0.
+ 		sysex - where a System Exclusive message is copied to.
+ 		size - the room at sysex.
+ 		length - filled in with 0 for a short message, or with the
+diff --git a/workbench/libs/camd/legacy_driver_output_backend.c b/workbench/libs/camd/legacy_driver_output_backend.c
+--- a/workbench/libs/camd/legacy_driver_output_backend.c
++++ b/workbench/libs/camd/legacy_driver_output_backend.c
+@@ -79,6 +79,12 @@ static enum CAMDProviderResult release_input(void *context)
+     return result;
+ }
+ 
++static uint32_t now_ms(void *context)
++{
++    (void)context;
++    return CamdClock();
++}
++
+ static enum CAMDProviderResult submit_midi1(
+     void *context, const struct CAMDMIDI1EventV1 *event)
+ {
+@@ -205,6 +211,7 @@ enum CAMDProviderResult camd_legacy_driver_output_backend_create(
+     backend_config.Callbacks.SubmitMIDI1SysEx = submit_sysex;
+     backend_config.Callbacks.AcquireInput = acquire_input;
+     backend_config.Callbacks.ReleaseInput = release_input;
++    backend_config.Callbacks.Now = now_ms;
+     backend_config.Ports = ports;
+     backend_config.PortCount = config->PortCount;
+     backend_config.MaxQueueCapacity = config->MaxQueueCapacity;
+diff --git a/workbench/libs/camd/legacy_output_backend.c b/workbench/libs/camd/legacy_output_backend.c
+--- a/workbench/libs/camd/legacy_output_backend.c
++++ b/workbench/libs/camd/legacy_output_backend.c
+@@ -150,6 +150,26 @@ static enum CAMDProviderResult queue_result(
+     return CAMD_PROVIDER_STATE;
+ }
+ 
++/* Whether the head message may go to the port now. One that has to wait
++ * tells the session's worker when to try again; the pump keeps it queued
++ * because the caller then reports no room. Times compare by their signed
++ * difference, so the clock may wrap. */
++static int due(struct output_session *session, uint32_t flags,
++               uint32_t time_low)
++{
++    int32_t ahead;
++
++    if ((flags & CAMD_EVENT_TIME_VALID) == 0 ||
++        !session->backend->callbacks.Now)
++        return 1;
++    ahead = (int32_t)(time_low -
++                      session->backend->callbacks.Now(session->port->Context));
++    if (ahead <= 0)
++        return 1;
++    camd_native_worker_wake_after(session->worker, (uint32_t)ahead);
++    return 0;
++}
++
+ static enum CAMDProviderResult submit_midi1(
+     void *context, const struct CAMDMIDI1EventV1 *events, size_t event_count)
+ {
+@@ -157,6 +177,8 @@ static enum CAMDProviderResult submit_midi1(
+ 
+     if (!session || !events || event_count != 1)
+         return CAMD_PROVIDER_INVALID;
++    if (!due(session, events->Flags, events->TimeLow))
++        return CAMD_PROVIDER_QUEUE_FULL;
+     return session->backend->callbacks.SubmitMIDI1(session->port->Context,
+                                                     events);
+ }
+@@ -170,6 +192,8 @@ static enum CAMDProviderResult submit_sysex(
+ 
+     if (!session)
+         return CAMD_PROVIDER_INVALID;
++    if (!due(session, flags, time_low))
++        return CAMD_PROVIDER_QUEUE_FULL;
+     return session->backend->callbacks.SubmitMIDI1SysEx(
+         session->port->Context, bytes, byte_count, time_high, time_low,
+         clock_domain, flags);
+@@ -509,6 +533,21 @@ static enum CAMDProviderResult backend_close(void *context,
+     return CAMD_PROVIDER_OK;
+ }
+ 
++/* A time in a clock this backend does not know cannot be kept. */
++static int known_clock(const struct CAMDMIDI1EventV1 *events,
++                       size_t event_count)
++{
++    size_t i;
++
++    for (i = 0; i < event_count; ++i) {
++        if ((events[i].Flags & CAMD_EVENT_TIME_VALID) != 0 &&
++            (events[i].ClockDomain != CAMD_CLOCK_CAMD ||
++             events[i].TimeHigh != 0))
++            return 0;
++    }
++    return 1;
++}
++
+ static enum CAMDProviderResult backend_send_midi1(
+     void *context, void *session_context,
+     const struct CAMDMIDI1EventV1 *events, size_t event_count)
+@@ -520,6 +559,8 @@ static enum CAMDProviderResult backend_send_midi1(
+     if (!backend || !session || session->backend != backend ||
+         session->direction != CAMD_PROVIDER_DIRECTION_OUTPUT)
+         return CAMD_PROVIDER_INVALID;
++    if (!known_clock(events, event_count))
++        return CAMD_PROVIDER_INVALID;
+     result = camd_native_queue_enqueue_midi1_items(session->queue, events,
+                                                    event_count);
+     if (result != CAMD_NATIVE_QUEUE_OK)
+diff --git a/workbench/libs/camd/legacy_output_backend.h b/workbench/libs/camd/legacy_output_backend.h
+--- a/workbench/libs/camd/legacy_output_backend.h
++++ b/workbench/libs/camd/legacy_output_backend.h
+@@ -34,6 +34,9 @@ struct CAMDLegacyOutputCallbacksV1 {
+     /* Both NULL when the ports cannot be opened for input. */
+     CAMDLegacyOutputPortFnV1 AcquireInput;
+     CAMDLegacyOutputPortFnV1 ReleaseInput;
++    /* The CAMD_CLOCK_CAMD time in milliseconds. NULL sends every message at
++     * once, whatever its time. */
++    uint32_t (*Now)(void *context);
+ };
+ 
+ struct CAMDLegacyOutputPortV1 {
+diff --git a/workbench/libs/camd/native_event_worker.c b/workbench/libs/camd/native_event_worker.c
+--- a/workbench/libs/camd/native_event_worker.c
++++ b/workbench/libs/camd/native_event_worker.c
+@@ -4,6 +4,7 @@
+ #include <string.h>
+ 
+ #ifdef __AROS__
++#include <devices/timer.h>
+ #include <dos/dos.h>
+ #include <dos/dostags.h>
+ #include <exec/memory.h>
+@@ -14,6 +15,7 @@
+ #else
+ #include <pthread.h>
+ #include <stdlib.h>
++#include <time.h>
+ #endif
+ 
+ struct worker_lock {
+@@ -38,6 +40,7 @@ struct CAMDNativeEventWorker {
+     int stop_requested;
+     int exited;
+     int stop_completed;
++    uint32_t retry_after_ms;    /* from camd_native_worker_wake_after() */
+ #ifdef __AROS__
+     struct Process *process;
+     LONG wake_signal;
+@@ -157,19 +160,62 @@ static void worker_entry(void)
+ {
+     struct CAMDNativeEventWorker *worker = FindTask(NULL)->tc_UserData;
+     LONG signal_number = AllocSignal(-1);
++    struct MsgPort *timer_port = CreateMsgPort();
++    struct timerequest *timer = NULL;
++    BOOL timer_open = FALSE;
+ 
++    /* The timer is for camd_native_worker_wake_after(). */
++    if (timer_port)
++        timer = (struct timerequest *)CreateIORequest(timer_port,
++                                                      sizeof(*timer));
++    if (timer &&
++        OpenDevice((CONST_STRPTR)"timer.device", UNIT_MICROHZ,
++                   (struct IORequest *)timer, 0) == 0)
++        timer_open = TRUE;
+     lock_acquire(&worker->lock);
+-    if (signal_number == -1) {
++    if (signal_number == -1 || !timer_open) {
+         worker->state = CAMD_NATIVE_WORKER_FAILED;
+         worker->exited = 1;
+         lock_release(&worker->lock);
++        if (timer_open)
++            CloseDevice((struct IORequest *)timer);
++        if (timer)
++            DeleteIORequest((struct IORequest *)timer);
++        if (timer_port)
++            DeleteMsgPort(timer_port);
++        if (signal_number != -1)
++            FreeSignal(signal_number);
+         return;
+     }
+     worker->wake_signal = signal_number;
+     worker->state = CAMD_NATIVE_WORKER_IDLE;
+     lock_release(&worker->lock);
+     for (;;) {
+-        ULONG signals = Wait((1UL << signal_number) | SIGBREAKF_CTRL_C);
++        ULONG wake_mask = 1UL << signal_number;
++        ULONG timer_mask = 1UL << timer_port->mp_SigBit;
++        ULONG signals;
++        uint32_t retry;
++
++        lock_acquire(&worker->lock);
++        retry = worker->retry_after_ms;
++        worker->retry_after_ms = 0;
++        lock_release(&worker->lock);
++        if (retry != 0) {
++            timer->tr_node.io_Command = TR_ADDREQUEST;
++            timer->tr_time.tv_secs = retry / 1000;
++            timer->tr_time.tv_micro = (retry % 1000) * 1000;
++            SendIO((struct IORequest *)timer);
++            signals = Wait(wake_mask | timer_mask | SIGBREAKF_CTRL_C);
++            if (!CheckIO((struct IORequest *)timer))
++                AbortIO((struct IORequest *)timer);
++            WaitIO((struct IORequest *)timer);
++            SetSignal(0, timer_mask);
++            /* Its time has come: run the pump as for a wake. */
++            if (signals & timer_mask)
++                signals |= wake_mask;
++        } else {
++            signals = Wait(wake_mask | SIGBREAKF_CTRL_C);
++        }
+ 
+         if (signals & SIGBREAKF_CTRL_C)
+             break;
+@@ -186,6 +232,9 @@ static void worker_entry(void)
+         }
+         lock_release(&worker->lock);
+     }
++    CloseDevice((struct IORequest *)timer);
++    DeleteIORequest((struct IORequest *)timer);
++    DeleteMsgPort(timer_port);
+     FreeSignal(signal_number);
+     lock_acquire(&worker->lock);
+     if (worker->state != CAMD_NATIVE_WORKER_FAILED)
+@@ -201,8 +250,27 @@ static void *worker_entry(void *opaque)
+     lock_acquire(&worker->lock);
+     worker->state = CAMD_NATIVE_WORKER_IDLE;
+     for (;;) {
+-        while (!worker->wake_pending && !worker->stop_requested)
+-            pthread_cond_wait(&worker->condition, &worker->lock.mutex);
++        while (!worker->wake_pending && !worker->stop_requested) {
++            struct timespec until;
++            uint32_t retry = worker->retry_after_ms;
++
++            worker->retry_after_ms = 0;
++            if (retry == 0) {
++                pthread_cond_wait(&worker->condition, &worker->lock.mutex);
++                continue;
++            }
++            clock_gettime(CLOCK_REALTIME, &until);
++            until.tv_sec += retry / 1000;
++            until.tv_nsec += (long)(retry % 1000) * 1000000L;
++            if (until.tv_nsec >= 1000000000L) {
++                until.tv_nsec -= 1000000000L;
++                ++until.tv_sec;
++            }
++            /* Its time has come: run the pump as for a wake. */
++            if (pthread_cond_timedwait(&worker->condition,
++                                       &worker->lock.mutex, &until) != 0)
++                worker->wake_pending = 1;
++        }
+         if (worker->stop_requested)
+             break;
+         worker->wake_pending = 0;
+@@ -310,6 +378,17 @@ enum CAMDNativeWorkerResult camd_native_worker_wake(
+     return CAMD_NATIVE_WORKER_OK;
+ }
+ 
++enum CAMDNativeWorkerResult camd_native_worker_wake_after(
++    struct CAMDNativeEventWorker *worker, uint32_t milliseconds)
++{
++    if (!worker)
++        return CAMD_NATIVE_WORKER_INVALID;
++    lock_acquire(&worker->lock);
++    worker->retry_after_ms = milliseconds ? milliseconds : 1;
++    lock_release(&worker->lock);
++    return CAMD_NATIVE_WORKER_OK;
++}
++
+ #ifdef __AROS__
+ enum CAMDNativeWorkerResult camd_native_worker_wake_from_interrupt(
+     struct CAMDNativeEventWorker *worker)
+diff --git a/workbench/libs/camd/native_event_worker.h b/workbench/libs/camd/native_event_worker.h
+--- a/workbench/libs/camd/native_event_worker.h
++++ b/workbench/libs/camd/native_event_worker.h
+@@ -51,6 +51,12 @@ enum CAMDNativeWorkerResult camd_native_worker_create(
+ enum CAMDNativeWorkerResult camd_native_worker_wake(
+     struct CAMDNativeEventWorker *worker);
+ 
++/* For the pump's downstream callback, which runs in the worker: when the
++ * pump then reports that it is blocked, the worker runs it again after at
++ * most this long, without a wake. Zero is taken as one millisecond. */
++enum CAMDNativeWorkerResult camd_native_worker_wake_after(
++    struct CAMDNativeEventWorker *worker, uint32_t milliseconds);
++
+ #ifdef __AROS__
+ /* Interrupt-safe AROS capacity notification.  Unlike the task-context wake,
+  * this only calls Exec Signal() and does not acquire a semaphore or update
+diff --git a/workbench/libs/camd/putendpointmidi.c b/workbench/libs/camd/putendpointmidi.c
+--- a/workbench/libs/camd/putendpointmidi.c
++++ b/workbench/libs/camd/putendpointmidi.c
+@@ -39,7 +39,9 @@
+     NOTES
+ 		New in V43 and provisional: the endpoint functions can still
+ 		change. Does not wait. SysEx goes through
+-		PutEndpointSysEx().
++		PutEndpointSysEx(). An event with CAMD_EVENT_TIME_VALID is
++		handed to a driver's port when CamdTime() reaches its TimeLow,
++		and holds back the session's later messages until then.
+ 
+     EXAMPLE
+ 
