@@ -82,6 +82,11 @@ enum CAMDIdentityMapResult camd_identity_map_create(
     struct CAMDIdentityMap **map);
 void camd_identity_map_destroy(struct CAMDIdentityMap *map);
 
+/* An ID that belongs to no key and is not stored: for one run only. It
+ * differs from every ID the map holds. */
+enum CAMDIdentityMapResult camd_identity_map_temporary(
+    struct CAMDIdentityMap *map, struct CAMDEndpointIDV1 *id);
+
 enum CAMDIdentityMapResult camd_identity_map_resolve(
     struct CAMDIdentityMap *map, const struct CAMDIdentityKeyV1 *key,
     struct CAMDIdentityResolutionV1 *resolution);

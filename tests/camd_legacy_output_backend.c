@@ -377,8 +377,8 @@ static void test_input_sessions(void)
 struct timed_port {
     pthread_mutex_t lock;
     unsigned int written;
-    uint8_t notes[8];
-    uint32_t when[8];
+    uint8_t notes[16];
+    uint32_t when[16];
 };
 
 static uint32_t clock_ms(void *context)
@@ -427,7 +427,7 @@ static void sleep_ms(long milliseconds)
     nanosleep(&pause, NULL);
 }
 
-/* A message with a time waits for it, and those behind it wait with it. */
+/* A message with a time waits for it; the others do not wait behind it. */
 static void test_scheduled_output(void)
 {
     struct CAMDEndpointRegistry *registry = camd_registry_create();
@@ -516,23 +516,50 @@ static void test_scheduled_output(void)
     events[1].Flags = CAMD_EVENT_TIME_VALID;
     events[1].ClockDomain = CAMD_CLOCK_CAMD;
     events[1].TimeLow = target;
-    events[2] = note_event(12);                 /* overdue, but behind 11 */
+    events[2] = note_event(12);                 /* overdue: before both */
     events[2].Flags = CAMD_EVENT_TIME_VALID;
     events[2].ClockDomain = CAMD_CLOCK_CAMD;
     events[2].TimeLow = start - 1000;
     assert(camd_registry_session_send_midi1(registry, session, events, 3) ==
            CAMD_REGISTRY_OK);
     sleep_ms(40);
-    assert(timed_written(&physical) == 1 && physical.notes[0] == 10);
+    /* By time: the overdue one, the untimed one, and 11 still waits. */
+    assert(timed_written(&physical) == 2 && physical.notes[0] == 12 &&
+           physical.notes[1] == 10);
     assert(camd_registry_session_drain(registry, session) ==
            CAMD_REGISTRY_QUEUE_FULL);
-    for (tries = 0; tries < 200 && timed_written(&physical) < 3; ++tries)
+    /* An untimed message sent now does not wait behind 11 either. */
+    events[0] = note_event(13);
+    assert(camd_registry_session_send_midi1(registry, session, events, 1) ==
+           CAMD_REGISTRY_OK);
+    sleep_ms(30);
+    assert(timed_written(&physical) == 3 && physical.notes[2] == 13);
+    for (tries = 0; tries < 200 && timed_written(&physical) < 4; ++tries)
         sleep_ms(5);
-    assert(timed_written(&physical) == 3);
-    assert(physical.notes[1] == 11 && physical.notes[2] == 12);
+    assert(timed_written(&physical) == 4 && physical.notes[3] == 11);
     /* Not early, and not much later than asked on an idle machine. */
-    assert((int32_t)(physical.when[1] - target) >= 0);
-    assert((int32_t)(physical.when[1] - target) < 500);
+    assert((int32_t)(physical.when[3] - target) >= 0);
+    assert((int32_t)(physical.when[3] - target) < 500);
+    /* Two for the same time keep the order they were sent in, and one for
+     * an earlier time sent last goes first. */
+    target = clock_ms(NULL) + 80;
+    events[0] = note_event(14);
+    events[1] = note_event(15);
+    events[2] = note_event(16);
+    events[0].Flags = events[1].Flags = events[2].Flags =
+        CAMD_EVENT_TIME_VALID;
+    events[0].ClockDomain = events[1].ClockDomain = events[2].ClockDomain =
+        CAMD_CLOCK_CAMD;
+    events[0].TimeLow = events[1].TimeLow = target;
+    events[2].TimeLow = target - 40;
+    assert(camd_registry_session_send_midi1(registry, session, events, 2) ==
+           CAMD_REGISTRY_OK);
+    assert(camd_registry_session_send_midi1(registry, session, &events[2],
+                                            1) == CAMD_REGISTRY_OK);
+    for (tries = 0; tries < 200 && timed_written(&physical) < 7; ++tries)
+        sleep_ms(5);
+    assert(timed_written(&physical) == 7 && physical.notes[4] == 16 &&
+           physical.notes[5] == 14 && physical.notes[6] == 15);
     assert(camd_registry_session_drain(registry, session) == CAMD_REGISTRY_OK);
 
     /* Cancelling drops a message that still waits for its time. */
@@ -543,16 +570,16 @@ static void test_scheduled_output(void)
     assert(camd_registry_session_send_midi1(registry, session, events, 1) ==
            CAMD_REGISTRY_OK);
     sleep_ms(30);
-    assert(timed_written(&physical) == 3);
+    assert(timed_written(&physical) == 7);
     assert(camd_registry_session_cancel(registry, session) ==
            CAMD_REGISTRY_OK);
     assert(camd_registry_session_drain(registry, session) == CAMD_REGISTRY_OK);
     events[0] = note_event(21);
     assert(camd_registry_session_send_midi1(registry, session, events, 1) ==
            CAMD_REGISTRY_OK);
-    for (tries = 0; tries < 200 && timed_written(&physical) < 4; ++tries)
+    for (tries = 0; tries < 200 && timed_written(&physical) < 8; ++tries)
         sleep_ms(5);
-    assert(timed_written(&physical) == 4 && physical.notes[3] == 21);
+    assert(timed_written(&physical) == 8 && physical.notes[7] == 21);
 
     /* Closing does not wait for a message's time either. */
     events[0] = note_event(22);
@@ -562,7 +589,7 @@ static void test_scheduled_output(void)
     assert(camd_registry_session_send_midi1(registry, session, events, 1) ==
            CAMD_REGISTRY_OK);
     assert(camd_registry_session_close(registry, session) == CAMD_REGISTRY_OK);
-    assert(timed_written(&physical) == 4);
+    assert(timed_written(&physical) == 8);
 
     assert(camd_legacy_driver_adapter_begin_retire(adapter) ==
            CAMD_REGISTRY_OK);

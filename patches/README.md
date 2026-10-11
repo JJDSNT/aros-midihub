@@ -207,6 +207,7 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-endpoint-time.patch` | received messages carry the `CamdTime()` of their arrival, and a message sent to a driver's port with a time waits in its session's queue until then: the session worker gains a timed retry on timer.device |
 | `aros-camd-endpoint-ump.patch` | native UMP without conversion for published endpoints: `PutEndpointUMP()`, `GetEndpointUMP()`, `PutPublishedUMP()`, `GetPublishedUMP()`; Groups and Function Blocks with `SetPublishedEndpointTopology()`, `GetEndpointGroup()` and `GetEndpointFunctionBlock()`; word counts checked against the message type |
 | `aros-camd-endpoint-layout.patch` | `midi/camdendpoint.h` checks every record's size at compile time |
+| `aros-camd-endpoint-hardening.patch` | objects go with their task's last close of the library; temporary IDs and a full identity store; time-ordered session queues and timed SysEx; a bounded, really blocking drain; direction flags, snapshot generation, name checks, per-session SysEx limits and `GetPublishedEndpointStats()` |
 
 ```sh
 grep -v '^#' patches/camd-series | while read -r p; do
@@ -383,9 +384,13 @@ patches and with all of them:
 | up to `camd-part-notify` | 50 of 50 | skipped | 8 of 8 |
 | all patches | 65 of 65 | 34 of 34 | 13 of 13 |
 
-`MIDIHubCAMDCompat --v43` is a client of the provisional endpoint functions: 148
-checks on hosted AROS, and 148 again after `--v43-leak` exits with a session
-open and `Avail FLUSH` tries to expunge the library. Its session and a legacy link send to the same
+`MIDIHubCAMDCompat --v43` is a client of the provisional endpoint functions: 177
+checks on hosted AROS. The runners repeat it twice in the second boot: after
+`--v43-leak` left objects behind, closed the library and `Avail FLUSH`
+expunged it, and after `--v43-abandon` ended without closing it, when the
+library has to stay. They start the suite with `Run`: the shell that executes
+`User-Startup` at boot runs commands with task switching disabled, and the
+suite refuses to start there. Its session and a legacy link send to the same
 debugdriver port, and the runner compares the bytes the driver printed. Input
 sessions are tested on the loopback driver, in both directions between a
 session and the port's legacy clusters. The suite also publishes an endpoint

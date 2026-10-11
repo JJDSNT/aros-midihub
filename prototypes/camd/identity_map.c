@@ -249,6 +249,31 @@ void camd_identity_map_destroy(struct CAMDIdentityMap *map)
     map_free(map);
 }
 
+enum CAMDIdentityMapResult camd_identity_map_temporary(
+    struct CAMDIdentityMap *map, struct CAMDEndpointIDV1 *id)
+{
+    enum CAMDIdentityMapResult result = CAMD_IDENTITY_MAP_COLLISION;
+    unsigned int attempt;
+
+    if (!map || !id)
+        return CAMD_IDENTITY_MAP_INVALID;
+    lock_acquire(&map->lock);
+    for (attempt = 0; attempt < GENERATE_ATTEMPTS; ++attempt) {
+        if (!map->generate(map->callback_context, id)) {
+            result = CAMD_IDENTITY_MAP_GENERATOR;
+            break;
+        }
+        if (!id_is_zero(id) && !id_exists(map, id)) {
+            result = CAMD_IDENTITY_MAP_OK;
+            break;
+        }
+    }
+    lock_release(&map->lock);
+    if (result != CAMD_IDENTITY_MAP_OK)
+        memset(id, 0, sizeof(*id));
+    return result;
+}
+
 enum CAMDIdentityMapResult camd_identity_map_resolve(
     struct CAMDIdentityMap *map, const struct CAMDIdentityKeyV1 *key,
     struct CAMDIdentityResolutionV1 *resolution)

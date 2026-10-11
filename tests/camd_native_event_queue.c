@@ -230,9 +230,134 @@ static void test_ump_queue_concurrency(void)
     camd_native_queue_destroy(queue);
 }
 
+static struct CAMDMIDI1EventV1 timed_event(uint8_t note, uint32_t time)
+{
+    struct CAMDMIDI1EventV1 event = midi1_event(note);
+
+    event.Flags = CAMD_EVENT_TIME_VALID;
+    event.ClockDomain = CAMD_CLOCK_CAMD;
+    event.TimeLow = time;
+    return event;
+}
+
+static uint8_t take_note(struct CAMDNativeEventQueue *queue)
+{
+    struct CAMDMIDI1EventV1 event;
+    size_t count = 0;
+
+    assert(camd_native_queue_dequeue_midi1(queue, &event, 1, &count) ==
+           CAMD_NATIVE_QUEUE_OK && count == 1);
+    return event.Bytes[1];
+}
+
+/* Ordered enqueues keep the queue by time, equal times by arrival. */
+static void test_ordered_queue(void)
+{
+    struct CAMDNativeEventQueue *queue = NULL;
+    struct CAMDNativeQueueConfigV1 config;
+    struct CAMDNativeQueueHeadV1 head;
+    struct CAMDNativeQueueSysExInfoV1 info;
+    struct CAMDNativeQueueCheckoutV1 checkout;
+    struct CAMDMIDI1EventV1 events[5], out;
+    const uint8_t early[] = { 0xf0, 0x01, 0x02, 0x03, 0xf7 };
+    const uint8_t late[] = { 0xf0, 0x7f, 0xf7 };
+    uint8_t bytes[8];
+    size_t count = 0;
+
+    memset(&config, 0, sizeof(config));
+    config.Size = sizeof(config);
+    config.Version = 1;
+    config.DataFormat = CAMD_PROVIDER_FORMAT_MIDI1;
+    config.Capacity = 6;
+    config.MaxSysExBytes = 8;
+    assert(camd_native_queue_create(&config, &queue) == CAMD_NATIVE_QUEUE_OK);
+
+    /* Now is 1000. Untimed, +50, +50, +10, and one that is overdue. */
+    events[0] = midi1_event(1);
+    events[1] = timed_event(2, 1050);
+    events[2] = timed_event(3, 1050);
+    events[3] = timed_event(4, 1010);
+    events[4] = timed_event(5, 900);
+    assert(camd_native_queue_enqueue_midi1_ordered(queue, events, 5, 1000) ==
+           CAMD_NATIVE_QUEUE_OK);
+    /* SysEx for +30 goes between, with its bytes. */
+    assert(camd_native_queue_enqueue_midi1_sysex_ordered(
+               queue, early, sizeof(early), 0, 1030, CAMD_CLOCK_CAMD,
+               CAMD_EVENT_TIME_VALID, 1000) == CAMD_NATIVE_QUEUE_OK);
+    /* All or none. */
+    assert(camd_native_queue_enqueue_midi1_ordered(queue, events, 1, 1000) ==
+           CAMD_NATIVE_QUEUE_FULL);
+    assert(take_note(queue) == 5);
+    assert(take_note(queue) == 1);
+    assert(take_note(queue) == 4);
+    memset(&head, 0, sizeof(head));
+    head.Size = sizeof(head);
+    head.Version = 1;
+    assert(camd_native_queue_peek(queue, &head) == CAMD_NATIVE_QUEUE_OK &&
+           head.Kind == CAMD_NATIVE_QUEUE_ITEM_MIDI1_SYSEX &&
+           head.ByteCount == sizeof(early));
+    memset(&info, 0, sizeof(info));
+    info.Size = sizeof(info);
+    info.Version = 1;
+    assert(camd_native_queue_dequeue_midi1_sysex(queue, bytes, sizeof(bytes),
+                                                 &info) ==
+           CAMD_NATIVE_QUEUE_OK && info.TimeLow == 1030 &&
+           memcmp(bytes, early, sizeof(early)) == 0);
+    assert(take_note(queue) == 2);
+    assert(take_note(queue) == 3);
+
+    /* Times that wrap still compare: 0xfffffff0 is before 0x10. */
+    events[0] = timed_event(6, 0x00000010u);
+    events[1] = timed_event(7, 0xfffffff0u);
+    assert(camd_native_queue_enqueue_midi1_ordered(queue, events, 2,
+                                                   0xffffff00u) ==
+           CAMD_NATIVE_QUEUE_OK);
+    assert(take_note(queue) == 7);
+    assert(take_note(queue) == 6);
+
+    /* A checked-out head is not overtaken; released, it sinks to its
+     * place, bytes and all. */
+    assert(camd_native_queue_enqueue_midi1_sysex_ordered(
+               queue, late, sizeof(late), 0, 2500, CAMD_CLOCK_CAMD,
+               CAMD_EVENT_TIME_VALID, 2000) == CAMD_NATIVE_QUEUE_OK);
+    memset(&checkout, 0, sizeof(checkout));
+    checkout.Size = sizeof(checkout);
+    checkout.Version = 1;
+    info.Size = sizeof(info);
+    assert(camd_native_queue_checkout_midi1_sysex(
+               queue, bytes, sizeof(bytes), &info, &checkout) ==
+           CAMD_NATIVE_QUEUE_OK);
+    events[0] = midi1_event(8);
+    assert(camd_native_queue_enqueue_midi1_ordered(queue, events, 1, 2000) ==
+           CAMD_NATIVE_QUEUE_OK);
+    assert(camd_native_queue_enqueue_midi1_sysex_ordered(
+               queue, early, sizeof(early), 0, 2100, CAMD_CLOCK_CAMD,
+               CAMD_EVENT_TIME_VALID, 2000) == CAMD_NATIVE_QUEUE_OK);
+    assert(camd_native_queue_peek(queue, &head) == CAMD_NATIVE_QUEUE_OK &&
+           head.Kind == CAMD_NATIVE_QUEUE_ITEM_MIDI1_SYSEX &&
+           head.ByteCount == sizeof(late));
+    assert(camd_native_queue_release(queue, &checkout) ==
+           CAMD_NATIVE_QUEUE_OK);
+    assert(take_note(queue) == 8);
+    info.Size = sizeof(info);
+    assert(camd_native_queue_dequeue_midi1_sysex(queue, bytes, sizeof(bytes),
+                                                 &info) ==
+           CAMD_NATIVE_QUEUE_OK && info.ByteCount == sizeof(early) &&
+           memcmp(bytes, early, sizeof(early)) == 0);
+    info.Size = sizeof(info);
+    assert(camd_native_queue_dequeue_midi1_sysex(queue, bytes, sizeof(bytes),
+                                                 &info) ==
+           CAMD_NATIVE_QUEUE_OK && info.ByteCount == sizeof(late) &&
+           memcmp(bytes, late, sizeof(late)) == 0);
+    assert(camd_native_queue_dequeue_midi1(queue, &out, 1, &count) ==
+           CAMD_NATIVE_QUEUE_EMPTY);
+    camd_native_queue_destroy(queue);
+}
+
 int main(void)
 {
     test_midi1_queue();
+    test_ordered_queue();
     test_ump_queue_concurrency();
     puts("CAMD native event queue OK");
     return 0;

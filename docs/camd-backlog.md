@@ -16,28 +16,49 @@ Priorities: **P0** can hurt a user of the slice as it is. **P1** is a gap a
 real client runs into soon. **P2** completes the surface before review. **P3**
 is polish. Within a priority the order is the suggested order of work.
 
+## Done
+
+Closed in `aros-camd-endpoint-hardening.patch` and verified on hosted AROS
+(177 checks in `MIDIHubCAMDCompat --v43`, three runs in a row):
+
+| # | What was done |
+|---|---|
+| B01 | Objects belong to the task that made them and go with its last close of the library. The runner checks that the library is then expunged, and that it stays for a task that never closed it. A task that dies without closing is still not covered. |
+| B02 | `CAMD_PUBLISH_TEMPORARY`, and a full store falls back to temporary IDs for names and for driver ports. 300 names are published in a row. |
+| B03 | `DrainEndpointSession()` takes a time limit and blocks on timer.device between looks. It is still polling, every two milliseconds, not woken by the worker: see B26. |
+| B04 | Published names are checked: printable, no space at either end, at most 57 characters for a MIDI 1.0 endpoint. |
+| B06 | `CAMDEndpointInfoV1.Flags` carries the directions. |
+| B07 | `ObtainEndpointSnapshot()` returns the generation. Open-by-ID keeps no minimum generation, by decision. |
+| B08 | `GetPublishedEndpointStats()`. |
+| B09 | `PutEndpointSysEx()` takes an optional time. |
+| B10 | Session workers run at priority 35, one below a port's receiver process. At 36 the loopback driver, which hands bytes back in the sender's task, overran the receiver's ring. |
+| B11 | A session's queue is ordered by time, equal times by arrival. |
+| B13 | A session may ask for a SysEx limit up to 65536 bytes; an oversize received message is dropped and counted. |
+
+Found while doing it, on hosted AROS: the shell that executes `User-Startup`
+at boot runs each command with task switching disabled (`TDNestCnt` is 1 when
+`main()` starts; a program started with `Run` has -1). A program there that
+loops without waiting stops the whole system, and the first version of the
+drain did exactly that, because the legacy `CamdWait()` only waits on its
+first call in such a context. The runners now start the suite with `Run`, and
+the suite refuses to start where task switching is off. Whether that state of
+the boot shell is intended is a question for AROS, not for CAMD.
+
 ## P0 — can hurt as it is
 
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
-| B01 | A program that closes `camd.library` without releasing its sessions, snapshots, watches and published endpoints keeps CAMD loaded for good, and CAMD goes on signalling its dead task. | Record the owning task of every such object and release them in the library's close hook for that task. A task that dies without closing the library is still not covered; say so. | The leak test's program exits normally, `Avail FLUSH` expunges CAMD, and the next open works. |
-| B02 | Stored identities are never removed and there are 256. A program that publishes changing names fills the store; after that nothing new can be published or published persistently. | Let `PublishEndpoint()` ask for a temporary identity that is not stored, and make a full store fall back to temporary IDs instead of failing. Removal belongs to B14. | Publishing 300 distinct names succeeds, the first 256 at most are stored, and driver ports keep their IDs. |
-| B03 | `DrainEndpointSession()` waits without limit: on a blocked port, or on a publisher that never reads. | Give it a time limit in milliseconds (0 = do not wait) and return a distinct result when it expires. It polls with `CamdWait()` today; wait on a signal from the worker or the publisher's read instead. | A drain on a publisher that does not read returns after its limit; the suite has no unbounded wait left. |
-| B04 | A published name becomes two cluster names unchecked. | Refuse names CAMD cannot use as a cluster name: empty, too long for a cluster name with its `.out.0` suffix, control characters. Find the real cluster-name limit first. | Such names are `CAMD_REGISTRY_INVALID`, with a test for each rule. |
 | B05 | Only one task at a time has ever driven the endpoint functions. | A stress pass in the compatibility suite: several tasks opening, sending, receiving, closing, publishing, withdrawing and taking snapshots at once, on the loopback port and a published endpoint. This is a test, but the locking it exercises is library scope. | It runs for a fixed number of rounds on hosted AROS with no hang, crash or lost count, several times in a row. Fix what it finds. |
+| B25 | A port's receive ring (1025 entries) has no overflow check: `Receiver()` writes past unread data and only counts up. A driver that delivers a burst faster than the receiver process reads corrupts the stream; it was hit with a 10000-byte SysEx on the loopback driver. This is legacy CAMD code. | Refuse or count entries that do not fit, and report the loss as a receive error on the port's cluster and to its input sessions. | A burst larger than the ring loses bytes cleanly, with the error visible and later messages intact. |
+| B27 | Legacy waits on a driver port (`PutSysEx()`, `PutMidi()` on a full buffer, `ParseMidi()`) loop on `CamdWait()`, which stops waiting after its first call when the caller holds `Forbid()`: the caller then spins with the system stopped. Legacy CAMD code. | Make `CamdWait()` a real wait, as the drain now has. | A legacy `PutSysEx()` to a busy port under `Forbid()` ends. |
 
 ## P1 — a real client runs into it soon
 
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
-| B06 | `CAMDEndpointInfoV1.Flags` is always 0: a client cannot tell whether an endpoint takes input, output or both without trying to open it. | Define direction flags and set them for driver ports and published endpoints. | The snapshot shows directions; the suite checks them. |
-| B07 | `ObtainEndpointSnapshot()` does not give the registry generation, so a watch and a snapshot cannot be put in order, and open-by-ID has no minimum generation. | Return the generation with the snapshot. Decide whether `CAMDSessionRequestV1` gets a minimum generation or the limit stays documented (see D1). | A client can tell that an event is older than its snapshot. |
-| B08 | A legacy link that sends to a published endpoint whose publisher does not read loses messages, counted only inside CAMD. `PutPublished*()` also hides how many client queues were full. | A `GetPublishedEndpointStats()` with records taken, lost from legacy senders, and lost to full client queues. | The counts are visible and tested. |
-| B09 | `PutEndpointSysEx()` takes no time, so SysEx is never scheduled. | Add a timed form (the registry and queue already carry the time). | A SysEx message with a time waits for it on the loopback port. |
-| B10 | A session's worker runs at priority 0, below the port's receiver process (36), so scheduled output is late under load. | Run workers at the receiver's priority. | The scheduled-output check holds with a busy-looping task at priority 0. |
-| B11 | A message that waits for its time holds back everything behind it in the session. | Decide (D2): keep strict order and document it as the contract, or order a session's waiting messages by time. | The contract is stated in the header and tested either way. |
 | B12 | Scheduling exists only for driver ports. A published endpoint gets raw times. | Optional per publish request: "CAMD holds messages until their time before I take them". | A publisher that asks for it takes a timed message only when it is due. |
-| B13 | Received SysEx longer than 4096 bytes is dropped whole, and no session can ask for more or less. | Let `CAMDSessionRequestV1` name a SysEx limit up to a system maximum; report the drop in the session's counters. | A session that asked for 16 KB receives a 10 KB message; an oversize one is counted. |
+| B26 | `DrainEndpointSession()` looks every two milliseconds instead of being woken when the queue empties. | Have the session's worker, or the publisher's read, signal the drainer; keep the timer for the limit only. | A drain returns within a scheduling quantum of the last hand-over, without periodic wakeups. |
+| B28 | `AllocDriverData()` sets `bufferend` twice and never `bufferend_rt`, so the realtime send ring of a driver port never wraps and writes past its 1025 bytes after that many realtime messages. Legacy CAMD code, found by reading. | Set `bufferend_rt`. | 2000 realtime messages to a driver port leave the heap intact. |
 
 ## P2 — complete the surface before review
 
@@ -48,7 +69,6 @@ is polish. Within a priority the order is the suggested order of work.
 | B16 | Fixed tables: 32 snapshots, 64 input sessions, 16 watches, 32 published endpoints, 32 sessions per endpoint, 64 records per queue. | Grow the system-wide tables on demand; keep per-session and per-endpoint bounds but let the request name them up to a maximum. | The suite opens more than today's limits without failure. |
 | B17 | Function Block and Group flags have no defined values (direction, active, static). | Define the values the UMP specification's Function Block Info carries, as CAMD's own flags, and check only their range. Needs the values confirmed against the specification text later. | Flags round-trip through topology and snapshot. |
 | B18 | Nothing keeps a MIDI 1.0-protocol UMP endpoint from carrying MIDI 2.0 channel voice messages, or the reverse. | Check the message type against the endpoint's protocol on send and emit, letting utility, system, data and stream types through. | A type-4 message on a MIDI 1.0-protocol endpoint is refused, with a test. |
-| B19 | `PutPublished*()` runs receivers' work, legacy hooks included, in the publisher's task. | Document as the contract, or hand legacy delivery to a process of the endpoint. Only the second removes the limit; decide when B05 shows whether it matters. | Stated in the header, or delivery no longer runs in the caller. |
 | B20 | Identity-file writes that fail half-way are covered only by the host model. | A debug-only switch in the store that fails a chosen DOS call, driven by the hosted runner. | The runner fails each write, flush, rename and delete once and the IDs survive. |
 
 ## P3 — polish
@@ -62,12 +82,10 @@ is polish. Within a priority the order is the suggested order of work.
 
 ## Decisions needed
 
-- **D1 (for B07):** should opening by ID be able to demand "the endpoint as
-  of generation N or newer" and fail as stale otherwise? The draft says yes;
-  it adds a field to the request record.
-- **D2 (for B11):** strict order per session, or order waiting messages by
-  time? Strict order is simpler and is what CoreMIDI-style packet lists
-  assume; ordering by time is what a sequencer that sends out of order wants.
+None open. Taken on 2026-10-11: order a session's messages by time (B11);
+return the snapshot's generation without a minimum generation for opening
+(B07); delivery in the publisher's task is the contract (B19, now only a
+documented rule).
 
 ## Not scheduled here
 

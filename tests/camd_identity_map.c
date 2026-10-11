@@ -224,6 +224,36 @@ int main(void)
     assert(creators == 1);
     assert(storage.generate_calls == 1 && storage.commit_calls == 1);
     camd_identity_map_destroy(map);
+    {
+        struct storage temp_state;
+        struct CAMDIdentityMapConfigV1 temp_config;
+        struct CAMDIdentityMap *temp_map = NULL;
+        struct CAMDEndpointIDV1 one, two;
+        static const struct CAMDEndpointIDV1 zero;
+
+        memset(&temp_state, 0, sizeof(temp_state));
+        temp_state.next_id = 1;
+        memset(&temp_config, 0, sizeof(temp_config));
+        temp_config.Size = sizeof(temp_config);
+        temp_config.Version = 1;
+        temp_config.Capacity = 1;
+        temp_config.CallbackContext = &temp_state;
+        temp_config.Generate = generate_id;
+        temp_config.Commit = commit_records;
+        assert(camd_identity_map_create(&temp_config, &temp_map) ==
+               CAMD_IDENTITY_MAP_OK);
+        /* Temporary IDs need no room and are not committed. */
+        assert(camd_identity_map_temporary(temp_map, &one) ==
+               CAMD_IDENTITY_MAP_OK);
+        assert(camd_identity_map_temporary(temp_map, &two) ==
+               CAMD_IDENTITY_MAP_OK);
+        assert(memcmp(&one, &zero, sizeof(one)) != 0 &&
+               memcmp(&one, &two, sizeof(one)) != 0);
+        assert(temp_state.commit_calls == 0);
+        assert(camd_identity_map_temporary(NULL, &one) ==
+               CAMD_IDENTITY_MAP_INVALID);
+        camd_identity_map_destroy(temp_map);
+    }
     puts("CAMD identity map OK");
     return 0;
 }

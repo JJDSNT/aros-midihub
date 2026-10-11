@@ -16,19 +16,20 @@ in this draft is exported as a public symbol.
 
 `patches/aros-camd-endpoint-client.patch`, `aros-camd-endpoint-input.patch` and
 `aros-camd-endpoint-watch.patch` and `aros-camd-endpoint-publish.patch` `aros-camd-endpoint-diagnostics.patch`, `aros-camd-endpoint-time.patch` and
-`aros-camd-endpoint-ump.patch` append twenty-seven ordinary vectors behind
+`aros-camd-endpoint-ump.patch` append twenty-eight ordinary vectors (the last
+one in `aros-camd-endpoint-hardening.patch`) behind
 `.version 43` and installs `midi/camdendpoint.h`, so that the endpoint core has
 a real client before review. Everything in it can still change.
 
 | Function | Registers | Purpose |
 |---|---|---|
-| `LONG ObtainEndpointSnapshot(snapshot, count)` | A0, A1 | immutable copy of the registry; handle is slot + generation |
+| `LONG ObtainEndpointSnapshot(snapshot, count, generation)` | A0, A1, A2 | immutable copy of the registry and its generation; handle is slot + generation |
 | `LONG GetEndpointInfo(snapshot, index, info)` | A0, D0, A1 | copy at most the caller's `Size` bytes of `CAMDEndpointInfoV1` |
 | `void ReleaseEndpointSnapshot(snapshot)` | A0 | |
 | `LONG OpenEndpointSession(request, session, info)` | A0, A1, A2 | by stable ID; one direction, data format and protocol; no conversion |
 | `LONG PutEndpointMidi(session, events, count)` | A0, A1, D0 | atomic batch of `CAMDMIDI1EventV1`; never waits |
-| `LONG PutEndpointSysEx(session, bytes, length)` | A0, A1, D0 | one complete copied message; never waits |
-| `LONG DrainEndpointSession(session)` | A0 | wait until the queue is handed to the port |
+| `LONG PutEndpointSysEx(session, bytes, length, time)` | A0, A1, D0, A2 | one complete copied message, optionally for a time; never waits |
+| `LONG DrainEndpointSession(session, milliseconds)` | A0, D0 | wait, at most that long, until the queue is handed over |
 | `LONG GetEndpointMidi(session, event, sysex, size, length)` | A0, A1, A2, D0, A3 | oldest received short message or complete SysEx; never waits |
 | `LONG StartEndpointWatch(watch, signal, generation)` | A0, D0, A1 | bounded queue of endpoint changes; signals the calling task |
 | `LONG GetEndpointWatchEvent(watch, event)` | A0, A1 | oldest `CAMDEndpointWatchEventV1`; `CAMD_ENDPOINT_EVENT_LOST` after overflow |
@@ -48,6 +49,7 @@ a real client before review. Everything in it can still change.
 | `LONG SetPublishedEndpointTopology(endpoint, groups, groupcount, blocks, blockcount)` | A0, A1, D0, A2, D1 | replace Groups and Function Blocks as a whole |
 | `LONG GetEndpointGroup(snapshot, index, number, info)` | A0, D0, D1, A1 | one `CAMDGroupInfoV1` of an endpoint |
 | `LONG GetEndpointFunctionBlock(snapshot, index, number, info)` | A0, D0, D1, A1 | one `CAMDFunctionBlockInfoV1` of an endpoint |
+| `LONG GetPublishedEndpointStats(endpoint, stats)` | A0, A1 | records taken, emitted and lost on either side |
 | `LONG CloseEndpointSession(session)` | A0 | |
 
 Results are `enum CAMDRegistryResult` values. The native MIDI 1.0 record for
@@ -108,14 +110,11 @@ These are deliberate or still open; each is what the code does today.
 - Scheduling exists for sessions to a driver's port only. A published
   endpoint gets its clients' times as given and has to keep them itself, and
   legacy links carry no time.
-- A session is one queue in order: a message that waits for its time holds
-  back the messages queued after it, even overdue ones. Nothing is reordered.
-- `PutEndpointSysEx()` takes no time; SysEx is always sent at once, in its
-  place in the queue.
 - A received message's time is when it reached the session's queue, taken in
   the port's receiver process, not when the hardware saw it.
 - Scheduling is as exact as timer.device and the session's worker process,
-  which runs at priority 0; nothing compensates for latency.
+  which runs at priority 35, one below a port's receiver process; nothing
+  compensates for latency.
 - Names, registers, record layouts and result codes are not reviewed upstream
   and can change. `enum CAMDRegistryResult` is the internal registry enum
   exposed as it is.
@@ -127,7 +126,8 @@ These are deliberate or still open; each is what the code does today.
   endpoint publication has been run, and it is not built for m68k or i386, so
   the register assignments are untested there.
 - A record CAMD fills in (`CAMDEndpointInfoV1`, `CAMDSessionInfoV1`,
-  `CAMDSessionStatsV1`, Group and Function Block records) may be shorter or
+  `CAMDSessionStatsV1`, `CAMDPublishedStatsV1`, Group and Function Block
+  records) may be shorter or
   longer than CAMD's: at most the caller's `Size` is written and `Size`
   returns as the full size. A record the caller hands in
   (`CAMDSessionRequestV1`, `CAMDPublishRequestV1`, events) must have exactly
@@ -135,26 +135,39 @@ These are deliberate or still open; each is what the code does today.
 
 **Behaviour a client has to know**
 
-- A program that exits without closing its sessions, snapshots and watches or
-  withdrawing its endpoints keeps camd.library loaded for good. If it named a
-  signal, CAMD goes on signalling a task that no longer exists, as CAMD 41
-  does for a node left behind. There is no per-task cleanup.
-- Nothing waits except `DrainEndpointSession()`, which waits without a
-  timeout: for a driver port as long as the port takes, for a published
-  endpoint until its publisher has read everything or withdraws.
+- A task's sessions, snapshots, watches and published endpoints are released
+  when it closes camd.library for the last time. A task that ends without
+  closing the library is not noticed: its objects stay, the library stays
+  loaded, and a signal it named goes on being sent to a task that no longer
+  exists, as CAMD 41 does for a node left behind.
+- Nothing waits except `DrainEndpointSession()`, which waits at most the time
+  it is given, looking every two milliseconds. It really blocks, so the
+  session's worker runs also when the caller holds `Forbid()`. Every other
+  function returns at once; none assumes that other tasks get to run while it
+  is inside CAMD.
+- A session hands its messages over by time: one that waits does not hold
+  back an untimed or earlier one sent after it, and equal times keep their
+  order. Nothing else is reordered, and there is one queue per session.
 - Input is lossy by design. A full input-session queue loses the newest
   messages, reported once by `GetEndpointMidi()` and counted in
   `GetEndpointSessionStats()`. A SysEx message longer than the session's
-  `MaxSysExBytes` (4096) is dropped whole.
+  limit (4096 bytes unless it asked for more, 65536 at most) is dropped
+  whole and counted.
 - A legacy link that sends to a published endpoint is never held up: when the
-  publisher does not read, the newest messages are lost, and that loss is
-  counted only inside CAMD.
-- `PutPublishedMidi()` and `PutPublishedSysEx()` run the receivers' work in
-  the publisher's task, including legacy receive hooks.
+  publisher does not read, the newest messages are lost and counted in
+  `GetPublishedEndpointStats()`.
+- `PutPublishedMidi()`, `PutPublishedSysEx()` and `PutPublishedUMP()` do the
+  receivers' work in the publisher's task, legacy receive hooks included, as
+  `PutMidi()` always has. This is the contract, not a temporary state.
 - Open-by-ID has no minimum generation: a client that kept an ID opens
-  whatever endpoint has that ID now.
+  whatever endpoint has that ID now. A snapshot gives its generation, so a
+  client can tell which watch events came after it.
 - Do not call the publishing functions while holding `LockCAMD()`; they take
   the cluster lock exclusively, like `AddMidiLinkA()`.
+- A published name is printable, has no space at either end and, for a
+  MIDI 1.0 endpoint, is at most 57 characters, so that its cluster names are
+  reported whole. A loaded driver's name cannot be published, and a driver
+  whose name is published is not loaded.
 
 **Fixed sizes**
 
@@ -174,7 +187,10 @@ These are deliberate or still open; each is what the code does today.
   run and are left untouched; nothing repairs or reports them beyond a line on
   the debug console. Failing DOS calls in the middle of a write are covered
   only by the host model.
-- Stored identities are never removed.
+- Stored identities are never removed, and there is room for 256. Once the
+  store is full, new driver ports and published names get temporary IDs
+  (`CAMD_IDENTITY_TEMPORARY`), as a name published with
+  `CAMD_PUBLISH_TEMPORARY` always does.
 
 **Lifecycle**
 

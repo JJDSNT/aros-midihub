@@ -307,6 +307,7 @@ int main(void)
     config.Directions = CAMD_PROVIDER_DIRECTION_ALL;
     config.MaxQueueCapacity = 4;
     config.MaxSysExBytes = 8;
+    config.LimitSysExBytes = 64;
     config.Notify = count_notify;
     assert(camd_app_endpoint_create(&config, &app) == CAMD_PROVIDER_INVALID);
     config.MaxSessions = 3;
@@ -341,6 +342,9 @@ int main(void)
            CAMD_REGISTRY_OK);
     assert(strcmp(info->Transport, "camd-app") == 0 &&
            info->State == CAMD_ENDPOINT_AVAILABLE);
+    /* The directions sessions open in. */
+    assert(info->Flags ==
+           (CAMD_ENDPOINT_FLAG_INPUT | CAMD_ENDPOINT_FLAG_OUTPUT));
     camd_snapshot_destroy(snapshot);
 
     /* Nothing waits before a client sends. */
@@ -359,6 +363,35 @@ int main(void)
     assert(camd_registry_session_open(registry, &request, &refused) ==
            CAMD_REGISTRY_UNSUPPORTED);
     request.QueueCapacity = 2;
+    /* A session may ask for longer SysEx up to the endpoint's limit. */
+    request.MaxSysExBytes = 65;
+    assert(camd_registry_session_open(registry, &request, &refused) ==
+           CAMD_REGISTRY_UNSUPPORTED);
+    request.MaxSysExBytes = 64;
+    assert(camd_registry_session_open(registry, &request, &refused) ==
+           CAMD_REGISTRY_OK);
+    {
+        struct CAMDRegistrySessionInfoV1 opened;
+        uint8_t longer[40];
+
+        memset(&opened, 0, sizeof(opened));
+        opened.Size = sizeof(opened);
+        opened.Version = 1;
+        assert(camd_registry_session_info(registry, refused, &opened) ==
+               CAMD_REGISTRY_OK && opened.MaxSysExBytes == 64);
+        memset(longer, 0x11, sizeof(longer));
+        longer[0] = 0xf0;
+        longer[sizeof(longer) - 1] = 0xf7;
+        assert(camd_registry_session_send_midi1_sysex(
+                   registry, refused, longer, sizeof(longer), 0, 0, 0, 0) ==
+               CAMD_REGISTRY_OK);
+        assert(camd_registry_session_cancel(registry, refused) ==
+               CAMD_REGISTRY_OK);
+        assert(camd_registry_session_close(registry, refused) ==
+               CAMD_REGISTRY_OK);
+    }
+    request.MaxSysExBytes = 0;
+    notified = 0;
     assert(camd_registry_session_open(registry, &request, &first) ==
            CAMD_REGISTRY_OK);
     assert(camd_registry_session_open(registry, &request, &second) ==
@@ -508,6 +541,17 @@ int main(void)
                legacy.sysex == 1);
         assert(camd_app_endpoint_set_projection(app, NULL) ==
                CAMD_PROVIDER_OK);
+        {
+            struct CAMDPublishedStatsV1 stats;
+
+            assert(camd_app_endpoint_stats(app, &stats) == CAMD_PROVIDER_OK);
+            /* Taken: three from sessions, SysEx, and six legacy ones.
+             * Emitted: the calls above. One client queue was full once, and
+             * one legacy message found the queue full. */
+            assert(stats.Size == sizeof(stats) && stats.Taken == 10 &&
+                   stats.ClientsLost == 1 && stats.LegacyLost == 1 &&
+                   stats.Emitted == 6);
+        }
         assert(camd_app_endpoint_emit_midi1(app, events, 1, NULL) ==
                CAMD_PROVIDER_OK && legacy.events == 1);
     }

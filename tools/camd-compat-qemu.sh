@@ -54,8 +54,11 @@ make_image() {
     done
 }
 
+# The suite runs in a shell of its own, as in camd-compat-hosted.sh.
 boot() {
-    printf '%b\n' "$1" > "$work/User-Startup"
+    printf '%b\n' "$1" > "$work/camdcompat-run"
+    printf 'Run >NIL: Execute S:camdcompat-run\n' > "$work/User-Startup"
+    mcopy -o -Q -i "$img@@1M" "$work/camdcompat-run" ::/S/camdcompat-run
     mcopy -o -Q -i "$img@@1M" "$work/User-Startup" ::/S/User-Startup
     timeout "$seconds" qemu-system-aarch64 -M raspi3b \
         -kernel "$sd/aros-aarch64-raspi.img" \
@@ -75,12 +78,14 @@ boot "$cmd >SYS:camdcompat-contract.log\n$cmd --v42 >SYS:camdcompat-v42.log\n$cm
 
 mcopy -o -Q -i "$img@@1M" "$sd/Devs/Midi/debugdriver" ::/camdcompat-debugdriver
 mdel -i "$img@@1M" ::/Devs/Midi/debugdriver
-# After the rethink pass a client exits with a session open and memory is
-# flushed: camd.library must refuse to go, and then still work.
-boot "$cmd --rethink >SYS:camdcompat-rethink.log\n$cmd --v43-leak >SYS:camdcompat-leak.log\nAvail FLUSH >NIL:\n$cmd --v43 >SYS:camdcompat-flushed.log" rethink "rethink leak flushed"
+# After the rethink pass a client leaves endpoint objects behind and memory
+# is flushed, twice. The first client closes camd.library, which releases
+# them: the library is expunged and loads its drivers again. The second ends
+# without closing it: the library has to stay, and still work.
+boot "$cmd --rethink >SYS:camdcompat-rethink.log\n$cmd --v43-leak >SYS:camdcompat-leak.log\nAvail FLUSH >NIL:\n$cmd --v43 >SYS:camdcompat-flushed.log\n$cmd --v43-abandon >SYS:camdcompat-abandon.log\nAvail FLUSH >NIL:\n$cmd --v43 >SYS:camdcompat-kept.log" rethink "rethink leak flushed abandon kept"
 
 status=0
-for run in contract v42 v43 rethink leak flushed; do
+for run in contract v42 v43 rethink leak flushed abandon kept; do
     log="$work/camdcompat-$run.log"
     if [ ! -s "$log" ]; then
         echo "no $run log: AROS did not run the suite (see $work/serial-$run.log)"
@@ -98,7 +103,8 @@ done
 # A camd.library that publishes driver endpoints prints their stored IDs on
 # the serial console. The second boot must find the IDs the first one made.
 ids() {
-    grep -a 'camd.library: \(provider\|endpoint\) [0-9]* id ' "$work/serial-$1.log" | tr -d '\r' || true
+    sed -n '/camd.library: debugdriver published/,/camd.library: drivers.c/p' \
+        "$work/serial-$1.log" | grep -a ' id ' | tr -d '\r' | head -n 5 || true
 }
 first=$(ids contract)
 if [ -n "$first" ]; then
@@ -108,6 +114,17 @@ if [ -n "$first" ]; then
         echo "FAIL endpoint IDs changed across a reboot"
         status=1
     fi
+fi
+
+# The debugdriver is published once when RethinkCAMD() loads it and once more
+# when the library comes back after the first flush; the second flush must
+# not unload it.
+loads=$(grep -ac 'camd.library: debugdriver published' "$work/serial-rethink.log" || true)
+if [ "$loads" = 2 ]; then
+    echo "PASS camd.library goes after a client's last close and stays for one that never closed"
+else
+    echo "FAIL camd.library loaded the debugdriver $loads times in the rethink boot, not 2"
+    status=1
 fi
 
 # The v43 run sends on debugdriver port 2 only: a legacy message, a session's
