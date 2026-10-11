@@ -305,5 +305,9 @@ for amiga-m68k and raspi-aarch64 as well.
 | `net/aros-arostcp-multicast-no-route.patch` | Review: a socket that only joined a group could not send without a route. The first membership's interface is used when there is none. |
 | `net/aros-net-if-flags-unsigned.patch` | Review: `if_flags` and `ifr_flags` were `short`, so `IFF_MULTICAST` (0x8000) was the sign bit. |
 | `net/aros-eth-unix-multicast-filter.patch` | Review: the hosted `eth.device` passed every group on the host's network up to the stack. It keeps the addresses its clients asked for and filters by them. |
+| `net/aros-arostcp-sana2arp-own-header.patch` | Second review of PR #1543: `net/sana2arp.c` got the public `in_var.h`, so `in_mcast_macaddr()` was implicitly declared. It names the stack's header relative to itself and stops the compiler otherwise. |
+| `net/aros-arostcp-run-dhcp-softc.patch` | Second review, cosmetic: `run_dhcp()` cast the interface by hand with the softc in scope. |
+| `net/aros-arostcp-in-ifdetach.patch` | Second review: `if_detach()` left group memberships naming the freed interface, so one removed and added again by a reload looked joined to the all-hosts group and the device was never told. `in_ifdetach()` releases the interface's own membership and cuts the sockets' loose. `tools/igmp-reload-hosted.sh` tests it. |
+| `net/aros-eth-unix-multicast-free.patch` | Second review: the hosted `eth.device` did not free its multicast address list with the unit. |
 | `net/aros-arostcp-ipv4-multicast.patch` | IPv4 multicast on a SANA-II interface. `IFF_MULTICAST` was never set, and its bit was used for a private flag, now in `ss_cflags`; a group had no Ethernet address (RFC 1112 section 6.4); `ip_input()` had no case for a joined group; and a sender that chose its interface with `IP_MULTICAST_IF` still needed a route. |
 

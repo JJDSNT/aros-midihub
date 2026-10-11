@@ -12,6 +12,8 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-camdprobe \
 #MM      contrib-aros-midihub-camdcompat \
 #MM      contrib-aros-midihub-camdidentities \
+#MM      contrib-aros-midihub-netreload \
+#MM      contrib-aros-midihub-mcastjoin \
 #MM      contrib-aros-midihub-synth \
 #MM      contrib-aros-midihub-router \
 #MM      contrib-aros-midihub-prefs \
@@ -193,6 +195,16 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
 %build_prog mmake=contrib-aros-midihub-camdcompat \
     progname=MIDIHubCAMDCompat \
     files="$(MIDIHUB_ROOT)/ports/aros/camd_compat" \
+    targetdir=$(MIDIHUB_PACKAGE)/C
+
+%build_prog mmake=contrib-aros-midihub-mcastjoin \
+    progname=McastJoin \
+    files="$(MIDIHUB_ROOT)/ports/aros/mcast_join" \
+    targetdir=$(MIDIHUB_PACKAGE)/C
+
+%build_prog mmake=contrib-aros-midihub-netreload \
+    progname=NetReload \
+    files="$(MIDIHUB_ROOT)/ports/aros/net_reload" \
     targetdir=$(MIDIHUB_PACKAGE)/C
 
 %build_prog mmake=contrib-aros-midihub-camdidentities \

@@ -38,6 +38,24 @@ untested: a real SANA-II driver, a `TUNNEL` line, an unknown wire type.
 Open question put to him: the first membership's interface as the
 route-free fallback, or a 224.0.0.0/4 interface route.
 
+His second look found three things left and one cosmetic point. Wanted
+before merge: `net/sana2arp.c` still got the public `in_var.h`, so
+`in_mcast_macaddr()` compiled only as an implicit declaration. Follow-ups
+the PR made relevant: the hosted device did not free its multicast list,
+and `if_detach()` left the all-hosts membership of a removed interface, so
+after a reload that removes and re-adds an interface the queries were
+filtered out again. All four are fixed locally as four more commits on the
+branch and four more patches here. `tools/igmp-reload-hosted.sh` is new,
+with the tools `NetReload` and `McastJoin`: it removes an interface by a
+reload, adds it again, joins a group on it and plays the querier; it fails
+without `in_ifdetach()`. Both earlier tests still pass and the stack
+builds for raspi-aarch64 and amiga-m68k.
+
+Seen while writing that test and not part of the PR: after a reload that
+removed and re-added an interface, mdnsd did not join 224.0.0.251 again on
+any interface. The same reload with the interface kept showed no such
+thing. Not looked into yet.
+
 The sections below are the PR bodies as first written, except the one about
 `btmidi.class`, which describes the class as it is after the review.
 

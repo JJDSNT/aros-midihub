@@ -10,3 +10,7 @@ arostcp-s2-multicast
 arostcp-multicast-no-route
 net-if-flags-unsigned
 eth-unix-multicast-filter
+arostcp-sana2arp-own-header
+arostcp-run-dhcp-softc
+arostcp-in-ifdetach
+eth-unix-multicast-free
