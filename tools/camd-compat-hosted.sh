@@ -112,7 +112,7 @@ fi
 # interrupted or damaged replacement would and boots again: a complete main,
 # .new or .bak file must bring the same IDs back. Damaged files with nothing
 # complete give temporary IDs and stay as they are; no file at all gives new
-# IDs that are kept.
+# IDs that are kept. Then every file call of a replacement is failed once.
 store="$sys/Prefs/Env-Archive/SYS/camd-identities.iff"
 all_ids() {
     grep -a 'camd.library: \(provider\|endpoint\) [0-9]* id ' "$work/serial-$1.log" || true
@@ -176,6 +176,46 @@ if [ -f "$store" ]; then
         echo "FAIL identity store: with no file at all new IDs are made and kept"
         status=1
     fi
+fi
+
+# Writes that fail half-way (backlog B20). A library built with
+# CAMD_TEST_HOOKS=yes fails the n-th call that changes a file when the
+# variable CAMD_IDENTITY_FAULT says so. Each call of two replacements of the
+# store is failed in turn: a new name is published, which stores two IDs,
+# and the boot after it must find every driver ID as it was.
+if grep -aq 'CAMD_IDENTITY_FAULT' "$aros/Libs/camd.library" && [ -f "$store" ]; then
+    rm -f "$store" "$store.new" "$store.bak"
+    base=$(recover fault-base)
+    n=1
+    survived=0
+    kinds=""
+    while [ $n -le 30 ]; do
+        boot "SetEnv CAMD_IDENTITY_FAULT $n\n$cmd --v43-store \"camdcompat fault $n\" >SYS:camdcompat-fault.log" "fault-$n" ""
+        failed=$(grep -a 'CAMD_IDENTITY_FAULT failed' "$work/serial-fault-$n.log" | sed 's/.*failed \([A-Za-z]*\).*/\1/' | head -n 1)
+        # past the last call: nothing was failed
+        [ -n "$failed" ] || break
+        kinds="$kinds $failed"
+        if [ -n "$base" ] && [ "$(recover "fault-after-$n")" = "$base" ]; then
+            survived=$((survived + 1))
+        else
+            echo "FAIL identity store: the IDs did not survive a failed $failed (file call $n)"
+            status=1
+        fi
+        n=$((n + 1))
+    done
+    n=$((n - 1))
+    missing=""
+    for kind in Open Write Flush Close Rename DeleteFile; do
+        case " $kinds " in *" $kind "*) ;; *) missing="$missing $kind" ;; esac
+    done
+    if [ $n -gt 0 ] && [ $survived -eq $n ] && [ -z "$missing" ]; then
+        echo "PASS identity store: the IDs survive each of $n failed file calls ($(echo $kinds | tr ' ' '\n' | sort | uniq -c | awk '{printf "%s%s x%s", sep, $2, $1; sep=", "}'))"
+    else
+        echo "FAIL identity store: $survived of $n failed file calls survived; never failed:${missing:- none}"
+        status=1
+    fi
+else
+    echo "SKIP identity store write faults: camd.library was built without CAMD_TEST_HOOKS=yes"
 fi
 
 rm -rf "$sys"

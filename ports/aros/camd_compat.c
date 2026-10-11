@@ -17,6 +17,10 @@
                                 published endpoint left behind; closing
                                 camd.library releases them, so the runner's
                                 memory flush expunges the library
+   MIDIHubCAMDCompat --v43-store NAME
+                                publishes NAME with a stored ID and prints
+                                the kind of ID it got, for the runner's
+                                write-fault boots.
    MIDIHubCAMDCompat --v43-abandon
                                 the same without closing camd.library, as a
                                 task that just ends: the library then stays
@@ -2335,6 +2339,39 @@ static void test_endpoint_limits(void)
           "once the store of IDs is full the rest get temporary ones", NULL);
     check(endpoint_info("loopback.0", &info, NULL) && info.IdentityKind == CAMD_IDENTITY_STORED_BY_PATH,
           "a driver port keeps its stored ID", NULL);
+
+    /* The store is full now. Forgetting what filled it makes room again
+       (backlog B14), and leaves the next run a store it can use. */
+    {
+        struct CAMDIdentityStoreInfoV1 store;
+        struct CAMDStoredIdentityV1 identity;
+        ULONG index = 0, forgotten = 0, refused = 0;
+
+        for (;;) {
+            memset(&identity, 0, sizeof(identity));
+            identity.Size = sizeof(identity);
+            identity.Version = 1;
+            if (GetStoredEndpointIdentity(index, &identity) != CAMD_RESULT_OK) break;
+            if (identity.Kind == CAMD_IDENTITY_STORED_BY_NAME && !strncmp(identity.Name, "camdcompat fill ", 16)) {
+                /* the list closes up: the next one is at this index */
+                if (ForgetEndpointIdentity(&identity.ID) == CAMD_RESULT_OK) {
+                    forgotten++;
+                    continue;
+                }
+                refused++;
+            }
+            index++;
+        }
+        memset(&store, 0, sizeof(store));
+        store.Size = sizeof(store);
+        store.Version = 1;
+        /* an endpoint and its publisher have an ID each, and the store may
+           have filled between the two */
+        check(forgotten >= stored && forgotten <= 2 * stored + 1 && refused == 0 &&
+              GetEndpointIdentityStore(&store) == CAMD_RESULT_OK && store.Stored + forgotten <= store.Capacity &&
+              store.Stored < store.Capacity,
+              "forgetting the names that filled the store makes room again", NULL);
+    }
 }
 
 /* A publisher in another task: it takes what clients sent a little later. */
@@ -2755,6 +2792,122 @@ static void test_flags_and_names(void)
     if (result == CAMD_RESULT_OK) WithdrawEndpoint(&port);
 }
 
+/* The store of IDs can be looked at and an ID forgotten (backlog B14). */
+static void test_identity_store(void)
+{
+    struct CAMDIdentityStoreInfoV1 store;
+    struct CAMDStoredIdentityV1 identity;
+    struct CAMDPublishRequestV1 publish;
+    struct CAMDHandleV1 port;
+    struct CAMDEndpointIDV1 id, again, provider;
+    ULONG index, listed = 0;
+    int driver_port = 0, have_provider = 0;
+    LONG result;
+
+    memset(&store, 0, sizeof(store));
+    store.Size = sizeof(store);
+    store.Version = 1;
+    result = GetEndpointIdentityStore(&store);
+    check(result == CAMD_RESULT_OK && store.Size == sizeof(store) &&
+          (store.State == CAMD_IDENTITY_STORE_COMPLETE || store.State == CAMD_IDENTITY_STORE_RECOVERED) &&
+          store.Capacity >= store.Stored && store.Stored > 0,
+          "GetEndpointIdentityStore reports a usable store and how full it is", NULL);
+    if (result != CAMD_RESULT_OK) return;
+
+    for (index = 0;; index++) {
+        memset(&identity, 0, sizeof(identity));
+        identity.Size = sizeof(identity);
+        identity.Version = 1;
+        if (GetStoredEndpointIdentity(index, &identity) != CAMD_RESULT_OK) break;
+        listed++;
+        if (identity.Kind == CAMD_IDENTITY_STORED_BY_PATH && !strcmp(identity.Name, "debugdriver") &&
+            identity.Port == 2 && !(identity.Flags & CAMD_STORED_IDENTITY_PROVIDER) &&
+            (identity.Flags & CAMD_STORED_IDENTITY_IN_USE))
+            driver_port = 1;
+    }
+    check(listed == store.Stored, "GetStoredEndpointIdentity lists as many IDs as the store holds", NULL);
+    check(GetStoredEndpointIdentity(store.Stored, &identity) == CAMD_RESULT_OUT_OF_RANGE,
+          "one past the last is CAMD_RESULT_OUT_OF_RANGE", NULL);
+    if (FindCluster("debugdriver.out.2"))
+        check(driver_port, "a loaded driver's port is listed by file name and port, in use", NULL);
+
+    memset(&publish, 0, sizeof(publish));
+    publish.Size = sizeof(publish);
+    publish.Version = 1;
+    publish.Directions = CAMD_DIRECTION_OUTPUT;
+    publish.Signal = CAMD_SIGNAL_NONE;
+    publish.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+    publish.Protocol = CAMD_PROTOCOL_MIDI1;
+    strcpy(publish.Name, "camdcompat forget");
+    memset(&id, 0, sizeof(id));
+    result = PublishEndpoint(&publish, &port, &id);
+    check(result == CAMD_RESULT_OK, "forget: an endpoint is published", NULL);
+    if (result != CAMD_RESULT_OK) return;
+    check(ForgetEndpointIdentity(&id) == CAMD_RESULT_BUSY, "an ID in use is CAMD_RESULT_BUSY to forget", NULL);
+    WithdrawEndpoint(&port);
+    /* its publisher's ID, to leave nothing behind */
+    for (index = 0;; index++) {
+        memset(&identity, 0, sizeof(identity));
+        identity.Size = sizeof(identity);
+        identity.Version = 1;
+        if (GetStoredEndpointIdentity(index, &identity) != CAMD_RESULT_OK) break;
+        if (identity.Kind == CAMD_IDENTITY_STORED_BY_NAME && !strcmp(identity.Name, "camdcompat forget") &&
+            (identity.Flags & CAMD_STORED_IDENTITY_PROVIDER)) {
+            provider = identity.ID;
+            have_provider = 1;
+        }
+    }
+    check(have_provider, "the publisher's ID is stored under the same name", NULL);
+    check(ForgetEndpointIdentity(&id) == CAMD_RESULT_OK, "ForgetEndpointIdentity removes it once it is withdrawn", NULL);
+    check(ForgetEndpointIdentity(&id) == CAMD_RESULT_STALE, "forgetting it again is CAMD_RESULT_STALE", NULL);
+    memset(&again, 0, sizeof(again));
+    result = PublishEndpoint(&publish, &port, &again);
+    check(result == CAMD_RESULT_OK && memcmp(&id, &again, sizeof(id)) != 0 &&
+          (again.word[0] | again.word[1] | again.word[2] | again.word[3]) != 0,
+          "published again, the name has a new stable ID", NULL);
+    if (result == CAMD_RESULT_OK) {
+        WithdrawEndpoint(&port);
+        ForgetEndpointIdentity(&again);
+    }
+    if (have_provider) ForgetEndpointIdentity(&provider);
+    store.Size = sizeof(store);
+    listed = store.Stored;
+    check(GetEndpointIdentityStore(&store) == CAMD_RESULT_OK && store.Stored == listed,
+          "after forgetting all three the store holds what it held before", NULL);
+}
+
+/* For the runner's write-fault boots: publishes NAME with a stored ID, says
+   what kind of ID it got, and withdraws it. */
+static void store_publish(const char *name)
+{
+    struct CAMDPublishRequestV1 publish;
+    struct CAMDHandleV1 port, snapshot;
+    struct CAMDEndpointInfoV1 info;
+    struct CAMDEndpointIDV1 id;
+    ULONG count = 0;
+    LONG result;
+
+    memset(&publish, 0, sizeof(publish));
+    publish.Size = sizeof(publish);
+    publish.Version = 1;
+    publish.Directions = CAMD_DIRECTION_OUTPUT;
+    publish.Signal = CAMD_SIGNAL_NONE;
+    publish.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+    publish.Protocol = CAMD_PROTOCOL_MIDI1;
+    strncpy(publish.Name, name, sizeof(publish.Name) - 1);
+    result = PublishEndpoint(&publish, &port, &id);
+    check(result == CAMD_RESULT_OK, "store: the endpoint is published whether or not its ID could be stored", NULL);
+    if (result != CAMD_RESULT_OK) return;
+    memset(&info, 0, sizeof(info));
+    if (ObtainEndpointSnapshot(&snapshot, &count, NULL) == CAMD_RESULT_OK) {
+        endpoint_index(&snapshot, count, name, &info);
+        ReleaseEndpointSnapshot(&snapshot);
+    }
+    printf("store-publish: identity kind %lu id %08lx%08lx%08lx%08lx\n", (unsigned long)info.IdentityKind,
+           (unsigned long)id.word[0], (unsigned long)id.word[1], (unsigned long)id.word[2], (unsigned long)id.word[3]);
+    WithdrawEndpoint(&port);
+}
+
 /* A request record may be shorter or longer than today's (backlog B15), and
    the results have fixed public values (B21). */
 static void test_endpoint_records(void)
@@ -3144,11 +3297,12 @@ int main(int argc, char **argv)
     int leak_mode = argc == 2 && (!strcmp(argv[1], "--v43-leak") || !strcmp(argv[1], "--v43-abandon"));
     int abandon_mode = argc == 2 && !strcmp(argv[1], "--v43-abandon");
     int router_mode = argc == 4 && !strcmp(argv[1], "--router");
+    int store_mode = argc == 3 && !strcmp(argv[1], "--v43-store");
 
     /* Unbuffered, so a crash still leaves the checks before it in the log. */
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (argc != 1 && !rethink_mode && !v42_mode && !v43_mode && !leak_mode && !router_mode) {
-        puts("Usage: MIDIHubCAMDCompat [--v42 | --v43 | --v43-leak | --v43-abandon | --rethink | --router SOURCE DESTINATION]");
+    if (argc != 1 && !rethink_mode && !v42_mode && !v43_mode && !leak_mode && !router_mode && !store_mode) {
+        puts("Usage: MIDIHubCAMDCompat [--v42 | --v43 | --v43-leak | --v43-abandon | --v43-store NAME | --rethink | --router SOURCE DESTINATION]");
         return 20;
     }
     /* The shell that runs User-Startup at boot has task switching disabled
@@ -3170,6 +3324,12 @@ int main(int argc, char **argv)
         if (CamdBase->lib_Version >= 43) start_rethink_watch();
         RUN(test_rethink_load);
         if (CamdBase->lib_Version >= 43) RUN(test_rethink_watch);
+    } else if (store_mode) {
+        if (CamdBase->lib_Version < 43) {
+            skip("camd.library 43", "older library");
+        } else {
+            store_publish(argv[2]);
+        }
     } else if (leak_mode) {
         if (CamdBase->lib_Version < 43) {
             skip("camd.library 43", "older library");
@@ -3190,6 +3350,7 @@ int main(int argc, char **argv)
             RUN(test_published_hold);
             RUN(test_ump_protocol);
             RUN(test_flags_and_names);
+            RUN(test_identity_store);
             RUN(test_endpoint_records);
             RUN(test_endpoint_stress);
             RUN(test_endpoint_limits);

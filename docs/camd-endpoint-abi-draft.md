@@ -16,7 +16,7 @@ in this draft is exported as a public symbol.
 
 `patches/aros-camd-endpoint-client.patch`, `aros-camd-endpoint-input.patch` and
 `aros-camd-endpoint-watch.patch` and `aros-camd-endpoint-publish.patch` `aros-camd-endpoint-diagnostics.patch`, `aros-camd-endpoint-time.patch` and
-`aros-camd-endpoint-ump.patch` append twenty-eight ordinary vectors (the last
+`aros-camd-endpoint-ump.patch` append thirty-one ordinary vectors (the last
 one in `aros-camd-endpoint-hardening.patch`) behind
 `.version 43` and installs `midi/camdendpoint.h`, so that the endpoint core has
 a real client before review. Everything in it can still change.
@@ -50,6 +50,9 @@ a real client before review. Everything in it can still change.
 | `LONG GetEndpointGroup(snapshot, index, number, info)` | A0, D0, D1, A1 | one `CAMDGroupInfoV1` of an endpoint |
 | `LONG GetEndpointFunctionBlock(snapshot, index, number, info)` | A0, D0, D1, A1 | one `CAMDFunctionBlockInfoV1` of an endpoint |
 | `LONG GetPublishedEndpointStats(endpoint, stats)` | A0, A1 | records taken, emitted and lost on either side |
+| `LONG GetEndpointIdentityStore(info)` | A0 | how the store of IDs was found (complete, recovered, unreadable, absent), how many IDs it holds and can hold |
+| `LONG GetStoredEndpointIdentity(index, identity)` | D0, A0 | one stored ID: a published name, or a driver's file and port; whether it is in use |
+| `LONG ForgetEndpointIdentity(id)` | A0 | remove a stored ID that nothing uses; its owner gets a new one next time |
 | `LONG CloseEndpointSession(session)` | A0 | |
 
 Results are `enum CAMDResult` values, `CAMD_RESULT_OK` and thirteen others
@@ -202,10 +205,17 @@ These are deliberate or still open; each is what the code does today.
   stored ID and cannot be published side by side. IDs stored for names with
   capitals before this rule are not found again.
 - Damaged identity files with no complete copy give temporary IDs for that
-  run and are left untouched; nothing repairs or reports them beyond a line on
-  the debug console. Failing DOS calls in the middle of a write are covered
-  only by the host model.
-- Stored identities are never removed, and there is room for 256. Once the
+  run and are left untouched. `GetEndpointIdentityStore()` reports it as
+  `CAMD_IDENTITY_STORE_UNREADABLE`, and the shell command `CAMDIdentities`
+  shows it and lists the stored IDs; nothing repairs the files. A store
+  read from its backup or from an unfinished replacement reports
+  `CAMD_IDENTITY_STORE_RECOVERED`.
+- `ForgetEndpointIdentity()` removes one stored ID that nothing uses. An
+  endpoint and what offers it have an ID each. A loaded driver's IDs stay in
+  use until the library is expunged, so a driver's ports cannot be given new
+  IDs while it is loaded.
+- Stored identities are removed only by `ForgetEndpointIdentity()`, and
+  there is room for 256. Once the
   store is full, new driver ports and published names get temporary IDs
   (`CAMD_IDENTITY_TEMPORARY`), as a name published with
   `CAMD_PUBLISH_TEMPORARY` always does.

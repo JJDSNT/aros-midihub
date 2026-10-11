@@ -7,7 +7,7 @@ hardware, upstream review, and checking UMP rules against the specification
 text.
 
 **State this starts from:** the provisional version 43 slice in
-[`camd-endpoint-abi-draft.md`](camd-endpoint-abi-draft.md) (27 functions) and
+[`camd-endpoint-abi-draft.md`](camd-endpoint-abi-draft.md) (31 functions) and
 its "Known limits of the provisional slice". Each item below removes one of
 those limits or finishes something the slice left half done. When an item is
 done, delete its limit there and its entry here.
@@ -79,6 +79,14 @@ host tests, builds for raspi-aarch64):
 | B23 | One rule: names compare without regard to ASCII case. A published name is folded for its stored ID and for the duplicate check, as a driver's file name already was. IDs stored earlier for names with capitals are not found again. |
 | B24 | `midi/camdendpoint.h` is in four parts: what every caller needs, looking at endpoints, sessions, publishing. It also states the two size rules for records. |
 
+Closed in `aros-camd-identity-functions.patch` (229 v43 checks, three runs in
+one suite; host tests; builds for raspi-aarch64):
+
+| # | What was done |
+|---|---|
+| B14 | `GetEndpointIdentityStore()`, `GetStoredEndpointIdentity()` and `ForgetEndpointIdentity()`, and the shell command `CAMDIdentities [FORGET <id>]`. The store's state is complete, recovered, unreadable or absent. An ID in use is `CAMD_RESULT_BUSY` to forget; a forgotten name gets a new ID. The suite's test that fills the store now forgets what it stored, so a second run in the same system has room. Nothing repairs an unreadable store: its files are still left for a person to look at. |
+| B20 | With `CAMD_TEST_HOOKS=yes` in the environment of `make`, the library fails the file call that `CAMD_IDENTITY_FAULT` numbers. `tools/camd-compat-hosted.sh` fails each call of two replacements in turn, 15 boots: Open, Write (half the data stays), Flush, Close, Rename and DeleteFile each at least twice. After every one the next boot finds the drivers' IDs as they were. Without the hooks the runner says it skipped this. |
+
 ## P0 — can hurt as it is
 
 Nothing open.
@@ -91,9 +99,7 @@ Nothing open.
 
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
-| B14 | No way to see, remove or repair stored identities. A damaged store is only mentioned on the debug console. | Functions to list and remove stored identities and to report the store's state (complete, recovered from backup, unreadable), and a small shell command using them. | A removed identity gets a new ID on next use; the damaged-store case is visible to a program. |
 | B16 | Fixed tables: 32 snapshots, 64 input sessions, 16 watches, 32 published endpoints, 32 sessions per endpoint, 64 records per queue. | Grow the system-wide tables on demand; keep per-session and per-endpoint bounds but let the request name them up to a maximum. | The suite opens more than today's limits without failure. |
-| B20 | Identity-file writes that fail half-way are covered only by the host model. | A debug-only switch in the store that fails a chosen DOS call, driven by the hosted runner. | The runner fails each write, flush, rename and delete once and the IDs survive. |
 
 ## P3 — polish
 

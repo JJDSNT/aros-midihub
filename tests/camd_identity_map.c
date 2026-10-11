@@ -254,6 +254,82 @@ int main(void)
                CAMD_IDENTITY_MAP_INVALID);
         camd_identity_map_destroy(temp_map);
     }
+    {
+        /* Listing and forgetting: a forgotten key gets a new ID, storage
+         * loses the mapping first, and a failed write leaves it. */
+        struct storage state;
+        struct CAMDIdentityMapConfigV1 list_config;
+        struct CAMDIdentityMap *list_map = NULL;
+        struct CAMDIdentityKeyV1 key_a, key_b;
+        struct CAMDIdentityResolutionV1 res_a, res_b, res_again;
+        struct CAMDIdentityRecordV1 record;
+        struct CAMDEndpointIDV1 nobody;
+        uint32_t persistent = 9;
+
+        memset(&state, 0, sizeof(state));
+        state.next_id = 100;
+        state.commit_enabled = 1;
+        memset(&list_config, 0, sizeof(list_config));
+        list_config.Size = sizeof(list_config);
+        list_config.Version = 1;
+        list_config.Capacity = 4;
+        list_config.CallbackContext = &state;
+        list_config.Generate = generate_id;
+        list_config.Commit = commit_records;
+        assert(camd_identity_map_create(&list_config, &list_map) ==
+               CAMD_IDENTITY_MAP_OK);
+        assert(camd_identity_map_count(list_map) == 0 &&
+               camd_identity_map_capacity(list_map) == 4);
+        assert(camd_legacy_endpoint_identity_key("DEVS:Midi/a", 0, &key_a) ==
+               CAMD_IDENTITY_MAP_OK);
+        assert(camd_legacy_endpoint_identity_key("DEVS:Midi/b", 0, &key_b) ==
+               CAMD_IDENTITY_MAP_OK);
+        memset(&res_a, 0, sizeof(res_a));
+        res_a.Size = sizeof(res_a);
+        res_a.Version = 1;
+        res_b = res_again = res_a;
+        assert(camd_identity_map_resolve(list_map, &key_a, &res_a) ==
+               CAMD_IDENTITY_MAP_OK);
+        assert(camd_identity_map_resolve(list_map, &key_b, &res_b) ==
+               CAMD_IDENTITY_MAP_OK);
+        assert(camd_identity_map_count(list_map) == 2 && state.count == 2);
+        assert(camd_identity_map_get(list_map, 0, &record, &persistent) ==
+               CAMD_IDENTITY_MAP_OK && persistent == 1 &&
+               same_id(&record.ID, &res_a.ID));
+        assert(camd_identity_map_get(list_map, 2, &record, NULL) ==
+               CAMD_IDENTITY_MAP_MISSING);
+
+        memset(&nobody, 0, sizeof(nobody));
+        assert(camd_identity_map_remove(list_map, &nobody) ==
+               CAMD_IDENTITY_MAP_INVALID);
+        nobody.word[0] = 77;
+        assert(camd_identity_map_remove(list_map, &nobody) ==
+               CAMD_IDENTITY_MAP_MISSING);
+
+        /* storage refuses: nothing changes */
+        state.commit_enabled = 0;
+        assert(camd_identity_map_remove(list_map, &res_a.ID) ==
+               CAMD_IDENTITY_MAP_STORAGE);
+        assert(camd_identity_map_count(list_map) == 2 && state.count == 2);
+        assert(camd_identity_map_get(list_map, 0, &record, NULL) ==
+               CAMD_IDENTITY_MAP_OK && same_id(&record.ID, &res_a.ID));
+        assert(camd_identity_map_resolve(list_map, &key_a, &res_again) ==
+               CAMD_IDENTITY_MAP_OK && same_id(&res_again.ID, &res_a.ID));
+
+        state.commit_enabled = 1;
+        assert(camd_identity_map_remove(list_map, &res_a.ID) ==
+               CAMD_IDENTITY_MAP_OK);
+        assert(camd_identity_map_count(list_map) == 1 && state.count == 1 &&
+               same_id(&state.records[0].ID, &res_b.ID));
+        assert(camd_identity_map_get(list_map, 0, &record, NULL) ==
+               CAMD_IDENTITY_MAP_OK && same_id(&record.ID, &res_b.ID));
+        assert(camd_identity_map_resolve(list_map, &key_a, &res_again) ==
+               CAMD_IDENTITY_MAP_OK && res_again.Existing == 0 &&
+               !same_id(&res_again.ID, &res_a.ID));
+        assert(camd_identity_map_resolve(list_map, &key_b, &res_again) ==
+               CAMD_IDENTITY_MAP_OK && same_id(&res_again.ID, &res_b.ID));
+        camd_identity_map_destroy(list_map);
+    }
     puts("CAMD identity map OK");
     return 0;
 }

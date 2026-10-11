@@ -1,0 +1,811 @@
+diff --git a/workbench/libs/camd/camd.conf b/workbench/libs/camd/camd.conf
+--- a/workbench/libs/camd/camd.conf
++++ b/workbench/libs/camd/camd.conf
+@@ -83,4 +83,7 @@ LONG SetPublishedEndpointTopology(struct CAMDHandleV1 *endpoint, struct CAMDGrou
+ LONG GetEndpointGroup(struct CAMDHandleV1 *snapshot, ULONG index, ULONG number, struct CAMDGroupInfoV1 *info) (A0, D0, D1, A1)
+ LONG GetEndpointFunctionBlock(struct CAMDHandleV1 *snapshot, ULONG index, ULONG number, struct CAMDFunctionBlockInfoV1 *info) (A0, D0, D1, A1)
+ LONG GetPublishedEndpointStats(struct CAMDHandleV1 *endpoint, struct CAMDPublishedStatsV1 *stats) (A0, A1)
++LONG GetEndpointIdentityStore(struct CAMDIdentityStoreInfoV1 *info) (A0)
++LONG GetStoredEndpointIdentity(ULONG index, struct CAMDStoredIdentityV1 *identity) (D0, A0)
++LONG ForgetEndpointIdentity(struct CAMDEndpointIDV1 *id) (A0)
+ ##end functionlist
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -590,6 +590,18 @@ BOOL AppEndpointsRemain(struct CamdBase *CamdBase);
+ struct CAMDPublishedStatsV1;
+ LONG GetAppEndpointStats(const struct CAMDHandleV1 *handle,
+ 	struct CAMDPublishedStatsV1 *stats,struct CamdBase *CamdBase);
++/* The identity namespaces of published endpoints and their publishers. */
++#define NAMESPACE_APP_PROVIDER 0x41505256u  /* 'APRV' */
++#define NAMESPACE_APP_ENDPOINT 0x41454e44u  /* 'AEND' */
++
++/* endpoint_identity.c */
++LONG ReadIdentityStore(struct CAMDIdentityStoreInfoV1 *info,
++	struct CamdBase *CamdBase);
++LONG ReadStoredIdentity(ULONG index,struct CAMDStoredIdentityV1 *identity,
++	struct CamdBase *CamdBase);
++LONG ForgetStoredIdentity(const struct CAMDEndpointIDV1 *id,
++	struct CamdBase *CamdBase);
++
+ /* Copies a record a caller hands in. See TakeEndpointRecord(). */
+ BOOL TakeEndpointRecord(const APTR given,APTR record,ULONG size,ULONG least);
+ 
+diff --git a/workbench/libs/camd/camdendpoint.h b/workbench/libs/camd/camdendpoint.h
+--- a/workbench/libs/camd/camdendpoint.h
++++ b/workbench/libs/camd/camdendpoint.h
+@@ -8,9 +8,9 @@
+  * values and layouts can still change.
+  *
+  * Every record starts with Size and Version, holds no pointers and has the
+- * same layout on every target. The file has four parts: what every caller
+- * needs, looking at endpoints, sessions with an endpoint, and publishing
+- * an endpoint of one's own.
++ * same layout on every target. The file has five parts: what every caller
++ * needs, looking at endpoints, sessions with an endpoint, publishing an
++ * endpoint of one's own, and the store of IDs.
+  *
+  * Records CAMD fills in: the caller sets Size and Version, CAMD writes at
+  * most Size bytes and sets Size to the size of the full record, so a
+@@ -358,6 +358,49 @@ struct CAMDPublishedStatsV1 {
+     ULONG LegacyLost;
+ };
+ 
++/* ------------------------------------------------------------------------
++ * 5. The store of IDs
++ * ------------------------------------------------------------------------ */
++
++/* CAMDIdentityStoreInfoV1.State. */
++#define CAMD_IDENTITY_STORE_COMPLETE     1u  /* read whole, or begun anew */
++#define CAMD_IDENTITY_STORE_RECOVERED    2u  /* read from the backup, or from
++                                                a replacement that was not
++                                                finished; whole again now */
++#define CAMD_IDENTITY_STORE_UNREADABLE   3u  /* files but no complete copy:
++                                                they are left as they are and
++                                                every ID is temporary */
++#define CAMD_IDENTITY_STORE_ABSENT       4u  /* could not be set up at all */
++
++/* Stored is how many IDs the store holds and Capacity how many it can. */
++struct CAMDIdentityStoreInfoV1 {
++    ULONG Size;
++    ULONG Version;
++    ULONG State;
++    ULONG Stored;
++    ULONG Capacity;
++};
++
++/* CAMDStoredIdentityV1.Flags. */
++#define CAMD_STORED_IDENTITY_PROVIDER    (1u << 0)  /* of what offers endpoints:
++                                                       a driver, a publisher */
++#define CAMD_STORED_IDENTITY_IN_USE      (1u << 1)  /* something has it now */
++
++/* One stored ID and what it is stored for. Kind is
++ * CAMD_IDENTITY_STORED_BY_NAME, with a published endpoint's Name, or
++ * CAMD_IDENTITY_STORED_BY_PATH, with a driver's file name in Name and, for
++ * an endpoint, its port number in Port. Names are as stored: in lower case.
++ * An endpoint and what offers it have an ID each. */
++struct CAMDStoredIdentityV1 {
++    ULONG Size;
++    ULONG Version;
++    struct CAMDEndpointIDV1 ID;
++    ULONG Kind;
++    ULONG Flags;
++    ULONG Port;
++    char Name[CAMD_ENDPOINT_NAME_BYTES];
++};
++
+ /* ------------------------------------------------------------------------
+  * The records hold 32-bit fields and bytes only, so they have these sizes on
+  * every target. A compiler that disagrees stops here.
+@@ -378,6 +421,8 @@ CAMD_RECORD_SIZE(CAMDSessionInfoV1, 28);
+ CAMD_RECORD_SIZE(CAMDSessionStatsV1, 24);
+ CAMD_RECORD_SIZE(CAMDPublishRequestV1, 284);
+ CAMD_RECORD_SIZE(CAMDPublishedStatsV1, 24);
++CAMD_RECORD_SIZE(CAMDIdentityStoreInfoV1, 20);
++CAMD_RECORD_SIZE(CAMDStoredIdentityV1, 164);
+ #undef CAMD_RECORD_SIZE
+ 
+ #endif
+diff --git a/workbench/libs/camd/endpoint_identity.c b/workbench/libs/camd/endpoint_identity.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/endpoint_identity.c
+@@ -0,0 +1,155 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++/* The stored endpoint IDs as a program may see them: the store's state, a
++   listing, and forgetting one. */
++
++#include <proto/exec.h>
++
++#include <string.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++#include "identity_map.h"
++#include "identity_store_aros.h"
++#include "legacy_identity_key.h"
++
++/* Whether an endpoint or what offers it has this ID at the moment. */
++static BOOL identity_in_use(const struct CAMDEndpointIDV1 *id,
++                            struct CamdBase *CamdBase)
++{
++    struct CAMDEndpointSnapshot *snapshot = NULL;
++    const struct CAMDEndpointInfoV1 *endpoint;
++    const struct CAMDGroupInfoV1 *groups;
++    const struct CAMDFunctionBlockInfoV1 *blocks;
++    size_t group_count, block_count, count, i;
++    BOOL used = FALSE;
++
++    if (camd_registry_snapshot(CB(CamdBase)->EndpointRegistry, &snapshot) !=
++        CAMD_REGISTRY_OK)
++        return TRUE;    /* cannot tell: do not let it be forgotten */
++    count = camd_snapshot_endpoint_count(snapshot);
++    for (i = 0; i < count && !used; ++i) {
++        if (camd_snapshot_endpoint(snapshot, i, &endpoint, &groups,
++                                   &group_count, &blocks, &block_count) !=
++            CAMD_REGISTRY_OK)
++            continue;
++        used = memcmp(&endpoint->ID, id, sizeof(*id)) == 0 ||
++               memcmp(&endpoint->ProviderID, id, sizeof(*id)) == 0;
++    }
++    camd_snapshot_destroy(snapshot);
++    return used;
++}
++
++LONG ReadIdentityStore(struct CAMDIdentityStoreInfoV1 *info,
++                       struct CamdBase *CamdBase)
++{
++    struct CAMDIdentityStoreAROS *store = CB(CamdBase)->EndpointIdentity;
++    struct CAMDIdentityMap *map = camd_identity_store_aros_map(store);
++
++    memset(info, 0, sizeof(*info));
++    info->Size = sizeof(*info);
++    info->Version = 1;
++    info->State = camd_identity_store_aros_state(store);
++    info->Stored = camd_identity_map_count(map);
++    info->Capacity = camd_identity_map_capacity(map);
++    return CAMD_REGISTRY_OK;
++}
++
++/* Keys are a format byte, a length, the name and, for a driver's port, its
++ * number: see legacy_identity_key.c and resolve_name() in
++ * endpoint_publish.c. */
++LONG ReadStoredIdentity(ULONG index, struct CAMDStoredIdentityV1 *identity,
++                        struct CamdBase *CamdBase)
++{
++    struct CAMDIdentityMap *map =
++        camd_identity_store_aros_map(CB(CamdBase)->EndpointIdentity);
++    struct CAMDIdentityRecordV1 record;
++    uint32_t persistent = 0;
++    ULONG length;
++
++    /* Mappings that could not be written are not stored: skip them. */
++    for (;;) {
++        enum CAMDIdentityMapResult got;
++        ULONG skipped = 0, at;
++
++        if (map == NULL)
++            return CAMD_REGISTRY_RANGE;
++        for (at = 0;; ++at) {
++            got = camd_identity_map_get(map, at, &record, &persistent);
++            if (got != CAMD_IDENTITY_MAP_OK)
++                return CAMD_REGISTRY_RANGE;
++            if (!persistent) {
++                ++skipped;
++                continue;
++            }
++            if (at - skipped == index)
++                break;
++        }
++        break;
++    }
++
++    memset(identity, 0, sizeof(*identity));
++    identity->Size = sizeof(*identity);
++    identity->Version = 1;
++    identity->ID = record.ID;
++    switch (record.Namespace) {
++    case CAMD_IDENTITY_NAMESPACE_LEGACY_PROVIDER:
++        identity->Flags |= CAMD_STORED_IDENTITY_PROVIDER;
++        /* fall through */
++    case CAMD_IDENTITY_NAMESPACE_LEGACY_ENDPOINT:
++        identity->Kind = CAMD_IDENTITY_STORED_BY_PATH;
++        break;
++    case NAMESPACE_APP_PROVIDER:
++        identity->Flags |= CAMD_STORED_IDENTITY_PROVIDER;
++        /* fall through */
++    case NAMESPACE_APP_ENDPOINT:
++        identity->Kind = CAMD_IDENTITY_STORED_BY_NAME;
++        break;
++    }
++    if (record.KeyByteCount >= 2 && record.Key[0] == 1 &&
++        2u + record.Key[1] <= record.KeyByteCount) {
++        length = record.Key[1];
++        if (length > sizeof(identity->Name) - 1)
++            length = sizeof(identity->Name) - 1;
++        CopyMem(&record.Key[2], identity->Name, length);
++        if (record.Namespace == CAMD_IDENTITY_NAMESPACE_LEGACY_ENDPOINT &&
++            record.KeyByteCount == 2u + record.Key[1] + 4u) {
++            const UBYTE *port = &record.Key[2 + record.Key[1]];
++
++            identity->Port = ((ULONG)port[0] << 24) | ((ULONG)port[1] << 16) |
++                             ((ULONG)port[2] << 8) | (ULONG)port[3];
++        }
++    }
++    if (identity_in_use(&record.ID, CamdBase))
++        identity->Flags |= CAMD_STORED_IDENTITY_IN_USE;
++    return CAMD_REGISTRY_OK;
++}
++
++LONG ForgetStoredIdentity(const struct CAMDEndpointIDV1 *id,
++                          struct CamdBase *CamdBase)
++{
++    struct CAMDIdentityStoreAROS *store = CB(CamdBase)->EndpointIdentity;
++    struct CAMDIdentityMap *map = camd_identity_store_aros_map(store);
++    LONG result;
++
++    if (map == NULL ||
++        camd_identity_store_aros_state(store) == CAMD_IDENTITY_STORE_UNREADABLE)
++        return CAMD_REGISTRY_STATE;
++    /* Publishing takes this semaphore too, so nothing starts to use the ID
++     * between the look and the removal. */
++    ObtainSemaphore(&CB(CamdBase)->EndpointClientSemaphore);
++    if (identity_in_use(id, CamdBase)) {
++        result = CAMD_REGISTRY_BUSY;
++    } else {
++        switch (camd_identity_map_remove(map, id)) {
++        case CAMD_IDENTITY_MAP_OK:      result = CAMD_REGISTRY_OK; break;
++        case CAMD_IDENTITY_MAP_MISSING: result = CAMD_REGISTRY_STALE; break;
++        case CAMD_IDENTITY_MAP_STORAGE: result = CAMD_REGISTRY_CALLBACK_FAILED; break;
++        default:                        result = CAMD_REGISTRY_INVALID; break;
++        }
++    }
++    ReleaseSemaphore(&CB(CamdBase)->EndpointClientSemaphore);
++    return result;
++}
+diff --git a/workbench/libs/camd/endpoint_publish.c b/workbench/libs/camd/endpoint_publish.c
+--- a/workbench/libs/camd/endpoint_publish.c
++++ b/workbench/libs/camd/endpoint_publish.c
+@@ -16,8 +16,6 @@
+ #include "identity_store_aros.h"
+ #include "legacy_driver_adapter.h"
+ 
+-#define NAMESPACE_APP_PROVIDER 0x41505256u  /* 'APRV' */
+-#define NAMESPACE_APP_ENDPOINT 0x41454e44u  /* 'AEND' */
+ 
+ /* Runs in the task of the client that sent something. */
+ static void publisher_notify(void *context)
+diff --git a/workbench/libs/camd/forgetendpointidentity.c b/workbench/libs/camd/forgetendpointidentity.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/forgetendpointidentity.c
+@@ -0,0 +1,63 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH1(LONG, ForgetEndpointIdentity,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDEndpointIDV1 *, id, A0),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 76, Camd)
++
++/*  FUNCTION
++		Removes a stored endpoint ID. What it was stored for, a
++		published name or a driver's port, gets a new ID the next time
++		it appears. Saved routes that name the old ID no longer find
++		anything.
++
++    INPUTS
++		id - the ID to forget.
++
++    RESULT
++		CAMD_RESULT_OK; CAMD_RESULT_BUSY while an endpoint or what
++		offers it has the ID; CAMD_RESULT_STALE when no such ID is
++		stored; CAMD_RESULT_WRONG_STATE when the store is unreadable;
++		CAMD_RESULT_FAILED when the store could not be written, in
++		which case the ID stays.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change.
++		An endpoint and what offers it, a driver or a publisher, have
++		an ID each: forget both to start afresh. A loaded driver's IDs
++		stay in use until the library is expunged.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		GetStoredEndpointIdentity()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	if(id==NULL) return camd_public_result(CAMD_REGISTRY_INVALID);
++
++	return camd_public_result(ForgetStoredIdentity(id,CamdBase));
++
++    AROS_LIBFUNC_EXIT
++}
+diff --git a/workbench/libs/camd/getendpointidentitystore.c b/workbench/libs/camd/getendpointidentitystore.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/getendpointidentitystore.c
+@@ -0,0 +1,68 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH1(LONG, GetEndpointIdentityStore,
++
++/*  SYNOPSIS */
++	AROS_LHA(struct CAMDIdentityStoreInfoV1 *, info, A0),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 74, Camd)
++
++/*  FUNCTION
++		Tells how the store of endpoint IDs was found when camd.library
++		started, how many IDs it holds and how many it can hold.
++
++    INPUTS
++		info - Size and Version set by the caller. At most Size bytes
++		    are written, and Size is then the size of the full record.
++
++    RESULT
++		CAMD_RESULT_OK, or CAMD_RESULT_INVALID.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change.
++		With CAMD_IDENTITY_STORE_UNREADABLE every endpoint has a
++		temporary ID and the files in ENVARC:Sys are left untouched,
++		for whoever wants to look at them. Removing them gives a new
++		store, and new IDs, the next time the library starts.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		GetStoredEndpointIdentity(), ForgetEndpointIdentity()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	struct CAMDIdentityStoreInfoV1 full;
++	ULONG size;
++
++	if(info==NULL || info->Size<2*sizeof(ULONG) || info->Version!=1){
++		return camd_public_result(CAMD_REGISTRY_INVALID);
++	}
++	ReadIdentityStore(&full,CamdBase);
++	size=info->Size<sizeof(full) ? info->Size : sizeof(full);
++	CopyMem(&full,info,size);
++	info->Size=sizeof(full);
++
++	return camd_public_result(CAMD_REGISTRY_OK);
++
++    AROS_LIBFUNC_EXIT
++}
+diff --git a/workbench/libs/camd/getstoredendpointidentity.c b/workbench/libs/camd/getstoredendpointidentity.c
+new file mode 100644
+--- /dev/null
++++ b/workbench/libs/camd/getstoredendpointidentity.c
+@@ -0,0 +1,75 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++*/
++
++#include <proto/exec.h>
++
++#include "camd_intern.h"
++#include "endpoint_registry.h"
++
++/*****************************************************************************
++
++    NAME */
++
++	AROS_LH2(LONG, GetStoredEndpointIdentity,
++
++/*  SYNOPSIS */
++	AROS_LHA(ULONG, index, D0),
++	AROS_LHA(struct CAMDStoredIdentityV1 *, identity, A0),
++
++/*  LOCATION */
++	struct CamdBase *, CamdBase, 75, Camd)
++
++/*  FUNCTION
++		Reads one of the stored endpoint IDs and what it is stored
++		for: a published endpoint's name, or a driver's file name and
++		port.
++
++    INPUTS
++		index - from 0; see GetEndpointIdentityStore() for how many.
++		identity - Size and Version set by the caller. At most Size
++		    bytes are written, and Size is then the size of the full
++		    record.
++
++    RESULT
++		CAMD_RESULT_OK, CAMD_RESULT_OUT_OF_RANGE past the last one, or
++		CAMD_RESULT_INVALID.
++
++    NOTES
++		New in V43 and provisional: the endpoint functions can still
++		change.
++		The order means nothing and changes when an ID is forgotten
++		or added: read them all in one go, and forget by ID.
++
++    EXAMPLE
++
++    BUGS
++
++    SEE ALSO
++		GetEndpointIdentityStore(), ForgetEndpointIdentity()
++
++    INTERNALS
++
++*****************************************************************************/
++{
++    AROS_LIBFUNC_INIT
++
++	struct CAMDStoredIdentityV1 full;
++	ULONG size;
++	LONG result;
++
++	if(identity==NULL || identity->Size<2*sizeof(ULONG) ||
++	   identity->Version!=1){
++		return camd_public_result(CAMD_REGISTRY_INVALID);
++	}
++	result=ReadStoredIdentity(index,&full,CamdBase);
++	if(result==CAMD_REGISTRY_OK){
++		size=identity->Size<sizeof(full) ? identity->Size : sizeof(full);
++		CopyMem(&full,identity,size);
++		identity->Size=sizeof(full);
++	}
++
++	return camd_public_result(result);
++
++    AROS_LIBFUNC_EXIT
++}
+diff --git a/workbench/libs/camd/identity_map.c b/workbench/libs/camd/identity_map.c
+--- a/workbench/libs/camd/identity_map.c
++++ b/workbench/libs/camd/identity_map.c
+@@ -331,3 +331,74 @@ enum CAMDIdentityMapResult camd_identity_map_resolve(
+     lock_release(&map->lock);
+     return CAMD_IDENTITY_MAP_OK;
+ }
++
++uint32_t camd_identity_map_count(struct CAMDIdentityMap *map)
++{
++    uint32_t count;
++
++    if (!map)
++        return 0;
++    lock_acquire(&map->lock);
++    count = map->count;
++    lock_release(&map->lock);
++    return count;
++}
++
++uint32_t camd_identity_map_capacity(struct CAMDIdentityMap *map)
++{
++    return map ? map->capacity : 0;
++}
++
++enum CAMDIdentityMapResult camd_identity_map_get(
++    struct CAMDIdentityMap *map, uint32_t index,
++    struct CAMDIdentityRecordV1 *record, uint32_t *persistent)
++{
++    enum CAMDIdentityMapResult result = CAMD_IDENTITY_MAP_MISSING;
++
++    if (!map || !record)
++        return CAMD_IDENTITY_MAP_INVALID;
++    lock_acquire(&map->lock);
++    if (index < map->count) {
++        *record = map->entries[index].record;
++        if (persistent)
++            *persistent = map->entries[index].persistent ? 1u : 0u;
++        result = CAMD_IDENTITY_MAP_OK;
++    }
++    lock_release(&map->lock);
++    return result;
++}
++
++enum CAMDIdentityMapResult camd_identity_map_remove(
++    struct CAMDIdentityMap *map, const struct CAMDEndpointIDV1 *id)
++{
++    enum CAMDIdentityMapResult result = CAMD_IDENTITY_MAP_MISSING;
++    struct identity_entry removed;
++    uint32_t i, at;
++
++    if (!map || !id || id_is_zero(id))
++        return CAMD_IDENTITY_MAP_INVALID;
++    lock_acquire(&map->lock);
++    for (at = 0; at < map->count; ++at) {
++        if (id_equal(&map->entries[at].record.ID, id))
++            break;
++    }
++    if (at < map->count) {
++        removed = map->entries[at];
++        for (i = at; i + 1 < map->count; ++i)
++            map->entries[i] = map->entries[i + 1];
++        --map->count;
++        memset(&map->entries[map->count], 0, sizeof(map->entries[0]));
++        result = CAMD_IDENTITY_MAP_OK;
++        /* What storage holds has to lose it too, or it is back next time. */
++        if (removed.persistent && !commit_all(map)) {
++            for (i = map->count; i > at; --i)
++                map->entries[i] = map->entries[i - 1];
++            map->entries[at] = removed;
++            ++map->count;
++            result = CAMD_IDENTITY_MAP_STORAGE;
++        }
++    }
++    lock_release(&map->lock);
++    return result;
++}
++
+diff --git a/workbench/libs/camd/identity_map.h b/workbench/libs/camd/identity_map.h
+--- a/workbench/libs/camd/identity_map.h
++++ b/workbench/libs/camd/identity_map.h
+@@ -16,7 +16,9 @@ enum CAMDIdentityMapResult {
+     CAMD_IDENTITY_MAP_NOMEM,
+     CAMD_IDENTITY_MAP_FULL,
+     CAMD_IDENTITY_MAP_COLLISION,
+-    CAMD_IDENTITY_MAP_GENERATOR
++    CAMD_IDENTITY_MAP_GENERATOR,
++    CAMD_IDENTITY_MAP_MISSING,
++    CAMD_IDENTITY_MAP_STORAGE
+ };
+ 
+ enum CAMDIdentityConfidenceV1 {
+@@ -91,4 +93,23 @@ enum CAMDIdentityMapResult camd_identity_map_resolve(
+     struct CAMDIdentityMap *map, const struct CAMDIdentityKeyV1 *key,
+     struct CAMDIdentityResolutionV1 *resolution);
+ 
++/* How many mappings the map holds, and how many it has room for. */
++uint32_t camd_identity_map_count(struct CAMDIdentityMap *map);
++uint32_t camd_identity_map_capacity(struct CAMDIdentityMap *map);
++
++/* A copy of mapping number index, counted from 0 in no particular order,
++ * and whether it is stored. CAMD_IDENTITY_MAP_MISSING beyond the last. The
++ * order changes when a mapping is removed. */
++enum CAMDIdentityMapResult camd_identity_map_get(
++    struct CAMDIdentityMap *map, uint32_t index,
++    struct CAMDIdentityRecordV1 *record, uint32_t *persistent);
++
++/* Forgets the mapping to this ID: its key gets a new ID the next time it is
++ * resolved. A stored mapping goes from storage first, and stays when that
++ * fails (CAMD_IDENTITY_MAP_STORAGE). CAMD_IDENTITY_MAP_MISSING when no
++ * mapping has the ID. Whether something still uses the ID is the caller's
++ * to know. */
++enum CAMDIdentityMapResult camd_identity_map_remove(
++    struct CAMDIdentityMap *map, const struct CAMDEndpointIDV1 *id);
++
+ #endif
+diff --git a/workbench/libs/camd/identity_store_aros.c b/workbench/libs/camd/identity_store_aros.c
+--- a/workbench/libs/camd/identity_store_aros.c
++++ b/workbench/libs/camd/identity_store_aros.c
+@@ -28,8 +28,48 @@ struct CAMDIdentityStoreAROS {
+     ULONG file_capacity;
+     /* No complete snapshot could be read: leave the files as they are. */
+     int unreadable;
++    /* The slot the records came from, or -1 when there was no file. */
++    int loaded_slot;
+ };
+ 
++/*
++ * Test hook, compiled in with CAMD_TEST_HOOKS only (see mmakefile.src). The
++ * variable CAMD_IDENTITY_FAULT holds a number n: the n-th call that changes
++ * a file fails once, counted from the creation of the store. A failed Write
++ * leaves half of the data behind, a failed Close still closes, and the
++ * others do nothing. tools/camd-compat-hosted.sh fails each call in turn
++ * and checks that no stored ID is lost.
++ */
++#ifdef CAMD_TEST_HOOKS
++static LONG fault_at, fault_calls;
++
++static void fault_setup(void)
++{
++    char text[16];
++    LONG value = 0;
++
++    fault_at = fault_calls = 0;
++    if (GetVar("CAMD_IDENTITY_FAULT", text, sizeof(text), GVF_GLOBAL_ONLY) > 0 &&
++        StrToLong(text, &value) > 0 && value > 0) {
++        fault_at = value;
++        bug("camd.library: CAMD_IDENTITY_FAULT fails file call %ld\n",
++            (long)value);
++    }
++}
++
++static int fault_now(const char *what)
++{
++    if (fault_at == 0 || ++fault_calls != fault_at)
++        return 0;
++    bug("camd.library: CAMD_IDENTITY_FAULT failed %s (call %ld)\n", what,
++        (long)fault_calls);
++    return 1;
++}
++#else
++#define fault_setup()
++#define fault_now(what) 0
++#endif
++
+ struct recovery_context {
+     struct CAMDIdentityStoreAROS *store;
+     struct CAMDIdentityRecordV1 *records;
+@@ -91,10 +131,14 @@ static enum CAMDIdentityStoreLoadState recovery_load(
+     void *opaque, enum CAMDIdentityStoreSlot slot)
+ {
+     struct recovery_context *context = opaque;
+-
+-    return load_path(slot_path(slot), context->store->file_bytes,
+-                     context->store->file_capacity, context->records,
+-                     IDENTITY_CAPACITY, context->record_count);
++    enum CAMDIdentityStoreLoadState state;
++
++    state = load_path(slot_path(slot), context->store->file_bytes,
++                      context->store->file_capacity, context->records,
++                      IDENTITY_CAPACITY, context->record_count);
++    if (state == CAMD_IDENTITY_STORE_VALID)
++        context->store->loaded_slot = (int)slot;
++    return state;
+ }
+ 
+ static int recovery_exists(void *opaque, enum CAMDIdentityStoreSlot slot)
+@@ -106,6 +150,8 @@ static int recovery_exists(void *opaque, enum CAMDIdentityStoreSlot slot)
+ static int recovery_remove(void *opaque, enum CAMDIdentityStoreSlot slot)
+ {
+     (void)opaque;
++    if (fault_now("DeleteFile"))
++        return 0;
+     return DeleteFile(slot_path(slot));
+ }
+ 
+@@ -113,6 +159,8 @@ static int recovery_move(void *opaque, enum CAMDIdentityStoreSlot from,
+                          enum CAMDIdentityStoreSlot to)
+ {
+     (void)opaque;
++    if (fault_now("Rename"))
++        return 0;
+     return Rename(slot_path(from), slot_path(to));
+ }
+ 
+@@ -164,17 +212,24 @@ static int generate_id(void *context, struct CAMDEndpointIDV1 *id)
+ 
+ static int write_new(struct CAMDIdentityStoreAROS *store, ULONG byte_count)
+ {
+-    BPTR file = Open(IDENTITY_NEW_PATH, MODE_NEWFILE);
++    BPTR file;
+     LONG written;
+     int ok;
+ 
++    if (fault_now("Open"))
++        return 0;
++    file = Open(IDENTITY_NEW_PATH, MODE_NEWFILE);
+     if (!file)
+         return 0;
+-    written = Write(file, store->file_bytes, (LONG)byte_count);
+-    ok = written == (LONG)byte_count && Flush(file);
+-    if (!Close(file))
++    if (fault_now("Write"))
++        written = Write(file, store->file_bytes, (LONG)(byte_count / 2));
++    else
++        written = Write(file, store->file_bytes, (LONG)byte_count);
++    ok = written == (LONG)byte_count && !fault_now("Flush") && Flush(file);
++    if (!Close(file) || (ok && fault_now("Close")))
+         ok = 0;
+-    if (!ok)
++    /* A fault may leave the half-written file: recovery has to cope. */
++    if (!ok && !fault_now("DeleteFile"))
+         DeleteFile(IDENTITY_NEW_PATH);
+     return ok;
+ }
+@@ -226,6 +281,8 @@ struct CAMDIdentityStoreAROS *camd_identity_store_aros_create(void)
+     store->uuid_base = OpenLibrary("uuid.library", 1);
+     if (!store->file_bytes || !store->uuid_base)
+         goto fail;
++    store->loaded_slot = -1;
++    fault_setup();
+     /* Files that exist but hold no complete snapshot may be damaged or just
+      * unreadable now. Writing a new one over them could lose every stored
+      * ID, so this run gives temporary IDs instead and touches nothing. */
+@@ -278,3 +335,15 @@ struct CAMDIdentityMap *camd_identity_store_aros_map(
+ {
+     return store ? store->map : NULL;
+ }
++
++unsigned int camd_identity_store_aros_state(
++    struct CAMDIdentityStoreAROS *store)
++{
++    if (!store)
++        return CAMD_IDENTITY_STORE_ABSENT;
++    if (store->unreadable)
++        return CAMD_IDENTITY_STORE_UNREADABLE;
++    if (store->loaded_slot > (int)CAMD_IDENTITY_STORE_MAIN)
++        return CAMD_IDENTITY_STORE_RECOVERED;
++    return CAMD_IDENTITY_STORE_COMPLETE;
++}
+diff --git a/workbench/libs/camd/identity_store_aros.h b/workbench/libs/camd/identity_store_aros.h
+--- a/workbench/libs/camd/identity_store_aros.h
++++ b/workbench/libs/camd/identity_store_aros.h
+@@ -8,5 +8,9 @@ struct CAMDIdentityStoreAROS *camd_identity_store_aros_create(void);
+ void camd_identity_store_aros_destroy(struct CAMDIdentityStoreAROS *store);
+ struct CAMDIdentityMap *camd_identity_store_aros_map(
+     struct CAMDIdentityStoreAROS *store);
++/* A CAMD_IDENTITY_STORE_ value of camdendpoint.h: how the files were found
++ * when the store was created. NULL is CAMD_IDENTITY_STORE_ABSENT. */
++unsigned int camd_identity_store_aros_state(
++    struct CAMDIdentityStoreAROS *store);
+ 
+ #endif
+diff --git a/workbench/libs/camd/mmakefile.src b/workbench/libs/camd/mmakefile.src
+--- a/workbench/libs/camd/mmakefile.src
++++ b/workbench/libs/camd/mmakefile.src
+@@ -13,7 +13,7 @@ FILES :=    drivers clusters init camdwait mididistr midifromdriver \
+ 	    identity_store_recovery identity_store_aros legacy_identity_key \
+ 	    legacy_identity_set driver_endpoints endpoint_client \
+ 	    app_endpoint endpoint_publish endpoint_projection \
+-	    endpoint_owner
++	    endpoint_owner endpoint_identity
+ 
+ FUNCS := \
+     lockcamd \
+@@ -84,7 +84,10 @@ FUNCS := \
+     setpublishedendpointtopology \
+     getendpointgroup \
+     getendpointfunctionblock \
+-    getpublishedendpointstats
++    getpublishedendpointstats \
++    getendpointidentitystore \
++    getstoredendpointidentity \
++    forgetendpointidentity
+ 
+ #MM workbench-libs-camd-includes : \
+ #MM     kernel-exec-includes \
+@@ -94,6 +97,12 @@ FUNCS := \
+ 
+ #MM- workbench-libs-camd : linklibs
+ 
++# CAMD_TEST_HOOKS=yes in the environment of make builds in what the test
++# runners need to make things fail; see identity_store_aros.c.
++ifeq ($(CAMD_TEST_HOOKS),yes)
++USER_CPPFLAGS += -DCAMD_TEST_HOOKS
++endif
++
+ %build_module mmake=workbench-libs-camd \
+     modname=camd modtype=library \
+     files="$(FUNCS) $(FILES) camd_init"
