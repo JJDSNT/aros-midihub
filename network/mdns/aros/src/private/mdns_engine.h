@@ -260,6 +260,10 @@ void mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
 void mdnsRegHandleAnswerName(struct MDNSEngineToken *tok, const char *name,
     UWORD type, ULONG srcaddr);
 BOOL mdnsRegTick(struct MDNSEngineToken *tok);
+struct MDNSRecord;
+void mdnsRegHandleProbe(struct MDNSEngineToken *tok,
+    const struct MDNSRecord *theirs, LONG count, const UBYTE *pkt,
+    LONG pktlen);
 
 void mdnsBrowseSendQuery(struct MDNSEngineToken *tok, const char *type,
     BOOL unicast);

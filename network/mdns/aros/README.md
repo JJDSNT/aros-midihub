@@ -226,8 +226,11 @@ between two AROS systems.
 Protocol:
 
 - The host name itself is not probed; only service names are.
-- Two hosts that probe the same name at the same moment are not told apart
-  by the tie-break of RFC 6762 section 8.2.
+- Two hosts that probe the same service name at the same moment are told
+  apart by the tie-break of RFC 6762 section 8.2: the one whose SRV record
+  sorts earlier waits a second and probes again
+  (`tools/mdns-tiebreak-hosted.sh`). mdnsd proposes the SRV record only,
+  not the TXT record beside it.
 - mdnsd's own questions do not list the answers it already has, and its
   answers are sent at once rather than delayed and gathered.
 - IPv4 only.

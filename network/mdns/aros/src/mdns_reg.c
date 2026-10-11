@@ -383,6 +383,132 @@ mdnsRegHandleAnswerName(struct MDNSEngineToken *tok, const char *name,
 }
 
 /*
+ * A record as it is compared when two hosts probe for one name: class
+ * without the cache-flush bit, type, and the data with no name compressed
+ * (RFC 6762 section 8.2). Returns the length of the data, or -1.
+ */
+static LONG
+probe_rdata(const struct MDNSRecord *r, const UBYTE *pkt, LONG pktlen,
+    UBYTE *out, LONG outmax)
+{
+    char target[256];
+    LONG wirelen;
+
+    if (r->type != DNS_TYPE_SRV) {
+        if ((LONG)r->rdlength > outmax) {
+            return -1;
+        }
+        memcpy(out, r->rdata, r->rdlength);
+        return (LONG)r->rdlength;
+    }
+    /* priority, weight and port, then a name that may be compressed */
+    if (r->rdlength < 7 || outmax < 6 ||
+        mdnsWireToName(pkt, pktlen, r->rdoffset + 6, pkt, pktlen, target,
+            (LONG)sizeof(target)) < 0 ||
+        mdnsNameToWire(target, out + 6, outmax - 6, &wirelen) != 0) {
+        return -1;
+    }
+    memcpy(out, r->rdata, 6);
+    return 6 + wirelen;
+}
+
+/* <0 when (class, type, data) a sorts before b, 0 when equal, >0 after. */
+static LONG
+probe_compare(UWORD classA, UWORD typeA, const UBYTE *a, LONG lenA,
+    UWORD classB, UWORD typeB, const UBYTE *b, LONG lenB)
+{
+    LONG n, d;
+
+    classA &= 0x7fff;
+    classB &= 0x7fff;
+    if (classA != classB) {
+        return (LONG)classA - (LONG)classB;
+    }
+    if (typeA != typeB) {
+        return (LONG)typeA - (LONG)typeB;
+    }
+    n = lenA < lenB ? lenA : lenB;
+    d = (LONG)memcmp(a, b, (size_t)n);
+    if (d != 0) {
+        return d;
+    }
+    return lenA - lenB;
+}
+
+/*
+ * Another host is probing, and these are the records it proposes. For a
+ * name this host is probing for too, the two sets of records are compared
+ * and the host whose set is lexicographically later keeps going; the other
+ * waits a second and probes again, by which time the winner has announced
+ * and the usual conflict gives the loser another name (RFC 6762 section
+ * 8.2). This host proposes one record for a service, its SRV, so the other
+ * host's set is compared from its earliest record: an equal first record
+ * and more behind it makes the other set the later one.
+ */
+void
+mdnsRegHandleProbe(struct MDNSEngineToken *tok,
+    const struct MDNSRecord *theirs, LONG count, const UBYTE *pkt,
+    LONG pktlen)
+{
+    static UBYTE mine[6 + 256], other[512], first[512];
+    struct MDNSRegisteredService *rs;
+    struct Node *n;
+    char instfqdn[256];
+    char hostwire[256];
+    LONG hostwirelen, minelen, otherlen, firstlen, i, matches, d;
+    UWORD firstclass = 0, firsttype = 0;
+
+    if (tok == NULL || theirs == NULL || count <= 0) {
+        return;
+    }
+    for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
+        n = n->ln_Succ) {
+        rs = (struct MDNSRegisteredService *)n;
+        if (rs->rs_State != MDNS_RS_PROBING || rs->rs_Step == 0) {
+            continue;       /* not probing, or has not asked yet */
+        }
+        mdnsRegBuildFqdn(instfqdn, (LONG)sizeof(instfqdn), rs->rs_Instance,
+            rs->rs_Type, rs->rs_Domain);
+        /* the earliest of the other host's records for this name */
+        matches = 0;
+        firstlen = 0;
+        for (i = 0; i < count; i++) {
+            if (Stricmp(theirs[i].name, instfqdn) != 0) {
+                continue;
+            }
+            otherlen = probe_rdata(&theirs[i], pkt, pktlen, other,
+                (LONG)sizeof(other));
+            if (otherlen < 0) {
+                continue;
+            }
+            if (matches == 0 ||
+                probe_compare(theirs[i].rclass, theirs[i].type, other,
+                    otherlen, firstclass, firsttype, first, firstlen) < 0) {
+                memcpy(first, other, (size_t)otherlen);
+                firstlen = otherlen;
+                firstclass = theirs[i].rclass;
+                firsttype = theirs[i].type;
+            }
+            matches++;
+        }
+        if (matches == 0 ||
+            mdnsNameToWire(rs->rs_HostTarget, hostwire,
+                (LONG)sizeof(hostwire), &hostwirelen) != 0) {
+            continue;
+        }
+        minelen = mdnsRegAppendSrv(mine, (UBYTE *)hostwire, hostwirelen,
+            rs->rs_Port);
+        d = probe_compare(DNS_CLASS_IN, DNS_TYPE_SRV, mine, minelen,
+            firstclass, firsttype, first, firstlen);
+        if (d < 0 || (d == 0 && matches > 1)) {
+            /* theirs is later: give way for a second, then ask again */
+            rs->rs_Step = 0;
+            rs->rs_NextTick = mdnsEngineTicks() + 50;
+        }
+    }
+}
+
+/*
  * Moves each service along: three probes, then two announcements. Returns
  * TRUE while a service is being probed, so that the caller comes back in a
  * quarter of a second.

@@ -20,11 +20,14 @@
 
 #define MDNS_QUESTIONS_MAX  8
 #define MDNS_KNOWN_MAX      16
+#define MDNS_PROPOSED_MAX   8
 
 /* One packet at a time is taken apart, in mdnsd's only task. */
 static struct MDNSQuestion questions[MDNS_QUESTIONS_MAX];
 static char known[MDNS_KNOWN_MAX][256];
 static struct MDNSRecord record;
+/* what the sender of a probe says it is about to publish */
+static struct MDNSRecord proposed[MDNS_PROPOSED_MAX];
 
 void
 MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
@@ -78,6 +81,26 @@ MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
                 nknown++;
             }
             offset += consumed;
+        }
+        /*
+         * The authority section of a query holds the records its sender is
+         * probing for (RFC 6762 section 8.1). If this host is probing for
+         * the same name at this moment, one of the two has to give way.
+         */
+        if (i == ntohs(hdr->ancount) && ntohs(hdr->nscount) != 0) {
+            LONG nproposed = 0;
+
+            for (i = 0; i < ntohs(hdr->nscount); i++) {
+                if (mdnsParseRecord(pkt, pktlen, offset,
+                        &proposed[nproposed], &consumed) != 0) {
+                    break;
+                }
+                offset += consumed;
+                if (nproposed < MDNS_PROPOSED_MAX - 1) {
+                    nproposed++;
+                }
+            }
+            mdnsRegHandleProbe(tok, proposed, nproposed, pkt, pktlen);
         }
         tok->et_PacketSerial++;
         for (i = 0; i < nq; i++) {
