@@ -119,6 +119,9 @@ earlier blocker list:
 No public v43 header, vector or numeric constant is frozen until upstream
 review; the slice exists to make that review concrete.
 
+The ordered list of what is still to be closed inside the library is
+[`camd-backlog.md`](camd-backlog.md).
+
 ### Radium feasibility backlog (not a CAMD dependency)
 
 1. Identify and reproduce-build a historical Amiga-capable revision, initially

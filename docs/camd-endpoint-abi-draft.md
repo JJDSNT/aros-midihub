@@ -76,6 +76,7 @@ holds for everything else.
 ### Known limits of the provisional slice
 
 These are deliberate or still open; each is what the code does today.
+[`camd-backlog.md`](camd-backlog.md) orders the ones to be removed.
 
 **Scope**
 
