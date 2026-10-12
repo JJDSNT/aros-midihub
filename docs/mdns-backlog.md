@@ -41,6 +41,7 @@ history of `tools/mdns-*-hosted.sh`. Under it:
 |---|---|
 | MD02 | A value in a service's text may have spaces. In the string a client gives and gets, a space that belongs to an item has a backslash before it and a backslash is written twice; the items go into the TXT record, and come out of it, as the strings they are (`mdnsTxtNext()`, `mdnsTxtAppend()`). Text without backslashes means what it meant before. `dnssd -R` marks its arguments so. `tools/mdns-txt-hosted.sh`: Avahi reads four items registered on AROS, two with spaces and one with a backslash, as written, and AROS is given the host's `name=Host With Spaces` with its spaces marked. The whole text is still at most 256 characters, and a record's item that does not fit is left out whole. Whether a string with backslashes is the form AROS wants for this, or counted strings, is one more question for the review. |
 | MD19 | A client says how long its service's records may live: `MDNS_TimeToLive` in `RegisterServiceA()`, 1 to 4500 seconds, anything else refused. The service's PTR, SRV and TXT records are announced and answered with it; the address record is the host's and keeps its 120 seconds. Without the tag nothing changes: 75 minutes, and 2 for the SRV record (RFC 6762 section 10). `dnssd -R ... -t seconds`. `tools/mdns-ttl-hosted.sh` reads the announcements off the wire: 60 seconds where asked, the defaults where not, nothing announced for 0 and for 4501. `UpdateServiceA()` does not change it. The message between library and daemon grew a field, and its version went from 4 to 5. |
+| MD21 | `dnssd -Z` prints a service's host as it is, `arosbox.local.`, not with the domain a second time. Seen on hosted AROS in the output of `tools/mdns-txt-hosted.sh`, for a service of AROS's own and for one of the host's. |
 
 ## P0 — wrong or unsafe as it is
 
@@ -79,7 +80,6 @@ history of `tools/mdns-*-hosted.sh`. Under it:
 | MD16 | The Envoy bridge publishes and finds hosts but does not match what DNS-SD cannot tell (memory, versions, realms), and AROS's `nipc.library` does not call it. | Nothing until someone wants Envoy discovery; see [the notes](nipc-envoy-future.md). |
 | MD17 | The commodity has no automatic test; its Share panel, hot key and Exchange were never tried, and a label overlaps a gadget with the default font. | Try them by hand; lay the row out by the font. |
 | MD18 | On amiga-m68k AROSTCP does not build until `fd.library`'s headers exist, because its build file does not ask for them. | A one-line dependency, as a pull request of its own. |
-| MD21 | `dnssd -Z` prints a service's host as `name.local.local.`: the tool adds a domain the name already has. | Print the name as it is. |
 
 ## The way upstream
 

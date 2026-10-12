@@ -193,9 +193,24 @@ DSPrintZoneAdd(struct MDNSServiceInstance *si)
     BAPrintf("%s.local.\tPTR\t%s.%s.local.\n",
         si->si_Type, si->si_Name, si->si_Type);
     if (si->si_Port != 0 || si->si_HostName[0] != '\0') {
-        BAPrintf("%s.%s.local.\tSRV\t0 0 %ld %s.local.\n",
-            si->si_Name, si->si_Type, (LONG)si->si_Port,
-            (si->si_HostName[0] != '\0') ? (STRPTR)si->si_HostName : (STRPTR)"?");
+        /* The host comes with its domain, "name.local" or "name.local.":
+         * it is printed as it is, with the dot that ends a full name. One
+         * with no dot at all is a bare host name, and is in .local. */
+        const char *host = (si->si_HostName[0] != '\0') ?
+            (const char *)si->si_HostName : "?";
+        ULONG length = 0;
+        BOOL dotted = FALSE;
+
+        while (host[length] != '\0') {
+            if (host[length] == '.') {
+                dotted = TRUE;
+            }
+            length++;
+        }
+        BAPrintf("%s.%s.local.\tSRV\t0 0 %ld %s%s\n",
+            si->si_Name, si->si_Type, (LONG)si->si_Port, host,
+            !dotted ? ".local." :
+            (length > 0 && host[length - 1] == '.') ? "" : ".");
     }
     if (si->si_TXTLength > 0) {
         char txt[MDNS_MAX_TXT + 1];
