@@ -66,7 +66,7 @@ so it is not included.
 ## What is left
 
 For the service itself, the open items are listed under "Known limits" in
-[`aros/README.md`](aros/README.md): probing the host name, known answers and delayed responses in mdnsd's own traffic,
+[`aros/README.md`](aros/README.md): known answers and delayed responses in mdnsd's own traffic,
 and IPv6. AROSTCP already has what IPv6 needs from the stack (scoped
 link-local multicast and `SO_BINDTODEVICE`).
 

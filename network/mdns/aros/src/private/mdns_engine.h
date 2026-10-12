@@ -207,6 +207,15 @@ struct MDNSEngineToken
     ULONG                   et_DbgPtr;       /* PTR records seen by handler */
     ULONG                   et_DbgNotify;    /* browse hook fires attempted */
     char                    et_HostName[MDNS_MAX_HOST + 1];
+                                            /* the name in use: the system's
+                                             * first label, with "-2", "-3"
+                                             * after it lost the name */
+    char                    et_HostBase[MDNS_MAX_HOST + 1];
+                                            /* what the system calls itself */
+    ULONG                   et_HostSuffix;  /* 0, or the number after it */
+    UWORD                   et_HostState;   /* MDNS_RS_*, as for a service */
+    UWORD                   et_HostStep;
+    ULONG                   et_HostNextTick;
     struct List             et_Services;
     struct List             et_BrowseSessions;
     struct List             et_InquirySessions;
@@ -253,7 +262,11 @@ LONG mdnsNetSendMulticast(struct MDNSEngineToken *tok, const UBYTE *pkt,
     LONG pktlen);
 
 void mdnsRegAnnounceAll(struct MDNSEngineToken *tok);
+struct MDNSRecord;
 void mdnsRegHostChanged(struct MDNSEngineToken *tok);
+void mdnsHostHandleRecord(struct MDNSEngineToken *tok,
+    const struct MDNSRecord *r);
+void mdnsNetNameHost(struct MDNSEngineToken *tok);
 void mdnsRegGoodbyeAll(struct MDNSEngineToken *tok);
 void mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
     char (*known)[256], LONG knownCount);

@@ -121,6 +121,7 @@ MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
             return;
         }
         tok->et_RxAnswers++;
+        mdnsHostHandleRecord(tok, r);
         mdnsRegHandleAnswerName(tok, r->name, r->type, srcaddr);
         mdnsBrowseHandleRecord(tok, r, pkt, pktlen);
         mdnsQueryHandleRecord(tok, r, pkt, pktlen);
@@ -143,6 +144,7 @@ MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
         if (mdnsParseRecord(pkt, pktlen, offset, r, &consumed) != 0) {
             return;
         }
+        mdnsHostHandleRecord(tok, r);
         mdnsRegHandleAnswerName(tok, r->name, r->type, srcaddr);
         mdnsBrowseHandleRecord(tok, r, pkt, pktlen);
         mdnsQueryHandleRecord(tok, r, pkt, pktlen);

@@ -155,12 +155,55 @@ set_primary(struct MDNSEngineToken *tok)
     tok->et_Socket = tok->et_IfCount > 0 ? tok->et_Ifs[0].mi_Socket : -1;
     tok->et_HostAddr = tok->et_IfCount > 0 ? tok->et_Ifs[0].mi_Addr : 0;
 
-    tok->et_HostName[0] = '\0';
-    if (gethostname(tok->et_HostName, MDNS_MAX_HOST) != 0 ||
-        tok->et_HostName[0] == '\0') {
-        strcpy(tok->et_HostName, "aros");
+    {
+        char base[MDNS_MAX_HOST + 1];
+        char *dot;
+
+        base[0] = '\0';
+        if (gethostname(base, MDNS_MAX_HOST) != 0 || base[0] == '\0') {
+            strcpy(base, "aros");
+        }
+        base[MDNS_MAX_HOST] = '\0';
+        /* over mDNS a host is its first label, in the mDNS domain */
+        if ((dot = strchr(base, '.')) != NULL) {
+            *dot = '\0';
+        }
+        /* another name from the system starts without a number again */
+        if (strcmp(base, tok->et_HostBase) != 0) {
+            strcpy(tok->et_HostBase, base);
+            tok->et_HostSuffix = 0;
+        }
     }
-    tok->et_HostName[MDNS_MAX_HOST] = '\0';
+    mdnsNetNameHost(tok);
+}
+
+/* The name in use, from what the system calls itself and the number the
+ * host took after another host turned out to have the name. */
+void
+mdnsNetNameHost(struct MDNSEngineToken *tok)
+{
+    char digits[12];
+    ULONG number = tok->et_HostSuffix;
+    LONG n = 0, len;
+
+    strcpy(tok->et_HostName, tok->et_HostBase);
+    if (number == 0) {
+        return;
+    }
+    do {
+        digits[n++] = (char)('0' + number % 10);
+        number /= 10;
+    } while (number != 0);
+    /* a label has at most 63 characters */
+    len = (LONG)strlen(tok->et_HostName);
+    if (len > 63 - 1 - n) {
+        len = 63 - 1 - n;
+    }
+    tok->et_HostName[len++] = '-';
+    while (n > 0) {
+        tok->et_HostName[len++] = digits[--n];
+    }
+    tok->et_HostName[len] = '\0';
 }
 
 /*

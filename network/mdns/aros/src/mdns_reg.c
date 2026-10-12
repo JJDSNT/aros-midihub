@@ -230,6 +230,8 @@ mdnsRegAnnounceService(struct MDNSEngineToken *tok, struct MDNSRegisteredService
     }
 }
 
+static void host_send_addr(struct MDNSEngineToken *tok, BOOL goodbye);
+
 /* Before the socket goes away: nobody should keep what this host offered. */
 void
 mdnsRegGoodbyeAll(struct MDNSEngineToken *tok)
@@ -246,6 +248,9 @@ mdnsRegGoodbyeAll(struct MDNSEngineToken *tok)
         if (rs->rs_State == MDNS_RS_ANNOUNCED) {
             mdnsRegSendService(tok, rs, TRUE);
         }
+    }
+    if (tok->et_HostState == MDNS_RS_ANNOUNCED) {
+        host_send_addr(tok, TRUE);
     }
 }
 
@@ -383,6 +388,153 @@ mdnsRegHandleAnswerName(struct MDNSEngineToken *tok, const char *name,
 }
 
 /*
+ * The host's own name. It is a record of its own, apart from any service:
+ * probed when the network comes up, announced, answered for, defended, and
+ * changed to "name-2", "name-3" when another host has it (RFC 6762 sections
+ * 8 and 9). Each interface gets the address record of that interface.
+ */
+static void
+host_fqdn(struct MDNSEngineToken *tok, char *buf, LONG buflen)
+{
+    mdnsRegBuildHostFqdn(buf, buflen, tok->et_HostName, MDNS_DOMAIN_LOCAL);
+}
+
+static void
+host_addr_data(ULONG addr, UBYTE *data)
+{
+    data[0] = (UBYTE)((addr >> 24) & 0xFF);
+    data[1] = (UBYTE)((addr >> 16) & 0xFF);
+    data[2] = (UBYTE)((addr >> 8) & 0xFF);
+    data[3] = (UBYTE)(addr & 0xFF);
+}
+
+/* Asks every link whether anyone has the name, with the address record this
+ * host would publish there in the authority section. */
+static void
+host_send_probe(struct MDNSEngineToken *tok)
+{
+    UBYTE *pkt = tok->et_TxBuf;
+    struct MDNSHeader *hdr = (struct MDNSHeader *)pkt;
+    char fqdn[256];
+    UBYTE addrdata[4];
+    LONG pos, i;
+    UWORD nscount;
+
+    host_fqdn(tok, fqdn, (LONG)sizeof(fqdn));
+    for (i = 0; i < tok->et_IfCount; i++) {
+        nscount = 0;
+        if (mdnsBuildQuery(pkt, (LONG)MDNS_MAX_PACKET, 0, fqdn, DNS_TYPE_ANY,
+                (UWORD)(DNS_CLASS_IN |
+                    (tok->et_HostStep == 0 ? DNS_QU_BIT : 0)), &pos) != 0) {
+            return;
+        }
+        host_addr_data(tok->et_Ifs[i].mi_Addr, addrdata);
+        if (mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &nscount, fqdn,
+                DNS_TYPE_A, DNS_CLASS_IN, MDNS_TTL_HOST, addrdata, 4) != 0) {
+            return;
+        }
+        hdr->nscount = htons(nscount);
+        mdnsNetSendOn(tok, i, pkt, pos);
+    }
+}
+
+/* The host's address record, to the interface a question came in on or to
+ * every one; as a goodbye with no time to live. */
+static void
+host_send_addr(struct MDNSEngineToken *tok, BOOL goodbye)
+{
+    UBYTE *pkt = tok->et_TxBuf;
+    struct MDNSHeader *hdr = (struct MDNSHeader *)pkt;
+    char fqdn[256];
+    UBYTE addrdata[4];
+    LONG pos, i;
+    UWORD ancount;
+
+    host_fqdn(tok, fqdn, (LONG)sizeof(fqdn));
+    for (i = 0; i < tok->et_IfCount; i++) {
+        if (tok->et_SendIf >= 0 && i != tok->et_SendIf) {
+            continue;
+        }
+        mdnsInitHeader(hdr, DNS_FLAG_QR | DNS_FLAG_AA, 0);
+        pos = (LONG)sizeof(struct MDNSHeader);
+        ancount = 0;
+        host_addr_data(tok->et_Ifs[i].mi_Addr, addrdata);
+        if (mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, fqdn,
+                DNS_TYPE_A, DNS_CLASS_IN | 0x8000,
+                goodbye ? 0 : MDNS_TTL_HOST, addrdata, 4) != 0) {
+            continue;
+        }
+        hdr->ancount = htons(ancount);
+        mdnsNetSendOn(tok, i, pkt, pos);
+    }
+}
+
+/* Services that stand for this host point at its name. */
+static void
+host_retarget_services(struct MDNSEngineToken *tok)
+{
+    struct MDNSRegisteredService *rs;
+    struct Node *n;
+
+    for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
+        n = n->ln_Succ) {
+        rs = (struct MDNSRegisteredService *)n;
+        if (!rs->rs_Proxy) {
+            mdnsRegBuildHostFqdn(rs->rs_HostTarget,
+                (LONG)sizeof(rs->rs_HostTarget), tok->et_HostName,
+                MDNS_DOMAIN_LOCAL);
+            rs->rs_HostAddr = tok->et_HostAddr;
+        }
+    }
+}
+
+/* Starts asking for the name, from the first probe. */
+static void
+host_probe_from(struct MDNSEngineToken *tok, ULONG ticks)
+{
+    tok->et_HostState = MDNS_RS_PROBING;
+    tok->et_HostStep = 0;
+    tok->et_HostNextTick = mdnsEngineTicks() + ticks;
+}
+
+/* Another host has the name: take the next one and ask for that. */
+static void
+host_rename(struct MDNSEngineToken *tok)
+{
+    tok->et_HostSuffix = tok->et_HostSuffix == 0 ? 2 : tok->et_HostSuffix + 1;
+    mdnsNetNameHost(tok);
+    host_retarget_services(tok);
+    host_probe_from(tok, MDNS_PROBE_TICKS);
+}
+
+/*
+ * A record from another host. An address record under this host's name
+ * whose address is not one of this host's says somebody else has the name,
+ * whether this host is still asking for it or has announced it already.
+ */
+void
+mdnsHostHandleRecord(struct MDNSEngineToken *tok, const struct MDNSRecord *r)
+{
+    char fqdn[256];
+    ULONG addr;
+
+    if (tok == NULL || r == NULL || tok->et_IfCount == 0 ||
+        r->type != DNS_TYPE_A || r->rdlength != 4 || r->ttl == 0) {
+        return;
+    }
+    host_fqdn(tok, fqdn, (LONG)sizeof(fqdn));
+    if (Stricmp(fqdn, r->name) != 0) {
+        return;
+    }
+    addr = ((ULONG)r->rdata[0] << 24) | ((ULONG)r->rdata[1] << 16) |
+           ((ULONG)r->rdata[2] << 8) | (ULONG)r->rdata[3];
+    if (mdnsNetIsOwn(tok, addr)) {
+        return;
+    }
+    host_rename(tok);
+}
+
+/*
  * A record as it is compared when two hosts probe for one name: class
  * without the cache-flush bit, type, and the data with no name compressed
  * (RFC 6762 section 8.2). Returns the length of the data, or -1.
@@ -461,6 +613,30 @@ mdnsRegHandleProbe(struct MDNSEngineToken *tok,
     if (tok == NULL || theirs == NULL || count <= 0) {
         return;
     }
+    /*
+     * The host's own name, with the address of the interface the probe came
+     * in on. An equal record is this same host seen from somewhere else, or
+     * a host with this host's address, which is not for mDNS to sort out.
+     */
+    if (tok->et_HostState == MDNS_RS_PROBING && tok->et_HostStep != 0 &&
+        tok->et_IfCount > 0) {
+        LONG index = tok->et_SendIf >= 0 ? tok->et_SendIf : 0;
+
+        mdnsRegBuildHostFqdn(instfqdn, (LONG)sizeof(instfqdn),
+            tok->et_HostName, MDNS_DOMAIN_LOCAL);
+        host_addr_data(tok->et_Ifs[index].mi_Addr, mine);
+        for (i = 0; i < count; i++) {
+            if (Stricmp(theirs[i].name, instfqdn) == 0 &&
+                theirs[i].type == DNS_TYPE_A && theirs[i].rdlength == 4 &&
+                probe_compare(DNS_CLASS_IN, DNS_TYPE_A, mine, 4,
+                    theirs[i].rclass, theirs[i].type, theirs[i].rdata,
+                    4) < 0) {
+                /* theirs is later: give way for a second, then ask again */
+                host_probe_from(tok, 50);
+                break;
+            }
+        }
+    }
     for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
         n = n->ln_Succ) {
         rs = (struct MDNSRegisteredService *)n;
@@ -520,6 +696,41 @@ mdnsRegTick(struct MDNSEngineToken *tok)
     struct Node *n;
     ULONG now = mdnsEngineTicks();
     BOOL probing = FALSE;
+    BOOL hostReady;
+
+    /* The host's name first: a service's records point at it and carry its
+     * address, so no service is announced before the name is this host's. */
+    if (tok->et_IfCount > 0 && tok->et_HostState == MDNS_RS_PROBING) {
+        probing = TRUE;
+        if ((LONG)(now - tok->et_HostNextTick) >= 0) {
+            if (tok->et_HostStep < MDNS_PROBE_COUNT) {
+                host_send_probe(tok);
+                tok->et_HostStep++;
+                tok->et_HostNextTick = now + MDNS_PROBE_TICKS;
+            } else {
+                /* Nobody objected. Services announced under an earlier
+                 * name or address are announced again with this one. */
+                tok->et_HostState = MDNS_RS_ANNOUNCED;
+                tok->et_HostStep = 1;
+                tok->et_HostNextTick = now + 50;
+                host_send_addr(tok, FALSE);
+                for (n = tok->et_Services.lh_Head;
+                    n != NULL && n->ln_Succ != NULL; n = n->ln_Succ) {
+                    rs = (struct MDNSRegisteredService *)n;
+                    if (rs->rs_State == MDNS_RS_ANNOUNCED) {
+                        mdnsBrowseAnnounceLocal(tok, rs);
+                    }
+                }
+                mdnsRegAnnounceAll(tok);
+            }
+        }
+    } else if (tok->et_IfCount > 0 &&
+               tok->et_HostStep < MDNS_ANNOUNCE_COUNT &&
+               (LONG)(now - tok->et_HostNextTick) >= 0) {
+        tok->et_HostStep++;
+        host_send_addr(tok, FALSE);
+    }
+    hostReady = tok->et_HostState == MDNS_RS_ANNOUNCED;
 
     for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
         n = n->ln_Succ) {
@@ -535,6 +746,9 @@ mdnsRegTick(struct MDNSEngineToken *tok)
                 rs->rs_NextTick = now + MDNS_PROBE_TICKS;
                 continue;
             }
+            if (!hostReady && !rs->rs_Proxy) {
+                continue;       /* waits for the host's name */
+            }
             /* Nobody objected: the name is this host's. */
             rs->rs_State = MDNS_RS_ANNOUNCED;
             rs->rs_Step = 1;
@@ -542,7 +756,8 @@ mdnsRegTick(struct MDNSEngineToken *tok)
             mdnsRegSendService(tok, rs, FALSE);
             mdnsBrowseAnnounceLocal(tok, rs);
         } else if (rs->rs_Step < MDNS_ANNOUNCE_COUNT &&
-                   (LONG)(now - rs->rs_NextTick) >= 0) {
+                   (LONG)(now - rs->rs_NextTick) >= 0 &&
+                   (hostReady || rs->rs_Proxy)) {
             rs->rs_Step++;
             mdnsRegSendService(tok, rs, FALSE);
         }
@@ -622,11 +837,26 @@ mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
         return;
     }
 
+    /* The host's own name, whether or not it offers a service. */
+    if ((any || q->qtype == DNS_TYPE_A) && tok->et_IfCount > 0 &&
+        tok->et_HostState == MDNS_RS_ANNOUNCED) {
+        mdnsRegBuildHostFqdn(fqdn, (LONG)sizeof(fqdn), tok->et_HostName,
+            MDNS_DOMAIN_LOCAL);
+        if (Stricmp(q->qname, fqdn) == 0) {
+            host_send_addr(tok, FALSE);
+            return;
+        }
+    }
+
     for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
         n = n->ln_Succ) {
         rs = (struct MDNSRegisteredService *)n;
         if (rs->rs_State != MDNS_RS_ANNOUNCED ||
             rs->rs_Answered == tok->et_PacketSerial) {
+            continue;
+        }
+        /* a service of this host waits while the host's name is in doubt */
+        if (!rs->rs_Proxy && tok->et_HostState != MDNS_RS_ANNOUNCED) {
             continue;
         }
         answer = FALSE;
@@ -636,7 +866,10 @@ mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
         if (Stricmp(q->qname, fqdn) == 0) {
             answer = any || q->qtype == DNS_TYPE_SRV ||
                 q->qtype == DNS_TYPE_TXT;
-        } else if (Stricmp(q->qname, rs->rs_HostTarget) == 0) {
+        } else if (rs->rs_Proxy &&
+                   Stricmp(q->qname, rs->rs_HostTarget) == 0) {
+            /* the host a service stands in for; this host's own name was
+             * answered above */
             answer = any || q->qtype == DNS_TYPE_A;
         } else if (any || q->qtype == DNS_TYPE_PTR) {
             char typefqdn[256];
@@ -842,20 +1075,12 @@ mdnsRegHostChanged(struct MDNSEngineToken *tok)
     if (tok == NULL) {
         return;
     }
-    for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
-        n = n->ln_Succ) {
-        rs = (struct MDNSRegisteredService *)n;
-        if (!rs->rs_Proxy) {
-            mdnsRegBuildHostFqdn(rs->rs_HostTarget,
-                (LONG)sizeof(rs->rs_HostTarget), tok->et_HostName,
-                MDNS_DOMAIN_LOCAL);
-            rs->rs_HostAddr = tok->et_HostAddr;
-        }
-        if (rs->rs_State == MDNS_RS_ANNOUNCED) {
-            mdnsBrowseAnnounceLocal(tok, rs);
-        }
-    }
-    mdnsRegAnnounceAll(tok);
+    (void)rs;
+    (void)n;
+    /* The name is asked for again on what is there now; mdnsRegTick()
+     * announces it and the services once nobody has objected. */
+    host_retarget_services(tok);
+    host_probe_from(tok, 0);
 }
 
 void
