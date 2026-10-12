@@ -26,10 +26,11 @@ int rtpmidi_clock_offset(const uint64_t timestamps[3], int is_initiator,
                     int64_t *peer_to_local);
 
 /* Resolve a 32-bit RTP timestamp near the current peer time. */
-/* An event due further ahead than this is not held but played at once:
- * ten seconds, in ten-thousandths. No latency setting comes near it; a
- * time that far off means the clocks are not known, not that the sender
- * meant it. */
+/* An event due further ahead than this is not held: ten seconds, in
+ * ten-thousandths. No latency setting comes near it; a time that far off
+ * means the clocks are not known, not that the sender meant it. The
+ * AppleMIDI path drops such an event and says so; the Network MIDI 2.0
+ * path plays it at once. */
 #define RTPMIDI_QUEUE_HORIZON 100000u
 
 int rtpmidi_clock_due(uint32_t timestamp, uint64_t local_now,

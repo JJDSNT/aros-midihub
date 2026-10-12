@@ -874,7 +874,8 @@ def main():
     binary = sys.argv[1]
     run_case(binary, "--probe-note", ("bytes=903c64", "bytes=903c00"))
     run_case(binary, "--probe-sysex",
-             ("SysEx complete bytes=4", "SysEx complete bytes=2004"))
+             ("SysEx complete bytes=4", "SysEx complete bytes=2004",
+              "SysEx complete bytes=16384"))
     run_case(binary, None, (), use_config=True)
     run_feedback_case(binary)
     run_outgoing_journal_case(binary)

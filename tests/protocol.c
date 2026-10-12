@@ -194,6 +194,68 @@ static void config_round_trip(void)
     remove(path);
 }
 
+/* R14: a SysEx message of 16 KiB, a bulk dump's size, is gathered from
+ * its segments; one past the limit is refused whole. */
+static void sysex_dump(void)
+{
+    static struct rtpmidi_sysex_assembler assembler;
+    static uint8_t segment[1002];
+    static uint8_t whole[16384];
+    struct rtpmidi_event event;
+    const uint8_t *message = NULL;
+    size_t message_length = 0;
+    size_t sent = 1;            /* bytes of whole given so far */
+    uint16_t sequence = 40;
+    size_t i;
+    int result = 0;
+
+    whole[0] = 0xf0;
+    for (i = 1; i + 1 < sizeof(whole); ++i)
+        whole[i] = (uint8_t)((i * 5) & 0x7f);
+    whole[sizeof(whole) - 1] = 0xf7;
+    memset(&event, 0, sizeof(event));
+    rtpmidi_sysex_reset(&assembler);
+    while (sent < sizeof(whole) - 1) {
+        size_t chunk = sizeof(whole) - 1 - sent;
+        int last;
+
+        if (chunk > 1000)
+            chunk = 1000;
+        last = sent + chunk == sizeof(whole) - 1;
+        segment[0] = sent == 1 ? 0xf0 : 0xf7;
+        memcpy(segment + 1, whole + sent, chunk);
+        segment[1 + chunk] = last ? 0xf7 : 0xf0;
+        event.sysex = segment;
+        event.sysex_length = chunk + 2;
+        event.timestamp = 500;
+        result = rtpmidi_sysex_feed(&assembler, &event, sequence++, &message,
+                                    &message_length);
+        assert(result == (last ? 1 : 0));
+        sent += chunk;
+    }
+    assert(message_length == sizeof(whole) &&
+           !memcmp(message, whole, sizeof(whole)));
+
+    /* past the limit: refused, and the next message is taken */
+    rtpmidi_sysex_reset(&assembler);
+    for (i = 0; i < RTPMIDI_SYSEX_MAX / 1000 + 2 && result >= 0; ++i) {
+        segment[0] = i ? 0xf7 : 0xf0;
+        memset(segment + 1, 1, 1000);
+        segment[1001] = 0xf0;
+        event.sysex = segment;
+        event.sysex_length = 1002;
+        result = rtpmidi_sysex_feed(&assembler, &event, sequence++, &message,
+                                    &message_length);
+    }
+    assert(result == -1 && i <= RTPMIDI_SYSEX_MAX / 1000 + 1);
+    segment[0] = 0xf0;
+    segment[1] = 0x7d;
+    segment[2] = 0xf7;
+    event.sysex_length = 3;
+    assert(rtpmidi_sysex_feed(&assembler, &event, sequence++, &message,
+                              &message_length) == 1 && message_length == 3);
+}
+
 static void apple_ports(void)
 {
     struct applemidi_ports ports;
@@ -2426,6 +2488,7 @@ int main(void)
     apple_sync();
     apple_clock();
     apple_ports();
+    sysex_dump();
     config_round_trip();
     apple_clock_delayed();
     apple_feedback();

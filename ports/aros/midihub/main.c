@@ -60,6 +60,7 @@ struct stream {
     unsigned long late;         /* of those, the ones already past it */
     struct runtime *rt;
     int port;                   /* the port its peer was given, or -1 */
+    unsigned long sysex_dropped;    /* SysEx messages too long, or broken */
 };
 
 struct runtime {
@@ -265,6 +266,11 @@ static void stream_forget(struct runtime *rt, int index, uint64_t now)
                stream->late, stream->timed);
         stream->timed = stream->late = 0;
     }
+    if (stream->sysex_dropped) {
+        printf("MIDIHub: %lu SysEx messages were dropped, too long or broken\n",
+               stream->sysex_dropped);
+        stream->sysex_dropped = 0;
+    }
     applemidi_clock_init(&stream->clock, stream->initiating, now);
     stream->have_received_sequence = 0;
     rtpmidi_sysex_reset(&stream->sysex);
@@ -447,8 +453,10 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
                 }
                 rtpmidi_receiver_deliver_sysex(&stream->receiver,
                                                sysex_message, sysex_length);
-            } else if (sysex_result < 0)
+            } else if (sysex_result < 0) {
+                ++stream->sysex_dropped;
                 puts("MIDIHub: SysEx segment discarded");
+            }
         } else {
             uint64_t due;
             now = now_ticks();
@@ -1103,8 +1111,14 @@ static void send_note(struct runtime *rt, int index, uint8_t velocity)
 static void send_probe_sysex(struct runtime *rt, int index)
 {
     static uint8_t large[2004];
+    static uint8_t dump[16384];     /* a bulk dump's size */
     static const uint8_t small[] = {0xf0, 0x7d, 0x01, 0xf7};
     size_t i;
+    dump[0] = 0xf0;
+    dump[1] = 0x7d;
+    for (i = 2; i + 1 < sizeof(dump); ++i)
+        dump[i] = (uint8_t)((i * 7) & 0x7f);
+    dump[sizeof(dump) - 1] = 0xf7;
     large[0] = 0xf0;
     large[1] = 0x7d;
     for (i = 2; i + 1 < sizeof(large); ++i)
@@ -1112,6 +1126,7 @@ static void send_probe_sysex(struct runtime *rt, int index)
     large[sizeof(large) - 1] = 0xf7;
     send_midi_to(rt, index, small, sizeof(small));
     send_midi_to(rt, index, large, sizeof(large));
+    send_midi_to(rt, index, dump, sizeof(dump));
 }
 
 /* Ends a peer from our side, with BY when a session had been reached. */

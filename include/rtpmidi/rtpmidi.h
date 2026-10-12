@@ -243,7 +243,11 @@ struct rtpmidi_event {
     size_t sysex_length;
 };
 
-enum { RTPMIDI_SYSEX_MAX = 4096 };
+/* The longest SysEx message taken, F0 and F7 counted, in either direction:
+ * 32 KiB, which holds the bulk dumps of the instruments this was tried
+ * against on paper (a DX7 voice bank is 4104 bytes, already past the 4096
+ * this used to be). Every stream keeps a buffer of this size. */
+enum { RTPMIDI_SYSEX_MAX = 32768 };
 
 struct rtpmidi_sysex_assembler {
     uint8_t bytes[RTPMIDI_SYSEX_MAX];
