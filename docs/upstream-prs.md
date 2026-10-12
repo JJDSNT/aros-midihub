@@ -95,6 +95,14 @@ on both interfaces after the reloads and to have announced it again, and a
 group must no longer be reported once the socket that joined it has closed.
 Each check fails with its fix taken out.
 
+Outside AROS: [kmatheussen/camd#1](https://github.com/kmatheussen/camd/issues/1),
+opened on 2026-10-12, presents the CAMD work to Kjetil Matheussen, who
+wrote the library, and asks what he thinks: the fixes (two of them are in
+his sources too), versions 42 and 43, and the driver side, where the
+transmit function's contract, the undocumented "new driver format" and
+drivers never being unloaded are things we had to guess at. His repository
+is a single commit from 2011, so an answer is not to be counted on.
+
 The sections below are the PR bodies as first written, except the one about
 `btmidi.class`, which describes the class as it is after the review.
 
