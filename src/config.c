@@ -83,6 +83,17 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
             if (!*value || strlen(value) >= sizeof(next.session_name))
                 goto done;
             strcpy(next.session_name, value);
+        } else if (strncmp(key, "port.", 5) == 0) {
+            char *end;
+            unsigned long port;
+
+            errno = 0;
+            port = strtoul(key + 5, &end, 10);
+            if (errno || end == key + 5 || *end ||
+                port >= sizeof(next.port_name) / sizeof(next.port_name[0]) ||
+                !*value || strlen(value) >= sizeof(next.port_name[0]))
+                goto done;
+            strcpy(next.port_name[port], value);
         } else
             goto done;
     }

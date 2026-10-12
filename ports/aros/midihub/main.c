@@ -8,6 +8,7 @@
 #include <ump/ump.h>
 #include <rtpmidi/clock.h>
 #include <rtpmidi/peers.h>
+#include <rtpmidi/ports.h>
 #include <rtpmidi/receiver.h>
 #include <rtpmidi/rtpmidi.h>
 #include <rtpmidi/session.h>
@@ -57,6 +58,8 @@ struct stream {
     struct rtpmidi_receiver receiver;
     unsigned long timed;        /* events that came with a time to keep */
     unsigned long late;         /* of those, the ones already past it */
+    struct runtime *rt;
+    int port;                   /* the port its peer was given, or -1 */
 };
 
 struct runtime {
@@ -101,7 +104,11 @@ struct runtime {
     /* What CAMD handed over in one turn of the loop and has not gone out
        yet: it leaves together, one packet to a peer where it fits. */
     struct rtpmidi_timed_message outgoing[64];
+    uint8_t outgoing_port[64];  /* the port each was sent to */
     size_t outgoing_count;
+    /* which port each peer has; where they share one, all have port 0 */
+    struct applemidi_ports ports;
+    int shared_port;
 };
 
 /* What we answer when asked which device this is, in an Invitation Reply
@@ -184,10 +191,13 @@ static uint32_t random32(uint64_t now)
     return value;
 }
 
+static void drop_peer(struct runtime *rt, int index, uint64_t now);
+
 static void output_message(void *context, const uint8_t *bytes,
                            size_t length)
 {
-    struct runtime *rt = context;
+    struct stream *stream = context;
+    struct runtime *rt = stream->rt;
     if (rt->trace) {
         size_t i;
         printf("MIDIHub: delivered at=%lu bytes=",
@@ -196,13 +206,16 @@ static void output_message(void *context, const uint8_t *bytes,
             printf("%02x", (unsigned int)bytes[i]);
         putchar('\n');
     }
-    netmidi_camd_deliver(&rt->camd, bytes, length);
+    if (stream->port >= 0)
+        netmidi_camd_deliver_port(&rt->camd, stream->port, bytes, length);
 }
 
 static void output_sysex(void *context, const uint8_t *message, size_t length)
 {
-    struct runtime *rt = context;
-    netmidi_camd_deliver_sysex(&rt->camd, message, length);
+    struct stream *stream = context;
+    if (stream->port >= 0)
+        netmidi_camd_deliver_port(&stream->rt->camd, stream->port, message,
+                                  length);
 }
 
 static void output_report(void *context, const char *text)
@@ -224,6 +237,8 @@ static void stream_begin(struct runtime *rt, int index, int initiating,
     struct stream *stream = &rt->stream[index];
     rtpmidi_queue_reset(&stream->queue);
     memset(stream, 0, sizeof(*stream));
+    stream->rt = rt;
+    stream->port = -1;
     stream->initiating = initiating;
     stream->last_invite = now;
     stream->last_activity = now;
@@ -232,7 +247,7 @@ static void stream_begin(struct runtime *rt, int index, int initiating,
     rtpmidi_sysex_reset(&stream->sysex);
     rtpmidi_queue_reset(&stream->queue);
     rtpmidi_sender_reset(&stream->sender);
-    rtpmidi_receiver_init(&stream->receiver, &receiver_output, rt,
+    rtpmidi_receiver_init(&stream->receiver, &receiver_output, stream,
                           &stream->queue);
 }
 
@@ -256,6 +271,9 @@ static void stream_forget(struct runtime *rt, int index, uint64_t now)
         rtpmidi_receiver_reset_system(&stream->receiver);
     }
     rtpmidi_sender_reset(&stream->sender);
+    /* after the notes were released on it */
+    applemidi_ports_release(&rt->ports, index + 1);
+    stream->port = -1;
 }
 
 static int invite_configured(struct runtime *rt, uint64_t now)
@@ -559,7 +577,19 @@ static void receive_packet(struct runtime *rt, int data_port)
         puts("MIDIHub: peer began again");
         stream_forget(rt, index, now);
     } else if (event == APPLEMIDI_PEER_CONNECTED) {
-        puts("MIDIHub: session connected");
+        /* The peer gets a port: the one kept for its name, or the first
+           that is free and kept for no one. Where every peer shares the
+           one pair of clusters there is nothing to give out. */
+        rt->stream[index].port = rt->shared_port ? 0 :
+            applemidi_ports_take(&rt->ports, packet.name, packet.name_length,
+                                 index + 1);
+        if (rt->stream[index].port < 0) {
+            puts("MIDIHub: no port for this peer");
+            drop_peer(rt, index, now);
+            return;
+        }
+        printf("MIDIHub: session connected port=%d\n",
+               rt->stream[index].port);
         applemidi_clock_init(&rt->stream[index].clock,
                              rt->stream[index].initiating, now);
         send_sync(rt, index, now);
@@ -918,16 +948,22 @@ static void flush_midi(struct runtime *rt)
         size_t wire_length;
         size_t taken;
         size_t done = 0;
+        size_t count = 0;
+        size_t i;
+        struct rtpmidi_timed_message mine[64];
 
         if (!rt->peers.peer[index].used ||
             rt->peers.peer[index].session.phase != APPLEMIDI_SESSION_CONNECTED)
             continue;
+        /* what was sent to this peer's port */
+        for (i = 0; i < rt->outgoing_count; ++i)
+            if (rt->shared_port || rt->outgoing_port[i] == stream->port)
+                mine[count++] = rt->outgoing[i];
         peer_address(&rt->peers.peer[index], 1, &data);
-        while (done < rt->outgoing_count) {
+        while (done < count) {
             if (rtpmidi_sender_packet_list(&stream->sender, stream->sequence,
                                            rt->peers.local_ssrc,
-                                           rt->outgoing + done,
-                                           rt->outgoing_count - done,
+                                           mine + done, count - done,
                                            wire, sizeof(wire), &wire_length,
                                            &taken) != 0) {
                 ++done;         /* not a message we can send */
@@ -970,6 +1006,7 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
         if (rt->outgoing_count ==
             sizeof(rt->outgoing) / sizeof(rt->outgoing[0]))
             flush_midi(rt);
+        rt->outgoing_port[rt->outgoing_count] = (uint8_t)rt->camd.port_now;
         m = &rt->outgoing[rt->outgoing_count++];
         m->timestamp = (uint32_t)now_ticks();
         m->length = (uint8_t)length;
@@ -977,7 +1014,9 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
         for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
             if (rt->peers.peer[index].used &&
                 rt->peers.peer[index].session.phase ==
-                    APPLEMIDI_SESSION_CONNECTED)
+                    APPLEMIDI_SESSION_CONNECTED &&
+                (rt->shared_port ||
+                 rt->stream[index].port == rt->camd.port_now))
                 result = 0;
     } else {
         /* a SysEx message has packets of its own, after what came first */
@@ -986,6 +1025,8 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
             if (rt->peers.peer[index].used &&
                 rt->peers.peer[index].session.phase ==
                     APPLEMIDI_SESSION_CONNECTED &&
+                (rt->shared_port ||
+                 rt->stream[index].port == rt->camd.port_now) &&
                 send_midi_to(rt, index, message, length) == 0)
                 result = 0;
     }
@@ -1228,9 +1269,15 @@ int main(int argc, char **argv)
         argi = 3;
     } else {
 #ifdef __AROS__
+#ifdef NETMIDI_SERVICE
+        config_result = netmidi_config_load("ENV:AppleMIDI", &config);
+        if (config_result == 1)
+            config_result = netmidi_config_load("ENVARC:AppleMIDI", &config);
+#else
         config_result = netmidi_config_load("ENV:MidiHub/Network", &config);
         if (config_result == 1)
             config_result = netmidi_config_load("ENVARC:MidiHub/Network", &config);
+#endif
         if (config_result < 0) {
             fputs("MIDIHub: invalid network preferences\n", stderr);
             return 20;
@@ -1339,6 +1386,15 @@ int main(int argc, char **argv)
         fputs("MIDIHub: camd.library unavailable\n", stderr);
         goto cleanup;
     }
+    rt.shared_port = netmidi_camd_ports(&rt.camd) == 1;
+    applemidi_ports_init(&rt.ports, rt.shared_port ? 0 :
+                                    netmidi_camd_ports(&rt.camd));
+    for (index = 0; index < 16; ++index)
+        if (config.port_name[index][0] &&
+            applemidi_ports_keep(&rt.ports, index,
+                                 config.port_name[index]) != 0)
+            printf("MIDIHub: port %d cannot be kept for \"%s\"\n", index,
+                   config.port_name[index]);
     now = now_ticks();
     if (applemidi_peers_init(&rt.peers, random32(now),
                         (const uint8_t *)config.session_name,

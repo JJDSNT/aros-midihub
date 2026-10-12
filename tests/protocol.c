@@ -5,6 +5,7 @@
 #include "rtpmidi/session.h"
 #include "rtpmidi/sender.h"
 #include "rtpmidi/peers.h"
+#include "rtpmidi/ports.h"
 #include "rtpmidi/timing.h"
 
 #include <assert.h>
@@ -156,6 +157,45 @@ static void apple_clock_delayed(void)
     for (i = 0; i < APPLEMIDI_CLOCK_KEPT; ++i)
         clock_exchange(&inviter, &invited, &t, ahead, 20, 320);
     assert(inviter.peer_to_local == -(int64_t)ahead + 150);
+}
+
+/* Which port a peer is given (decision D2 of the AppleMIDI backlog). */
+static void apple_ports(void)
+{
+    struct applemidi_ports ports;
+    static const uint8_t ipad[] = "the iPad";
+    static const uint8_t other[] = "Someone";
+
+    applemidi_ports_init(&ports, 4);
+    assert(applemidi_ports_keep(&ports, 2, "the iPad") == 0);
+    assert(applemidi_ports_keep(&ports, 2, "Another") == -1);   /* kept */
+    assert(applemidi_ports_keep(&ports, 3, "the iPad") == -1);  /* twice */
+    assert(applemidi_ports_keep(&ports, 4, "Nobody") == -1);    /* no port */
+    assert(applemidi_ports_keep(&ports, 0, "") == -1);
+
+    /* nobody named takes the first port kept for no one */
+    assert(applemidi_ports_take(&ports, other, 7, 1) == 0);
+    assert(applemidi_ports_take(&ports, NULL, 0, 2) == 1);
+    /* the named one gets its own, whoever came first */
+    assert(applemidi_ports_take(&ports, ipad, 8, 3) == 2);
+    assert(applemidi_ports_take(&ports, other, 7, 4) == 3);
+    /* none left, and a kept port is not given to another */
+    assert(applemidi_ports_take(&ports, other, 7, 5) == -1);
+    /* asking again says the same */
+    assert(applemidi_ports_take(&ports, ipad, 8, 3) == 2);
+    assert(applemidi_ports_of(&ports, 3) == 2 &&
+           applemidi_ports_owner(&ports, 2) == 3);
+
+    /* it leaves and comes back, into another slot of the table: the
+       same port, though lower ones are free by then */
+    applemidi_ports_release(&ports, 3);
+    applemidi_ports_release(&ports, 1);
+    assert(applemidi_ports_of(&ports, 3) == -1);
+    assert(applemidi_ports_take(&ports, ipad, 8, 6) == 2);
+    /* a second peer of the same name has no port while the first is there */
+    assert(applemidi_ports_take(&ports, ipad, 8, 7) == -1);
+    /* a name is compared whole */
+    assert(applemidi_ports_take(&ports, ipad, 7, 8) == 0);
 }
 
 static void apple_clock(void)
@@ -2305,6 +2345,7 @@ int main(void)
     apple_exchange();
     apple_sync();
     apple_clock();
+    apple_ports();
     apple_clock_delayed();
     apple_feedback();
     applemidi_peers();

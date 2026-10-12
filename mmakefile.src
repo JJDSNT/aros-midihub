@@ -47,6 +47,7 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
     libname=arosmidihub \
     files="$(MIDIHUB_ROOT)/network/rtpmidi/applemidi $(MIDIHUB_ROOT)/network/rtpmidi/rtpmidi \
            $(MIDIHUB_ROOT)/network/rtpmidi/session $(MIDIHUB_ROOT)/network/rtpmidi/peers \
+           $(MIDIHUB_ROOT)/network/rtpmidi/ports \
            $(MIDIHUB_ROOT)/src/config \
            $(MIDIHUB_ROOT)/network/rtpmidi/timing $(MIDIHUB_ROOT)/network/rtpmidi/sender \
            $(MIDIHUB_ROOT)/network/rtpmidi/receiver \

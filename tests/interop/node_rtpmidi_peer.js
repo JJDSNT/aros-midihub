@@ -22,8 +22,8 @@ function hex(bytes) {
 }
 
 const session = rtpmidi.manager.createSession({
-  localName: 'Node peer',
-  bonjourName: 'Node peer',
+  localName: process.env.PEER_NAME || 'Node peer',
+  bonjourName: process.env.PEER_NAME || 'Node peer',
   port,
   published: false,
 }, true);

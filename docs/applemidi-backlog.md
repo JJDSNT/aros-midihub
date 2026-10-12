@@ -87,7 +87,6 @@ Nothing open.
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
 | AM06 | Run against other implementations. One has been met: see "Peers met" below. | rtpmidid, which needs a Linux with the ALSA sequencer (this machine's WSL kernel has none, and Ubuntu 24.04 has no package). Then macOS, iOS and rtpMIDI for Windows when the machines are at hand ([the iPhone procedure](iphone-smoke-test.md) is written for Linux and needs redoing for AROS). With a peer that has the recovery journal: packets dropped with `tc netem`, to see a loss repaired in each direction. | Every row of "Peers met" is filled. |
-| AM08 | A CAMD client, not a driver. | A `DEVS:Midi` driver with a fixed number of ports, each bound to a peer while the session lasts, as `btmidi` does. Needs D1 and D2 below. | A CAMD program opens `applemidi.out.0` and a peer hears it; `MIDIHub In`/`Out` are gone. |
 
 **AM08 is being done in three cuts** (decisions D1, D2 and D4 below).
 
@@ -122,8 +121,25 @@ Nothing open.
    while CAMD holds a port open with bytes waiting, and CAMD expunging
    the driver under a running service (the adapters are then left where
    they are, off the list). Not built or run for m68k.
-3. *Peers to ports.* The rule of D2, and the tests moved from the
-   clusters `MIDIHub In` and `MIDIHub Out` to the driver's ports.
+3. *Peers to ports.* Done on 2026-10-12. A peer that connects is given a
+   port by `struct applemidi_ports` (`network/rtpmidi/ports.c`, portable):
+   the one kept for the name its invitation carries, or the first that is
+   free and kept for no one; a peer for whom there is none is told
+   goodbye. A port is kept by a line `port.<n> = <name>` in the service's
+   configuration, now `ENV:AppleMIDI`. What arrives from a peer goes to
+   its port, and what a CAMD client sends to a port goes to its peer
+   alone. `apple_ports` in `tests/protocol.c`; on hosted AROS, two
+   node-rtpmidi peers, the named one on port 3 and the other on port 0,
+   each port receiving its own peer's messages once, and a scale sent to
+   `applemidi.out.3` reaching the named peer only. The program `MIDIHub`
+   is unchanged: there every peer shares the clusters `MIDIHub In` and
+   `MIDIHub Out`, and its tests pass as before.
+
+**AM08 is done by its own measure**: a CAMD program opens a driver's port
+and plays to a peer. What it leaves is AM24 to AM26 below, AM16 and AM20.
+The time a message was meant for does not cross the driver (decision D4):
+a received message is played at its time by the service, and one sent
+carries the time the service took it from the port's ring.
 
 ## P2 — complete before an upstream proposal
 
@@ -132,6 +148,8 @@ Nothing open.
 | AM14 | IPv4 only: `struct applemidi_peer` holds a `uint32_t` address. | An address type that holds either family. Waits for the IPv6 answer in AROS issue #1559; do not start before it. | — |
 | AM15 | Eight peers, a constant. | A number from configuration with eight as the default, and a NO with a reason in the log when the table is full. | A test fills a table of two. |
 | AM16 | Configuration is one text file with one peer: local port, peer address and port, session name. | Several sessions to invite, the accept rule (AM07), latency (RTP-MIDI backlog R17), a port's binding to a peer (D2). Preferences reads and writes it, and the runtime takes a change without a restart. | The Preferences page edits all of it. |
+| AM24 | The service is switched off in its file (`Enabled=no`), because the package's programs and their tests start the same runtime by hand on the same ports. Two ways to CAMD exist side by side: the driver, and the program's clusters. | Move the remaining hosted tests to the service and the driver's ports, make the program a client of nothing (or remove it), and switch the service on. | One runtime in a booted system, started by the stack. |
+| AM25 | A CAMD client sees `applemidi.in.3`, not the peer's name, and every port is there whether a peer is or not. A SysEx message from a second port while one is being gathered from a first is left out. | Names and presence wait for the driver-side block in CAMD (its backlog, B30 and B31); a buffer per port for SysEx. | — |
 | AM17 | A peer's name is cut at 63 bytes wherever that falls, which can split a UTF-8 character; our own name is refused over 63. | Cut at a character boundary. | A host test with a name of multi-byte characters. |
 | AM18 | A packet with a command we do not know (Apple's bit-rate limit, `RL`, is one) fails to decode and is then tried as RTP, which also fails. Nothing is lost, and nothing is counted. | Recognise the command as known and ignored. | A host test; a counter. |
 | AM19 | The decoders are tested with packets we wrote. | A fuzz target for `applemidi_decode()` and for the session and peer state machines fed with arbitrary packet sequences, under the sanitizers; captures from AM06 added to the tests. | An hour without a finding; at least one capture per peer. |
@@ -140,7 +158,8 @@ Nothing open.
 
 | # | Limit or defect | What to do |
 |---|---|---|
-| AM20 | The program's name, its `--probe-note` and `--probe-sysex` arguments and its messages are those of a diagnostic. | Goes with AM08: the driver has no command line; the probes become a test program. |
+| AM20 | The program's name, its `--probe-note` and `--probe-sysex` arguments and its messages are those of a diagnostic. The service, built from the same source, prints its reports under the name `MIDIHub`. | The probes become a test program; the service's reports name no program and go to counters (RTP-MIDI backlog R18). |
+| AM26 | Read and never run: a driver in memory of another layout than the service (`APPLEMIDI_ADAPTERS_VERSION`); the service stopping while CAMD holds a port open with bytes waiting; CAMD expunging the driver under a running service. Never built for m68k. | A test of each on hosted AROS; a build in the m68k tree. |
 | AM21 | `applemidi_peers_receive()` sets the "left" event through two branches that end the same way. | Simplify when the function is next touched. |
 
 ## Decisions needed

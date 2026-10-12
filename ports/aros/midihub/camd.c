@@ -54,3 +54,21 @@ void netmidi_camd_poll(struct netmidi_camd_runtime *runtime,
     if (runtime && runtime->opened)
         aros_camd_bridge_poll(&runtime->bridge, output, context);
 }
+
+void netmidi_camd_deliver_port(struct netmidi_camd_runtime *runtime, int port,
+                               const uint8_t *message, size_t length)
+{
+    (void)port;
+    if (!runtime || !runtime->opened || !length)
+        return;
+    if (message[0] == 0xf0)
+        aros_camd_bridge_deliver_sysex(&runtime->bridge, message, length);
+    else
+        aros_camd_bridge_deliver(&runtime->bridge, message, length);
+}
+
+int netmidi_camd_ports(const struct netmidi_camd_runtime *runtime)
+{
+    (void)runtime;
+    return 1;
+}

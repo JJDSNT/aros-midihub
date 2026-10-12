@@ -10,6 +10,9 @@ struct netmidi_network_config {
     uint16_t peer_port;
     char peer_ip[64];
     char session_name[64];
+    /* "port.<n> = <name>": the driver's port n is kept for the peer whose
+     * session has that name */
+    char port_name[16][64];
 };
 
 void netmidi_config_defaults(struct netmidi_network_config *config);

@@ -6,6 +6,11 @@
 /* CAMD-facing state owned by the Network MIDI runtime.  Keeping this wrapper
  * separate from the reusable bridge gives the resident process one boundary
  * for CAMD lifecycle and leaves room for one bridge per peer later. */
+/* The service has the ports of a driver, a peer to each. The program that
+ * is a client of camd.library has one pair of clusters, which every peer
+ * shares: all its messages are of port 0, whatever port is named. */
+#define NETMIDI_CAMD_PORTS 16
+
 struct netmidi_camd_runtime {
     struct aros_camd_bridge bridge;
     int opened;
@@ -14,15 +19,20 @@ struct netmidi_camd_runtime {
        DEVS:Midi/applemidi (adapters.c), not as a client of camd.library. */
     void *adapters;             /* struct AppleMidiAdapters, once found */
     int signal_bit;
-    /* the bytes CAMD clients sent, gathered into messages */
-    uint8_t status;
-    uint8_t message[3];
-    uint8_t have;
-    uint8_t need;
-    int in_sysex;
-    uint8_t *sysex;
-    size_t sysex_length;
+    /* the bytes CAMD clients sent to each port, gathered into messages */
+    struct {
+        uint8_t status;
+        uint8_t message[3];
+        uint8_t have;
+        uint8_t need;
+        int in_sysex;
+        size_t sysex_length;
+    } stream[NETMIDI_CAMD_PORTS];
+    uint8_t *sysex;             /* one message at a time, of any port */
+    int sysex_port;
 #endif
+    int port_now;               /* during netmidi_camd_poll's output: the
+                                   port the message was sent to */
 };
 
 int netmidi_camd_open(struct netmidi_camd_runtime *runtime);
@@ -31,6 +41,11 @@ int netmidi_camd_is_open(const struct netmidi_camd_runtime *runtime);
 int netmidi_camd_signal_bit(const struct netmidi_camd_runtime *runtime);
 void netmidi_camd_deliver(struct netmidi_camd_runtime *runtime,
                           const uint8_t *message, size_t length);
+/* The same, to the port a peer was given. */
+void netmidi_camd_deliver_port(struct netmidi_camd_runtime *runtime, int port,
+                               const uint8_t *message, size_t length);
+/* How many ports there are for peers to be given: 1 when they share. */
+int netmidi_camd_ports(const struct netmidi_camd_runtime *runtime);
 void netmidi_camd_deliver_sysex(struct netmidi_camd_runtime *runtime,
                                 const uint8_t *message, size_t length);
 void netmidi_camd_poll(struct netmidi_camd_runtime *runtime,
