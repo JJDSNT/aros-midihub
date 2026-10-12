@@ -857,6 +857,55 @@ def run_latency_case(binary, latency_ms):
     return intervals, output
 
 
+def run_config_change_case(binary):
+    """The configuration file changes under a running program: the session
+    is told goodbye and the program goes on under what the file says now."""
+    port = free_port_pair()
+    directory = tempfile.TemporaryDirectory()
+    config = Path(directory.name) / "net.conf"
+    config.write_text(f"local_port={port}\nsession_name=First Name\n")
+    log = tempfile.TemporaryFile(mode="w+b")
+    process = subprocess.Popen([binary, "--config", str(config)],
+                               stdout=log, stderr=subprocess.STDOUT)
+    peer = ScriptedPeer(port, 2, 0x55555555, 0xEEEE0005, b"Watcher")
+    again = None
+    try:
+        peer.connect()
+        # mtime has whole seconds: let one pass before the change
+        time.sleep(1.1)
+        config.write_text(f"local_port={port}\nsession_name=Second Name\n")
+        peer.control.settimeout(5)
+        goodbye, _ = peer.control.recvfrom(128)
+        assert goodbye[:4] == b"\xff\xffBY", goodbye
+        again = ScriptedPeer(port, 4, 0x66666666, 0xFFFF0006, b"Watcher")
+        deadline = time.monotonic() + 4
+        reply = None
+        while reply is None:
+            again.control.sendto(again.invite, ("127.0.0.1", port))
+            try:
+                reply, _ = again.control.recvfrom(128)
+            except socket.timeout:
+                assert time.monotonic() < deadline, "no answer after the change"
+        # the answer carries the name the file gives now
+        assert reply[:4] == b"\xff\xffOK" and b"Second Name\0" in reply, reply
+    finally:
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        peer.close()
+        if again is not None:
+            again.close()
+        log.seek(0)
+        output = log.read().decode("utf-8", "replace")
+        log.close()
+        directory.cleanup()
+    assert "the configuration changed: beginning anew" in output, output
+    assert output.count("listening on UDP") == 2, output
+
+
 def run_latency_cases(binary):
     # With no latency every note is already late when it comes, and is
     # played as it arrives: the spacing is the network's.
@@ -881,6 +930,7 @@ def main():
     run_outgoing_journal_case(binary)
     run_two_peers_case(binary)
     run_latency_cases(binary)
+    run_config_change_case(binary)
     with tempfile.TemporaryDirectory() as directory:
         bad_config = Path(directory) / "invalid.conf"
         bad_config.write_text("local_port=65535\n")

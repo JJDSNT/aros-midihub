@@ -243,3 +243,27 @@ int netmidi_network_wait(const struct netmidi_network_runtime *runtime,
     }
     return ready < 0 ? -1 : 0;
 }
+
+int netmidi_network_hostname(char *name, size_t size)
+{
+    size_t i;
+
+    if (!name || !size)
+        return -1;
+    name[0] = 0;
+#ifdef __AROS__
+    if (!SocketBase)
+        return -1;
+#endif
+    if (gethostname(name, size) != 0) {
+        name[0] = 0;
+        return -1;
+    }
+    name[size - 1] = 0;
+    for (i = 0; name[i]; ++i)
+        if (name[i] == '.') {
+            name[i] = 0;
+            break;
+        }
+    return name[0] ? 0 : -1;
+}

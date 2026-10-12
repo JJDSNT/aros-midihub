@@ -10,10 +10,12 @@
 # the host's Avahi browsing on it. It needs passwordless sudo, a running
 # avahi-daemon, avahi-utils, ethtool and xvfb-run.
 #
-#   advertised  The service starts with the stack and, twenty seconds later,
-#               is sent Ctrl-C. Avahi has to resolve "AROS" of type
-#               _apple-midi._udp to AROS's address and port 5004, and then
-#               be told that it is gone.
+#   advertised  The service starts with the stack. Its configuration is
+#               changed under it, and it is then sent Ctrl-C. Avahi has to
+#               resolve the session, named after the machine, of type
+#               _apple-midi._udp to AROS's address and port 5004, then
+#               see it replaced by the one the new configuration names,
+#               and be told that that one is gone.
 #   found       The host advertises a session "Host Session" through Avahi
 #               and runs node-rtpmidi behind it. The service's
 #               configuration says "peer_name = Host Session": it has to find
@@ -70,7 +72,9 @@ Path C S ADD QUIET
 Run >NIL: QUIET AROSTCP
 WaitForPort AROSTCP
 Wait 8
-Wait 20
+Wait 14
+Echo >ENV:NetMIDI "session_name = Renamed Session"
+Wait 14
 Break \`Status COMMAND=netmidi\` C
 Wait 6
 Shutdown
@@ -89,13 +93,21 @@ cp "$sys/netmidid.log" "$work/hub.log" 2> /dev/null || true
 
 status=0
 if grep -q 'advertised by the system mDNS service' "$work/hub.log" 2> /dev/null &&
-   grep -q '^=;aroshost;IPv4;AROS;_apple-midi._udp;local;[^;]*;192\.168\.166\.2;5004;' "$work/browse.log"; then
-    echo "ok: Avahi resolved \"AROS\" (_apple-midi._udp) to 192.168.166.2 port 5004, advertised by mdnsd"
+   grep -q '^=;aroshost;IPv4;arosbox;_apple-midi._udp;local;[^;]*;192\.168\.166\.2;5004;' "$work/browse.log"; then
+    echo "ok: Avahi resolved \"arosbox\", the session named after the machine (_apple-midi._udp) to 192.168.166.2 port 5004, advertised by mdnsd"
 else
     echo "FAIL: the session was not advertised (keep $work/mdns-capture.txt and $work/browse.log)"
     status=1
 fi
-if grep -q '^-;aroshost;IPv4;AROS;_apple-midi._udp;local' "$work/browse.log"; then
+if grep -q 'the configuration changed: beginning anew' "$work/hub.log" 2> /dev/null &&
+   grep -q '^-;aroshost;IPv4;arosbox;_apple-midi._udp;local' "$work/browse.log" &&
+   grep -q '^=;aroshost;IPv4;Renamed\\032Session;_apple-midi._udp;local;[^;]*;192\.168\.166\.2;5004;' "$work/browse.log"; then
+    echo "ok: a name written to ENV:NetMIDI was taken without anyone restarting the service: the old session left the network and the new one came"
+else
+    echo "FAIL: the changed configuration was not taken"
+    status=1
+fi
+if grep -q '^-;aroshost;IPv4;Renamed\\032Session;_apple-midi._udp;local' "$work/browse.log"; then
     echo "ok: when the service ended, Avahi was told the session is gone"
 else
     echo "FAIL: no goodbye for the session"

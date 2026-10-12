@@ -29,6 +29,10 @@ enum netmidi_network_event {
 };
 
 void netmidi_network_init(struct netmidi_network_runtime *runtime);
+/* This machine's name on the network, without its domain; after
+ * netmidi_network_platform_open. Returns -1, with name empty, when it has
+ * none. */
+int netmidi_network_hostname(char *name, size_t size);
 int netmidi_network_platform_open(struct netmidi_network_runtime *runtime);
 int netmidi_network_open_pair(struct netmidi_network_runtime *runtime,
                               uint16_t control_port);

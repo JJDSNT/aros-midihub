@@ -131,6 +131,7 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
             if (!*value || strlen(value) >= sizeof(next.session_name))
                 goto done;
             strcpy(next.session_name, value);
+            next.session_name_given = 1;
         } else if (strcmp(key, "peer_name") == 0) {
             if (!*value || strlen(value) >= sizeof(next.peer_name))
                 goto done;

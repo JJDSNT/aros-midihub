@@ -7,6 +7,7 @@
 #include <netmidi2/netmidi2.h>
 #include <ump/ump.h>
 #include <rtpmidi/clock.h>
+#include <sys/stat.h>
 #include <rtpmidi/peers.h>
 #include <rtpmidi/ports.h>
 #include <rtpmidi/receiver.h>
@@ -1332,9 +1333,46 @@ static void periodic(struct runtime *rt, uint64_t now)
         midi2_periodic(rt, now);
 }
 
-int main(int argc, char **argv)
+/* What a configuration file looked like when it was read, to know when it
+   has been changed. */
+struct config_watch {
+    const char *path;           /* NULL: none to watch */
+    int exists;
+    long modified;
+    long size;
+};
+
+static void config_look(struct config_watch *watch)
+{
+    struct stat status;
+
+    watch->exists = 0;
+    watch->modified = watch->size = 0;
+    if (watch->path && stat(watch->path, &status) == 0) {
+        watch->exists = 1;
+        watch->modified = (long)status.st_mtime;
+        watch->size = (long)status.st_size;
+    }
+}
+
+static int config_changed(const struct config_watch *watch)
+{
+    struct config_watch now = *watch;
+
+    if (!watch->path)
+        return 0;
+    config_look(&now);
+    return now.exists != watch->exists || now.modified != watch->modified ||
+           now.size != watch->size;
+}
+
+#define RUN_AGAIN 100       /* the configuration changed: begin anew */
+
+static int run(int argc, char **argv)
 {
     static struct runtime rt;
+    struct config_watch watch = {NULL, 0, 0, 0};
+    uint64_t watched = 0;
     struct in_addr peer_address_bytes;
     uint16_t local_port;
     uint16_t peer_port;
@@ -1358,19 +1396,7 @@ int main(int argc, char **argv)
     long wait_us;
     int result = 20;
 
-#ifdef NETMIDI_SERVICE
-    /* Started by the stack's service manager: no console, no arguments.
-       What it would print goes nowhere, or to the file ENV:netmidid.log
-       names, for whoever wants to see it. */
-    {
-        const char *log = getenv("netmidid.log");
-
-        if (!log || !*log || !freopen(log, "w", stdout))
-            freopen("NIL:", "w", stdout);
-        freopen("NIL:", "w", stderr);
-    }
-#endif
-    setvbuf(stdout, NULL, _IONBF, 0);
+    memset(&rt, 0, sizeof(rt));
 
     netmidi_config_defaults(&config);
     if (argc > 1 && strcmp(argv[1], "--config") == 0) {
@@ -1379,9 +1405,13 @@ int main(int argc, char **argv)
             return 20;
         }
         argi = 3;
+        watch.path = argv[2];
     } else {
 #ifdef __AROS__
 #ifdef NETMIDI_SERVICE
+        /* ENV: is where a change is made to be seen at once; the copy in
+           ENVARC: is read when there is none, and not watched */
+        watch.path = "ENV:NetMIDI";
         config_result = netmidi_config_load("ENV:NetMIDI", &config);
         if (config_result == 1)
             config_result = netmidi_config_load("ENVARC:NetMIDI", &config);
@@ -1456,8 +1486,6 @@ int main(int argc, char **argv)
     rt.latency = (uint32_t)latency_ms * 10;
     rt.trace = trace;
     netmidi_discovery_init(&rt.discovery);
-    snprintf(rt.session_name, sizeof(rt.session_name), "%s",
-             config.session_name);
     rt.configured = *peer_ip != 0;
     rt.probe_note = remaining == 4 &&
                     strcmp(argv[argi + 3], "--probe-note") == 0;
@@ -1468,6 +1496,19 @@ int main(int argc, char **argv)
         fputs(TAG "bsdsocket.library unavailable\n", stderr);
         return 20;
     }
+#ifdef NETMIDI_SERVICE
+    /* A session nobody named is called as the machine is, so that two
+       machines on a network are told apart. */
+    if (!config.session_name_given) {
+        char host[sizeof(config.session_name)];
+
+        if (netmidi_network_hostname(host, sizeof(host)) == 0)
+            strcpy(config.session_name, host);
+    }
+#endif
+    snprintf(rt.session_name, sizeof(rt.session_name), "%s",
+             config.session_name);
+    config_look(&watch);
 #ifndef __AROS__
     signal(SIGINT, stop_signal);
     signal(SIGTERM, stop_signal);
@@ -1592,6 +1633,8 @@ int main(int argc, char **argv)
            (M2-124-UM sections 4.4 and 4.6). */
         static char midi2_text[256];
 
+        midi2_text[0] = 0;
+
         netmidi_discovery_item(midi2_text, sizeof(midi2_text),
                                "UMPEndpointName", rt.session_name);
         netmidi_discovery_item(midi2_text, sizeof(midi2_text),
@@ -1645,6 +1688,17 @@ int main(int argc, char **argv)
         if (network_events & NETMIDI_NETWORK_EVENT_MIDI2)
             midi2_receive(&rt);
         periodic(&rt, now_ticks());
+        /* A changed configuration is taken by beginning anew: sessions
+           end with a goodbye and are made again under what it says now.
+           Looked at every two seconds. */
+        if (watch.path && elapsed_ticks(now_ticks(), watched) >= 20000) {
+            watched = now_ticks();
+            if (config_changed(&watch)) {
+                puts(TAG "the configuration changed: beginning anew");
+                result = RUN_AGAIN;
+                goto cleanup;
+            }
+        }
         if (rt.midi2_enabled)
             midi2_release(&rt, now_ticks());
         netmidi_camd_poll(&rt.camd, send_midi, &rt);
@@ -1674,5 +1728,28 @@ cleanup:
     }
     netmidi_camd_close(&rt.camd);
     netmidi_network_close(&rt.network);
+    return result;
+}
+
+int main(int argc, char **argv)
+{
+    int result;
+
+#ifdef NETMIDI_SERVICE
+    /* Started by the stack's service manager: no console, no arguments.
+       What it would print goes nowhere, or to the file ENV:netmidid.log
+       names, for whoever wants to see it. */
+    {
+        const char *log = getenv("netmidid.log");
+
+        if (!log || !*log || !freopen(log, "w", stdout))
+            freopen("NIL:", "w", stdout);
+        freopen("NIL:", "w", stderr);
+    }
+#endif
+    setvbuf(stdout, NULL, _IONBF, 0);
+    do
+        result = run(argc, argv);
+    while (result == RUN_AGAIN);
     return result;
 }

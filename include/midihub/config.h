@@ -10,6 +10,7 @@ struct netmidi_network_config {
     uint16_t peer_port;
     char peer_ip[64];
     char session_name[64];
+    int session_name_given;     /* the file says it: not the default */
     /* "applemidi.port.<n> = <name>": port n of the driver applemidi is
      * kept for the peer whose session has that name.
      * "networkmidi2.port.<n> = <name>": the same of the driver

@@ -170,6 +170,7 @@ static void config_round_trip(void)
     netmidi_config_defaults(&written);
     written.local_port = 5010;
     strcpy(written.session_name, "A Session");
+    written.session_name_given = 1;
     strcpy(written.peer_ip, "192.0.2.7");
     written.peer_port = 5104;
     strcpy(written.peer_name, "Host Session");
@@ -190,6 +191,7 @@ static void config_round_trip(void)
     /* nothing but the defaults: a file that reads as the defaults */
     netmidi_config_defaults(&written);
     assert(netmidi_config_save(path, &written) == 0);
+    written.session_name_given = 1;     /* a file always says the name */
     memset(&read_back, 0xff, sizeof(read_back));
     netmidi_config_defaults(&read_back);
     assert(netmidi_config_load(path, &read_back) == 0);
