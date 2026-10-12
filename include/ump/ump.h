@@ -4,7 +4,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* MIDI 2.0 Universal MIDI Packet (UMP Format and MIDI 2.0 Protocol, v1.1).
+/* MIDI 2.0 Universal MIDI Packet, after the MIDI Association's "Universal
+ * MIDI Packet (UMP) Format and MIDI 2.0 Protocol", M2-104-UM version
+ * 1.1.2. The section numbers in this file and in ump.c are that
+ * document's; the code was read against it on 2026-10-12.
  * A UMP is one to four 32-bit words in host order; the first word's top
  * nibble is the message type. CAMD carries MIDI 1.0 byte messages, so
  * these helpers translate between the two. No OS calls occur here. */
@@ -20,17 +23,21 @@ enum ump_type {
     UMP_STREAM = 0xf
 };
 
-/* Words in a UMP of the message type in the first word's top nibble. */
+/* Words in a UMP of the message type in the first word's top nibble
+ * (section 2.1.4, table 4). The reserved types have sizes too. */
 unsigned ump_words(uint32_t first_word);
 
-/* Min-center-max scaling between resolutions, as the UMP specification
- * defines it, e.g. 7-bit velocity to 16-bit and back. */
+/* Scaling between resolutions, e.g. 7-bit velocity to 16-bit and back:
+ * up by the min-center-max method (appendix D.1.3), down by dropping the
+ * low bits (D.1.4). */
 uint32_t ump_scale_up(uint32_t value, unsigned from_bits, unsigned to_bits);
 uint32_t ump_scale_down(uint32_t value, unsigned from_bits, unsigned to_bits);
 
 /* MIDI 1.0 byte stream to UMP. Feed bytes as they arrive (running status
  * and real time bytes inside SysEx are handled); each complete message
- * is emitted as MT 1, MT 2 or a series of MT 3 SysEx7 packets. */
+ * is emitted as MT 1 (section 7.6), MT 2 (7.3) or a series of MT 3 SysEx7
+ * packets (7.7). The status bytes F4, F5, F9 and FD, which table 17 marks
+ * reserved, are not passed on. */
 struct ump_from_midi1 {
     uint8_t group;
     uint8_t status;               /* running status, 0 for none */
@@ -49,23 +56,54 @@ void ump_from_midi1_init(struct ump_from_midi1 *state, uint8_t group);
 void ump_from_midi1_byte(struct ump_from_midi1 *state, uint8_t byte,
                             ump_sink sink, void *context);
 
-/* UMP to MIDI 1.0 bytes. MT 1 and MT 2 map directly, SysEx7 is
- * reassembled, MIDI 2.0 Channel Voice is translated down (bank and
- * RPN/NRPN become their Control Change sequences); messages with no
- * MIDI 1.0 equivalent are dropped. Only UMPs of one group are taken. */
+/* What a translation to MIDI 1.0 left out, by reason. */
+struct ump_dropped {
+    unsigned long other_group;      /* not this translator's group */
+    unsigned long no_midi1_form;    /* per-note and relative controllers,
+                                       per-note pitch bend and management
+                                       (appendix D.2.8) */
+    unsigned long not_translated;   /* utility, SysEx8, mixed data, flex
+                                       data, stream and reserved types */
+    unsigned long reserved_status;  /* a reserved status (table 17) or a
+                                       malformed packet */
+    unsigned long sysex_broken;     /* ended by another message, or a
+                                       piece without its start (7.7.1) */
+    unsigned long sysex_too_long;   /* longer than the buffer */
+};
+
+/* UMP to MIDI 1.0 bytes, by the default translation of appendix D.2. MT 1
+ * and MT 2 map directly; MIDI 2.0 Channel Voice is translated down (bank
+ * and RPN/NRPN become their Control Change sequences); messages with no
+ * MIDI 1.0 equivalent are dropped and counted. Only UMPs of one group are
+ * taken.
+ *
+ * A SysEx message reaches the sink whole, F0 to F7, once its last packet
+ * has come (D.2.7), and needs a buffer to be gathered in: without one
+ * every SysEx message is counted as too long. A message of the same group
+ * that is neither a further piece nor System Real Time ends a SysEx
+ * message in progress (7.7.1), which is then dropped. */
 struct ump_to_midi1 {
     uint8_t group;
     uint8_t in_sysex;
+    uint8_t sysex_overflow;
+    uint8_t *sysex;
+    size_t sysex_capacity;
+    size_t sysex_length;
+    struct ump_dropped dropped;
 };
 
 typedef void (*ump_midi1_sink)(void *context, const uint8_t *bytes, size_t length);
 
 void ump_to_midi1_init(struct ump_to_midi1 *state, uint8_t group);
+/* Where SysEx messages are gathered. capacity counts F0 and F7. */
+void ump_to_midi1_buffer(struct ump_to_midi1 *state, uint8_t *buffer,
+                         size_t capacity);
 /* Returns -1 when words holds fewer words than the UMP needs. */
 int ump_to_midi1(struct ump_to_midi1 *state, const uint32_t *words,
                     unsigned count, ump_midi1_sink sink, void *context);
 
-/* UMP Stream messages (MT 0xF) an endpoint answers discovery with. */
+/* UMP Stream messages (MT 0xF, section 7.1) an endpoint answers discovery
+ * with. */
 enum ump_stream_status {
     UMP_ENDPOINT_DISCOVERY = 0x000,
     UMP_ENDPOINT_INFO = 0x001,
@@ -87,14 +125,21 @@ enum {
 enum { UMP_PROTOCOL_MIDI1 = 0x01, UMP_PROTOCOL_MIDI2 = 0x02 };
 
 unsigned ump_stream_status(const uint32_t *words);
-/* Endpoint Info Notification: UMP 1.1, no function blocks, the protocols
- * given (UMP_PROTOCOL_* bits). Writes 4 words. */
+/* Endpoint Info Notification (7.1.2): UMP 1.1, no function blocks, which
+ * the specification allows and which leaves Function Block Discovery
+ * without an answer to give (7.1.8), and the protocols given
+ * (UMP_PROTOCOL_* bits). Writes 4 words. */
 void ump_endpoint_info(uint32_t *words, unsigned protocols);
-/* Stream Configuration Notification for protocol. Writes 4 words. */
+/* Stream Configuration Notification (7.1.6.3) for protocol, with no
+ * jitter-reduction timestamps either way. Writes 4 words. */
 void ump_stream_config(uint32_t *words, unsigned protocol);
-/* Endpoint Name or Product Instance Id Notification: text split over as
- * many 4-word UMPs as needed (14 bytes each). Returns the words written,
- * 0 when capacity is too small. */
+/* Endpoint Name (7.1.4) or Product Instance Id (7.1.5) Notification: text
+ * split over as many 4-word UMPs as needed (14 bytes each). Returns the
+ * words written, 0 when capacity is too small or the text is not one the
+ * specification allows: a name of at most 98 bytes, an id of at most 42
+ * bytes of ASCII from 32 to 126. */
+#define UMP_ENDPOINT_NAME_MAX 98
+#define UMP_PRODUCT_INSTANCE_ID_MAX 42
 unsigned ump_stream_text(uint32_t *words, size_t capacity_words,
                             unsigned status, const char *text, size_t length);
 

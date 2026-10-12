@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+/* Section 2.1.4, table 4. */
 unsigned ump_words(uint32_t first_word)
 {
     static const unsigned char words[16] = {
@@ -10,11 +11,13 @@ unsigned ump_words(uint32_t first_word)
     return words[first_word >> 28];
 }
 
+/* Appendix D.1.4. */
 uint32_t ump_scale_down(uint32_t value, unsigned from_bits, unsigned to_bits)
 {
     return value >> (from_bits - to_bits);
 }
 
+/* Appendix D.1.3, the min-center-max method. */
 uint32_t ump_scale_up(uint32_t value, unsigned from_bits, unsigned to_bits)
 {
     unsigned scale_bits = to_bits - from_bits;
@@ -48,6 +51,17 @@ void ump_from_midi1_init(struct ump_from_midi1 *state, uint8_t group)
 {
     memset(state, 0, sizeof(*state));
     state->group = group & 0x0f;
+}
+
+/* The system status bytes a UMP may carry (section 7.6, table 17). F0 and
+ * F7 belong to SysEx, which has its own packets; F4, F5, F9 and FD are
+ * reserved. */
+static int system_status_defined(uint8_t status)
+{
+    return status == 0xf1 || status == 0xf2 || status == 0xf3 ||
+           status == 0xf6 || status == 0xf8 || status == 0xfa ||
+           status == 0xfb || status == 0xfc || status == 0xfe ||
+           status == 0xff;
 }
 
 static unsigned midi1_data_bytes(uint8_t status)
@@ -106,7 +120,8 @@ void ump_from_midi1_byte(struct ump_from_midi1 *state, uint8_t byte,
 {
     if (byte >= 0xf8) {
         /* Real time: may come anywhere, even inside SysEx. */
-        emit_short(state, byte, 0, 0, sink, context);
+        if (system_status_defined(byte))
+            emit_short(state, byte, 0, 0, sink, context);
         return;
     }
     if (byte == 0xf0) {
@@ -140,7 +155,8 @@ void ump_from_midi1_byte(struct ump_from_midi1 *state, uint8_t byte,
         state->need = (uint8_t)midi1_data_bytes(byte);
         state->have = 0;
         if (state->need == 0) {
-            emit_short(state, byte, 0, 0, sink, context);
+            if (byte < 0xf0 || system_status_defined(byte))
+                emit_short(state, byte, 0, 0, sink, context);
             state->status = 0;
             return;
         }
@@ -168,6 +184,16 @@ void ump_to_midi1_init(struct ump_to_midi1 *state, uint8_t group)
     state->group = group & 0x0f;
 }
 
+void ump_to_midi1_buffer(struct ump_to_midi1 *state, uint8_t *buffer,
+                         size_t capacity)
+{
+    state->sysex = buffer;
+    state->sysex_capacity = buffer ? capacity : 0;
+    state->sysex_length = 0;
+    state->in_sysex = 0;
+    state->sysex_overflow = 0;
+}
+
 static void put3(ump_midi1_sink sink, void *context, uint8_t a, uint8_t b, uint8_t c)
 {
     uint8_t bytes[3] = { a, b, c };
@@ -180,7 +206,9 @@ static void put_cc(ump_midi1_sink sink, void *context, uint8_t channel,
     put3(sink, context, (uint8_t)(0xb0 | channel), controller, value);
 }
 
-static void midi2_voice_down(const uint32_t *words, ump_midi1_sink sink, void *context)
+/* Appendix D.2: the default translation of MIDI 2.0 Channel Voice (section
+ * 7.4) to MIDI 1.0. Returns 0 for a message that has no MIDI 1.0 form. */
+static int midi2_voice_down(const uint32_t *words, ump_midi1_sink sink, void *context)
 {
     unsigned opcode = (words[0] >> 20) & 0x0f;
     uint8_t channel = (uint8_t)((words[0] >> 16) & 0x0f);
@@ -195,7 +223,7 @@ static void midi2_voice_down(const uint32_t *words, ump_midi1_sink sink, void *c
         put3(sink, context, (uint8_t)(0x80 | channel), byte2 & 0x7f,
              (uint8_t)ump_scale_down(data >> 16, 16, 7));
         break;
-    case 0x9: { /* Note On: 0 would mean Note Off in MIDI 1.0 */
+    case 0x9: { /* Note On: 0 would mean Note Off in MIDI 1.0 (D.2.1) */
         uint8_t velocity = (uint8_t)ump_scale_down(data >> 16, 16, 7);
         put3(sink, context, (uint8_t)(0x90 | channel), byte2 & 0x7f,
              velocity ? velocity : 1);
@@ -211,13 +239,18 @@ static void midi2_voice_down(const uint32_t *words, ump_midi1_sink sink, void *c
         break;
     case 0x2: /* Registered Controller: RPN */
     case 0x3: /* Assignable Controller: NRPN */
+        /* Four messages, as D.2.3 and its figure 97 give them: the bank
+           and the index select, the top fourteen bits are the data. The
+           parameter is left selected; the specification asks for no
+           more. */
         value14 = ump_scale_down(data, 32, 14);
         put_cc(sink, context, channel, opcode == 0x2 ? 101 : 99, byte2 & 0x7f);
         put_cc(sink, context, channel, opcode == 0x2 ? 100 : 98, byte3 & 0x7f);
         put_cc(sink, context, channel, 6, (uint8_t)(value14 >> 7));
         put_cc(sink, context, channel, 38, (uint8_t)(value14 & 0x7f));
         break;
-    case 0xc: /* Program Change, with the bank when Bank Valid is set */
+    case 0xc: /* Program Change, with the bank first when Bank Valid is
+                 set (D.2.4; the fields are those of figure 64) */
         if (byte3 & 0x01) {
             put_cc(sink, context, channel, 0, (uint8_t)((data >> 8) & 0x7f));
             put_cc(sink, context, channel, 32, (uint8_t)(data & 0x7f));
@@ -238,8 +271,76 @@ static void midi2_voice_down(const uint32_t *words, ump_midi1_sink sink, void *c
         break;
     default:
         /* Per-note and relative controllers, per-note pitch bend and
-           management have no MIDI 1.0 form. */
-        break;
+           management have no MIDI 1.0 form (D.2.8). */
+        return 0;
+    }
+    return 1;
+}
+
+/* A SysEx message in progress is cut off by a message that may not come
+ * inside one (section 7.7.1). */
+static void sysex_cut(struct ump_to_midi1 *state)
+{
+    if (state->in_sysex) {
+        state->in_sysex = 0;
+        state->sysex_length = 0;
+        state->sysex_overflow = 0;
+        ++state->dropped.sysex_broken;
+    }
+}
+
+static void sysex_byte(struct ump_to_midi1 *state, uint8_t byte)
+{
+    /* one place is kept for the F7 */
+    if (state->sysex_overflow || !state->sysex ||
+        state->sysex_length + 1 >= state->sysex_capacity)
+        state->sysex_overflow = 1;
+    else
+        state->sysex[state->sysex_length++] = byte;
+}
+
+/* Section 7.7. */
+static void sysex7(struct ump_to_midi1 *state, const uint32_t *words,
+                   ump_midi1_sink sink, void *context)
+{
+    unsigned kind = (words[0] >> 20) & 0x0f;
+    unsigned n = (words[0] >> 16) & 0x0f;
+    uint8_t data[6];
+    unsigned i;
+
+    if (n > 6 || kind > SYSEX7_END) {
+        sysex_cut(state);
+        ++state->dropped.reserved_status;
+        return;
+    }
+    data[0] = (uint8_t)(words[0] >> 8);
+    data[1] = (uint8_t)words[0];
+    data[2] = (uint8_t)(words[1] >> 24);
+    data[3] = (uint8_t)(words[1] >> 16);
+    data[4] = (uint8_t)(words[1] >> 8);
+    data[5] = (uint8_t)words[1];
+    if (kind == SYSEX7_COMPLETE || kind == SYSEX7_START) {
+        sysex_cut(state);           /* a start inside a message ends it */
+        state->in_sysex = 1;
+        state->sysex_length = 0;
+        state->sysex_overflow = 0;
+        sysex_byte(state, 0xf0);
+    } else if (!state->in_sysex) {
+        ++state->dropped.sysex_broken;  /* a piece without its start */
+        return;
+    }
+    for (i = 0; i < n; ++i)
+        sysex_byte(state, data[i] & 0x7f);
+    if (kind == SYSEX7_COMPLETE || kind == SYSEX7_END) {
+        state->in_sysex = 0;
+        if (state->sysex_overflow) {
+            ++state->dropped.sysex_too_long;
+        } else {
+            state->sysex[state->sysex_length++] = 0xf7;
+            sink(context, state->sysex, state->sysex_length);
+        }
+        state->sysex_length = 0;
+        state->sysex_overflow = 0;
     }
 }
 
@@ -252,68 +353,62 @@ int ump_to_midi1(struct ump_to_midi1 *state, const uint32_t *words,
 
     if (count < needed)
         return -1;
-    if (type != UMP_UTILITY && type != UMP_STREAM &&
-        ((words[0] >> 24) & 0x0f) != state->group)
+    /* Utility and stream messages have no group and may come anywhere
+       (7.7.1). Neither has a MIDI 1.0 form (D.2.9). */
+    if (type == UMP_UTILITY || type == UMP_STREAM) {
+        ++state->dropped.not_translated;
         return 0;
-
+    }
+    if (((words[0] >> 24) & 0x0f) != state->group) {
+        ++state->dropped.other_group;
+        return 0;
+    }
     switch (type) {
     case UMP_SYSTEM:
         status = (uint8_t)(words[0] >> 16);
-        if (status >= 0xf8 || status == 0xf6 || status == 0xf4 || status == 0xf5) {
-            sink(context, &status, 1);
-        } else if (status == 0xf1 || status == 0xf3) {
+        if (!system_status_defined(status)) {
+            sysex_cut(state);
+            ++state->dropped.reserved_status;
+            break;
+        }
+        if (status < 0xf8)
+            sysex_cut(state);   /* System Real Time alone may interleave */
+        if (status == 0xf1 || status == 0xf3) {
             uint8_t bytes[2] = { status, (uint8_t)((words[0] >> 8) & 0x7f) };
             sink(context, bytes, 2);
         } else if (status == 0xf2) {
             put3(sink, context, status, (uint8_t)((words[0] >> 8) & 0x7f),
                  (uint8_t)(words[0] & 0x7f));
+        } else {
+            sink(context, &status, 1);
         }
         break;
     case UMP_MIDI1_VOICE: {
         uint8_t bytes[3];
+        sysex_cut(state);
         status = (uint8_t)(words[0] >> 16);
-        if (status < 0x80 || status >= 0xf0)
+        if (status < 0x80 || status >= 0xf0) {
+            ++state->dropped.reserved_status;
             break;
+        }
         bytes[0] = status;
         bytes[1] = (uint8_t)((words[0] >> 8) & 0x7f);
         bytes[2] = (uint8_t)(words[0] & 0x7f);
         sink(context, bytes, midi1_data_bytes(status) + 1);
         break;
     }
-    case UMP_DATA64: {
-        unsigned kind = (words[0] >> 20) & 0x0f;
-        unsigned n = (words[0] >> 16) & 0x0f;
-        uint8_t bytes[8], *out = bytes;
-        uint8_t data[6];
-        unsigned i;
-
-        if (n > 6 || kind > SYSEX7_END)
-            break;
-        data[0] = (uint8_t)(words[0] >> 8);
-        data[1] = (uint8_t)words[0];
-        data[2] = (uint8_t)(words[1] >> 24);
-        data[3] = (uint8_t)(words[1] >> 16);
-        data[4] = (uint8_t)(words[1] >> 8);
-        data[5] = (uint8_t)words[1];
-        if (kind == SYSEX7_COMPLETE || kind == SYSEX7_START) {
-            *out++ = 0xf0;
-            state->in_sysex = 1;
-        } else if (!state->in_sysex) {
-            break;          /* a continuation without its start */
-        }
-        for (i = 0; i < n; ++i)
-            *out++ = data[i] & 0x7f;
-        if (kind == SYSEX7_COMPLETE || kind == SYSEX7_END) {
-            *out++ = 0xf7;
-            state->in_sysex = 0;
-        }
-        sink(context, bytes, (size_t)(out - bytes));
+    case UMP_DATA64:
+        sysex7(state, words, sink, context);
         break;
-    }
     case UMP_MIDI2_VOICE:
-        midi2_voice_down(words, sink, context);
+        sysex_cut(state);
+        if (!midi2_voice_down(words, sink, context))
+            ++state->dropped.no_midi1_form;
         break;
     default:
+        /* SysEx8, mixed data, flex data, the reserved types */
+        sysex_cut(state);
+        ++state->dropped.not_translated;
         break;
     }
     return 0;
@@ -332,6 +427,8 @@ static uint32_t stream_word0(unsigned form, unsigned status)
            ((uint32_t)status << 16);
 }
 
+/* Section 7.1.2, figure 13: the static bit and the count of function
+ * blocks in the second word's first byte, M2 and M1 at bits 9 and 8. */
 void ump_endpoint_info(uint32_t *words, unsigned protocols)
 {
     /* UMP version 1.1; static function blocks, none declared. */
@@ -343,6 +440,8 @@ void ump_endpoint_info(uint32_t *words, unsigned protocols)
     words[3] = 0;
 }
 
+/* Section 7.1.6.3: the protocol in the first word's third byte, as in
+ * figure 18 for the request. */
 void ump_stream_config(uint32_t *words, unsigned protocol)
 {
     words[0] = stream_word0(0, UMP_STREAM_CONFIG_NOTIFY) |
@@ -352,11 +451,22 @@ void ump_stream_config(uint32_t *words, unsigned protocol)
     words[3] = 0;
 }
 
+/* Sections 7.1.4 and 7.1.5; the layout is that of figure 16. */
 unsigned ump_stream_text(uint32_t *words, size_t capacity_words,
                             unsigned status, const char *text, size_t length)
 {
     unsigned packets = (unsigned)(length ? (length + 13) / 14 : 1);
     unsigned packet, i, written = 0;
+    if (status == UMP_ENDPOINT_NAME && length > UMP_ENDPOINT_NAME_MAX)
+        return 0;
+    if (status == UMP_PRODUCT_INSTANCE_ID) {
+        size_t n;
+        if (length > UMP_PRODUCT_INSTANCE_ID_MAX)
+            return 0;
+        for (n = 0; n < length; ++n)
+            if (text[n] < 32 || text[n] > 126)
+                return 0;
+    }
 
     if ((size_t)packets * 4 > capacity_words)
         return 0;
