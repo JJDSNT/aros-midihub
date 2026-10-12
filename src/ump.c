@@ -210,6 +210,17 @@ void ump_to_midi1_init(struct ump_to_midi1 *state, uint8_t group)
     state->group = group & 0x0f;
 }
 
+int ump_jr_after_clock(const struct ump_to_midi1 *state, int32_t *ticks)
+{
+    if (!state || !ticks || !state->jr.have_clock ||
+        !state->jr.have_timestamp)
+        return 0;
+    /* both wrap at sixteen bits, and a clock comes at least every 250 ms,
+       far inside half a turn: the difference as a signed sixteen bits */
+    *ticks = (int16_t)(uint16_t)(state->jr.timestamp - state->jr.clock);
+    return 1;
+}
+
 void ump_to_midi1_buffer(struct ump_to_midi1 *state, uint8_t *buffer,
                          size_t capacity)
 {
@@ -393,8 +404,30 @@ int ump_to_midi1(struct ump_to_midi1 *state, const uint32_t *words,
     if (count < needed)
         return -1;
     /* Utility and stream messages have no group and may come anywhere
-       (7.7.1). Neither has a MIDI 1.0 form (D.2.9). */
-    if (type == UMP_UTILITY || type == UMP_STREAM) {
+       (7.7.1). Neither has a MIDI 1.0 form (D.2.9). Of the utility
+       messages, the two of jitter reduction leave their time here
+       (7.2.2.1, 7.2.2.2; figures 29 and 31: the status in bits 23 to
+       20, the time in the low sixteen), and NOOP is nothing (7.2.1). */
+    if (type == UMP_UTILITY) {
+        switch ((words[0] >> 20) & 0x0f) {
+        case 0x0:
+            break;
+        case 0x1:
+            state->jr.clock = (uint16_t)words[0];
+            state->jr.have_clock = 1;
+            ++state->jr.clocks;
+            break;
+        case 0x2:
+            state->jr.timestamp = (uint16_t)words[0];
+            state->jr.have_timestamp = 1;
+            break;
+        default:
+            ++state->dropped.not_translated;
+            break;
+        }
+        return 0;
+    }
+    if (type == UMP_STREAM) {
         ++state->dropped.not_translated;
         return 0;
     }

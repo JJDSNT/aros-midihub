@@ -201,6 +201,55 @@ static void test_midi1_to_ump(void)
     }
 }
 
+/* Section 7.2.2: the time of a message is the JR Timestamp before it,
+   read against the sender's JR Clock. */
+static struct ump_to_midi1 jr_state;
+static int32_t jr_seen[8];
+static int jr_known[8];
+static unsigned jr_count;
+
+static void take_timed(void *context, const uint8_t *bytes, size_t length)
+{
+    (void)context;
+    (void)bytes;
+    (void)length;
+    jr_known[jr_count] = ump_jr_after_clock(&jr_state, &jr_seen[jr_count]);
+    ++jr_count;
+}
+
+static void test_jr_timestamps(void)
+{
+    static const uint32_t stream[] = {
+        0x20903c64u,            /* before any clock: for at once */
+        0x00100064u,            /* JR Clock: it is 100 */
+        0x20903d64u,            /* a clock and no timestamp yet: at once */
+        0x002000c8u,            /* JR Timestamp: 200 */
+        0x20903e64u,
+        0x20903f64u,            /* simultaneous: the same timestamp */
+        0x00000000u,            /* NOOP */
+        0x00200032u,            /* JR Timestamp: 50, before the clock */
+        0x20904064u,
+        0x0010fff0u,            /* JR Clock just before the wrap */
+        0x00200010u,            /* JR Timestamp just after it */
+        0x20904164u,
+        0x00400005u             /* a delta clockstamp: not for a transport */
+    };
+    unsigned i;
+
+    ump_to_midi1_init(&jr_state, 0);
+    jr_count = 0;
+    for (i = 0; i < sizeof(stream) / sizeof(stream[0]); ++i)
+        CHECK(ump_to_midi1(&jr_state, &stream[i], 1, take_timed, NULL) == 0);
+    CHECK(jr_count == 6);
+    CHECK(!jr_known[0] && !jr_known[1]);
+    CHECK(jr_known[2] && jr_seen[2] == 100);
+    CHECK(jr_known[3] && jr_seen[3] == 100);
+    CHECK(jr_known[4] && jr_seen[4] == -50);
+    CHECK(jr_known[5] && jr_seen[5] == 32);
+    CHECK(jr_state.jr.clocks == 2);
+    CHECK(jr_state.dropped.not_translated == 1);
+}
+
 static void test_ump_to_midi1(void)
 {
     static const uint32_t voice[] = { 0x22903c64u, 0x22c00500u, 0x22e00040u };
@@ -424,8 +473,9 @@ static void test_against_specification(void)
         to_midi(with_others, 6, 0);
         CHECK(midi_messages == 1 && midi_count == sizeof(whole) &&
               !memcmp(midi, whole, sizeof(whole)));
+        /* the NOOP among them is nothing, and not counted as left out */
         CHECK(dropped.sysex_broken == 0 && dropped.other_group == 1 &&
-              dropped.not_translated == 1);
+              dropped.not_translated == 0);
     }
 
     /* Appendix D.2.8 and D.2.9: what has no MIDI 1.0 form is counted. */
@@ -593,6 +643,7 @@ int main(void)
     test_scaling();
     test_midi1_to_ump();
     test_ump_to_midi1();
+    test_jr_timestamps();
     test_midi2_down();
     test_against_specification();
     test_stream();

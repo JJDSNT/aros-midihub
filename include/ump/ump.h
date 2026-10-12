@@ -69,8 +69,9 @@ struct ump_dropped {
     unsigned long no_midi1_form;    /* per-note and relative controllers,
                                        per-note pitch bend and management
                                        (appendix D.2.8) */
-    unsigned long not_translated;   /* utility, SysEx8, mixed data, flex
-                                       data, stream and reserved types */
+    unsigned long not_translated;   /* delta clockstamps, SysEx8, mixed
+                                       data, flex data, stream and
+                                       reserved types */
     unsigned long reserved_status;  /* a reserved status (table 17) or a
                                        malformed packet */
     unsigned long sysex_broken;     /* ended by another message, or a
@@ -89,6 +90,21 @@ struct ump_dropped {
  * every SysEx message is counted as too long. A message of the same group
  * that is neither a further piece nor System Real Time ends a SysEx
  * message in progress (7.7.1), which is then dropped. */
+/* The time a UMP stream carries (section 7.2.2), in the sender's ticks of
+ * 1/31250 second, sixteen bits that wrap every 2.09712 seconds. A JR
+ * Clock says what time it is at the sender as it leaves; a JR Timestamp
+ * says when the messages after it are meant, until the next one. The
+ * translator keeps the last of each; whoever calls it reads them in its
+ * sink, and notes when a clock came by watching clocks go up. */
+#define UMP_JR_TICKS_PER_SECOND 31250
+struct ump_jr {
+    uint8_t have_clock;
+    uint8_t have_timestamp;
+    uint16_t clock;
+    uint16_t timestamp;
+    unsigned long clocks;           /* JR Clock messages so far */
+};
+
 struct ump_to_midi1 {
     uint8_t group;
     uint8_t in_sysex;
@@ -97,7 +113,14 @@ struct ump_to_midi1 {
     size_t sysex_capacity;
     size_t sysex_length;
     struct ump_dropped dropped;
+    struct ump_jr jr;
 };
+
+/* How long after the sender's last clock the messages now passing are
+ * meant, in ticks; negative when before it. Returns 0 and leaves *ticks
+ * alone until both a JR Clock and a JR Timestamp have come: such
+ * messages are for at once (7.2.2.3). */
+int ump_jr_after_clock(const struct ump_to_midi1 *state, int32_t *ticks);
 
 typedef void (*ump_midi1_sink)(void *context, const uint8_t *bytes, size_t length);
 
