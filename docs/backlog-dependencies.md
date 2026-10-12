@@ -64,20 +64,14 @@ flowchart LR
     end
 
     subgraph NM[Network MIDI 2.0]
-        NM01["NM01 check against<br/>the text"]:::ready
-        NM02["NM02 session knows<br/>its peer"]:::ready
-        NMSPEC["NM05 NM12 NM20<br/>rules from the text"]
-        NM04["NM04 act on a<br/>long loss"]
-        NM06["NM06 table of<br/>sessions"]
+        NM06["NM06 table of<br/>sessions"]:::ready
         NM07["NM07 a runtime"]
         NM08["NM08 discovery"]
         NM09["NM09 timed delivery"]
         NM10["NM10 run against<br/>another implementation"]
         NM11["NM11 reach CAMD<br/>through a driver"]
-        NM13["NM13 retransmission"]
         NM14["NM14 MIDI 2.0<br/>protocol"]
         NM15["NM15 IPv6"]
-        NM16["NM16 ping identifier"]
         NM17["NM17 vectors, fuzzing,<br/>captures"]
     end
 
@@ -134,11 +128,6 @@ flowchart LR
 
     UP12 --> UP16
 
-    NM01 --> NMSPEC
-    NM01 --> NM04
-    NM04 --> NM13
-    NM02 --> NM06
-    NM02 --> NM16
     NM06 --> NM07
     NM07 --> NM08
     AM10 --> NM08
@@ -147,7 +136,6 @@ flowchart LR
     R17 --> NM09
     NM07 --> NM10
     NM10 --> NM17
-    NM01 --> NM17
     NM07 --> NM11
     AM08 --> NM11
     ND1 --> NM11
@@ -191,8 +179,8 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 109 open items, 60 have nothing in front of them, 31 sit behind something
-outside our hands or behind a decision, and 18 wait only for other work of
+Of 103 open items, 61 have nothing in front of them, 31 sit behind something
+outside our hands or behind a decision, and 11 wait only for other work of
 ours.
 
 **What opens the most**, counting everything that follows directly or
@@ -202,19 +190,18 @@ through other items:
 |---|---|---|
 | A yes in PR #1507 | 10 | B29 to B32, and what BLE MIDI lost to the driver model: names, presence, identity, time |
 | Answers in issue #1559 | 9 | Event delivery in mDNS and every cut of it after the first, and the three IPv6 items |
-| NM02, the session knows its peer | 8 | The session table, the runtime and everything run on it |
-| NM01, check Network MIDI 2.0 against the text | 6 | Its conformance items: loss, reset, authentication, retransmission, vectors |
+| NM06, a table of sessions | 6 | Network MIDI 2.0's runtime and everything run on it |
 | Hardware | 5 | The test owed to PR #1507, and with it the PR's merge and the removal of the old class here |
 | D2, peers to ports | 4 | The driver, configuration, and Network MIDI 2.0's way into CAMD |
 | PR #1560 reviewed | 4 | Every later cut of mDNS |
 
 The specification texts, which held 23 items, are in hand since 2026-10-12,
-and UMP was read against its text the same day.
+and UMP and Network MIDI 2.0 were read against theirs the same day.
 
 **The longest chains** are in what waits for others: PR #1507, then B29,
 B31, B32 and BLE's timestamps; and #1560, then the three further cuts of
 mDNS. Within our own hands the longest is in Network MIDI 2.0 alone:
-NM02 → NM06 → NM07 → NM10 → NM17.
+NM06 → NM07 → NM10 → NM17.
 
 **Four things outside our hands hold most of the 31:**
 
@@ -244,13 +231,13 @@ their own backlog, not from this graph.
 | RTP-MIDI | R11, R14, R18, R19, R20, R22, R24, R25, R28 |
 | AppleMIDI | AM11, AM13, AM15, AM17, AM18, AM21 |
 | UMP | UP06, UP07, UP08, UP13, UP15 |
-| Network MIDI 2.0 | NM03, NM18, NM19 |
+| Network MIDI 2.0 | NM12, NM13, NM18, NM19 |
 | CAMD | B16, B22 |
 | BLE MIDI | L13, L01, L06, T04, T06, L05, W03, W05, W06, L09, L04, L07 |
-| mDNS | MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
+| mDNS | MD19, MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
 
-NM03 is P0 in its own
-list: defects in code as it is. That they open nothing else is no reason to leave them.
+None of these is a P0 in its own list: the defects in code as it is that
+stood free have been closed.
 
 ## An order that follows from it
 
@@ -263,11 +250,9 @@ list: defects in code as it is. That they open nothing else is no reason to leav
 4. **AM08**, the driver, which needs the decisions D1, D2 and D4 first;
    meanwhile **AM09**/**AM10**, discovery through the system service, and
    **AM07**, who may connect, need nothing.
-5. Done on 2026-10-12: UP01, UMP read against its text, with the four
-   corrections it called for. **NM01**, the same for Network MIDI 2.0, is
-   next: it is reading, and it may change the items after it.
-6. **Network MIDI 2.0's runtime** (NM02, NM06, NM07), which no longer
-   waits for anything of AppleMIDI's.
+5. Done on 2026-10-12: UP01 and NM01, UMP and Network MIDI 2.0 read
+   against their texts, with the corrections they called for.
+6. **Network MIDI 2.0's runtime** (NM06, NM07), which waits for nothing.
 
 7. **BLE MIDI**: T01 the day the hardware is at hand. W01 and L08 were done
    on 2026-10-12.

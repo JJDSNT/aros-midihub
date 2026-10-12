@@ -54,6 +54,7 @@ README and in the history of `tools/mdns-*-hosted.sh`.
 | MD06 | Never met Apple's Bonjour, Windows' resolver, or a second AROS. | Each when the machine is at hand; Bonjour's conformance test if it can be run against AROS. | The same table. |
 | MD07 | The number in a host name changed after a conflict (`name-2`) is not kept across a restart of mdnsd, so every restart probes the taken name again and loses again. | Keep it in `ENV:` for the session. | The host-name runner restarts mdnsd and sees one probe series, not two. |
 | MD08 | Other SANA-II drivers were not looked at. A card that filters multicast in hardware has to honour `S2_ADDMULTICASTADDRESS`; only the hosted driver was checked, and its host interface is promiscuous. | Read the drivers in `workbench/devs/networks` for the command and list the ones that ignore it; test on any real card available. | The list exists; one real card answers a browse. |
+| MD19 | A client cannot say how long its records may live. Network MIDI 2.0 wants its service's at a minute or less (M2-124-UM section 4.6), so that a Host that vanished without a goodbye is forgotten soon. | A tag for the time to live in `RegisterServiceA()`, within what RFC 6762 allows. | A service registered with it is seen by Avahi with that time to live. |
 
 ## P2 — the protocol, before calling it complete
 

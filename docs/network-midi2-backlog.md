@@ -23,33 +23,39 @@ runtime and the discovery it needs are the ones
 - `tests/netmidi2.c` covers the codec and one session against itself.
 - **Nothing runs it.** No program on AROS or on the host opens a socket for
   it, advertises `_midi2._udp` or looks for it.
-- Added in one commit on 2026-10-06. **There is no record that it was
-  compared with the text of M2-124-UM**, and it has met no other
-  implementation.
+- Added in one commit on 2026-10-06, with two of the specification's packet
+  examples already in its tests, and read against M2-124-UM 1.0 in full on
+  2026-10-12: see NM01 under "Done". It has met no other implementation.
 
 Priorities as in the other backlogs.
 
 ## Done
 
-Nothing yet under this backlog.
+On 2026-10-12, with `tests/netmidi2.c` (also under the address and
+undefined-behaviour sanitizers) and the whole host suite passing. Still
+nothing runs this code outside its tests.
+
+| # | What was done |
+|---|---|
+| NM01 | `src/netmidi2.c` was read against M2-124-UM 1.0, and each rule and constant now cites its section. **Agreed as it was:** the signature and the command header (5.2 to 5.4), every command code (table 8), the NAK and Bye reason codes it used (tables 25 and 27), the Invitation's layout and limits (table 10), 64 words to a UMP Data command (7.1), 1400 bytes to a packet (5.1.1), the first sequence number being zero, forward error correction with two repeats in the order sent (7.2.2), the first idle command within 300 ms (7.2.1), repeats between 300 ms and 2 s (6.2), a Bye answered in every state (6.16). The appendix's packet examples A.1.1 to A.1.4 are in the tests, byte for byte; the first two already were. **Differed:** the five items below, and these, corrected with them: an Invitation nobody answers has to end with Bye, "invitation canceled" (6.4), not in silence; a Retransmit Request we cannot serve is answered with NAK, "not supported" (7.2.3), not with Retransmit Error; an Invitation Reply: Pending out of place gets Bye or NAK (6.6); an Invitation with Authentication at a Host that never asked for one gets Bye 0x41, not 0x45; a Client asked to authenticate withdraws with Bye 0x80, because 0x45 is a Host's reason; the commands of a session, outside one, get Bye, "not established" (6.11, 6.12, 7.2.3, 7.2.4). **Not read against code**, there being none: authentication (6.7 to 6.10), discovery (section 4), devices in both roles (8). |
+| NM02 | A session is with one address and port (3.2, 6.4). `netmidi2_receive_from()` takes where a packet came from; a packet from elsewhere leaves the session as it is. A second Client's Invitation used to be "accepted again" into the running session, overwriting the peer's name, and a Bye from anyone ended it. Now the Invitation gets Bye, "too many sessions"; UMP Data and the session's commands get Bye, "not established"; a Bye and a Ping are answered and nothing more; and none of it counts as the peer being alive. |
+| NM03 | A UMP Data command and its repeats go into a packet together or not at all: when the new command does not fit, what was already written is taken back. |
+| NM04 | A loss longer than the repeats cover is counted in `gaps`, which a caller compares before and after to know that something may hang. Nothing more is done by itself: we ask for no retransmission (NM13), and whether to reset or end the session after many losses is the caller's choice, with `netmidi2_reset()` and `netmidi2_bye()`. |
+| NM05 | A reset is a new beginning for both directions (6.11): sequence numbers at zero, the repeats flushed, `resets` counted for the caller. It can be asked for (`netmidi2_reset()`): no UMP Data goes out until the reply, the command is repeated, and a reset never answered ends the session with Bye, "timeout". A reply to a reset never asked for is answered by asking for one (6.12). |
+| NM16 | The specification lets a Ping Id be any value (6.13), and a reply from another address no longer reaches the session (NM02). Nothing left to do. |
+| NM20 | The limits cite their sections: 64 words (7.1), 1400 bytes (5.1.1). The 64 commands a packet is parsed into is ours, and more than a 1400-byte packet can hold of anything but empty commands. |
 
 ## P0 — wrong or unsafe as it is
 
-| # | Limit or defect | What to do | Done when |
-|---|---|---|---|
-| NM01 | Nothing was checked against the specification: the command codes, the reason codes, the meaning of the two command-specific bytes, the times (first idle command after 100 ms, a ping after 5 s of silence, ten retries a second apart) and the limits (64 words in a command, 1400 bytes in a packet). | Obtain M2-124-UM 1.0 and go through the file against it, writing the section beside each constant and each state change. | Every constant cites its section; the differences found are listed here as items. |
-| NM02 | The session does not know who its peer is. `netmidi2_receive()` takes any packet with the signature and treats it as the peer's: an Invitation from a second client is "accepted again" into the running session, a Bye from anyone ends it, and any packet at all resets the silence timer. | The caller gives the source with each packet; the session keeps its peer's and answers a stranger with Bye, reason "too many sessions" for an invitation. Or a table of sessions as AppleMIDI has (NM06), which then owns this. | Host tests: an invitation, a bye and UMP data from a second address leave the first session as it was. |
-| NM03 | When a reply does not fit the packet being written, the commands already added for error correction stay in it and the function returns an error. The caller holds a packet that is neither what it asked for nor empty. | Check the room first, or cut the writer back to where it was. | A host test with a writer too small by one word. |
-| NM04 | A loss longer than the two repeats is counted in `rx_lost` and nothing else happens: no retransmit request (we answer one with an error and never send one), no session reset, no bye for "too many missing". What was playing keeps playing. | Tell the caller there is a gap, so it can release notes; then what the specification asks for (NM01), at least the reset. | A host test loses four commands in a row and the sink is told. |
-| NM05 | A Session Reset from the peer clears only what we expect to receive. Whether the sequence we send must start again too is to be read in the specification. | Follow the text (NM01). | A host test of a reset in both directions. |
+Nothing open.
 
 ## P1 — before a first use with a real peer
 
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
-| NM06 | One session. A Host is one endpoint that several Clients connect to. | A table of sessions by address and port, as `applemidi_peers` is, with a limit and the "too many sessions" reply. | Two clients at once in a host test. |
+| NM06 | One session. A Host is one endpoint that several Clients connect to, each known by its address and port (3.2). | A table of sessions by address and port, as `applemidi_peers` is, with a limit and the "too many sessions" reply, which a single session already gives. | Two clients at once in a host test. |
 | NM07 | No runtime. | A host program first, so the protocol can be tried on Linux before AROS: one UDP socket, the clock, a session table, UMP in and out through the translators. Then the same loop on AROS beside AppleMIDI's. | Two instances on the host exchange notes; then on hosted AROS over the veth pair. |
-| NM08 | No discovery. A Host advertises `_midi2._udp` with the TXT keys `UMPEndpointName` and `ProductInstanceId`; a Client browses for it. | Through the system mDNS service, after AppleMIDI has done the same for its own name (AppleMIDI backlog AM09, AM10). Confirm the key names and the service name in the text (NM01). | `avahi-browse -r _midi2._udp` shows the endpoint and its TXT record. |
+| NM08 | No discovery. Section 4 has a Host advertise `_midi2._udp` with a TXT record holding `UMPEndpointName` and `ProductInstanceId`, the same two strings as in the Invitation Reply, and keep the records' time to live at a minute or less (4.6). A Client browses for it. | Through the system mDNS service, after AppleMIDI has done the same for its own name (AppleMIDI backlog AM09, AM10). The TXT value has spaces in it (mDNS backlog MD02), and the minute needs the service to take a time to live from its client. | `avahi-browse -r _midi2._udp` shows the endpoint and its TXT record. |
 | NM09 | No time. A UMP is delivered when its packet arrives. The jitter-reduction timestamps that would say when it was meant are dropped by the translator (UMP backlog UP09). | Use them once UP09 hands them over, with the same latency setting as RTP-MIDI (its backlog, R17). | With 20 ms of jitter from `tc netem`, intervals between notes at the receiver are those of the sender. |
 | NM10 | Never run against another implementation. | Find one that runs without hardware, as rtpmidid does for AppleMIDI. Candidates to check for availability, none confirmed: Windows MIDI Services' network transport, the MIDI Association's reference tools, an ALSA bridge on Linux. | A table here says which peer was tried, when, and what failed. |
 | NM11 | A peer reaches CAMD only as MIDI 1.0: the endpoint declares the MIDI 1.0 protocol, and a `DEVS:Midi` driver is given and gives bytes. | Keep it for the first version and say so. A port per session in the driver that AppleMIDI builds, or a second driver: decision D1. | A CAMD program plays to a Network MIDI 2.0 peer. |
@@ -58,12 +64,11 @@ Nothing yet under this backlog.
 
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
-| NM12 | No authentication. An invitation that carries it is answered with Bye, "no matching authentication method"; a Host that requires it ends our attempt. | Shared-secret and user authentication as the specification defines them, behind a setting. Needs a SHA-256, which AROS has to provide or this code has to carry: a question for the maintainers. | Host tests of both forms, with the specification's examples if it has them. |
-| NM13 | Retransmission is refused. | Keep a longer history than the two error-correction repeats and answer a Retransmit Request from it; ask for one on a gap before giving up (NM04). | A host test recovers a loss of five commands. |
+| NM12 | No authentication. It is optional (6.7): a Host may ask for it only of a Client that says it can, and we say we cannot. A Host that insists ends our invitation with Bye 0x45. | Shared-secret and user authentication (6.7 to 6.10), behind a setting. Needs a SHA-256, which AROS has to provide or this code has to carry: a question for the maintainers. | Host tests of both forms. |
+| NM13 | Retransmission is refused, with the NAK the specification gives for that (7.2.3); it calls the mechanism optional and recommended. We never ask for it either. | Keep a longer history than the two repeats and answer a Retransmit Request from it; ask for one, ten milliseconds after a gap, before counting it lost. | A host test recovers a loss of five commands. |
 | NM14 | The MIDI 2.0 protocol is never agreed: a Stream Configuration Request for it is answered with MIDI 1.0. | After the upward translation exists (UMP backlog UP11) and a client could use it (decision D1 there). | — |
-| NM15 | IPv4 or IPv6 is the caller's business, and there is no caller. What the specification requires of each is to be read (NM01). | Follow the answer on IPv6 in AROS issue #1559. | — |
-| NM16 | The ping identifier is the time XORed with a constant; an Invitation Reply's and a Ping Reply's origin is not checked beyond that. | With NM02 the source is checked; then a random identifier. | Host tests of a reply with a wrong identifier and of one from a wrong source. |
-| NM17 | The tests are one session talking to itself, with packets we wrote. | The specification's examples as vectors (NM01); a fuzz target for `netmidi2_parse()` and `netmidi2_receive()` under the sanitizers; captures from NM10. | The examples pass; an hour of fuzzing without a finding. |
+| NM15 | IPv4 or IPv6 is the caller's business, and there is no caller. Section 3.1: every device shall have an IPv4 address and should support IPv6 as well. | IPv4 first, then by the answer on IPv6 in AROS issue #1559. | — |
+| NM17 | The appendix's four packet examples are in the tests; its examples of forward error correction and of going idle (A.2, A.3) are figures not yet turned into tests, and nothing fuzzes the parser. | Those two as sequences of packets; a fuzz target for `netmidi2_parse()` and `netmidi2_receive_from()` under the sanitizers; captures from NM10. | The examples pass; an hour of fuzzing without a finding. |
 | NM18 | Big-endian has not been looked at. | Run `netmidi2-test` built for m68k in the cross tree. | It passes there. |
 
 ## P3 — polish
@@ -71,14 +76,13 @@ Nothing yet under this backlog.
 | # | Limit or defect | What to do |
 |---|---|---|
 | NM19 | The sources are in `src/`, beside MIDIHub's own programs. | Move them to `network/netmidi2/`, as RTP-MIDI's went to `network/rtpmidi/`. |
-| NM20 | Sixty-four commands in a packet and sixty-four words in a command are constants with no reason written beside them. | Derive them from the packet size, or cite the section (NM01). |
 
 ## Decisions needed
 
 | # | Question | Leaning |
 |---|---|---|
 | D1 | One driver or two. A Network MIDI 2.0 peer could take a port of the driver that AppleMIDI sessions use, or have a driver of its own (`networkmidi2`, as [the target architecture](aros-network-midi-target-architecture.md) names it). | Two drivers over one runtime: a user chooses a peer by what it is, and the two protocols share sockets handling, discovery and configuration but not names. |
-| D2 | When to start. Everything here is after AppleMIDI in the agreed order, but NM01 to NM05 are host work on portable code and need nothing from AROS. | NM01 first whenever the specification is at hand, because it may change the rest; the others after AppleMIDI's P0 and P1. |
+| D2 | When to start the runtime. NM01 to NM05 are done; what is left of P1 begins with the table of sessions (NM06) and a program on the host (NM07), neither of which waits for anything. | After the AppleMIDI driver's decisions are taken, or now if they are slow: nothing here depends on them until NM11. |
 
 ## Not scheduled here
 

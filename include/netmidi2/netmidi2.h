@@ -4,15 +4,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Network MIDI 2.0 (UDP), MMA/AMEI M2-124-UM v1.0. A UDP packet is the
- * signature "MIDI" followed by Command Packets: a 32-bit header (command
- * code, payload length in words, two command specific bytes) and the
- * payload. Integers are big-endian. No OS calls occur here: the caller
- * owns the socket, addresses, mDNS and the clock. */
+/* Network MIDI 2.0 (UDP), MMA/AMEI M2-124-UM v1.0. The section numbers in
+ * this file and in netmidi2.c are that document's; the code was read
+ * against it on 2026-10-12. A UDP packet is the signature "MIDI" followed
+ * by Command Packets: a 32-bit header (command code, payload length in
+ * words, two command specific bytes) and the payload (section 5).
+ * Integers are big-endian. No OS calls occur here: the caller owns the
+ * socket, addresses, mDNS and the clock. */
 
 #define NETMIDI2_SIGNATURE 0x4d494449u
-#define NETMIDI2_MAX_PACKET 1400      /* avoid IP fragmentation */
-#define NETMIDI2_MAX_UMP_WORDS 64     /* per UMP Data command */
+#define NETMIDI2_MAX_PACKET 1400      /* avoid IP fragmentation (5.1.1) */
+#define NETMIDI2_MAX_UMP_WORDS 64     /* per UMP Data command (7.1) */
 #define NETMIDI2_NAME_MAX 98
 #define NETMIDI2_PRODUCT_ID_MAX 42
 
@@ -45,8 +47,14 @@ enum netmidi2_bye_reason {
     NETMIDI2_BYE_NOT_ESTABLISHED = 0x05,
     NETMIDI2_BYE_NO_PENDING_SESSION = 0x06,
     NETMIDI2_BYE_PROTOCOL_ERROR = 0x07,
+    /* from a Host only */
     NETMIDI2_BYE_TOO_MANY_SESSIONS = 0x40,
+    NETMIDI2_BYE_AUTH_WITHOUT_INVITATION = 0x41,
+    NETMIDI2_BYE_USER_REFUSED = 0x42,
+    NETMIDI2_BYE_AUTH_FAILED = 0x43,
+    NETMIDI2_BYE_USER_NOT_FOUND = 0x44,
     NETMIDI2_BYE_AUTH_NOT_SUPPORTED = 0x45, /* No Matching Authentication Method */
+    /* from a Client only */
     NETMIDI2_BYE_INVITATION_CANCELED = 0x80
 };
 
@@ -103,7 +111,8 @@ enum netmidi2_state {
     NETMIDI2_IDLE,
     NETMIDI2_INVITING,        /* Client: Invitation sent */
     NETMIDI2_ESTABLISHED,
-    NETMIDI2_CLOSING          /* Bye sent, waiting for Bye Reply */
+    NETMIDI2_CLOSING,         /* Bye sent, waiting for Bye Reply */
+    NETMIDI2_RESETTING        /* Session Reset sent, waiting for its reply */
 };
 
 #define NETMIDI2_FEC_REPEATS 2
@@ -144,6 +153,14 @@ struct netmidi2_session {
     uint32_t state_since_ms;
     unsigned retries;
     uint8_t bye_reason;             /* repeated until Bye Reply */
+    /* Who the session is with: a number the caller makes of the peer's
+     * address and port, which is what identifies a session (3.2, 6.4). */
+    uint64_t peer;
+    /* Counted for the caller, which compares before and after a call. */
+    unsigned long gaps;             /* times UMP Data was lost for good:
+                                       what was sounding may hang */
+    unsigned long resets;           /* times the session was reset: both
+                                       directions begin again (6.11) */
 
     netmidi2_ump_sink ump_sink;
     void *ump_context;
@@ -153,9 +170,12 @@ void netmidi2_session_init(struct netmidi2_session *session, int host,
                          const char *name, const char *product_id,
                          netmidi2_ump_sink sink, void *context);
 
-/* Client: start a session. Writes the Invitation into out. */
+/* Client: start a session. Writes the Invitation into out. The second
+ * form names the Host; the first is for a caller with one peer only. */
 int netmidi2_invite(struct netmidi2_session *session, uint32_t now_ms,
                   struct netmidi2_writer *out);
+int netmidi2_invite_to(struct netmidi2_session *session, uint64_t peer,
+                     uint32_t now_ms, struct netmidi2_writer *out);
 
 /* Handles one UDP payload from the peer; replies, if any, are added to
  * out (initialised by the caller). Received UMPs reach the sink in order,
@@ -163,6 +183,19 @@ int netmidi2_invite(struct netmidi2_session *session, uint32_t now_ms,
  * -1 when the packet was not Network MIDI 2.0. */
 int netmidi2_receive(struct netmidi2_session *session, const uint8_t *packet,
                    size_t length, uint32_t now_ms, struct netmidi2_writer *out);
+/* The same, saying where the packet came from. Whatever is added to out
+ * is for that sender. A packet from someone the session is not with
+ * leaves the session as it is: an Invitation is refused with Bye, "too
+ * many sessions"; UMP Data and the commands of a session with Bye, "not
+ * established"; a Bye and a Ping are answered and nothing more. */
+int netmidi2_receive_from(struct netmidi2_session *session, uint64_t peer,
+                        const uint8_t *packet, size_t length,
+                        uint32_t now_ms, struct netmidi2_writer *out);
+/* Resets the session (6.11): no UMP Data is sent until the peer's reply,
+ * after which both directions count from zero again. For when the two
+ * ends are out of step and nothing else will repair it. */
+int netmidi2_reset(struct netmidi2_session *session, uint32_t now_ms,
+                 struct netmidi2_writer *out);
 
 /* Sends UMPs: a UMP Data command preceded by the previous ones for FEC.
  * Returns -1 when not established or it does not fit. */
