@@ -214,6 +214,31 @@ Nothing below waits for another answer than its own review.
 Beside it, and not in its way: #1507 moves with the radio test, #1560
 with its review, and C1 begins with an issue, not with code.
 
+## Where the preparations stand
+
+On 2026-10-12:
+
+- **PREP-1, the carve.** Done for N1, N2 and N3: each has a script that
+  writes it into an AROS tree with a build file of its own
+  (`tools/cut-netmidi-drivers.sh`, `tools/cut-netmidi-library.sh`), and
+  none of the three carries the package's name or needs anything else of
+  it. Not begun for the service (N4): its `main.c` is two thousand lines
+  in which AppleMIDI, Network MIDI 2.0, discovery, the command line and
+  the probes are one file. The plan is to mark the four with conditionals
+  that leave today's builds as they are, and have the cut made from the
+  one source by `unifdef`, so that the service sent is the service tested.
+- **PREP-2, the gate.** Done for N2, N3 and N6: nothing left for cppcheck
+  and no `strcpy`, `strncpy`, `strlen` or `sprintf`. Open for the service's
+  files, eighteen findings in all, which are best closed after the carve.
+- **PREP-3, the clean tree.** A worktree of upstream `master` with N1 and
+  nothing else (`~/AROS-netmidi`, branch `netmidi-drivers`) and a build
+  tree for it (`~/aros-build-netmidi-clean`) exist. The first attempts to
+  build it failed for a reason of this machine's, not of the cut's: the
+  translation catalogs are git submodules, and a new worktree has none
+  until `git submodule update --init` is run in it. The build was started
+  again with them. Not yet seen: that build finished, and the drivers
+  running on its unpatched `camd.library`.
+
 ## What stays here
 
 - MIDIHub's own programs: Preferences, the router, the synthesizer, the
