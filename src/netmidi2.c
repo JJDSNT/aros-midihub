@@ -302,6 +302,31 @@ static void answer_stream(struct netmidi2_session *session, const uint32_t *word
             ump_stream_config(reply, UMP_PROTOCOL_MIDI1, session->jr);
             (void)netmidi2_send_ump(session, reply, 4, session->now_ms, out);
         }
+    } else if (status == UMP_FUNCTION_BLOCK_DISCOVERY) {
+        /* Block 0, or 0xFF for all of them, which is the same one (UMP
+           specification 7.1.7). Each filter bit is a reply of its own. */
+        unsigned block = (words[0] >> 8) & 0xff;
+
+        filter = words[0] & 0xff;
+        if (block != 0 && block != 0xff)
+            return;
+        if (filter & UMP_FUNCTION_BLOCK_FILTER_INFO) {
+            ump_function_block_info(reply, 0);
+            (void)netmidi2_send_ump(session, reply, 4, session->now_ms, out);
+        }
+        if (filter & UMP_FUNCTION_BLOCK_FILTER_NAME) {
+            size_t length = strlen(session->name);
+
+            /* the block is called as the endpoint is, as far as fits */
+            if (length > UMP_FUNCTION_BLOCK_NAME_MAX)
+                length = UMP_FUNCTION_BLOCK_NAME_MAX;
+            n = ump_function_block_name(reply,
+                                        sizeof(reply) / sizeof(reply[0]),
+                                        session->name, length);
+            if (n)
+                (void)netmidi2_send_ump(session, reply, n, session->now_ms,
+                                        out);
+        }
     } else if (status == UMP_STREAM_CONFIG_REQUEST) {
         /* This endpoint speaks the MIDI 1.0 protocol in UMP only. It
            takes the peer's timestamps when the caller uses them, and

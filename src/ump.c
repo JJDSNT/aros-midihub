@@ -552,9 +552,9 @@ static uint32_t stream_word0(unsigned form, unsigned status)
  * blocks in the second word's first byte, M2 and M1 at bits 9 and 8. */
 void ump_endpoint_info(uint32_t *words, unsigned protocols, unsigned jr)
 {
-    /* UMP version 1.1; static function blocks, none declared. */
+    /* UMP version 1.1; one function block, static. */
     words[0] = stream_word0(0, UMP_ENDPOINT_INFO) | 0x0101;
-    words[1] = 0x80000000u |
+    words[1] = 0x81000000u |
                ((protocols & UMP_PROTOCOL_MIDI2) ? 0x200u : 0) |
                ((protocols & UMP_PROTOCOL_MIDI1) ? 0x100u : 0) | (jr & 0x3);
     words[2] = 0;
@@ -570,6 +570,50 @@ void ump_stream_config(uint32_t *words, unsigned protocol, unsigned jr)
     words[1] = 0;
     words[2] = 0;
     words[3] = 0;
+}
+
+/* Section 7.1.8, figure 22: active, block 0; user interface hint and
+ * direction both ways; a MIDI 1.0 port whose bandwidth is not to be
+ * restricted; one group; no MIDI-CI and no SysEx8. */
+void ump_function_block_info(uint32_t *words, unsigned group)
+{
+    words[0] = stream_word0(0, UMP_FUNCTION_BLOCK_INFO) |
+               0x8000u |               /* active, block 0 */
+               (0x3u << 4) |           /* a sender and a receiver */
+               (0x1u << 2) |           /* MIDI 1.0, not restricted */
+               0x3u;                   /* bidirectional */
+    words[1] = ((uint32_t)(group & 0x0f) << 24) | (1u << 16);
+    words[2] = 0;
+    words[3] = 0;
+}
+
+/* Section 7.1.9, figure 23: the block's number, then thirteen bytes. */
+unsigned ump_function_block_name(uint32_t *words, size_t capacity_words,
+                                 const char *text, size_t length)
+{
+    unsigned packets = (unsigned)(length ? (length + 12) / 13 : 1);
+    unsigned packet, i, written = 0;
+
+    if (length > UMP_FUNCTION_BLOCK_NAME_MAX ||
+        (size_t)packets * 4 > capacity_words)
+        return 0;
+    for (packet = 0; packet < packets; ++packet) {
+        uint8_t bytes[13];
+        unsigned form;
+        size_t offset = (size_t)packet * 13;
+
+        memset(bytes, 0, sizeof(bytes));
+        for (i = 0; i < 13 && offset + i < length; ++i)
+            bytes[i] = (uint8_t)text[offset + i];
+        form = packets == 1 ? 0 : packet == 0 ? 1 : packet == packets - 1 ? 3 : 2;
+        words[written++] = stream_word0(form, UMP_FUNCTION_BLOCK_NAME) |
+                           bytes[0];        /* block 0 in the byte before */
+        for (i = 1; i < 13; i += 4)
+            words[written++] = ((uint32_t)bytes[i] << 24) |
+                               ((uint32_t)bytes[i + 1] << 16) |
+                               ((uint32_t)bytes[i + 2] << 8) | bytes[i + 3];
+    }
+    return written;
 }
 
 /* Sections 7.1.4 and 7.1.5; the layout is that of figure 16. */

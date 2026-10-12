@@ -203,6 +203,30 @@ static void test_session(void)
         CHECK(client_in.count == 0);
     }
 
+    /* Function Block Discovery (UMP specification 7.1.7): the one block
+       is told of, info and name each in a UMP Data command of its own;
+       a block that is not there is not answered for. */
+    {
+        uint32_t ask[4] = { 0xf0100003u, 0, 0, 0 };
+        uint16_t before = client.rx_expected;
+
+        netmidi2_writer_init(&w, buffer, sizeof(buffer));
+        CHECK(netmidi2_send_ump(&client, ask, 4, now, &w) == 0);
+        exchange(&w, 1, 0);
+        CHECK(client.rx_expected == (uint16_t)(before + 2));
+        ask[0] = 0xf010ff01u;               /* all of them, info only */
+        netmidi2_writer_init(&w, buffer, sizeof(buffer));
+        CHECK(netmidi2_send_ump(&client, ask, 4, now, &w) == 0);
+        exchange(&w, 1, 0);
+        CHECK(client.rx_expected == (uint16_t)(before + 3));
+        ask[0] = 0xf0100103u;               /* block 1: there is none */
+        netmidi2_writer_init(&w, buffer, sizeof(buffer));
+        CHECK(netmidi2_send_ump(&client, ask, 4, now, &w) == 0);
+        exchange(&w, 1, 0);
+        CHECK(client.rx_expected == (uint16_t)(before + 3));
+        CHECK(client_in.count == 0);
+    }
+
     /* Idle: after data the sender says it has none, repeating for FEC */
     netmidi2_writer_init(&w, buffer, sizeof(buffer));
     now += 150;

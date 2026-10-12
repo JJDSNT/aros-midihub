@@ -649,16 +649,35 @@ static void test_stream(void)
 
     ump_endpoint_info(words, UMP_PROTOCOL_MIDI1, 0);
     CHECK(words[0] == 0xf0010101u);
-    CHECK(words[1] == 0x80000100u);
+    CHECK(words[1] == 0x81000100u);          /* one function block, static */
     CHECK(ump_stream_status(words) == UMP_ENDPOINT_INFO);
 
     ump_stream_config(words, UMP_PROTOCOL_MIDI1, 0);
     CHECK(words[0] == 0xf0060100u);
     /* figures 13 and 19: receive in bit 1, transmit in bit 0 */
     ump_endpoint_info(words, UMP_PROTOCOL_MIDI1, UMP_JR_RECEIVE);
-    CHECK(words[1] == 0x80000102u);
+    CHECK(words[1] == 0x81000102u);
     ump_stream_config(words, UMP_PROTOCOL_MIDI1, UMP_JR_RECEIVE);
     CHECK(words[0] == 0xf0060102u);
+
+    /* Figure 22: block 0, active; a sender and a receiver; MIDI 1.0;
+       bidirectional; group 5, one group; no MIDI-CI, no SysEx8 */
+    ump_function_block_info(words, 5);
+    CHECK(words[0] == 0xf0118037u && words[1] == 0x05010000u &&
+          words[2] == 0 && words[3] == 0);
+    /* Figure 23: the block's number, then thirteen bytes to a packet */
+    n = ump_function_block_name(words, 16, "AROS", 4);
+    CHECK(n == 4 && words[0] == 0xf0120041u && words[1] == 0x524f5300u);
+    n = ump_function_block_name(words, 16, "A name of 21 letters.", 21);
+    CHECK(n == 8 && (words[0] >> 26) == ((0xfu << 2) | 1) &&
+          (words[0] & 0xffff) == 0x0041 && (words[4] >> 26) == ((0xfu << 2) | 3) &&
+          (words[4] & 0xffff) == 0x006c);
+    CHECK(ump_function_block_name(words, 16, "", 0) == 4);
+    {
+        char longest[93];
+        memset(longest, 'x', sizeof(longest));
+        CHECK(ump_function_block_name(words, 16, longest, 92) == 0);
+    }
 
     /* "AROS MIDIHub Pi3" is 16 bytes: a Start and an End packet */
     n = ump_stream_text(words, 16, UMP_ENDPOINT_NAME, "AROS MIDIHub Pi3", 16);

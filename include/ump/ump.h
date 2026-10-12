@@ -172,7 +172,10 @@ enum ump_stream_status {
     UMP_ENDPOINT_NAME = 0x003,
     UMP_PRODUCT_INSTANCE_ID = 0x004,
     UMP_STREAM_CONFIG_REQUEST = 0x005,
-    UMP_STREAM_CONFIG_NOTIFY = 0x006
+    UMP_STREAM_CONFIG_NOTIFY = 0x006,
+    UMP_FUNCTION_BLOCK_DISCOVERY = 0x010,
+    UMP_FUNCTION_BLOCK_INFO = 0x011,
+    UMP_FUNCTION_BLOCK_NAME = 0x012
 };
 
 enum {
@@ -189,6 +192,21 @@ enum { UMP_PROTOCOL_MIDI1 = 0x01, UMP_PROTOCOL_MIDI2 = 0x02 };
 enum { UMP_JR_TRANSMIT = 0x01, UMP_JR_RECEIVE = 0x02 };
 
 unsigned ump_stream_status(const uint32_t *words);
+
+/* The one function block an endpoint here declares (sections 7.1.7 to
+ * 7.1.9): a MIDI 1.0 port in both directions, of one group. A host that
+ * shows its user function blocks has this one to show. */
+#define UMP_FUNCTION_BLOCK_NAME_MAX 91
+enum { UMP_FUNCTION_BLOCK_FILTER_INFO = 0x01,
+       UMP_FUNCTION_BLOCK_FILTER_NAME = 0x02 };
+/* Function Block Info Notification for block 0 (figure 22). Writes 4
+ * words. */
+void ump_function_block_info(uint32_t *words, unsigned group);
+/* Function Block Name Notification for block 0 (figure 23): thirteen
+ * bytes of the name to a packet. Returns the words written, 0 when the
+ * name is longer than 91 bytes or does not fit. */
+unsigned ump_function_block_name(uint32_t *words, size_t capacity_words,
+                                 const char *text, size_t length);
 /* Endpoint Info Notification (7.1.2): UMP 1.1, no function blocks, which
  * the specification allows and which leaves Function Block Discovery
  * without an answer to give (7.1.8), and the protocols given
