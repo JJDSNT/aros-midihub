@@ -220,7 +220,7 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 125 open items, 59 have nothing in front of them, 50 sit behind something
+Of 123 open items, 57 have nothing in front of them, 50 sit behind something
 outside our hands or behind a decision, and 16 wait only for other work of
 ours.
 
@@ -278,10 +278,10 @@ their own backlog, not from this graph.
 | UMP | UP02, UP14, UP15 |
 | Network MIDI 2.0 | NM03, NM18, NM19 |
 | CAMD | B16, B22 |
-| BLE MIDI | W01, L08, L01, L06, T04, T06, L05, W03, W05, W06, L09, L04, L07 |
+| BLE MIDI | L01, L06, T04, T06, L05, W03, W05, W06, L09, L04, L07 |
 | mDNS | MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
 
-R01, R04, AM01, AM03, AM04, UP02, NM03, W01 and L08 are P0 in their own
+R01, R04, AM01, AM03, AM04, UP02 and NM03 are P0 in their own
 lists: defects in code as it is. That they open nothing else is no reason to leave them.
 
 ## An order that follows from it
@@ -300,9 +300,8 @@ lists: defects in code as it is. That they open nothing else is no reason to lea
    between them they open a quarter of everything here.
 6. **Network MIDI 2.0's runtime** (NM02, NM06, NM07) after step 3.
 
-7. **BLE MIDI**: W01 and L08 as one more commit to PR #1507 now, since both
-   are small and the first is an ABI matter better settled before a merge;
-   T01 the day the hardware is at hand.
+7. **BLE MIDI**: T01 the day the hardware is at hand. W01 and L08 were done
+   on 2026-10-12.
 8. **mDNS**: MD02 before step 6 reaches discovery; the rest of its P1 and P2
    whenever the transports are waiting on something.
 

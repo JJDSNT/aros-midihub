@@ -22,8 +22,6 @@ it matters. The detail of each entry is in the three parts below.
 | Priority | Item | In one line | Waits for |
 |---|---|---|---|
 | P0 | T01 | The driver version has never run on a radio; the PR promises the test | A Pi 3 and a phone |
-| P0 | W01 | The structure shared by class and driver stub has no version | Nothing; before the merge |
-| P0 | L08 | A malformed packet leaves a partial message in CAMD's parser | Nothing |
 | P1 | L01 | A device's port number depends on which other devices are bound | Nothing in the class; B29 for the real answer |
 | P1 | L06 | A sixteenth device is refused without a word | Nothing; with L01 |
 | P1 | L10 | MIDIHub.prefs does not know the driver's ports; saved routes break | Nothing |
@@ -60,7 +58,12 @@ Two entries are new on 2026-10-12 and have no row in the parts below:
 
 ## Done
 
-Nothing yet under this backlog.
+In commit `658d741303` on the pull request's branch (2026-10-12):
+
+| # | What was done |
+|---|---|
+| W01 | `struct BTMidiAdapter` has `ba_Version` directly after `ba_ActivateFunc`, set by the class to `BTMIDI_ADAPTER_VERSION`; the driver stub returns no port when it is not the version it was built with. Run on hosted AROS: with the stub the class embeds, `btmidi.out.0` opens; with a stub built as version 2, kept in `DEVS:Midi` by making the file read-only, it does not. Found on the way: the stub's object did not depend on `btmidi_camd.h`, so a change to the adapter did not rebuild it; it does now. A class never rewrites a stub CAMD has already loaded, which is the case the version is for. |
+| L08 | `blemidi_check()` says whether a packet would decode to its end, on a copy of the decoder's state. Both roles call it first and hand CAMD nothing of a packet that fails; the decoder is left as it was, so a SysEx running over packets survives a bad one in the middle. Tested on the host with the address and undefined-behaviour sanitizers: a truncated message, an undefined status and a broken SysEx continuation. Not run inside AROS, where it needs a radio (T01). |
 
 **How far each statement was checked.** *Run* means it was seen on hosted
 AROS with this repository's CAMD patches. *Read* means it follows from the
@@ -89,7 +92,6 @@ device. These are things it did that the driver version does not.
 | L05 | **Available as soon as the class starts.** An unpatched `camd.library` scans `DEVS:Midi` only when it is loaded. | On a first installation with CAMD already in memory, BLE MIDI appears only after CAMD is reloaded, in practice a reboot. With this repository's rescan patch nothing changes for `btmidi`, because it does not call `RethinkCAMD()`: it may not open `camd.library`. | A trigger for the rescan that does not make the class open CAMD: CAMD watching `DEVS:Midi` with a DOS notification, or a rescan when a client names a driver CAMD does not know. See W03. | camd | read |
 | L06 | **More than 15 devices.** `NPorts` is 16; a 16th bound device gets no port. | The binding is refused without a word to the user. | Say so in the class's window and the Bluetooth log; raise `NPorts` if it ever matters. `NPorts` is a `UBYTE`. | class | read |
 | L07 | **Several centrals sending SysEx at once.** Each central had its own reassembly, up to four. CAMD parses one byte stream per port, so only one SysEx at a time reaches it: a second is left out and counted as an error, and a message from another central that interrupts a SysEx ends it. | Rare: two phones dumping patches to AROS at the same moment. Channel messages from several centrals still interleave correctly. | Reassemble a second central's SysEx in the class and feed it when the first has ended. That brings a SysEx buffer back, which the review asked to drop, so only if it turns out to matter. | class | read |
-| L08 | **Whole messages or nothing.** A malformed packet was dropped whole, and a SysEx longer than 4096 bytes was refused by the class. Now bytes go to CAMD as they are decoded: what came before the error stays, and the SysEx limit is CAMD's. | A broken packet can leave CAMD's parser with a partial message, which the next status byte clears. | Decode a packet into the buffer first and deliver it only if the whole packet is valid. Cheap. | class | read |
 | L09 | **No disk needed.** The class has to write `DEVS:Midi/btmidi`, and once CAMD has loaded the driver the class stays in memory, since CAMD never unloads a driver. | No BLE MIDI through CAMD on a read-only `DEVS:`. The class cannot be expunged or replaced without a reboot once CAMD has run. | Ship the driver in the system image as well, so writing is only an update. Unloading is CAMD's decision (`camd-improvements.md`, section 1.3). | build, camd | read |
 | L10 | **MIDIHub.prefs knows the ports.** It read the peripheral role's names from the class's configuration chunk and derived a bound device's from its name. There is no chunk now. | The Overview does not mark the ports as BLE MIDI, and saved routes that name `BLE MIDI In` no longer resolve. | Recognise `btmidi.in.<n>`/`btmidi.out.<n>`; get device and port from the class (it has no public query for that yet: a `btcGetAttrsA` tag on a binding would do); migrate saved routes. | midihub, class | read |
 
@@ -105,7 +107,6 @@ Not losses: things the driver version does that should be better.
 
 | # | Weak point | Effect | Fix | Where | Checked |
 |---|---|---|---|---|---|
-| W01 | **The adapter has no version.** `struct BTMidiAdapter` is shared by the class and the driver stub, and neither checks that the other was built with the same layout. The class rewrites the file in `DEVS:Midi` when it differs, but a stub CAMD has already loaded stays in use until CAMD is reloaded. | Harmless today. Dangerous the day the struct changes, which the extension will do. | A version (or size) field first in the struct after `ba_ActivateFunc`, checked in `btmidiCAMDOpenPort()`; refuse a mismatch. Do it before the merge: it is cheap now and an ABI break later. | class | read |
 | W02 | **Loss on input is invisible to the class.** CAMD's receive function returns nothing. With this repository's receive-ring patch a full ring refuses bytes and reports `CMEF_RecvOverflow` to CAMD clients; the class's error counter does not move. | The status window can show no errors while input was lost. | Nothing in the class. A timed, acknowledged receive belongs to the extension (B32). | extension | read |
 | W03 | **`camdusbmidi.class`, as patched here, opens `camd.library`** to call `RethinkCAMD()` after writing a driver (`aros-usb-midi-lifecycle.patch`). The review of `btmidi.class` says a class must not open CAMD: the dependency runs the other way. | That patch would meet the same objection upstream. | The same trigger as L05, used by both classes. Settle it before sending the USB patches. | camd | read |
 | W04 | **Two ways to name a device's port.** The patched USB class writes one driver file per device, with the device's ID as the driver's name, so path-bound identity follows the device. `btmidi` is one driver with a pool of ports, as the review asked. | The same question answered twice; the registry's identity for a USB device is stable and for a BLE device is not. | Decide once, in the sketch of the extension: per-port identity evidence makes the per-device files unnecessary. | extension | read |
@@ -126,7 +127,7 @@ Not losses: things the driver version does that should be better.
 ## Suggested order
 
 1. T01, because the PR promises it.
-2. W01 and L08, small and safe, as one more commit to the PR.
+2. Done: W01 and L08.
 3. L01, the address-to-port map, with L06's message. Ask in the PR first
    whether he wants it there or afterwards.
 4. L10, so MIDIHub works with the upstream class, then L11.

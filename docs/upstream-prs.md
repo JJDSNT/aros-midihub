@@ -120,7 +120,9 @@ bytes rather than messages to CAMD, output pulled through `ActivateXmit`,
 and roles mapped to numbered ports.
 
 The class was rewritten that way and pushed as two more commits on the same
-branch (`a45711131d`, `db7145795c`), with
+branch (`a45711131d`, `db7145795c`, and on 2026-10-12 `658d741303`: a
+version in the adapter shared with the driver, and a malformed packet kept
+whole from CAMD), with
 [a reply](https://github.com/aros-development-team/AROS/pull/1507#issuecomment-6112279392)
 that lists the changes against his eight points, where the class
 deliberately differs from the USB one, what was and was not tested, defects
