@@ -23,8 +23,24 @@ struct applemidi_packet {
     size_t name_length;
     uint8_t sync_count;
     uint64_t timestamps[3];
-    uint32_t feedback_sequence;
+    uint32_t feedback_sequence;     /* the RS packet's four bytes, as sent */
 };
+
+/* What an RS packet acknowledges is the 16-bit sequence number of an RTP
+ * packet, in a field of four bytes that implementations fill in two ways.
+ * Apple's has the number in the first two bytes and nothing in the last
+ * two: Wireshark's dissector reads it so, and node-rtpmidi writes it so.
+ * rtpmidid writes a 32-bit extended sequence number, which has it in the
+ * last two.
+ *
+ * We send Apple's form. On receiving, the field is read both ways and the
+ * reading that lies closer behind the last sequence number we sent is
+ * taken, since an acknowledgement is of something sent. Just after our
+ * sequence number wraps the two readings can come within a few packets of
+ * each other and the wrong one be taken; the journal is then a few
+ * packets shorter than it should be until the next RS. */
+uint32_t applemidi_feedback_field(uint16_t sequence);
+uint16_t applemidi_feedback_acked(uint32_t field, uint16_t last_sent);
 
 /* Why a packet was not taken. All are negative, so a caller that only
  * wants to know tests for zero. */

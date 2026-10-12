@@ -263,7 +263,8 @@ static int send_feedback(struct runtime *rt, uint16_t sequence)
     memset(&feedback, 0, sizeof(feedback));
     feedback.command = APPLEMIDI_RS;
     feedback.ssrc = rt->session.local_ssrc;
-    feedback.feedback_sequence = rt->received_sequence;
+    feedback.feedback_sequence =
+        applemidi_feedback_field((uint16_t)rt->received_sequence);
     send_apple(rt, 0, &feedback);
     return fresh;
 }
@@ -368,7 +369,8 @@ static void receive_packet(struct runtime *rt, int data_port)
         if (packet.command == APPLEMIDI_RS) {
             if (!data_port && rt->session.phase == APPLEMIDI_SESSION_CONNECTED &&
                 packet.ssrc == rt->session.peer_ssrc)
-                rtpmidi_sender_ack(&rt->sender, packet.feedback_sequence);
+                rtpmidi_sender_ack(&rt->sender, applemidi_feedback_acked(
+                    packet.feedback_sequence, (uint16_t)(rt->sequence - 1)));
             return;
         }
         restarts = rt->session.restarts;

@@ -280,8 +280,9 @@ lists: defects in code as it is. That they open nothing else is no reason to lea
 
 1. Done on 2026-10-12: the P0 defects of RTP-MIDI (R01, R02, R04, R27) and
    of AppleMIDI (AM01 to AM04).
-2. **AM06**, the run against rtpmidid, before building further on code
-   that has met no other implementation.
+2. **AM06**, the runs against other implementations. The first, against
+   node-rtpmidi, was done on 2026-10-12 and found the RS layout defect; rtpmidid
+   and Apple's need a machine this one is not.
 3. **AM05**, several peers. Here the driver's decisions (D1, D2, D4) become
    due.
 4. **AM08**, the driver, and **AM09**/**AM10**, discovery through the system

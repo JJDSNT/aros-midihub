@@ -44,6 +44,20 @@ static int exchange_command(uint16_t command)
            command == APPLEMIDI_NO || command == APPLEMIDI_BY;
 }
 
+uint32_t applemidi_feedback_field(uint16_t sequence)
+{
+    return (uint32_t)sequence << 16;
+}
+
+uint16_t applemidi_feedback_acked(uint32_t field, uint16_t last_sent)
+{
+    uint16_t first = (uint16_t)(field >> 16);
+    uint16_t last = (uint16_t)field;
+
+    return (uint16_t)(last_sent - first) <= (uint16_t)(last_sent - last) ?
+           first : last;
+}
+
 int applemidi_decode(const uint8_t *data, size_t length,
                     struct applemidi_packet *packet)
 {

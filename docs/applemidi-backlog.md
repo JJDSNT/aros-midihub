@@ -44,6 +44,26 @@ inside AROS or against another implementation.
 | AM02 | `struct applemidi_clock` in `network/rtpmidi/clock.c` holds one session's exchange: when to start one, the answer to each packet, the offset, and the silence after which the invited side gives up. The program passes packets and time and keeps none of it. `apple_clock` carries five exchanges between two clocks five hundred seconds apart over a path of known delay, checks the offset at both ends to the tick, and feeds each side the packets that belong to no exchange. The intervals are the ones the program had; AM11 is still open. |
 | AM03 | `applemidi_decode()` takes the fields it uses and no more: a name without its terminator, bytes after the terminator, and any value in a CK packet's three unused bytes are accepted. What it refuses it refuses with a reason (`enum applemidi_decode_result`): not AppleMIDI, unknown command, truncated, wrong version, malformed. Nothing counts the reasons yet: that is with the counters of RTP-MIDI backlog R18. |
 | AM04 | SSRC, tokens and the first sequence number come from `entropy.resource` on AROS and `/dev/urandom` on the host, through `netmidi_network_random()`; with neither, the program says so once and falls back to the clock. A peer with our SSRC is refused, NO for its invitation and BY for its acceptance, `ssrc_collisions` counts it, and the program takes another SSRC and invites again. The AROS branch compiles and has not run. |
+| AM22 | Found by the first run against another implementation: the RS packet. Its four bytes hold the 16-bit sequence number being acknowledged, and we wrote and read it in the last two, as a 32-bit number. Apple's form has it in the first two (Wireshark's dissector reads it so, node-rtpmidi writes it so); rtpmidid writes it our old way. So a peer of the first kind read every acknowledgement of ours as zero, and we read each of theirs as zero: the journal was never trimmed, and a journal-only packet went out every second for as long as the session lasted. We now send Apple's form and read both, taking the reading nearer behind what we last sent (`applemidi_feedback_acked()`). Seen on the wire: node-rtpmidi reports our acknowledgement at its own sequence number, and after its RS our journal-only packets stop. |
+
+## Peers met
+
+| Peer | Where | When | What passed | What it could not show |
+|---|---|---|---|---|
+| node-rtpmidi 1.0.0 | Linux build over loopback (`tools/applemidi-node-host.sh`) and hosted AROS over the veth pair (`tools/applemidi-node-hosted.sh`) | 2026-10-12 | Invitation and clock exchange in both roles; our Note On and Note Off shown by the peer; its packet of four commands with delta times (Note On, Note Off, Control Change, SysEx) delivered through CAMD to a program on AROS; RS understood both ways; its BY ends the session; `entropy.resource` gave AROS its SSRC and tokens | It has no recovery journal, so no loss was repaired; it sends nothing while it is the invited side; discovery, since its mDNS parts were left out |
+| rtpmidid | — | — | Not run: no ALSA sequencer here | |
+| macOS, iOS | — | — | Not run: no machine at hand | |
+| rtpMIDI for Windows | — | — | Not run | |
+
+What the first peer showed that our own tests could not:
+
+- Its RTP packets have the marker bit clear with commands in them, against
+  RFC 6295. Before R01 of the RTP-MIDI backlog, closed the same day, every
+  one of them was dropped without a word: the session connected, clocks
+  were exchanged, and nothing was ever received.
+- The RS packet's layout (AM22).
+- It sends the session name with its terminating zero counted in, which
+  our decoder takes as it is.
 
 ## P0 — wrong or unsafe as it is
 
@@ -54,7 +74,7 @@ Nothing open.
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
 | AM05 | One peer on AROS. | Put `applemidi_peers` under the event loop, with a sender, a receiver, a clock, a queue and a SysEx assembler per peer. | Two scripted peers connected at once, each recovering its own losses. |
-| AM06 | Never run against another implementation. | First rtpmidid on Linux, which needs no hardware: a runner in `tools/` beside the mDNS ones, hosted AROS on the veth pair, notes and SysEx in both directions, a session opened from each side, packets dropped with `tc netem` to make the journal work. Then macOS, iOS and rtpMIDI for Windows when the machines are at hand ([the iPhone procedure](iphone-smoke-test.md) is written for Linux and needs redoing for AROS). | `tools/applemidi-rtpmidid-hosted.sh` passes; a table in this file says which peer was tried, when, and what failed. |
+| AM06 | Run against other implementations. One has been met: see "Peers met" below. | rtpmidid, which needs a Linux with the ALSA sequencer (this machine's WSL kernel has none, and Ubuntu 24.04 has no package). Then macOS, iOS and rtpMIDI for Windows when the machines are at hand ([the iPhone procedure](iphone-smoke-test.md) is written for Linux and needs redoing for AROS). With a peer that has the recovery journal: packets dropped with `tc netem`, to see a loss repaired in each direction. | Every row of "Peers met" is filled. |
 | AM07 | An invitation from anyone is accepted while there is room; the only rule is the table's size. | An accept rule, as Apple's "who may connect to me": anyone, a list of addresses or names, nobody. | Host tests for an accepted and a refused invitation under each rule. |
 | AM08 | A CAMD client, not a driver. | A `DEVS:Midi` driver with a fixed number of ports, each bound to a peer while the session lasts, as `btmidi` does. Needs D1 and D2 below. | A CAMD program opens `applemidi.out.0` and a peer hears it; `MIDIHub In`/`Out` are gone. |
 | AM09 | The embedded mDNS responder. | Register `_apple-midi._udp` through the system service and take `network/mdns/embedded.c` out. The service's registration half is not upstream yet (AROS issue #1559, PR #1560), but `bonami.library` and `mdnsd` work in this repository, so this can be done against them now and adjusted to what upstream accepts. | `avahi-browse` sees the session with `mdnsd` running and no second socket on port 5353. |

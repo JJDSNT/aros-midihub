@@ -209,6 +209,19 @@ static void apple_feedback(void)
     assert(applemidi_decode(feedback, sizeof(feedback), &packet) == 0);
     assert(packet.command == APPLEMIDI_RS && packet.ssrc == 0x89abcdef);
     assert(packet.feedback_sequence == 0x00010002);
+    /* What we send has the RTP sequence number in the first two bytes. */
+    assert(applemidi_feedback_field(0x2e95) == 0x2e950000);
+    /* What we receive is read both ways, and the reading nearer behind
+     * what we last sent is the one: Apple's form, */
+    assert(applemidi_feedback_acked(0x2e950000, 0x2e95) == 0x2e95);
+    assert(applemidi_feedback_acked(0x2e930000, 0x2e95) == 0x2e93);
+    assert(applemidi_feedback_acked(0xfffe0000, 0xffff) == 0xfffe);
+    /* the extended form before and after its sequence number wraps, */
+    assert(applemidi_feedback_acked(0x00002e95, 0x2e95) == 0x2e95);
+    assert(applemidi_feedback_acked(0x00002e93, 0x2e95) == 0x2e93);
+    assert(applemidi_feedback_acked(0x00030010, 0x0012) == 0x0010);
+    /* and either when the number is zero. */
+    assert(applemidi_feedback_acked(0x00000000, 0x0001) == 0x0000);
     assert(applemidi_encode(&packet, encoded, sizeof(encoded), &length) == 0);
     assert(length == sizeof(feedback) && !memcmp(encoded, feedback, length));
     assert(applemidi_decode(feedback, sizeof(feedback) - 1, &packet) ==

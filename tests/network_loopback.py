@@ -145,7 +145,9 @@ def run_feedback_case(binary):
             feedback, source = control.recvfrom(128)
             assert source[1] == port
             assert feedback[:4] == b"\xff\xffRS" and len(feedback) == 12
-            assert struct.unpack(">I", feedback[8:12])[0] == expected_ack
+            # the sequence number, then two unused bytes: Apple's layout
+            assert struct.unpack(">HH", feedback[8:12]) == (
+                expected_ack & 0xffff, 0)
             if sequence == 0xffff:
                 data.sendto(packet, ("127.0.0.1", port + 1))
                 repeated, _ = control.recvfrom(128)
@@ -164,34 +166,34 @@ def run_feedback_case(binary):
                     ("127.0.0.1", port + 1))
         control.settimeout(2)
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10002
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10002 & 0xffff, 0)
         note_on = struct.pack(">BBHII", 0x80, 0xe1, 3, 100, peer_ssrc)
         data.sendto(note_on + b"\x03\x90\x3c\x64",
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10003
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10003 & 0xffff, 0)
         recovery = struct.pack(">BBHII", 0x80, 0xe1, 5, 100, peer_ssrc)
         journal = b"\x20\x00\x04\x00\x06\x08\x00\x77\x08"
         data.sendto(recovery + b"\x40" + journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10005
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10005 & 0xffff, 0)
         note_on = struct.pack(">BBHII", 0x80, 0xe1, 6, 100, peer_ssrc)
         data.sendto(note_on + b"\x03\x90\x3c\x64",
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10006
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10006 & 0xffff, 0)
         safe = struct.pack(">BBHII", 0x80, 0xe1, 8, 100, peer_ssrc)
         safe_journal = b"\x20\x00\x07\x00\x06\x08\x80\x77\x08"
         data.sendto(safe + b"\x40" + safe_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10008
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10008 & 0xffff, 0)
         note_off = struct.pack(">BBHII", 0x80, 0xe1, 9, 100, peer_ssrc)
         data.sendto(note_off + b"\x03\x80\x3c\x00",
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10009
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10009 & 0xffff, 0)
         t1 = int(time.time() * 10000)
         ck0 = struct.pack(">4sIB3xQQQ", b"\xff\xffCK", peer_ssrc,
                           0, t1, 0, 0)
@@ -209,7 +211,7 @@ def run_feedback_case(binary):
         data.sendto(missed_on + b"\x40" + on_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x1000B
+        assert struct.unpack(">HH", feedback[8:12]) == (0x1000B & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -227,7 +229,7 @@ def run_feedback_case(binary):
         data.sendto(state_packet + b"\x40" + state_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x1000D
+        assert struct.unpack(">HH", feedback[8:12]) == (0x1000D & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -244,7 +246,7 @@ def run_feedback_case(binary):
         data.sendto(control_packet + b"\x40" + control_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x1000F
+        assert struct.unpack(">HH", feedback[8:12]) == (0x1000F & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -259,14 +261,14 @@ def run_feedback_case(binary):
         data.sendto(sustain_on + b"\x03\xb0\x40\x7f",
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10010
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10010 & 0xffff, 0)
         sustain_gap = struct.pack(">BBHII", 0x80, 0xe1, 18,
                                   future & 0xffffffff, peer_ssrc)
         sustain_journal = b"\x20\x00\x11\x00\x06\x40\x00\x40\x83"
         data.sendto(sustain_gap + b"\x40" + sustain_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10012
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10012 & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -282,14 +284,14 @@ def run_feedback_case(binary):
         data.sendto(last_note + b"\x03\x90\x3e\x64",
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10013
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10013 & 0xffff, 0)
         all_notes_gap = struct.pack(">BBHII", 0x80, 0xe1, 21,
                                     future & 0xffffffff, peer_ssrc)
         all_notes_journal = b"\x20\x00\x14\x00\x06\x40\x00\x7b\xc1"
         data.sendto(all_notes_gap + b"\x40" + all_notes_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10015
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10015 & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -305,7 +307,7 @@ def run_feedback_case(binary):
         data.sendto(fresh_on + b"\x03\x90\x3c\x64",
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10016
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10016 & 0xffff, 0)
         pressure_gap = struct.pack(">BBHII", 0x80, 0xe1, 24,
                                    int(time.time() * 10000) & 0xffffffff,
                                    peer_ssrc)
@@ -313,7 +315,7 @@ def run_feedback_case(binary):
         data.sendto(pressure_gap + b"\x40" + pressure_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10018
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10018 & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -334,7 +336,7 @@ def run_feedback_case(binary):
         data.sendto(system_gap + b"\x40" + system_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x1001A
+        assert struct.unpack(">HH", feedback[8:12]) == (0x1001A & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -354,7 +356,7 @@ def run_feedback_case(binary):
         data.sendto(sequencer_gap + b"\x40" + sequencer_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x1001C
+        assert struct.unpack(">HH", feedback[8:12]) == (0x1001C & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -373,7 +375,7 @@ def run_feedback_case(binary):
         data.sendto(start_gap + b"\x40" + start_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x1001E
+        assert struct.unpack(">HH", feedback[8:12]) == (0x1001E & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -391,7 +393,7 @@ def run_feedback_case(binary):
         data.sendto(stop_gap + b"\x40" + stop_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10020
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10020 & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -409,7 +411,7 @@ def run_feedback_case(binary):
         data.sendto(mtc_gap + b"\x40" + mtc_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10022
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10022 & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -426,7 +428,7 @@ def run_feedback_case(binary):
         data.sendto(qf_gap + b"\x40" + qf_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10024
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10024 & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -444,7 +446,7 @@ def run_feedback_case(binary):
         data.sendto(qf_partial_gap + b"\x40" + qf_partial_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10026
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10026 & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -462,7 +464,7 @@ def run_feedback_case(binary):
         data.sendto(sysex_gap + b"\x40" + sysex_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10028
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10028 & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -483,7 +485,7 @@ def run_feedback_case(binary):
         data.sendto(multi_sysex_gap + b"\x40" + multi_sysex_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x1002a
+        assert struct.unpack(">HH", feedback[8:12]) == (0x1002a & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -504,7 +506,7 @@ def run_feedback_case(binary):
         data.sendto(note_extra_gap + b"\x40" + note_extra_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x1002c
+        assert struct.unpack(">HH", feedback[8:12]) == (0x1002c & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -527,7 +529,7 @@ def run_feedback_case(binary):
         data.sendto(parameter_gap + b"\x40" + parameter_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x1002e
+        assert struct.unpack(">HH", feedback[8:12]) == (0x1002e & 0xffff, 0)
         deadline = time.monotonic() + 1
         while True:
             log.seek(0)
@@ -548,7 +550,7 @@ def run_feedback_case(binary):
                     duplicate_parameter_journal,
                     ("127.0.0.1", port + 1))
         feedback, _ = control.recvfrom(128)
-        assert struct.unpack(">I", feedback[8:12])[0] == 0x10030
+        assert struct.unpack(">HH", feedback[8:12]) == (0x10030 & 0xffff, 0)
         time.sleep(0.05)
         log.seek(0)
         output = log.read().decode(errors="replace")
