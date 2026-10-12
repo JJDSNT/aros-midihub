@@ -183,8 +183,9 @@ somewhat smaller.
    the RTP-MIDI and AppleMIDI code (N2, N3) had 29 findings, 23 of them a
    variable declared further out than it is used, and has none since the
    same day, nor any `strcpy`, `strncpy`, `strlen` or `sprintf`. The service's
-   `main.c` has 12, `netmidi2.c` 3, the adapters 2, `network.c` and the
-   configuration reader 1 each, the UMP translator none. The checker
+   `main.c` has 12, the adapters 2, `network.c` and the
+   configuration reader 1 each; the UMP translator and, since the same day,
+   `netmidi2.c` have none. The checker
    cannot read the driver, whose entry points are AROS's register-argument
    macros; it cannot read upstream's own USB MIDI driver either.
 4. The statement of origin in the pull request (RTP-MIDI backlog, U4): what

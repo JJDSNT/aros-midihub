@@ -91,11 +91,24 @@ int netmidi2_add(struct netmidi2_writer *writer, uint8_t code, uint8_t csd1, uin
     return 0;
 }
 
+/* The length of a string that ends in a zero byte, looked for in its first
+ * limit + 1 bytes: limit + 1 when there is none there, which is "too
+ * long" to whoever asked. */
+static size_t text_length(const char *text, size_t limit)
+{
+    size_t length = 0;
+
+    while (length <= limit && text[length])
+        ++length;
+    return length;
+}
+
 int netmidi2_add_identity(struct netmidi2_writer *writer, uint8_t code, uint8_t csd2,
                         const char *name, const char *product_id)
 {
     uint8_t payload[(NETMIDI2_NAME_MAX + 3) / 4 * 4 + (NETMIDI2_PRODUCT_ID_MAX + 3) / 4 * 4];
-    size_t name_length = strlen(name), id_length = strlen(product_id);
+    size_t name_length = text_length(name, NETMIDI2_NAME_MAX);
+    size_t id_length = text_length(product_id, NETMIDI2_PRODUCT_ID_MAX);
     size_t name_words = (name_length + 3) / 4;
 
     if (name_length > NETMIDI2_NAME_MAX || id_length > NETMIDI2_PRODUCT_ID_MAX)
@@ -169,9 +182,11 @@ void netmidi2_session_init(struct netmidi2_session *session, int host,
 {
     memset(session, 0, sizeof(*session));
     session->host = host;
-    copy_text(session->name, sizeof(session->name), (const uint8_t *)name, strlen(name));
+    /* copy_text stops at the string's end, or where there is no more room */
+    copy_text(session->name, sizeof(session->name), (const uint8_t *)name,
+              sizeof(session->name));
     copy_text(session->product_id, sizeof(session->product_id),
-              (const uint8_t *)product_id, strlen(product_id));
+              (const uint8_t *)product_id, sizeof(session->product_id));
     session->protocols = UMP_PROTOCOL_MIDI1;
     session->ump_sink = sink;
     session->ump_context = context;
@@ -358,14 +373,16 @@ static void answer_stream(struct netmidi2_session *session, const uint32_t *word
         if (filter & UMP_FILTER_ENDPOINT_NAME) {
             n = ump_stream_text(reply, sizeof(reply) / sizeof(reply[0]),
                                    UMP_ENDPOINT_NAME, session->name,
-                                   strlen(session->name));
+                                   text_length(session->name,
+                                               NETMIDI2_NAME_MAX));
             if (n)
                 (void)netmidi2_send_ump(session, reply, n, session->now_ms, out);
         }
         if (filter & UMP_FILTER_PRODUCT_INSTANCE_ID) {
             n = ump_stream_text(reply, sizeof(reply) / sizeof(reply[0]),
                                    UMP_PRODUCT_INSTANCE_ID, session->product_id,
-                                   strlen(session->product_id));
+                                   text_length(session->product_id,
+                                               NETMIDI2_PRODUCT_ID_MAX));
             if (n)
                 (void)netmidi2_send_ump(session, reply, n, session->now_ms, out);
         }
@@ -386,7 +403,7 @@ static void answer_stream(struct netmidi2_session *session, const uint32_t *word
             (void)netmidi2_send_ump(session, reply, 4, session->now_ms, out);
         }
         if (filter & UMP_FUNCTION_BLOCK_FILTER_NAME) {
-            size_t length = strlen(session->name);
+            size_t length = text_length(session->name, NETMIDI2_NAME_MAX);
 
             /* the block is called as the endpoint is, as far as fits */
             if (length > UMP_FUNCTION_BLOCK_NAME_MAX)
@@ -452,7 +469,7 @@ static void bye(struct netmidi2_writer *out, uint8_t reason)
 }
 
 /* A command from someone the session is not with. */
-static void receive_stranger(struct netmidi2_session *session,
+static void receive_stranger(const struct netmidi2_session *session,
                              const struct netmidi2_command_packet *c,
                              struct netmidi2_writer *out)
 {
@@ -510,7 +527,6 @@ int netmidi2_receive_from(struct netmidi2_session *session, uint64_t peer,
 {
     struct netmidi2_command_packet commands[64];
     int count, i;
-    int active;
 
     count = netmidi2_parse(packet, length, commands, 64);
     if (count < 0)
@@ -524,8 +540,8 @@ int netmidi2_receive_from(struct netmidi2_session *session, uint64_t peer,
     session->last_receive_ms = now_ms;
     for (i = 0; i < count; ++i) {
         const struct netmidi2_command_packet *c = &commands[i];
-        active = session->state == NETMIDI2_ESTABLISHED ||
-                 session->state == NETMIDI2_RESETTING;
+        int active = session->state == NETMIDI2_ESTABLISHED ||
+                     session->state == NETMIDI2_RESETTING;
         switch (c->code) {
         case NETMIDI2_INVITATION:                           /* 6.4 */
             if (!session->host) {
@@ -769,9 +785,9 @@ void netmidi2_table_init(struct netmidi2_table *table, const char *name,
     int i;
     memset(table, 0, sizeof(*table));
     copy_text(table->name, sizeof(table->name), (const uint8_t *)name,
-              strlen(name));
+              sizeof(table->name));
     copy_text(table->product_id, sizeof(table->product_id),
-              (const uint8_t *)product_id, strlen(product_id));
+              (const uint8_t *)product_id, sizeof(table->product_id));
     table->accept = 1;
     table->sink = sink;
     table->context = context;
@@ -828,7 +844,6 @@ int netmidi2_table_receive(struct netmidi2_table *table, uint64_t peer,
                            int *index)
 {
     int found = netmidi2_table_find(table, peer);
-    int result;
 
     if (index)
         *index = found;
@@ -840,6 +855,8 @@ int netmidi2_table_receive(struct netmidi2_table *table, uint64_t peer,
        the slot is kept only if a session began. */
     found = table->accept ? free_slot(table) : -1;
     if (found >= 0) {
+        int result;
+
         slot_begin(table, found, 1);
         result = netmidi2_receive_from(&table->slot[found].session, peer,
                                        packet, length, now_ms, out);
