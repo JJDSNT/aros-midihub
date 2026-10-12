@@ -34,15 +34,18 @@ Priorities as in the other backlogs.
 
 ## Done
 
-Nothing yet under this backlog. What was done before it is in the port's
-README and in the history of `tools/mdns-*-hosted.sh`.
+What was done before this backlog is in the port's README and in the
+history of `tools/mdns-*-hosted.sh`. Under it:
+
+| # | What was done |
+|---|---|
+| MD02 | A value in a service's text may have spaces. In the string a client gives and gets, a space that belongs to an item has a backslash before it and a backslash is written twice; the items go into the TXT record, and come out of it, as the strings they are (`mdnsTxtNext()`, `mdnsTxtAppend()`). Text without backslashes means what it meant before. `dnssd -R` marks its arguments so. `tools/mdns-txt-hosted.sh`: Avahi reads four items registered on AROS, two with spaces and one with a backslash, as written, and AROS is given the host's `name=Host With Spaces` with its spaces marked. The whole text is still at most 256 characters, and a record's item that does not fit is left out whole. Whether a string with backslashes is the form AROS wants for this, or counted strings, is one more question for the review. |
 
 ## P0 — wrong or unsafe as it is
 
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
 | MD01 | A client's Hook is called in mdnsd's process. Every client has to know it may only copy and signal there; one that prints, calls the library or crashes does it inside the daemon, for every other client. | Deliver events outside the daemon: a message to the client's own port, or a dispatcher per client in the library. Which one is question 3 of issue #1559; do not build before the answer. | A client that misbehaves in its callback harms only itself; the tools no longer share a helper to copy and signal. |
-| MD02 | A value in a service's text record cannot contain a space, and the whole text is at most 256 characters. Network MIDI 2.0 advertises `UMPEndpointName` in the text, and a name has spaces. | Carry the text as counted strings from the API to the packet, as DNS-SD defines it, with the limit a TXT record has. | A service registered with `name=AROS MIDI` is read back so by `avahi-browse -r`. |
 
 ## P1 — before another program depends on it
 
@@ -76,6 +79,7 @@ README and in the history of `tools/mdns-*-hosted.sh`.
 | MD16 | The Envoy bridge publishes and finds hosts but does not match what DNS-SD cannot tell (memory, versions, realms), and AROS's `nipc.library` does not call it. | Nothing until someone wants Envoy discovery; see [the notes](nipc-envoy-future.md). |
 | MD17 | The commodity has no automatic test; its Share panel, hot key and Exchange were never tried, and a label overlaps a gadget with the default font. | Try them by hand; lay the row out by the font. |
 | MD18 | On amiga-m68k AROSTCP does not build until `fd.library`'s headers exist, because its build file does not ask for them. | A one-line dependency, as a pull request of its own. |
+| MD21 | `dnssd -Z` prints a service's host as `name.local.local.`: the tool adds a domain the name already has. | Print the name as it is. |
 
 ## The way upstream
 

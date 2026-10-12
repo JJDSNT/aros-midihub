@@ -629,22 +629,21 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
             }
         }
     } else if (r->type == DNS_TYPE_TXT && r->rdlength > 0) {
-        /* The record's strings, joined by spaces, as a client gave them. */
-        LONG in = 0, out = 0, len;
+        /* The record's strings, joined by spaces, as a client gave them:
+         * a space inside one gets its backslash back. What does not fit
+         * is left out whole, not cut. */
+        LONG in = 0, len;
 
+        newtxt[0] = '\0';
         while (in < r->rdlength) {
             len = r->rdata[in++];
-            if (in + len > r->rdlength || out + len + 1 > MDNS_MAX_TXT) {
+            if (in + len > r->rdlength ||
+                !mdnsTxtAppend(newtxt, (LONG)sizeof(newtxt), r->rdata + in,
+                               len)) {
                 break;
             }
-            if (len > 0 && out > 0) {
-                newtxt[out++] = ' ';
-            }
-            memcpy(newtxt + out, r->rdata + in, (size_t)len);
-            out += len;
             in += len;
         }
-        newtxt[out] = '\0';
         if (strcmp(ce->ce_TXT, newtxt) != 0) {
             strcpy(ce->ce_TXT, newtxt);
             changed = TRUE;

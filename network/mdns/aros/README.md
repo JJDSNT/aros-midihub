@@ -263,8 +263,9 @@ Library and daemon:
 - A client is not told the final name of its service.
 - A question about one of this host's own services gets no answer through
   `QueryRecordA()`, since mdnsd does not hear itself.
-- A value in a service's text cannot contain a space, and the whole text is
-  at most 256 characters.
+- A service's whole text is at most 256 characters. A space inside one of
+  its items is written with a backslash before it, and a backslash twice
+  (`tools/mdns-txt-hosted.sh`).
 - The Envoy bridge is not matched or answered for what DNS-SD cannot tell
   (memory, versions, realms).
 

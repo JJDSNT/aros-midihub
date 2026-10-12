@@ -27,6 +27,7 @@
 #include <bonami/mdns.h>
 #include <bonami/nipc.h>
 #include "private/mdns_engine.h"
+#include "private/mdns_dns.h"
 #include "private/bonami_ipc.h"
 
 #define NIPC_QUERY_IPADDR       (TAG_USER + 0x2000)
@@ -49,26 +50,34 @@ txt_value(const char *item, const char *key)
     return NULL;
 }
 
-/* Splits a copy of the text at its spaces; returns the number of items. */
+/* Splits a copy of the text into its items, in place, taking the
+ * backslashes out (an item only gets shorter); returns their number. */
 static LONG
 txt_split(char *text, char **items, LONG max)
 {
     LONG n = 0;
+    LONG pos = 0;
+    LONG out = 0;
 
-    while (*text != '\0' && n < max) {
-        while (*text == ' ') {
-            text++;
+    while (n < max) {
+        LONG start = pos;
+        LONG len;
+
+        /* where the item's own bytes begin, to read it before writing */
+        while (text[start] == ' ') {
+            start++;
         }
-        if (*text == '\0') {
+        len = mdnsTxtNext(text, &pos, (UBYTE *)text + out,
+                          (LONG)strlen(text + start));
+        if (len < 0) {
             break;
         }
-        items[n++] = text;
-        while (*text != '\0' && *text != ' ') {
-            text++;
+        items[n++] = text + out;
+        out += len;
+        if (text[pos] != '\0') {
+            pos++;
         }
-        if (*text != '\0') {
-            *text++ = '\0';
-        }
+        text[out++] = '\0';
     }
     return n;
 }

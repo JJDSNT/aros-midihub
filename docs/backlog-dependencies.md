@@ -88,7 +88,7 @@ flowchart LR
 
     subgraph MDNS[mDNS]
         MD01["MD01 events outside<br/>the daemon"]
-        MD02["MD02 spaces in<br/>text records"]:::ready
+        MD19["MD19 a time to live<br/>from the client"]:::ready
         MD03["MD03 tell a client<br/>its final name"]
         MD06["MD06 meet Bonjour and<br/>a second AROS"]
         MD14["MD14 IPv6"]
@@ -139,7 +139,7 @@ flowchart LR
     I1559 --> MU5
     MD01 --> MD03
     MD01 --> MU3
-    MD02 --> NM08
+    MD19 --> NM08
     MDD1 --> MD15
     MDD2 --> MU6
     P1560 --> MU1
@@ -191,9 +191,11 @@ the work that others waited on has been done.
 - *Hardware* holds the one thing we promised a reviewer: T01.
 - *PR #1560* holds only mDNS's later cuts.
 
-**mDNS and the transports meet in one place.** MD02, spaces in a text
-record, has to be done before Network MIDI 2.0 can advertise itself (NM08).
-Everything else in mDNS is independent of the MIDI work, and the reverse.
+**mDNS and the transports meet in one place.** Network MIDI 2.0 cannot
+advertise itself (NM08) until a client can give its records a time to live
+(MD19); the other thing it needed, spaces in a text record, was done on
+2026-10-12. Everything else in mDNS is independent of the MIDI work, and
+the reverse.
 
 **The decisions** are due. D1, D2 and D4 are needed by one item, the
 driver (AM08), and everything that item waited for in our own work is done. The two in mDNS each hold a
@@ -212,7 +214,7 @@ their own backlog, not from this graph.
 | Network MIDI 2.0 | NM12, NM13, NM17, NM18, NM19 |
 | CAMD | B16, B22 |
 | BLE MIDI | L13, L01, L06, T04, T06, L05, W03, W05, W06, L09, L04, L07 |
-| mDNS | MD19, MD20, MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
+| mDNS | MD20, MD21, MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
 
 None of these is a P0 in its own list: the defects in code as it is that
 stood free have been closed.
@@ -237,8 +239,8 @@ stood free have been closed.
 
 7. **BLE MIDI**: T01 the day the hardware is at hand. W01 and L08 were done
    on 2026-10-12.
-8. **mDNS**: MD02 before step 6 reaches discovery; the rest of its P1 and P2
-   whenever the transports are waiting on something.
+8. **mDNS**: MD19 before Network MIDI 2.0's discovery; the rest of its P1
+   and P2 whenever the transports are waiting on something.
 
 CAMD's B16 and B22 fit anywhere. B29 to B32 wait for the maintainer; opening
 the issue with the sketch of the driver-side block, which was promised in

@@ -219,26 +219,21 @@ service_append(struct MDNSEngineToken *tok,
      * The client's text is "key=value" pairs separated by spaces; DNS-SD
      * wants each pair as a string of its own (RFC 6763 section 6). An
      * instance always has a TXT record: one empty string when it has nothing
-     * to say. A value cannot contain a space.
+     * to say. A space inside a pair is written with a backslash before it:
+     * see mdnsTxtNext().
      */
     txtlen = 0;
-    for (txtsl = 0; rs->rs_TXT[txtsl] != '\0'; ) {
-        LONG start, len;
+    txtsl = 0;
+    for (;;) {
+        UBYTE item[255];
+        LONG len = mdnsTxtNext(rs->rs_TXT, &txtsl, item, (LONG)sizeof(item));
 
-        while (rs->rs_TXT[txtsl] == ' ') {
-            txtsl++;
-        }
-        start = txtsl;
-        while (rs->rs_TXT[txtsl] != '\0' && rs->rs_TXT[txtsl] != ' ') {
-            txtsl++;
-        }
-        len = txtsl - start;
-        if (len > 255) {
-            len = 255;
+        if (len < 0) {
+            break;
         }
         if (len > 0 && txtlen + 1 + len <= (LONG)sizeof(txtdata)) {
             txtdata[txtlen++] = (UBYTE)len;
-            memcpy(txtdata + txtlen, rs->rs_TXT + start, (size_t)len);
+            memcpy(txtdata + txtlen, item, (size_t)len);
             txtlen += len;
         }
     }

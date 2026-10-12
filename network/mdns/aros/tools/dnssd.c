@@ -353,12 +353,27 @@ DSRegister(CONST_STRPTR name, CONST_STRPTR type, CONST_STRPTR domain,
             domain);
     }
 
+    /* Each argument is one item of the text. The library takes them as
+     * one string with spaces between, so a space or a backslash that is
+     * part of an item gets a backslash before it. */
     txt[0] = '\0';
-    for (i = 0; i < txtArgc; i++) {
-        if (i > 0) {
-            BAStrAppend(txt, " ", (LONG)sizeof(txt));
+    {
+        LONG out = 0;
+
+        for (i = 0; i < txtArgc; i++) {
+            const char *arg = txtArgv[i];
+
+            if (i > 0 && out + 1 < (LONG)sizeof(txt)) {
+                txt[out++] = ' ';
+            }
+            for (; *arg != '\0' && out + 2 < (LONG)sizeof(txt); arg++) {
+                if (*arg == ' ' || *arg == '\\') {
+                    txt[out++] = '\\';
+                }
+                txt[out++] = *arg;
+            }
         }
-        BAStrAppend(txt, txtArgv[i], (LONG)sizeof(txt));
+        txt[out] = '\0';
     }
 
     ref = NULL;
