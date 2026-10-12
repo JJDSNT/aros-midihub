@@ -12,8 +12,12 @@
 # avahi-daemon and avahi-utils, and the network once to fetch the package.
 #
 # The host invites AROS and sends a Note On, a Note Off, a Control Change
-# and a SysEx message; a CAMD program on AROS has to print the four, and
-# the host's Avahi has to see the session advertised. The service is then
+# and a SysEx message; a CAMD program on AROS, listening on the port
+# applemidi.in.0 of the driver DEVS:Midi/applemidi, has to print the four.
+# A second plays a scale and a SysEx message into applemidi.out.0, which
+# the host has to show. The service is no client of camd.library: the
+# driver's adapters are its only way to CAMD. The host's Avahi has to see
+# the session advertised. The service is then
 # told to stop, and has to be gone.
 # Exit status: 0 when all of it passed.
 set -eu
@@ -27,6 +31,7 @@ c=SYS:Extras/aros-midihub/C
 
 test -x "$aros/boot/linux/AROSBootstrap"
 test -f "$aros/System/Network/Services/applemidid"
+test -f "$aros/Devs/Midi/applemidi"
 test -f "$aros/System/Network/AROSTCP/db/services.d/applemidi"
 test -f "$aros/Extras/aros-midihub/C/MIDIHubCAMDProbe"
 
@@ -82,8 +87,10 @@ boot() {
 }
 
 status=0
-prepare "Run >SYS:camd.log $c/MIDIHubCAMDProbe --monitor \"MIDIHub In\" 30
-Wait 34
+prepare "Run >SYS:camd.log $c/MIDIHubCAMDProbe --monitor applemidi.in.0 40
+Wait 20
+$c/MIDIHubCAMDProbe >SYS:camd-send.log --send applemidi.out.0
+Wait 22
 Status >SYS:status-before.log
 Break \`Status COMMAND=applemidi\` C
 Wait 3
@@ -95,11 +102,11 @@ Status >SYS:status-after.log"
     done
     sleep 14
     timeout 6 avahi-browse -rpt _apple-midi._udp > "$work/browse.log" 2>&1 &
-    timeout 14 node "$peer" 5114 192.168.166.2 5004 > "$work/peer.log" 2>&1
+    timeout 30 node "$peer" 5114 192.168.166.2 5004 > "$work/peer.log" 2>&1
 ) &
-boot 110 service
+boot 130 service
 wait || true
-cp "$sys/applemidid.log" "$sys/camd.log" "$sys/status-before.log" \
+cp "$sys/applemidid.log" "$sys/camd.log" "$sys/camd-send.log" "$sys/status-before.log" \
     "$sys/status-after.log" "$work/" 2> /dev/null || true
 
 if grep -q 'session connected' "$work/applemidid.log" 2> /dev/null &&
@@ -108,9 +115,18 @@ if grep -q 'session connected' "$work/applemidid.log" 2> /dev/null &&
    grep -q '^CAMDProbe: b0 07 64$' "$work/camd.log" &&
    grep -q '^CAMDProbe: SysEx 6 bytes: f0 7d 01 02 03 f7' "$work/camd.log" &&
    grep -q '^control receiver_feedback$' "$work/peer.log"; then
-    echo "ok: the stack started the service; node-rtpmidi invited it and a CAMD program received its Note On, Note Off, Control Change and SysEx"
+    echo "ok: the stack started the service; node-rtpmidi invited it and a CAMD program on the driver's port applemidi.in.0 received its Note On, Note Off, Control Change and SysEx"
 else
-    echo "FAIL: the service started by the stack"
+    echo "FAIL: the service started by the stack, towards CAMD"
+    status=1
+fi
+# the scale's first and last notes, and the SysEx
+if grep -q '^message 903c64$' "$work/peer.log" 2> /dev/null &&
+   grep -q '^message 804800$' "$work/peer.log" &&
+   grep -q '^message f07e7f0601f7$' "$work/peer.log"; then
+    echo "ok: a scale and a SysEx a CAMD program sent to applemidi.out.0 reached node-rtpmidi"
+else
+    echo "FAIL: from the driver's port to the network"
     status=1
 fi
 if grep -q '^=;aroshost;IPv4;.*;_apple-midi._udp;.*;192.168.166.2;5004;' "$work/browse.log" 2> /dev/null; then

@@ -104,9 +104,24 @@ Nothing open.
    same ports. It still reaches CAMD as a client, prints under the name
    `MIDIHub`, and reads `ENV:MidiHub/Network`: all three go with the next
    cuts and with AM16.
-2. *The stub and its link.* A `DEVS:Midi` driver with a fixed pool of
-   ports and no network code, and the adapters through which the service
-   takes and gives bytes, as `btmidi`'s driver and class do.
+2. *The stub and its link.* Done on 2026-10-12, in the shape the project
+   owner chose that day: the driver owns the adapters. `DEVS:Midi/applemidi`
+   (`ports/aros/applemidi/applemididriver.c`) has sixteen ports and no
+   network code; at `Init()` it makes an adapter for each and puts them on
+   the public semaphore list as `applemidi.driver`. The service
+   (`ports/aros/midihub/adapters.c`) finds them there, now or whenever the
+   driver appears, attaches only to the layout it was built with
+   (`APPLEMIDI_ADAPTERS_VERSION`), takes what CAMD clients sent from a
+   port's ring and hands CAMD what arrived, under the lock the driver
+   closes the port with. It no longer opens `camd.library`. What is sent
+   to a port while no service runs is dropped. The driver is installed by
+   the build, not written to disk by a program as `btmidi`'s is. Same
+   test, on the driver's ports: `applemidi.in.0` receives what the host
+   sent and `applemidi.out.0` reaches the host. Every session shares port
+   0. Read and not run: a driver of another layout, the service stopping
+   while CAMD holds a port open with bytes waiting, and CAMD expunging
+   the driver under a running service (the adapters are then left where
+   they are, off the list). Not built or run for m68k.
 3. *Peers to ports.* The rule of D2, and the tests moved from the
    clusters `MIDIHub In` and `MIDIHub Out` to the driver's ports.
 

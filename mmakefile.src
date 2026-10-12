@@ -188,20 +188,28 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
 
 # The same runtime as a service of the AROSTCP service manager: started
 # with the stack, without a console or arguments.
+# It reaches CAMD through the driver below, not as a client of camd.library.
 #MM contrib-aros-midihub-applemidid : linklibs-arosmidihub \
 #MM      contrib-aros-midihub-bonami \
-#MM      contrib-aros-midihub-applemidid-svccfg
+#MM      contrib-aros-midihub-applemidid-svccfg \
+#MM      contrib-aros-midihub-applemidi-driver
 %build_prog mmake=contrib-aros-midihub-applemidid \
     progname=applemidid \
     files="$(MIDIHUB_ROOT)/ports/aros/midihub/main \
-           $(MIDIHUB_ROOT)/ports/aros/midihub/camd \
+           $(MIDIHUB_ROOT)/ports/aros/midihub/adapters \
            $(MIDIHUB_ROOT)/ports/aros/midihub/network \
-           $(MIDIHUB_ROOT)/ports/aros/midihub/discovery \
-           $(MIDIHUB_ROOT)/ports/aros/camd_bridge" \
+           $(MIDIHUB_ROOT)/ports/aros/midihub/discovery" \
     objdir=$(GENDIR)/$(CURDIR)/applemidid \
     cppflags="-DNETMIDI_SERVICE" \
     uselibs=arosmidihub \
     targetdir=$(AROS_SYSTEM)/Network/Services
+
+# The CAMD driver the service attaches to: ports and no network code.
+%build_prog mmake=contrib-aros-midihub-applemidi-driver \
+    progname=applemidi \
+    files="$(MIDIHUB_ROOT)/ports/aros/applemidi/applemididriver" \
+    objdir=$(GENDIR)/$(CURDIR)/applemidi-driver \
+    targetdir=$(AROS_DEVS)/Midi
 
 %copy_files_q mmake=contrib-aros-midihub-applemidid-svccfg \
     files="applemidi" src=$(MIDIHUB_ROOT)/ports/aros/midihub/services.d \

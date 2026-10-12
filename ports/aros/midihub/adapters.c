@@ -1,0 +1,232 @@
+/* The service's side of the CAMD driver DEVS:Midi/applemidi: the same
+ * calls as camd.c, which is a client of camd.library, answered through
+ * the driver's adapters instead. The driver may be loaded after the
+ * service starts, or not at all: until its adapters are found, what
+ * arrives from the network for CAMD is dropped.
+ *
+ * Every session shares port 0 for now; a port to a peer is the next step. */
+
+#include "camd.h"
+
+#include <proto/exec.h>
+#include <exec/memory.h>
+
+#include <string.h>
+
+#include "../applemidi/applemidi_camd.h"
+#include "rtpmidi/rtpmidi.h"
+
+#define SERVICE_PORT 0
+
+int netmidi_camd_open(struct netmidi_camd_runtime *runtime)
+{
+    if (!runtime)
+        return -1;
+    memset(runtime, 0, sizeof(*runtime));
+    runtime->signal_bit = AllocSignal(-1);
+    runtime->sysex = AllocMem(RTPMIDI_SYSEX_MAX, MEMF_ANY);
+    if (runtime->signal_bit < 0 || !runtime->sysex) {
+        netmidi_camd_close(runtime);
+        return -1;
+    }
+    runtime->opened = 1;
+    return 0;
+}
+
+static struct AppleMidiAdapter *port_of(struct netmidi_camd_runtime *runtime)
+{
+    struct AppleMidiAdapters *adapters = runtime->adapters;
+    return adapters ? &adapters->aa_Port[SERVICE_PORT] : NULL;
+}
+
+/* Looks for the driver's adapters and takes the port. */
+static void attach(struct netmidi_camd_runtime *runtime)
+{
+    struct AppleMidiAdapters *adapters;
+    struct AppleMidiAdapter *port;
+
+    Forbid();
+    adapters = (struct AppleMidiAdapters *)
+        FindSemaphore((STRPTR)APPLEMIDI_ADAPTERS_NAME);
+    /* a driver of another layout is left alone */
+    if (adapters && (adapters->aa_Version != APPLEMIDI_ADAPTERS_VERSION ||
+                     adapters->aa_Ports <= SERVICE_PORT))
+        adapters = NULL;
+    Permit();
+    if (!adapters)
+        return;
+    runtime->adapters = adapters;
+    port = port_of(runtime);
+    Disable();
+    port->ad_SigMask = 1UL << runtime->signal_bit;
+    port->ad_Task = FindTask(NULL);
+    Enable();
+    /* CAMD may have had the port open all along, with bytes waiting */
+    if (port->ad_IsOpen)
+        Cause(&port->ad_CAMDTXFunc);
+}
+
+void netmidi_camd_close(struct netmidi_camd_runtime *runtime)
+{
+    struct AppleMidiAdapter *port;
+
+    if (!runtime)
+        return;
+    port = port_of(runtime);
+    if (port) {
+        Disable();
+        port->ad_Task = NULL;
+        port->ad_SigMask = 0;
+        Enable();
+        /* the driver now drops what clients send */
+        if (port->ad_IsOpen)
+            Cause(&port->ad_CAMDTXFunc);
+        /* a delivery to CAMD has finished: there is one task of ours */
+        runtime->adapters = NULL;
+    }
+    if (runtime->signal_bit >= 0)
+        FreeSignal(runtime->signal_bit);
+    runtime->signal_bit = -1;
+    if (runtime->sysex)
+        FreeMem(runtime->sysex, RTPMIDI_SYSEX_MAX);
+    runtime->sysex = NULL;
+    runtime->opened = 0;
+}
+
+int netmidi_camd_is_open(const struct netmidi_camd_runtime *runtime)
+{
+    return runtime && runtime->opened;
+}
+
+int netmidi_camd_signal_bit(const struct netmidi_camd_runtime *runtime)
+{
+    if (!runtime || !runtime->opened)
+        return -1;
+    return runtime->signal_bit;
+}
+
+/* CAMD parses the bytes itself: running status, lengths and SysEx. */
+void netmidi_camd_deliver(struct netmidi_camd_runtime *runtime,
+                          const uint8_t *message, size_t length)
+{
+    struct AppleMidiAdapter *port;
+    size_t i;
+
+    if (!runtime || !runtime->opened)
+        return;
+    if (!runtime->adapters)
+        attach(runtime);
+    port = port_of(runtime);
+    if (!port)
+        return;
+    /* the driver closes the port under the same lock */
+    ObtainSemaphore(&port->ad_Lock);
+    if (port->ad_IsOpen)
+        for (i = 0; i < length; ++i)
+            AROS_UFC2NR(void, port->ad_RXFunc,
+                AROS_UFCA(UWORD, message[i], D0),
+                AROS_UFCA(APTR, port->ad_UserData, A2));
+    ReleaseSemaphore(&port->ad_Lock);
+}
+
+void netmidi_camd_deliver_sysex(struct netmidi_camd_runtime *runtime,
+                                const uint8_t *message, size_t length)
+{
+    netmidi_camd_deliver(runtime, message, length);
+}
+
+static unsigned data_bytes(uint8_t status)
+{
+    if (status < 0xf0)
+        return (status & 0xf0) == 0xc0 || (status & 0xf0) == 0xd0 ? 1 : 2;
+    if (status == 0xf1 || status == 0xf3)
+        return 1;
+    return status == 0xf2 ? 2 : 0;
+}
+
+/* One byte of the stream a CAMD client sent, by the rules of a MIDI 1.0
+ * byte stream (MIDI 1.0 Detailed Specification 4.2.1, pages 5, 6, 29 and
+ * 30): whole messages go to output. */
+static void take_byte(struct netmidi_camd_runtime *runtime, uint8_t byte,
+                      aros_camd_output output, void *context)
+{
+    if (byte >= 0xf8) {
+        /* System Real Time: anywhere, and no new status */
+        if (byte != 0xf9 && byte != 0xfd)
+            output(context, &byte, 1);
+        return;
+    }
+    if (runtime->in_sysex) {
+        if (!(byte & 0x80)) {
+            if (runtime->sysex_length < RTPMIDI_SYSEX_MAX - 1)
+                runtime->sysex[runtime->sysex_length++] = byte;
+            else
+                runtime->in_sysex = 2;      /* too long: left out whole */
+            return;
+        }
+        /* EOX, or any other status, ends it */
+        if (runtime->in_sysex == 1) {
+            runtime->sysex[runtime->sysex_length++] = 0xf7;
+            output(context, runtime->sysex, runtime->sysex_length);
+        }
+        runtime->in_sysex = 0;
+        if (byte == 0xf7)
+            return;
+    }
+    if (byte == 0xf0) {
+        runtime->in_sysex = 1;
+        runtime->sysex[0] = 0xf0;
+        runtime->sysex_length = 1;
+        runtime->status = 0;
+        return;
+    }
+    if (byte & 0x80) {
+        runtime->have = 0;
+        runtime->status = 0;
+        if (byte == 0xf7 || byte == 0xf4 || byte == 0xf5)
+            return;
+        runtime->need = (uint8_t)data_bytes(byte);
+        if (!runtime->need) {
+            output(context, &byte, 1);
+            return;
+        }
+        runtime->status = byte;
+        return;
+    }
+    if (!runtime->status)
+        return;                 /* data with no status before it */
+    runtime->message[0] = runtime->status;
+    runtime->message[1 + runtime->have++] = byte;
+    if (runtime->have < runtime->need)
+        return;
+    output(context, runtime->message, (size_t)runtime->need + 1);
+    runtime->have = 0;
+    if (runtime->status >= 0xf0)
+        runtime->status = 0;    /* running status is for channel messages */
+}
+
+void netmidi_camd_poll(struct netmidi_camd_runtime *runtime,
+                       aros_camd_output output, void *context)
+{
+    struct AppleMidiAdapter *port;
+    ULONG pos;
+
+    if (!runtime || !runtime->opened)
+        return;
+    if (!runtime->adapters)
+        attach(runtime);
+    port = port_of(runtime);
+    if (!port)
+        return;
+    pos = port->ad_TXReadPos;
+    while (pos != port->ad_TXWritePos) {
+        take_byte(runtime, port->ad_TXBuffer[pos], output, context);
+        pos = (pos + 1) & (port->ad_TXBufSize - 1);
+    }
+    port->ad_TXReadPos = pos;
+    if (port->ad_TXMore) {
+        /* the ring was full: there is room now */
+        port->ad_TXMore = FALSE;
+        Cause(&port->ad_CAMDTXFunc);
+    }
+}

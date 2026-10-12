@@ -9,6 +9,20 @@
 struct netmidi_camd_runtime {
     struct aros_camd_bridge bridge;
     int opened;
+#ifdef NETMIDI_SERVICE
+    /* The service reaches CAMD through the adapters of the driver
+       DEVS:Midi/applemidi (adapters.c), not as a client of camd.library. */
+    void *adapters;             /* struct AppleMidiAdapters, once found */
+    int signal_bit;
+    /* the bytes CAMD clients sent, gathered into messages */
+    uint8_t status;
+    uint8_t message[3];
+    uint8_t have;
+    uint8_t need;
+    int in_sysex;
+    uint8_t *sysex;
+    size_t sysex_length;
+#endif
 };
 
 int netmidi_camd_open(struct netmidi_camd_runtime *runtime);
