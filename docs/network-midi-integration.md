@@ -120,7 +120,8 @@ MIDI 2.0 Channel Voice message is 64. So, in two steps:
 
 ## Order
 
-1. Finish the RTP-MIDI work in progress.
+1. Finish the RTP-MIDI work in progress; what is owed is listed, with
+   priorities, in [the RTP-MIDI backlog](rtp-midi-backlog.md).
 2. Connect the portable multi-peer AppleMIDI manager to the AROS event loop
    and give each connected peer a port of a `DEVS:Midi` driver, as
    `btmidi.class` does since its upstream review; a CAMD node per peer is
