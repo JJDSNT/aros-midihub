@@ -25,6 +25,7 @@ struct netmidi_camd_runtime {
                                                each driver, once found */
     int signal_bit;
     int reported[NETMIDI_CAMD_DRIVERS];     /* told once of another layout */
+    void *status;               /* struct NetMidiStatus, made public */
     /* the bytes CAMD clients sent to each port, gathered into messages */
     struct {
         uint8_t status;
@@ -56,5 +57,23 @@ void netmidi_camd_deliver_sysex(struct netmidi_camd_runtime *runtime,
                                 const uint8_t *message, size_t length);
 void netmidi_camd_poll(struct netmidi_camd_runtime *runtime,
                        aros_camd_output output, void *context);
+
+/* What has passed on a port, for whoever asks the service (R18). The
+ * runtime counts; where there is a way to ask, netmidi_camd_publish makes
+ * the counts public. */
+struct netmidi_port_counts {
+    int present;
+    char name[64];
+    unsigned long packets_in, packets_out, packets_lost;
+    unsigned long messages_in, messages_out;
+    unsigned long timed, late, sysex_dropped, journals_omitted, undefined;
+};
+
+/* counts has one entry to a port, numbered through as the ports are.
+ * Where peers share one pair of clusters nothing is made public. */
+void netmidi_camd_publish(struct netmidi_camd_runtime *runtime,
+                          const char *session, unsigned long refused,
+                          const struct netmidi_port_counts *counts,
+                          int count);
 
 #endif

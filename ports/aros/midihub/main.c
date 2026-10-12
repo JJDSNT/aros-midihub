@@ -62,6 +62,8 @@ struct stream {
     struct runtime *rt;
     int port;                   /* the port its peer was given, or -1 */
     unsigned long sysex_dropped;    /* SysEx messages too long, or broken */
+    /* what has passed since the session began, for whoever asks (R18) */
+    struct netmidi_port_counts count;
 };
 
 struct runtime {
@@ -111,6 +113,9 @@ struct runtime {
     char midi2_wanted[64];
     uint64_t midi2_tried;
     uint64_t midi2_wait;
+    struct netmidi_port_counts midi2_count[NETMIDI2_SESSIONS_MAX];
+    uint64_t published;             /* when the counts were last told */
+    int chatty;                     /* a line of text to every packet */
     int browse_apple;               /* which of discovery's searches */
     int browse_midi2;
     unsigned long midi2_timed;
@@ -229,6 +234,7 @@ static void output_message(void *context, const uint8_t *bytes,
             printf("%02x", (unsigned int)bytes[i]);
         putchar('\n');
     }
+    ++stream->count.messages_in;
     if (stream->port >= 0)
         netmidi_camd_deliver_port(&rt->camd, stream->port, bytes, length);
 }
@@ -236,6 +242,7 @@ static void output_message(void *context, const uint8_t *bytes,
 static void output_sysex(void *context, const uint8_t *message, size_t length)
 {
     struct stream *stream = context;
+    ++stream->count.messages_in;
     if (stream->port >= 0)
         netmidi_camd_deliver_port(&stream->rt->camd, stream->port, message,
                                   length);
@@ -357,9 +364,11 @@ static int stream_due(struct runtime *rt, struct stream *stream, uint64_t now,
 {
     *due += rt->latency;
     ++stream->timed;
+    ++stream->count.timed;
     if (*due > now)
         return 1;
     ++stream->late;
+    ++stream->count.late;
     return 0;
 }
 
@@ -415,6 +424,7 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
         sequence_advance = (int16_t)(midi.sequence -
                                      previous_sequence);
         if (sequence_advance > 1) {
+            stream->count.packets_lost += (unsigned long)(sequence_advance - 1);
             printf(TAG "%u RTP packet(s) lost; journal %s\n",
                    (unsigned int)(sequence_advance - 1),
                    !midi.journal ? "unavailable" :
@@ -439,14 +449,17 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
     }
     if (!midi.midi_length)
         return; /* Guard packet: acknowledge its journal without MIDI output. */
-    printf(TAG "RTP-MIDI seq=%u timestamp=%lu length=%lu bytes=",
-           (unsigned int)midi.sequence, (unsigned long)midi.timestamp,
-           (unsigned long)midi.midi_length);
-    for (i = 0; i < midi.midi_length && i < 16; ++i)
-        printf("%02x", (unsigned int)midi.midi[i]);
-    if (i < midi.midi_length)
-        fputs("...", stdout);
-    putchar('\n');
+    ++stream->count.packets_in;
+    if (rt->chatty) {
+        printf(TAG "RTP-MIDI seq=%u timestamp=%lu length=%lu bytes=",
+               (unsigned int)midi.sequence, (unsigned long)midi.timestamp,
+               (unsigned long)midi.midi_length);
+        for (i = 0; i < midi.midi_length && i < 16; ++i)
+            printf("%02x", (unsigned int)midi.midi[i]);
+        if (i < midi.midi_length)
+            fputs("...", stdout);
+        putchar('\n');
+    }
     rtpmidi_reader_init(&reader, &midi);
     while ((action = rtpmidi_reader_next(&reader, &event)) == 1) {
         if (event.sysex) {
@@ -455,8 +468,9 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
                                           &sysex_message, &sysex_length);
             if (sysex_result == 1) {
                 uint64_t due;
-                printf(TAG "SysEx complete bytes=%lu\n",
-                       (unsigned long)sysex_length);
+                if (rt->chatty)
+                    printf(TAG "SysEx complete bytes=%lu\n",
+                           (unsigned long)sysex_length);
                 now = now_ticks();
                 if (stream->clock.synchronized &&
                     rtpmidi_clock_due(stream->sysex.timestamp, now,
@@ -473,6 +487,7 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
                                                sysex_message, sysex_length);
             } else if (sysex_result < 0) {
                 ++stream->sysex_dropped;
+                ++stream->count.sysex_dropped;
                 puts(TAG "SysEx segment discarded");
             }
         } else {
@@ -492,6 +507,7 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
                                      event.length);
         }
     }
+    stream->count.undefined += reader.undefined;
     if (action < 0)
         puts(TAG "unsupported or malformed MIDI command");
 }
@@ -620,6 +636,14 @@ static void receive_packet(struct runtime *rt, int data_port)
         }
         printf(TAG "session connected port=%d\n",
                rt->stream[index].port);
+        {
+            size_t n = packet.name_length;
+
+            if (n >= sizeof(rt->stream[index].count.name))
+                n = sizeof(rt->stream[index].count.name) - 1;
+            memcpy(rt->stream[index].count.name, packet.name, n);
+            rt->stream[index].count.name[n] = 0;
+        }
         applemidi_clock_init(&rt->stream[index].clock,
                              rt->stream[index].initiating, now);
         send_sync(rt, index, now);
@@ -690,16 +714,20 @@ static void midi2_to_camd(void *context, const uint8_t *bytes, size_t length)
     uint64_t due_us;
     size_t i;
 
-    printf(TAG "MIDI 2.0 bytes=");
-    for (i = 0; i < length && i < 16; ++i)
-        printf("%02x", (unsigned int)bytes[i]);
-    puts(i < length ? "..." : "");
+    ++rt->midi2_count[index].messages_in;
+    if (rt->chatty) {
+        printf(TAG "MIDI 2.0 bytes=");
+        for (i = 0; i < length && i < 16; ++i)
+            printf("%02x", (unsigned int)bytes[i]);
+        puts(i < length ? "..." : "");
+    }
     if (jr->have_timestamp &&
         ump_jr_clock_due(&rt->midi2_clock[index], jr->timestamp, &due_us)) {
         uint64_t now = now_ticks();
         uint64_t due = due_us / 100 + rt->latency;
 
         ++rt->midi2_timed;
+        ++rt->midi2_count[index].timed;
         if (due > now && due - now <= RTPMIDI_QUEUE_HORIZON &&
             (bytes[0] == 0xf0 ?
                  rtpmidi_queue_push_sysex(&rt->midi2_queue[index], due, bytes,
@@ -707,8 +735,10 @@ static void midi2_to_camd(void *context, const uint8_t *bytes, size_t length)
                  rtpmidi_queue_push(&rt->midi2_queue[index], due, bytes,
                                     length)) == 0)
             return;
-        if (due <= now)
+        if (due <= now) {
             ++rt->midi2_late;
+            ++rt->midi2_count[index].late;
+        }
     }
     midi2_deliver(rt, index, bytes, length);
 }
@@ -734,6 +764,7 @@ static void midi2_sink(void *context, int index, const uint32_t *words,
 {
     struct runtime *rt = context;
     size_t i = 0;
+    ++rt->midi2_count[index].packets_in;
     while (i < count) {
         unsigned n = ump_words(words[i]);
         if (i + n > count)
@@ -834,6 +865,14 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
                    rt->midi2_port[index] < 0 ? -1 :
                    rt->shared_port ? 0 :
                    rt->midi2_port[index] - NETMIDI_CAMD_MIDI2);
+            memset(&rt->midi2_count[index], 0, sizeof(rt->midi2_count[index]));
+            {
+                size_t n = strlen(session->peer_name);
+
+                if (n >= sizeof(rt->midi2_count[index].name))
+                    n = sizeof(rt->midi2_count[index].name) - 1;
+                memcpy(rt->midi2_count[index].name, session->peer_name, n);
+            }
             rt->midi2_known[index] = 1;
             rt->midi2_gaps[index] = session->gaps;
             rt->midi2_resets[index] = session->resets;
@@ -845,6 +884,8 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
         if (rt->midi2_known[index] &&
             (session->gaps != rt->midi2_gaps[index] ||
              session->resets != rt->midi2_resets[index])) {
+            rt->midi2_count[index].packets_lost +=
+                session->gaps - rt->midi2_gaps[index];
             puts(TAG "MIDI 2.0 data lost or session reset");
             rt->midi2_gaps[index] = session->gaps;
             rt->midi2_resets[index] = session->resets;
@@ -861,6 +902,7 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
 
 struct midi2_outgoing {
     struct runtime *rt;
+    unsigned long messages;     /* MIDI messages in what is gathered */
     int port;                   /* the port it was sent to; -1 for all */
     uint32_t words[NETMIDI2_MAX_UMP_WORDS];
     size_t count;
@@ -885,8 +927,11 @@ static void midi2_flush(struct midi2_outgoing *outgoing)
             continue;
         netmidi2_writer_init(&packet, out, sizeof(out));
         if (netmidi2_send_ump(session, outgoing->words, outgoing->count,
-                              (uint32_t)(now_ticks() / 10), &packet) == 0)
+                              (uint32_t)(now_ticks() / 10), &packet) == 0) {
             midi2_send(rt, session->peer, &packet);
+            ++rt->midi2_count[index].packets_out;
+            rt->midi2_count[index].messages_out += outgoing->messages;
+        }
     }
     outgoing->count = 0;
 }
@@ -914,6 +959,7 @@ static void midi2_send_midi(struct runtime *rt, int port,
     outgoing.rt = rt;
     outgoing.port = port;
     outgoing.count = 0;
+    outgoing.messages = 1;
     ump_from_midi1_init(&from, 0);
     for (i = 0; i < length; ++i)
         ump_from_midi1_byte(&from, message[i], midi2_collect, &outgoing);
@@ -947,6 +993,7 @@ static int send_midi_to(struct runtime *rt, int index, const uint8_t *message,
                                  &data) != 0)
             return -1;
         ++stream->sequence;
+        ++stream->count.packets_out;
         stream->last_rtp_send = now_ticks();
         return 0;
     }
@@ -959,6 +1006,7 @@ static int send_midi_to(struct runtime *rt, int index, const uint8_t *message,
                                  &data) != 0)
             return -1;
         ++stream->sequence;
+        ++stream->count.packets_out;
         stream->last_rtp_send = now_ticks();
         rtpmidi_sender_record_sysex(&stream->sender, first_sequence, timestamp,
                                     message, length);
@@ -984,6 +1032,7 @@ static int send_midi_to(struct runtime *rt, int index, const uint8_t *message,
                                  &data) != 0)
             return -1;
         ++stream->sequence;
+        ++stream->count.packets_out;
         stream->last_rtp_send = now_ticks();
         offset += chunk;
     }
@@ -1027,10 +1076,12 @@ static void flush_midi(struct runtime *rt)
                 continue;
             }
             done += taken;
+            stream->count.messages_out += taken;
             if (netmidi_network_send(&rt->network, 1, wire, wire_length,
                                      &data) != 0)
                 break;
             ++stream->sequence;
+        ++stream->count.packets_out;
             stream->last_rtp_send = now_ticks();
         }
     }
@@ -1084,8 +1135,10 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
                     APPLEMIDI_SESSION_CONNECTED &&
                 (rt->shared_port ||
                  rt->stream[index].port == rt->camd.port_now) &&
-                send_midi_to(rt, index, message, length) == 0)
+                send_midi_to(rt, index, message, length) == 0) {
+                ++rt->stream[index].count.messages_out;
                 result = 0;
+            }
     }
     if (rt->midi2_enabled &&
         (rt->shared_port || rt->camd.port_now >= NETMIDI_CAMD_MIDI2)) {
@@ -1116,6 +1169,7 @@ static void send_guard(struct runtime *rt, int index, uint64_t now)
     if (netmidi_network_send(&rt->network, 1, wire, wire_length,
                              &data) == 0) {
         ++stream->sequence;
+        ++stream->count.packets_out;
         stream->last_rtp_send = now;
     }
 }
@@ -1226,8 +1280,42 @@ static void periodic_peer(struct runtime *rt, int index, uint64_t now)
     }
 }
 
+/* Tells whoever asks what has passed on each port: about once a second. */
+static void publish_counts(struct runtime *rt, uint64_t now)
+{
+    static struct netmidi_port_counts counts[NETMIDI_CAMD_PORTS *
+                                             NETMIDI_CAMD_DRIVERS];
+    int index;
+
+    if (rt->shared_port || elapsed_ticks(now, rt->published) < 10000)
+        return;
+    rt->published = now;
+    memset(counts, 0, sizeof(counts));
+    for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index) {
+        struct stream *stream = &rt->stream[index];
+
+        if (!rt->peers.peer[index].used || stream->port < 0 ||
+            stream->port >= NETMIDI_CAMD_PORTS)
+            continue;
+        stream->count.journals_omitted = stream->sender.journals_omitted;
+        counts[stream->port] = stream->count;
+        counts[stream->port].present = 1;
+    }
+    for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index) {
+        int port = rt->midi2_port[index];
+
+        if (!rt->midi2_enabled || !rt->midi2_known[index] || port < 0)
+            continue;
+        counts[port] = rt->midi2_count[index];
+        counts[port].present = 1;
+    }
+    netmidi_camd_publish(&rt->camd, rt->session_name, rt->peers.refused,
+                         counts, NETMIDI_CAMD_PORTS * NETMIDI_CAMD_DRIVERS);
+}
+
 static void periodic(struct runtime *rt, uint64_t now)
 {
+    publish_counts(rt, now);
     int index;
 
     /* The system's mDNS service may come up after us, or again. */
@@ -1485,6 +1573,9 @@ static int run(int argc, char **argv)
     netmidi_network_init(&rt.network);
     rt.latency = (uint32_t)latency_ms * 10;
     rt.trace = trace;
+#ifndef NETMIDI_SERVICE
+    rt.chatty = 1;      /* the program the host tests read */
+#endif
     netmidi_discovery_init(&rt.discovery);
     rt.configured = *peer_ip != 0;
     rt.probe_note = remaining == 4 &&

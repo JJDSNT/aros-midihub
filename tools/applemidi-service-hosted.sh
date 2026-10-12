@@ -93,7 +93,9 @@ prepare "Run >SYS:camd-0.log $c/MIDIHubCAMDProbe --monitor applemidi.in.0 40
 Run >SYS:camd-3.log $c/MIDIHubCAMDProbe --monitor applemidi.in.3 40
 Wait 20
 $c/MIDIHubCAMDProbe >SYS:camd-send.log --send applemidi.out.3
-Wait 22
+Wait 4
+NetMIDIStatus >SYS:counts.log
+Wait 18
 Status >SYS:status-before.log
 Break \`Status COMMAND=netmidi\` C
 Wait 3
@@ -114,7 +116,7 @@ printf 'applemidi.port.3 = Kept peer\n' > "$sys/Prefs/Env-Archive/NetMIDI"
 ) &
 boot 130 service
 wait || true
-cp "$sys/netmidid.log" "$sys/camd-0.log" "$sys/camd-3.log" "$sys/camd-send.log" \
+cp "$sys/netmidid.log" "$sys/camd-0.log" "$sys/camd-3.log" "$sys/camd-send.log" "$sys/counts.log" \
     "$sys/status-before.log" "$sys/status-after.log" "$work/" 2> /dev/null || true
 
 # the four messages, once: each port has one peer's and not the other's
@@ -141,6 +143,16 @@ if grep -q '^message 903c64$' "$work/peer-kept.log" 2> /dev/null &&
     echo "ok: a scale and a SysEx a CAMD program sent to applemidi.out.3 reached that port's peer and not the other"
 else
     echo "FAIL: from the driver's port to the network"
+    status=1
+fi
+# What the service counted, asked of it by a command: the four messages
+# of each peer in one packet, and to the peer of port 3 the scale of
+# sixteen notes and the SysEx message that were played to it.
+if grep -q '^applemidi\.0 "Node peer": in 4 messages in 1 packets, 0 lost; out 0 messages' "$work/counts.log" 2> /dev/null &&
+   grep -q '^applemidi\.3 "Kept peer": in 4 messages in 1 packets, 0 lost; out 17 messages' "$work/counts.log"; then
+    echo "ok: NetMIDIStatus prints, for each port, its peer's name and what was counted: four messages in, and seventeen out on the port played to"
+else
+    echo "FAIL: the service's counts: $(cat "$work/counts.log" 2> /dev/null | head -3)"
     status=1
 fi
 if grep -q '^=;aroshost;IPv4;.*;_apple-midi._udp;.*;192.168.166.2;5004;' "$work/browse.log" 2> /dev/null; then

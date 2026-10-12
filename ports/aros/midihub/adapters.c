@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "../netmidi/netmidi_camd.h"
+#include "../netmidi/netmidi_status.h"
 #include "rtpmidi/rtpmidi.h"
 
 int netmidi_camd_open(struct netmidi_camd_runtime *runtime)
@@ -30,8 +31,69 @@ int netmidi_camd_open(struct netmidi_camd_runtime *runtime)
         netmidi_camd_close(runtime);
         return -1;
     }
+    /* what we say about ourselves, for whoever asks */
+    {
+        static char status_name[] = NETMIDI_STATUS_NAME;
+        struct NetMidiStatus *status =
+            AllocMem(sizeof(*status), MEMF_PUBLIC | MEMF_CLEAR);
+
+        if (status) {
+            status->ns_Version = NETMIDI_STATUS_VERSION;
+            InitSemaphore(&status->ns_Semaphore);
+            status->ns_Semaphore.ss_Link.ln_Name = status_name;
+            Forbid();
+            /* one service: a second's is not made public */
+            if (FindSemaphore((STRPTR)NETMIDI_STATUS_NAME)) {
+                Permit();
+                FreeMem(status, sizeof(*status));
+            } else {
+                AddSemaphore(&status->ns_Semaphore);
+                Permit();
+                runtime->status = status;
+            }
+        }
+    }
     runtime->opened = 1;
     return 0;
+}
+
+void netmidi_camd_publish(struct netmidi_camd_runtime *runtime,
+                          const char *session, unsigned long refused,
+                          const struct netmidi_port_counts *counts,
+                          int count)
+{
+    struct NetMidiStatus *status = runtime ? runtime->status : NULL;
+    int port;
+    size_t i;
+
+    if (!status)
+        return;
+    ObtainSemaphore(&status->ns_Semaphore);
+    for (i = 0; i + 1 < sizeof(status->ns_Session) && session && session[i];
+         ++i)
+        status->ns_Session[i] = session[i];
+    status->ns_Session[i] = 0;
+    status->ns_Refused = refused;
+    for (port = 0; port < NETMIDI_STATUS_PORTS; ++port) {
+        struct NetMidiPortStatus *to = &status->ns_Port[port];
+
+        memset(to, 0, sizeof(*to));
+        if (port >= count || !counts[port].present)
+            continue;
+        to->ps_Present = 1;
+        memcpy(to->ps_Name, counts[port].name, sizeof(to->ps_Name) - 1);
+        to->ps_PacketsIn = counts[port].packets_in;
+        to->ps_PacketsOut = counts[port].packets_out;
+        to->ps_PacketsLost = counts[port].packets_lost;
+        to->ps_MessagesIn = counts[port].messages_in;
+        to->ps_MessagesOut = counts[port].messages_out;
+        to->ps_Timed = counts[port].timed;
+        to->ps_Late = counts[port].late;
+        to->ps_SysExDropped = counts[port].sysex_dropped;
+        to->ps_JournalsOmitted = counts[port].journals_omitted;
+        to->ps_Undefined = counts[port].undefined;
+    }
+    ReleaseSemaphore(&status->ns_Semaphore);
 }
 
 static const char *const driver_name[NETMIDI_CAMD_DRIVERS] = {
@@ -151,6 +213,19 @@ void netmidi_camd_close(struct netmidi_camd_runtime *runtime)
     }
     /* a delivery to CAMD has finished: there is one task of ours */
     memset(runtime->adapters, 0, sizeof(runtime->adapters));
+    if (runtime->status) {
+        struct NetMidiStatus *status = runtime->status;
+
+        /* off the list, so nobody new finds it; then wait for whoever
+           is reading it */
+        Forbid();
+        RemSemaphore(&status->ns_Semaphore);
+        Permit();
+        ObtainSemaphore(&status->ns_Semaphore);
+        ReleaseSemaphore(&status->ns_Semaphore);
+        FreeMem(status, sizeof(*status));
+        runtime->status = NULL;
+    }
     if (runtime->signal_bit >= 0)
         FreeSignal(runtime->signal_bit);
     runtime->signal_bit = -1;

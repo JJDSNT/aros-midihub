@@ -72,3 +72,15 @@ int netmidi_camd_ports(const struct netmidi_camd_runtime *runtime)
     (void)runtime;
     return 1;
 }
+
+void netmidi_camd_publish(struct netmidi_camd_runtime *runtime,
+                          const char *session, unsigned long refused,
+                          const struct netmidi_port_counts *counts,
+                          int count)
+{
+    (void)runtime;
+    (void)session;
+    (void)refused;
+    (void)counts;
+    (void)count;
+}
