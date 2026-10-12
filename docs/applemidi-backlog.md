@@ -150,6 +150,14 @@ The service has no command line and begins its reports with its own name,
 item asked for. That the reports are lines of text and not counters is
 RTP-MIDI backlog R18.
 
+**Two small ones, on 2026-10-12.** AM17: a peer's name too long for where
+it is kept is cut between characters (`applemidi_name_fit()`), not inside
+a UTF-8 character; our own name is still refused over 63 bytes, which the
+configuration does not allow anyway. AM18: an AppleMIDI packet with a
+command we have no use for is counted and left, not tried as RTP.
+`apple_names` in `tests/protocol.c` has both. The count is in the runtime
+and nobody reads it yet.
+
 **AM08 is done by its own measure**: a CAMD program opens a driver's port
 and plays to a peer. What it leaves is AM25 to AM27 below and AM16.
 The time a message was meant for does not cross the driver (decision D4):
@@ -165,8 +173,6 @@ carries the time the service took it from the port's ring.
 | AM16 | Configuration is one text file, `ENV:NetMIDI`, with one AppleMIDI peer to invite and one Network MIDI 2.0 Host. Done on 2026-10-12: every setting the runtime has is in it (ports kept for peers, a peer wanted by name, latency, who may connect, the Network MIDI 2.0 port and Host); a session nobody named is called as the machine is (`netmidi_network_hostname()`), so two machines differ; and a change to the file is taken without anyone restarting the service: it looks at the file every two seconds and, when it has changed, ends its sessions with a goodbye and begins anew under what the file says. `run_config_change_case` in `tests/network_loopback.py`; on hosted AROS, a name written to `ENV:NetMIDI` replaces the advertised session (`tools/applemidi-discovery-hosted.sh`). Left: every change costs every session, also one that concerns none of them (the latency, a port kept for a peer not there); several peers to invite; and the window of Preferences has no fields for what is new (AM27). | A change taken setting by setting; a list of peers to invite. | Changing the latency drops no session. |
 | AM27 | Preferences and the router follow the drivers in what could be done without running a window, since 2026-10-12: `MIDIHub.prefs` reads and writes the service's `ENV:NetMIDI` (taking what an older version saved in `ENV:MidiHub/Network` where there is none), through `netmidi_config_save()`, which writes every setting, also those the window does not show; a cluster named `applemidi.*`, `networkmidi2.*` or `btmidi.*` is listed under its transport; and routes saved with `MIDIHub In`, `MIDIHub Out`, `BLE MIDI In` or `BLE MIDI Out` are read as the first port of the driver that took their place (`mh_routes_migrate()`), by Preferences and by the router. `config_round_trip` in `tests/protocol.c` and `tests/routes.c`. **None of it was seen in the window**: Preferences is a MUI program and was built, not run. The window has no fields for a wanted peer's name, latency, who may connect, the Network MIDI 2.0 port or the ports kept for peers; and a change saved reaches the service only when it starts again. | Run it; the missing fields; a way to have the service take a change (AM16). | A route made in Preferences reaches a network peer, seen on a screen. |
 | AM25 | A CAMD client sees `applemidi.in.3`, not the peer's name, and every port is there whether a peer is or not. A SysEx message from a second port while one is being gathered from a first is left out. | Names and presence wait for the driver-side block in CAMD (its backlog, B30 and B31); a buffer per port for SysEx. | — |
-| AM17 | A peer's name is cut at 63 bytes wherever that falls, which can split a UTF-8 character; our own name is refused over 63. | Cut at a character boundary. | A host test with a name of multi-byte characters. |
-| AM18 | A packet with a command we do not know (Apple's bit-rate limit, `RL`, is one) fails to decode and is then tried as RTP, which also fails. Nothing is lost, and nothing is counted. | Recognise the command as known and ignored. | A host test; a counter. |
 | AM19 | The decoders are tested with packets we wrote. | A fuzz target for `applemidi_decode()` and for the session and peer state machines fed with arbitrary packet sequences, under the sanitizers; captures from AM06 added to the tests. | An hour without a finding; at least one capture per peer. |
 
 ## P3 — polish

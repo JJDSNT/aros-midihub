@@ -906,6 +906,45 @@ def run_config_change_case(binary):
     assert output.count("listening on UDP") == 2, output
 
 
+def run_uncovered_gap_case(binary):
+    """Packets are lost and the next one has no journal: the notes the
+    peer had on are ended, and nothing else is touched."""
+    port = free_port_pair()
+    log = tempfile.TemporaryFile(mode="w+b")
+    process = subprocess.Popen([binary, "--trace", str(port)],
+                               stdout=log, stderr=subprocess.STDOUT)
+    peer = ScriptedPeer(port, 2, 0x77777777, 0xABAB0007, b"Lossy")
+    try:
+        peer.connect()
+        # two notes on, a controller; then three packets never arrive
+        assert peer.send(10, b"\x03\x90\x3c\x64") == 10
+        assert peer.send(11, b"\x03\x91\x40\x50") == 11
+        assert peer.send(12, b"\x03\xb0\x07\x33") == 12
+        assert peer.send(16, b"\x03\x90\x43\x64") == 16
+        time.sleep(0.3)
+    finally:
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        peer.close()
+        log.seek(0)
+        output = log.read().decode("utf-8", "replace")
+        log.close()
+    delivered = [line.split("bytes=")[1] for line in output.splitlines()
+                 if "delivered at=" in line]
+    assert "3 RTP packet(s) lost; journal unavailable" in output, output
+    # the two notes ended, before the note the packet itself carries
+    gap = delivered.index("904364")
+    assert delivered[:3] == ["903c64", "914050", "b00733"], delivered
+    assert sorted(delivered[3:gap]) == ["803c00", "814000"], delivered
+    # and the controller was not reset
+    assert not any(d.startswith("b079") or d.startswith("b07b")
+                   for d in delivered[:gap]), delivered
+
+
 def run_latency_cases(binary):
     # With no latency every note is already late when it comes, and is
     # played as it arrives: the spacing is the network's.
@@ -931,6 +970,7 @@ def main():
     run_two_peers_case(binary)
     run_latency_cases(binary)
     run_config_change_case(binary)
+    run_uncovered_gap_case(binary)
     with tempfile.TemporaryDirectory() as directory:
         bad_config = Path(directory) / "invalid.conf"
         bad_config.write_text("local_port=65535\n")

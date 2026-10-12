@@ -120,6 +120,7 @@ struct runtime {
     struct netmidi_port_counts midi2_count[NETMIDI2_SESSIONS_MAX];
     uint64_t published;             /* when the counts were last told */
     int chatty;                     /* a line of text to every packet */
+    unsigned long unknown_commands; /* AppleMIDI commands not used */
     char product_id[PRODUCT_ID_MAX + 1];
     int browse_apple;               /* which of discovery's searches */
     int browse_midi2;
@@ -460,6 +461,16 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
                             system_decoded > 0 ? &system_state : NULL,
                             sequence_advance == 2, midi.timestamp, &clock);
     }
+    else if (sequence_advance > 1) {
+        /* Packets are gone and no journal says what was in them: among
+           them may be the end of a note that is sounding, and it would
+           sound for ever. The notes this peer has on are ended. Its
+           controllers are left as they are: nothing is known to be wrong
+           with them, and peers that send no journal lose a packet now and
+           then. */
+        puts(TAG "ending the notes this peer left on");
+        rtpmidi_receiver_release_notes(&stream->receiver);
+    }
     if (!midi.midi_length)
         return; /* Guard packet: acknowledge its journal without MIDI output. */
     ++stream->count.packets_in;
@@ -538,6 +549,7 @@ static void receive_packet(struct runtime *rt, int data_port)
     enum applemidi_peer_event event;
     uint32_t address;
     uint16_t port;
+    int decoded;
     unsigned int collisions;
     unsigned int completed;
     int response_port;
@@ -553,7 +565,14 @@ static void receive_packet(struct runtime *rt, int data_port)
     if (port == 65535 || (data_port && port == 0))
         return;
     now = now_ticks();
-    if (applemidi_decode(bytes, (size_t)count, &packet) != 0) {
+    decoded = applemidi_decode(bytes, (size_t)count, &packet);
+    if (decoded == APPLEMIDI_UNKNOWN_COMMAND) {
+        /* AppleMIDI, and a command we have no use for (the bit-rate
+           limit, RL, is one): not RTP, and not an error */
+        ++rt->unknown_commands;
+        return;
+    }
+    if (decoded != 0) {
         index = data_port ?
                 applemidi_peers_find_data(&rt->peers, address, port) : -1;
         if (index >= 0) {
@@ -650,10 +669,10 @@ static void receive_packet(struct runtime *rt, int data_port)
         printf(TAG "session connected port=%d\n",
                rt->stream[index].port);
         {
-            size_t n = packet.name_length;
+            size_t n = applemidi_name_fit(
+                packet.name, packet.name_length,
+                sizeof(rt->stream[index].count.name) - 1);
 
-            if (n >= sizeof(rt->stream[index].count.name))
-                n = sizeof(rt->stream[index].count.name) - 1;
             memcpy(rt->stream[index].count.name, packet.name, n);
             rt->stream[index].count.name[n] = 0;
         }
@@ -883,10 +902,11 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
                    rt->midi2_port[index] - NETMIDI_CAMD_MIDI2);
             memset(&rt->midi2_count[index], 0, sizeof(rt->midi2_count[index]));
             {
-                size_t n = strlen(session->peer_name);
+                size_t n = applemidi_name_fit(
+                    (const uint8_t *)session->peer_name,
+                    strlen(session->peer_name),
+                    sizeof(rt->midi2_count[index].name) - 1);
 
-                if (n >= sizeof(rt->midi2_count[index].name))
-                    n = sizeof(rt->midi2_count[index].name) - 1;
                 memcpy(rt->midi2_count[index].name, session->peer_name, n);
             }
             rt->midi2_known[index] = 1;

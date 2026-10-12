@@ -56,6 +56,7 @@ commit and the test that shows it.
 | R14 | A SysEx message of up to 32 KiB is taken in either direction (`RTPMIDI_SYSEX_MAX`, which was 4096: less than a DX7's voice bank of 4104 bytes). What is too long or broken is counted per session and reported when it ends. `sysex_dump` in `tests/protocol.c` gathers 16 KiB from seventeen segments and refuses one past the limit, taking the next; in `tests/network_loopback.py` one instance of the program sends another a dump of 16384 bytes, which arrives whole. The limit is a constant, not a setting; a session is lent a buffer of it while it has a peer (R22). Not run: a dump through CAMD on AROS in either direction, and against another implementation. The Network MIDI 2.0 path has the same limit for what it gathers from SysEx7 packets. |
 | R20 | The `P` flag needs nothing done, and the code says why. RFC 6295 section 3.2: it tells that the first channel command's status was not in the sender's own source stream, which had it by running status; the list has the status regardless ("the P bit describes the MIDI source data stream, not the MIDI list encoding"). A receiver that hands on whole messages has no use for it, and we send it clear because what we send reached us as whole messages. Closed by reading, on 2026-10-12. |
 | R30 | The journal's state treats a parameter number with only its MSB sent as no parameter until the LSB comes, and that is right. RFC 6295 appendix A.4 calls such a number pending, carries it in chapter M's PENDING field, and begins a transaction only at the LSB; MIDI 1.0's rule that a receiver take either half alone is for an instrument, not for the journal. Closed by reading, on 2026-10-12; the code cites it. |
+| R25 | After a loss that no journal covers, the notes the peer has on are ended: the end of one may have been in what was lost, and it would sound for ever. Its controllers are left as they are, where the item had asked for the resets of a session's end too: nothing is known to be wrong with them, and a peer that sends no journal, as node-rtpmidi and Bouchez's class do, loses a packet now and then. `run_uncovered_gap_case` in `tests/network_loopback.py`: two notes on, three packets lost, and both notes are ended before the next packet's own note, the controller untouched. |
 
 Found while doing it: `tests/network_loopback.py` failed about once in forty
 runs, before the change as after, because a journal-only guard packet could
@@ -88,7 +89,6 @@ Nothing open.
 |---|---|---|
 | R23 | The sender always writes the default form of chapter C; the enhanced form is only decoded. | Nothing unless a peer needs it; note which peers send it (AM06). |
 | R24 | Chapter X keeps four logs of 512 bytes; "other extended Chapter X history" in the README is not specified further. | Say exactly which tools of chapter X are and are not written, then decide. |
-| R25 | The receiver recovers at most what the journal's checkpoint covers and reports the rest as lost, without telling CAMD. | After an uncovered gap, release the notes and send the usual resets, as at the end of a session. |
 
 ## The way upstream
 

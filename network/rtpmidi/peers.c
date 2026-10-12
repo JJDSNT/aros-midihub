@@ -96,8 +96,7 @@ static void remember_name(struct applemidi_peer *peer, const struct applemidi_pa
     size_t length = in->name_length;
     if (!in->name || !length)
         return;
-    if (length > APPLEMIDI_PEER_NAME_MAX)
-        length = APPLEMIDI_PEER_NAME_MAX;
+    length = applemidi_name_fit(in->name, length, APPLEMIDI_PEER_NAME_MAX);
     memcpy(peer->name, in->name, length);
     peer->name[length] = 0;
 }

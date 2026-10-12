@@ -262,6 +262,46 @@ static void sysex_dump(void)
                               &message_length) == 1 && message_length == 3);
 }
 
+/* AM17: a name too long is cut between characters, not inside one. */
+static void apple_names(void)
+{
+    /* "Bj" + o-diaeresis (2 bytes) + "rk " + a euro sign (3) + " " + a
+       four-byte emoji: 2 + 2 + 3 + 3 + 1 + 4 = 15 bytes */
+    static const uint8_t name[] = {
+        'B', 'j', 0xc3, 0xb6, 'r', 'k', ' ', 0xe2, 0x82, 0xac, ' ',
+        0xf0, 0x9f, 0x8e, 0xb9
+    };
+    static const uint8_t noise[] = {'a', 0x80, 0x80, 0x80, 0x80, 0x80, 'b'};
+
+    assert(applemidi_name_fit(name, sizeof(name), 15) == 15);
+    assert(applemidi_name_fit(name, sizeof(name), 63) == 15);
+    assert(applemidi_name_fit(name, sizeof(name), 3) == 2);    /* not half an o */
+    assert(applemidi_name_fit(name, sizeof(name), 4) == 4);
+    assert(applemidi_name_fit(name, sizeof(name), 8) == 7);    /* nor of a euro */
+    assert(applemidi_name_fit(name, sizeof(name), 9) == 7);
+    assert(applemidi_name_fit(name, sizeof(name), 10) == 10);
+    assert(applemidi_name_fit(name, sizeof(name), 12) == 11);
+    assert(applemidi_name_fit(name, sizeof(name), 14) == 11);
+    assert(applemidi_name_fit(name, sizeof(name), 0) == 0);
+    /* bytes that are no UTF-8: cut where the limit falls */
+    assert(applemidi_name_fit(noise, sizeof(noise), 5) == 5);
+
+    /* AM18: a command we have no use for, such as Apple's bit-rate limit,
+       is told apart from what is not AppleMIDI at all */
+    {
+        static const uint8_t limit[] = {0xff, 0xff, 'R', 'L', 0, 0, 0, 1,
+                                        0, 0, 0x10, 0};
+        static const uint8_t rtp[] = {0x80, 0x61, 0, 1, 0, 0, 0, 0,
+                                      0, 0, 0, 1, 0};
+        struct applemidi_packet packet;
+
+        assert(applemidi_decode(limit, sizeof(limit), &packet) ==
+               APPLEMIDI_UNKNOWN_COMMAND);
+        assert(applemidi_decode(rtp, sizeof(rtp), &packet) ==
+               APPLEMIDI_NOT_APPLEMIDI);
+    }
+}
+
 static void apple_ports(void)
 {
     struct applemidi_ports ports;
@@ -2529,6 +2569,7 @@ int main(void)
     apple_sync();
     apple_clock();
     apple_ports();
+    apple_names();
     sysex_dump();
     config_round_trip();
     apple_clock_delayed();
