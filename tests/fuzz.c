@@ -10,6 +10,8 @@
  * that watches which code a packet reaches. */
 
 #include "rtpmidi/applemidi.h"
+#include "rtpmidi/clock.h"
+#include "rtpmidi/peers.h"
 #include "rtpmidi/receiver.h"
 #include "rtpmidi/rtpmidi.h"
 #include "rtpmidi/sender.h"
@@ -258,14 +260,71 @@ static void applemidi_take(void)
     packet.sync_count = (uint8_t)(rnd() % 3);
     if (applemidi_encode(&packet, wire, sizeof(wire), &length) != 0)
         length = 0;
-    length = mutate(wire, length, sizeof(wire));
-    if (applemidi_decode(wire, length, &decoded) >= 0 && decoded.name) {
+    if (rnd() % 3 == 0)
+        length = mutate(wire, length, sizeof(wire));
+    if (applemidi_decode(wire, length, &decoded) != APPLEMIDI_DECODED)
+        return;
+    if (decoded.name) {
         /* the name is inside the packet */
         volatile uint8_t touch = 0;
         size_t i;
         for (i = 0; i < decoded.name_length; ++i)
             touch ^= decoded.name[i];
         (void)touch;
+    }
+    /* The table of peers and a clock take whatever was decoded, from a
+       handful of addresses and either port, in any order: invitations,
+       answers nobody asked for, goodbyes from strangers. */
+    {
+        static struct applemidi_peers peers;
+        static struct applemidi_clock clock;
+        static uint32_t now;
+        static int ready;
+        struct applemidi_packet reply;
+        enum applemidi_peer_event event;
+        int data_port, index;
+        uint32_t address = 0xc0a80001u + rnd() % 4;
+        uint16_t port = (uint16_t)(5004 + 2 * (rnd() % 3));
+        int on_data = (int)(rnd() & 1);
+
+        if (!ready || rnd() % 500 == 0) {
+            (void)applemidi_peers_init(&peers, rnd(),
+                                       (const uint8_t *)"Fuzzed", 6);
+            if (rnd() % 4 == 0)
+                peers.limit = 1 + (int)(rnd() % 3);
+            if (rnd() % 4 == 0) {
+                peers.accept = APPLEMIDI_ACCEPT_LISTED;
+                (void)applemidi_peers_allow(&peers, 0xc0a80002u, NULL);
+                (void)applemidi_peers_allow(&peers, 0, "A Session");
+            }
+            applemidi_clock_init(&clock, (int)(rnd() & 1), now);
+            ready = 1;
+        }
+        now += rnd() % 3000;
+        if (rnd() % 16 == 0)
+            decoded.ssrc = peers.local_ssrc;        /* ours, as a peer's */
+        (void)applemidi_peers_receive(&peers, address,
+                                      (uint16_t)(port + on_data), on_data,
+                                      &decoded, now, &reply, &data_port,
+                                      &index, &event);
+        if (rnd() % 8 == 0)
+            (void)applemidi_peers_invite(&peers, address, port, rnd(), now,
+                                         &reply);
+        index = (int)(rnd() % APPLEMIDI_PEERS_MAX);
+        if (peers.peer[index].used) {
+            if (rnd() % 8 == 0)
+                (void)applemidi_peers_retry(&peers, index, &reply, &data_port);
+            if (rnd() % 32 == 0)
+                (void)applemidi_peers_end(&peers, index, &reply);
+            applemidi_peers_seen(&peers, index, now);
+        }
+        (void)applemidi_peers_find_data(&peers, address, (uint16_t)(port + 1));
+        (void)applemidi_peers_find_ssrc(&peers, decoded.ssrc);
+        if (decoded.command == APPLEMIDI_CK)
+            (void)applemidi_clock_receive(&clock, peers.local_ssrc, &decoded,
+                                          now, &reply);
+        (void)applemidi_clock_poll(&clock, peers.local_ssrc, now, &reply);
+        (void)applemidi_clock_expired(&clock, now);
     }
 }
 
