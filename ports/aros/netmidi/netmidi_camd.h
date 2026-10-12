@@ -30,7 +30,11 @@
 #define NETWORKMIDI2_ADAPTERS_NAME  "networkmidi2.driver"
 
 #define NETMIDI_DRIVER_PORTS         16
-#define NETMIDI_TXBUF_SIZE    4096    /* a power of two */
+/* What a CAMD client sent and the service has not taken yet. The driver
+   asks CAMD for more when the service has made room, so a small ring only
+   means more turns for a long SysEx message; sixteen ports of each of two
+   drivers have one each, whether used or not. */
+#define NETMIDI_TXBUF_SIZE    1024    /* a power of two */
 
 /* The driver camd.library has in memory may be older or newer than the
    service that finds it. The service attaches only to adapters of the

@@ -246,11 +246,13 @@ struct rtpmidi_event {
 /* The longest SysEx message taken, F0 and F7 counted, in either direction:
  * 32 KiB, which holds the bulk dumps of the instruments this was tried
  * against on paper (a DX7 voice bank is 4104 bytes, already past the 4096
- * this used to be). Every stream keeps a buffer of this size. */
+ * this used to be). A stream lends its assembler a buffer of this size
+ * while it has a peer. */
 enum { RTPMIDI_SYSEX_MAX = 32768 };
 
 struct rtpmidi_sysex_assembler {
-    uint8_t bytes[RTPMIDI_SYSEX_MAX];
+    uint8_t *bytes;             /* the caller's, of capacity bytes */
+    size_t capacity;
     size_t length;
     uint32_t timestamp;
     uint16_t last_sequence;
@@ -260,6 +262,11 @@ struct rtpmidi_sysex_assembler {
 /* Complete and segmented SysEx messages. A result of 1 provides a complete
  * F0..F7 message in *message; 0 means more segments are needed; -1 means a
  * malformed, lost, or oversized message was discarded. */
+/* Where messages are gathered: a buffer of the caller's, which may be
+ * NULL, when every message with more than one segment is refused. Call
+ * it once before anything else; rtpmidi_sysex_reset keeps the buffer. */
+void rtpmidi_sysex_buffer(struct rtpmidi_sysex_assembler *assembler,
+                          uint8_t *buffer, size_t capacity);
 void rtpmidi_sysex_reset(struct rtpmidi_sysex_assembler *assembler);
 int rtpmidi_sysex_feed(struct rtpmidi_sysex_assembler *assembler,
                   const struct rtpmidi_event *event, uint16_t sequence,

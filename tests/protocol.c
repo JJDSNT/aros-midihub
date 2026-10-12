@@ -204,6 +204,7 @@ static void config_round_trip(void)
 static void sysex_dump(void)
 {
     static struct rtpmidi_sysex_assembler assembler;
+    static uint8_t gathered[RTPMIDI_SYSEX_MAX];
     static uint8_t segment[1002];
     static uint8_t whole[16384];
     struct rtpmidi_event event;
@@ -219,7 +220,7 @@ static void sysex_dump(void)
         whole[i] = (uint8_t)((i * 5) & 0x7f);
     whole[sizeof(whole) - 1] = 0xf7;
     memset(&event, 0, sizeof(event));
-    rtpmidi_sysex_reset(&assembler);
+    rtpmidi_sysex_buffer(&assembler, gathered, sizeof(gathered));
     while (sent < sizeof(whole) - 1) {
         size_t chunk = sizeof(whole) - 1 - sent;
         int last;
@@ -1486,12 +1487,13 @@ static const uint8_t first[] = {0xf0, 0x7d, 1, 0xf0};
     struct rtpmidi_reader reader;
     struct rtpmidi_event event;
     struct rtpmidi_sysex_assembler assembler;
+    static uint8_t gathered[RTPMIDI_SYSEX_MAX];
     const uint8_t *message;
     size_t message_length;
     uint8_t wire[32];
     size_t wire_length;
 
-    rtpmidi_sysex_reset(&assembler);
+    rtpmidi_sysex_buffer(&assembler, gathered, sizeof(gathered));
     assert(rtpmidi_encode_list(1, 100, 7, complete, sizeof(complete),
                               wire, sizeof(wire), &wire_length) == 0);
     assert(rtpmidi_decode(wire, wire_length, &packet) == 0);

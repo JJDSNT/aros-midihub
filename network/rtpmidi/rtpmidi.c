@@ -1066,9 +1066,20 @@ again:
     return 1;
 }
 
-void rtpmidi_sysex_reset(struct rtpmidi_sysex_assembler *assembler)
+void rtpmidi_sysex_buffer(struct rtpmidi_sysex_assembler *assembler,
+                          uint8_t *buffer, size_t capacity)
 {
     memset(assembler, 0, sizeof(*assembler));
+    assembler->bytes = buffer;
+    assembler->capacity = buffer ? capacity : 0;
+}
+
+void rtpmidi_sysex_reset(struct rtpmidi_sysex_assembler *assembler)
+{
+    assembler->length = 0;
+    assembler->timestamp = 0;
+    assembler->last_sequence = 0;
+    assembler->active = 0;
 }
 
 int rtpmidi_sysex_feed(struct rtpmidi_sysex_assembler *assembler,
@@ -1091,7 +1102,7 @@ int rtpmidi_sysex_feed(struct rtpmidi_sysex_assembler *assembler,
         return 0;
     }
     if (head == 0xf0) {
-        if (size > RTPMIDI_SYSEX_MAX) {
+        if (size > assembler->capacity) {
             rtpmidi_sysex_reset(assembler);
             return -1;
         }
@@ -1102,7 +1113,7 @@ int rtpmidi_sysex_feed(struct rtpmidi_sysex_assembler *assembler,
     } else if (head == 0xf7 && assembler->active &&
                (sequence == assembler->last_sequence ||
                 sequence == (uint16_t)(assembler->last_sequence + 1))) {
-        if (assembler->length + size - 1 - (tail == 0xf0) > RTPMIDI_SYSEX_MAX) {
+        if (assembler->length + size - 1 - (tail == 0xf0) > assembler->capacity) {
             rtpmidi_sysex_reset(assembler);
             return -1;
         }

@@ -95,7 +95,9 @@ struct runtime {
     int midi2_enabled;
     struct netmidi2_table midi2;
     struct ump_to_midi1 midi2_in[NETMIDI2_SESSIONS_MAX];
-    uint8_t midi2_sysex[NETMIDI2_SESSIONS_MAX][RTPMIDI_SYSEX_MAX];
+    /* where each session's SysEx messages are gathered: there while the
+       session is, since it is 32 KiB a session */
+    uint8_t *midi2_sysex[NETMIDI2_SESSIONS_MAX];
     int midi2_known[NETMIDI2_SESSIONS_MAX];
     unsigned long midi2_gaps[NETMIDI2_SESSIONS_MAX];
     unsigned long midi2_resets[NETMIDI2_SESSIONS_MAX];
@@ -269,8 +271,15 @@ static void stream_begin(struct runtime *rt, int index, int initiating,
                          uint64_t now)
 {
     struct stream *stream = &rt->stream[index];
+    /* where its SysEx messages are gathered: lent from the first peer the
+       slot has, and kept for the next */
+    uint8_t *sysex_buffer = stream->sysex.bytes;
+
     rtpmidi_queue_reset(&stream->queue);
     memset(stream, 0, sizeof(*stream));
+    if (!sysex_buffer)
+        sysex_buffer = malloc(RTPMIDI_SYSEX_MAX);
+    rtpmidi_sysex_buffer(&stream->sysex, sysex_buffer, RTPMIDI_SYSEX_MAX);
     stream->rt = rt;
     stream->port = -1;
     stream->initiating = initiating;
@@ -845,6 +854,9 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
                 midi2_all_notes_off(rt, index);
                 applemidi_ports_release(&rt->midi2_ports, index + 1);
                 rt->midi2_port[index] = -1;
+                ump_to_midi1_buffer(&rt->midi2_in[index], NULL, 0);
+                free(rt->midi2_sysex[index]);
+                rt->midi2_sysex[index] = NULL;
                 rt->midi2_known[index] = 0;
             }
             continue;
@@ -881,8 +893,10 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
             rt->midi2_gaps[index] = session->gaps;
             rt->midi2_resets[index] = session->resets;
             ump_to_midi1_init(&rt->midi2_in[index], 0);
+            if (!rt->midi2_sysex[index])
+                rt->midi2_sysex[index] = malloc(RTPMIDI_SYSEX_MAX);
             ump_to_midi1_buffer(&rt->midi2_in[index], rt->midi2_sysex[index],
-                                sizeof(rt->midi2_sysex[index]));
+                                RTPMIDI_SYSEX_MAX);
             ump_jr_clock_init(&rt->midi2_clock[index]);
         }
         if (rt->midi2_known[index] &&
@@ -894,7 +908,7 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
             rt->midi2_gaps[index] = session->gaps;
             rt->midi2_resets[index] = session->resets;
             ump_to_midi1_buffer(&rt->midi2_in[index], rt->midi2_sysex[index],
-                                sizeof(rt->midi2_sysex[index]));
+                                RTPMIDI_SYSEX_MAX);
             midi2_all_notes_off(rt, index);
         }
         netmidi2_writer_init(&packet, out, sizeof(out));
@@ -1870,6 +1884,14 @@ cleanup:
     }
     netmidi_camd_close(&rt.camd);
     netmidi_network_close(&rt.network);
+    for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index) {
+        free(rt.stream[index].sysex.bytes);
+        rt.stream[index].sysex.bytes = NULL;
+    }
+    for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index) {
+        free(rt.midi2_sysex[index]);
+        rt.midi2_sysex[index] = NULL;
+    }
     return result;
 }
 
