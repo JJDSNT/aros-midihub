@@ -1,7 +1,7 @@
 /* BLE MIDI GATT service and CAMD bridge for bluetooth.library. */
 
 #include "btmidi.h"
-#include <midihub/ble_midi.h>
+#include <blemidi/ble_midi.h>
 #include <rtpmidi/rtpmidi.h>
 #include "camd_bridge.h"
 #include <exec/memory.h>
@@ -28,7 +28,7 @@ struct btmidi_peer {
     BOOL in_use;
     APTR device;              /* the writer, or NULL from an older stack */
     ULONG last_use;
-    struct mh_ble_midi_stream stream;
+    struct blemidi_midi_stream stream;
 };
 
 struct btmidi_runtime {
@@ -99,7 +99,7 @@ static int send_to_ble(void *context, const uint8_t *message, size_t length)
     if (length >= 2 && message[0] == 0xf0 && message[length - 1] == 0xf7) {
         size_t offset = 0;
         while (offset < length) {
-            if (mh_ble_midi_encode_sysex_chunk(message, length, &offset,
+            if (blemidi_midi_encode_sysex_chunk(message, length, &offset,
                                                 timestamp, packet,
                                                 runtime->tx_payload, &written) ||
                 set_packet(runtime, packet, written))
@@ -107,7 +107,7 @@ static int send_to_ble(void *context, const uint8_t *message, size_t length)
         }
         return 0;
     }
-    if (mh_ble_midi_encode_message(message, length, timestamp, packet,
+    if (blemidi_midi_encode_message(message, length, timestamp, packet,
                                    runtime->tx_payload, &written))
         return -1;
     return set_packet(runtime, packet, written);
@@ -115,8 +115,8 @@ static int send_to_ble(void *context, const uint8_t *message, size_t length)
 
 static APTR add_service(void)
 {
-    static const UBYTE service_uuid[16] = MH_BLE_MIDI_SERVICE_UUID;
-    static const UBYTE io_uuid[16] = MH_BLE_MIDI_IO_UUID;
+    static const UBYTE service_uuid[16] = BLEMIDI_MIDI_SERVICE_UUID;
+    static const UBYTE io_uuid[16] = BLEMIDI_MIDI_IO_UUID;
     struct BtGattCharDef characteristic;
 
     memset(&characteristic, 0, sizeof(characteristic));
@@ -166,7 +166,7 @@ static struct btmidi_peer *find_peer(struct btmidi_runtime *runtime, APTR device
     peer->runtime = runtime;
     peer->in_use = TRUE;
     peer->device = device;
-    mh_ble_midi_stream_init(&peer->stream, deliver, peer);
+    blemidi_midi_stream_init(&peer->stream, deliver, peer);
 found:
     peer->last_use = ++runtime->use_counter;
     return peer;
@@ -208,7 +208,7 @@ static void handle_event(struct btmidi_runtime *runtime, struct Message *message
                index == 0 && value && length > 0 && length <= BTMIDI_VALUE_SIZE) {
         runtime->base->stats.ms_RxPackets++;
         if (!(peer = find_peer(runtime, device)) ||
-            mh_ble_midi_stream_feed(&peer->stream, value, (size_t)length))
+            blemidi_midi_stream_feed(&peer->stream, value, (size_t)length))
             runtime->base->stats.ms_Errors++;
     }
     ReplyMsg(message);

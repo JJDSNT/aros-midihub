@@ -1,4 +1,4 @@
-#include "midihub/ump.h"
+#include "ump/ump.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,59 +35,59 @@ static void take_midi(void *context, const uint8_t *bytes, size_t length)
 
 static void to_ump(const uint8_t *bytes, size_t length, uint8_t group)
 {
-    struct mh_ump_from_midi1 state;
+    struct ump_from_midi1 state;
     size_t i;
 
     ump_count = 0;
-    mh_ump_from_midi1_init(&state, group);
+    ump_from_midi1_init(&state, group);
     for (i = 0; i < length; ++i)
-        mh_ump_from_midi1_byte(&state, bytes[i], take_ump, NULL);
+        ump_from_midi1_byte(&state, bytes[i], take_ump, NULL);
 }
 
 static void to_midi(const uint32_t *words, unsigned count, uint8_t group)
 {
-    struct mh_ump_to_midi1 state;
+    struct ump_to_midi1 state;
     unsigned i = 0;
 
     midi_count = 0;
-    mh_ump_to_midi1_init(&state, group);
+    ump_to_midi1_init(&state, group);
     while (i < count) {
-        unsigned n = mh_ump_words(words[i]);
-        CHECK(mh_ump_to_midi1(&state, words + i, count - i, take_midi, NULL) == 0);
+        unsigned n = ump_words(words[i]);
+        CHECK(ump_to_midi1(&state, words + i, count - i, take_midi, NULL) == 0);
         i += n;
     }
 }
 
 static void test_sizes(void)
 {
-    CHECK(mh_ump_words(0x00000000u) == 1);
-    CHECK(mh_ump_words(0x20903c64u) == 1);
-    CHECK(mh_ump_words(0x30000000u) == 2);
-    CHECK(mh_ump_words(0x40000000u) == 2);
-    CHECK(mh_ump_words(0x50000000u) == 4);
-    CHECK(mh_ump_words(0xb0000000u) == 3);
-    CHECK(mh_ump_words(0xf0000000u) == 4);
+    CHECK(ump_words(0x00000000u) == 1);
+    CHECK(ump_words(0x20903c64u) == 1);
+    CHECK(ump_words(0x30000000u) == 2);
+    CHECK(ump_words(0x40000000u) == 2);
+    CHECK(ump_words(0x50000000u) == 4);
+    CHECK(ump_words(0xb0000000u) == 3);
+    CHECK(ump_words(0xf0000000u) == 4);
 }
 
 static void test_scaling(void)
 {
     /* The UMP specification's own examples: minimum, center and maximum
        keep their places. */
-    CHECK(mh_ump_scale_up(0, 7, 16) == 0);
-    CHECK(mh_ump_scale_up(64, 7, 16) == 0x8000);
-    CHECK(mh_ump_scale_up(127, 7, 16) == 0xffff);
-    CHECK(mh_ump_scale_up(0x2000, 14, 32) == 0x80000000u);
-    CHECK(mh_ump_scale_up(0x3fff, 14, 32) == 0xffffffffu);
-    CHECK(mh_ump_scale_up(127, 7, 32) == 0xffffffffu);
-    CHECK(mh_ump_scale_down(0xffff, 16, 7) == 127);
-    CHECK(mh_ump_scale_down(0x8000, 16, 7) == 64);
+    CHECK(ump_scale_up(0, 7, 16) == 0);
+    CHECK(ump_scale_up(64, 7, 16) == 0x8000);
+    CHECK(ump_scale_up(127, 7, 16) == 0xffff);
+    CHECK(ump_scale_up(0x2000, 14, 32) == 0x80000000u);
+    CHECK(ump_scale_up(0x3fff, 14, 32) == 0xffffffffu);
+    CHECK(ump_scale_up(127, 7, 32) == 0xffffffffu);
+    CHECK(ump_scale_down(0xffff, 16, 7) == 127);
+    CHECK(ump_scale_down(0x8000, 16, 7) == 64);
     /* Up and back down is the identity for every 7-bit value. */
     {
         uint32_t v;
         int ok = 1;
         for (v = 0; v < 128; ++v)
-            if (mh_ump_scale_down(mh_ump_scale_up(v, 7, 16), 16, 7) != v ||
-                mh_ump_scale_down(mh_ump_scale_up(v, 7, 32), 32, 7) != v)
+            if (ump_scale_down(ump_scale_up(v, 7, 16), 16, 7) != v ||
+                ump_scale_down(ump_scale_up(v, 7, 32), 32, 7) != v)
                 ok = 0;
         CHECK(ok);
     }
@@ -201,20 +201,20 @@ static void test_stream(void)
     char text[32];
     unsigned n, i, j;
 
-    mh_ump_endpoint_info(words, MH_UMP_PROTOCOL_MIDI1);
+    ump_endpoint_info(words, UMP_PROTOCOL_MIDI1);
     CHECK(words[0] == 0xf0010101u);
     CHECK(words[1] == 0x80000100u);
-    CHECK(mh_ump_stream_status(words) == MH_UMP_ENDPOINT_INFO);
+    CHECK(ump_stream_status(words) == UMP_ENDPOINT_INFO);
 
-    mh_ump_stream_config(words, MH_UMP_PROTOCOL_MIDI1);
+    ump_stream_config(words, UMP_PROTOCOL_MIDI1);
     CHECK(words[0] == 0xf0060100u);
 
     /* "AROS MIDIHub Pi3" is 16 bytes: a Start and an End packet */
-    n = mh_ump_stream_text(words, 16, MH_UMP_ENDPOINT_NAME, "AROS MIDIHub Pi3", 16);
+    n = ump_stream_text(words, 16, UMP_ENDPOINT_NAME, "AROS MIDIHub Pi3", 16);
     CHECK(n == 8);
     CHECK((words[0] >> 26) == ((0xfu << 2) | 1));   /* Start */
     CHECK((words[4] >> 26) == ((0xfu << 2) | 3));   /* End */
-    CHECK(mh_ump_stream_status(words + 4) == MH_UMP_ENDPOINT_NAME);
+    CHECK(ump_stream_status(words + 4) == UMP_ENDPOINT_NAME);
     for (i = 0, j = 0; i < 2; ++i) {
         const uint32_t *p = words + i * 4;
         text[j++] = (char)(p[0] >> 8);
@@ -227,7 +227,7 @@ static void test_stream(void)
         }
     }
     CHECK(!memcmp(text, "AROS MIDIHub Pi3", 16) && text[16] == 0);
-    CHECK(mh_ump_stream_text(words, 4, MH_UMP_ENDPOINT_NAME, "AROS MIDIHub Pi3", 16) == 0);
+    CHECK(ump_stream_text(words, 4, UMP_ENDPOINT_NAME, "AROS MIDIHub Pi3", 16) == 0);
 }
 
 int main(void)

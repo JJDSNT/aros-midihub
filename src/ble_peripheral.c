@@ -1,15 +1,15 @@
-#include <midihub/ble_peripheral.h>
-#include <midihub/ble_midi.h>
+#include <blemidi/ble_peripheral.h>
+#include <blemidi/ble_midi.h>
 
 #include <string.h>
 
-int mh_ble_peripheral_advertising(const char *name,
+int blemidi_peripheral_advertising(const char *name,
                                   uint8_t *advertising, size_t advertising_capacity,
                                   size_t *advertising_length,
                                   uint8_t *scan_response, size_t scan_capacity,
                                   size_t *scan_length)
 {
-    static const uint8_t service_uuid[16] = MH_BLE_MIDI_SERVICE_UUID;
+    static const uint8_t service_uuid[16] = BLEMIDI_MIDI_SERVICE_UUID;
     size_t name_length, i;
 
     if (!name || !advertising || !advertising_length || !scan_response ||
@@ -29,8 +29,8 @@ int mh_ble_peripheral_advertising(const char *name,
     name_length = strlen(name);
     if (name_length > scan_capacity - 2)
         name_length = scan_capacity - 2;
-    if (name_length > MH_BLE_LEGACY_AD_MAX - 2)
-        name_length = MH_BLE_LEGACY_AD_MAX - 2;
+    if (name_length > BLEMIDI_LEGACY_AD_MAX - 2)
+        name_length = BLEMIDI_LEGACY_AD_MAX - 2;
     scan_response[0] = (uint8_t)(name_length + 1);
     scan_response[1] = strlen(name) == name_length ? 0x09 : 0x08;
     if (name_length)

@@ -43,11 +43,11 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
 
 %build_linklib mmake=linklibs-arosmidihub \
     libname=arosmidihub \
-    files="$(MIDIHUB_ROOT)/src/applemidi $(MIDIHUB_ROOT)/src/rtpmidi \
-           $(MIDIHUB_ROOT)/src/session $(MIDIHUB_ROOT)/src/peers \
+    files="$(MIDIHUB_ROOT)/network/rtpmidi/applemidi $(MIDIHUB_ROOT)/network/rtpmidi/rtpmidi \
+           $(MIDIHUB_ROOT)/network/rtpmidi/session $(MIDIHUB_ROOT)/network/rtpmidi/peers \
            $(MIDIHUB_ROOT)/src/config \
-           $(MIDIHUB_ROOT)/src/timing $(MIDIHUB_ROOT)/src/sender \
-           $(MIDIHUB_ROOT)/src/receiver \
+           $(MIDIHUB_ROOT)/network/rtpmidi/timing $(MIDIHUB_ROOT)/network/rtpmidi/sender \
+           $(MIDIHUB_ROOT)/network/rtpmidi/receiver \
            $(MIDIHUB_ROOT)/network/mdns/embedded $(MIDIHUB_ROOT)/src/routes \
            $(MIDIHUB_ROOT)/src/ble_midi \
            $(MIDIHUB_ROOT)/src/ble_peripheral \

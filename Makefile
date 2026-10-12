@@ -6,7 +6,7 @@ M68K_CFLAGS ?= -O2 -Wall -Wextra -Werror -Wno-volatile-register-var -std=gnu99
 FLUIDSYNTH_CFLAGS ?= $(shell pkg-config --cflags fluidsynth 2>/dev/null)
 FLUIDSYNTH_LIBS ?= $(shell pkg-config --libs fluidsynth 2>/dev/null)
 
-SOURCES = src/applemidi.c src/rtpmidi.c src/session.c src/peers.c src/config.c src/timing.c src/sender.c src/receiver.c network/mdns/embedded.c src/routes.c
+SOURCES = network/rtpmidi/applemidi.c network/rtpmidi/rtpmidi.c network/rtpmidi/session.c network/rtpmidi/peers.c src/config.c network/rtpmidi/timing.c network/rtpmidi/sender.c network/rtpmidi/receiver.c network/mdns/embedded.c src/routes.c
 PROGRAM_SOURCES = ports/aros/midihub/main.c ports/aros/midihub/camd.c \
                   ports/aros/midihub/network.c \
                   ports/aros/camd_bridge.c
@@ -226,12 +226,12 @@ build/camd-legacy-identity-set-test: tests/camd_legacy_identity_set.c \
 		prototypes/camd/legacy_identity_set.c \
 		prototypes/camd/legacy_identity_key.c prototypes/camd/identity_map.c
 
-build/ump-test: tests/ump.c src/ump.c include/midihub/ump.h
+build/ump-test: tests/ump.c src/ump.c include/ump/ump.h
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/ump.c src/ump.c
 
 build/netmidi2-test: tests/netmidi2.c src/netmidi2.c src/ump.c \
-                     include/midihub/netmidi2.h include/midihub/ump.h
+                     include/netmidi2/netmidi2.h include/ump/ump.h
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/netmidi2.c src/netmidi2.c src/ump.c
 
@@ -240,7 +240,7 @@ build/routes-test: tests/routes.c src/routes.c include/midihub/routes.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/routes.c src/routes.c
 
 build/ble-midi-test: tests/ble_midi.c src/ble_midi.c src/ble_peripheral.c \
-                     include/midihub/ble_midi.h include/midihub/ble_peripheral.h
+                     include/blemidi/ble_midi.h include/blemidi/ble_peripheral.h
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/ble_midi.c src/ble_midi.c src/ble_peripheral.c
 

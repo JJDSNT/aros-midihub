@@ -1,8 +1,8 @@
-#include "midihub/ump.h"
+#include "ump/ump.h"
 
 #include <string.h>
 
-unsigned mh_ump_words(uint32_t first_word)
+unsigned ump_words(uint32_t first_word)
 {
     static const unsigned char words[16] = {
         1, 1, 1, 2, 2, 4, 1, 1, 2, 2, 2, 3, 3, 4, 4, 4
@@ -10,12 +10,12 @@ unsigned mh_ump_words(uint32_t first_word)
     return words[first_word >> 28];
 }
 
-uint32_t mh_ump_scale_down(uint32_t value, unsigned from_bits, unsigned to_bits)
+uint32_t ump_scale_down(uint32_t value, unsigned from_bits, unsigned to_bits)
 {
     return value >> (from_bits - to_bits);
 }
 
-uint32_t mh_ump_scale_up(uint32_t value, unsigned from_bits, unsigned to_bits)
+uint32_t ump_scale_up(uint32_t value, unsigned from_bits, unsigned to_bits)
 {
     unsigned scale_bits = to_bits - from_bits;
     uint32_t shifted = value << scale_bits;
@@ -44,7 +44,7 @@ uint32_t mh_ump_scale_up(uint32_t value, unsigned from_bits, unsigned to_bits)
 
 /* MIDI 1.0 to UMP */
 
-void mh_ump_from_midi1_init(struct mh_ump_from_midi1 *state, uint8_t group)
+void ump_from_midi1_init(struct ump_from_midi1 *state, uint8_t group)
 {
     memset(state, 0, sizeof(*state));
     state->group = group & 0x0f;
@@ -71,13 +71,13 @@ static unsigned midi1_data_bytes(uint8_t status)
     }
 }
 
-static void emit_sysex7(struct mh_ump_from_midi1 *state, unsigned kind,
-                        mh_ump_sink sink, void *context)
+static void emit_sysex7(struct ump_from_midi1 *state, unsigned kind,
+                        ump_sink sink, void *context)
 {
     uint32_t words[2];
     const uint8_t *b = state->sysex;
 
-    words[0] = ((uint32_t)MH_UMP_DATA64 << 28) | ((uint32_t)state->group << 24) |
+    words[0] = ((uint32_t)UMP_DATA64 << 28) | ((uint32_t)state->group << 24) |
                ((uint32_t)kind << 20) | ((uint32_t)state->sysex_count << 16) |
                ((uint32_t)b[0] << 8) | b[1];
     words[1] = ((uint32_t)b[2] << 24) | ((uint32_t)b[3] << 16) |
@@ -90,19 +90,19 @@ static void emit_sysex7(struct mh_ump_from_midi1 *state, unsigned kind,
 /* SysEx7 packet kinds */
 enum { SYSEX7_COMPLETE, SYSEX7_START, SYSEX7_CONTINUE, SYSEX7_END };
 
-static void emit_short(struct mh_ump_from_midi1 *state, uint8_t status,
-                       uint8_t data1, uint8_t data2, mh_ump_sink sink, void *context)
+static void emit_short(struct ump_from_midi1 *state, uint8_t status,
+                       uint8_t data1, uint8_t data2, ump_sink sink, void *context)
 {
     uint32_t word;
-    unsigned type = status >= 0xf0 ? MH_UMP_SYSTEM : MH_UMP_MIDI1_VOICE;
+    unsigned type = status >= 0xf0 ? UMP_SYSTEM : UMP_MIDI1_VOICE;
 
     word = ((uint32_t)type << 28) | ((uint32_t)state->group << 24) |
            ((uint32_t)status << 16) | ((uint32_t)data1 << 8) | data2;
     sink(context, &word, 1);
 }
 
-void mh_ump_from_midi1_byte(struct mh_ump_from_midi1 *state, uint8_t byte,
-                            mh_ump_sink sink, void *context)
+void ump_from_midi1_byte(struct ump_from_midi1 *state, uint8_t byte,
+                            ump_sink sink, void *context)
 {
     if (byte >= 0xf8) {
         /* Real time: may come anywhere, even inside SysEx. */
@@ -162,25 +162,25 @@ void mh_ump_from_midi1_byte(struct mh_ump_from_midi1 *state, uint8_t byte,
 
 /* UMP to MIDI 1.0 */
 
-void mh_ump_to_midi1_init(struct mh_ump_to_midi1 *state, uint8_t group)
+void ump_to_midi1_init(struct ump_to_midi1 *state, uint8_t group)
 {
     memset(state, 0, sizeof(*state));
     state->group = group & 0x0f;
 }
 
-static void put3(mh_midi1_sink sink, void *context, uint8_t a, uint8_t b, uint8_t c)
+static void put3(ump_midi1_sink sink, void *context, uint8_t a, uint8_t b, uint8_t c)
 {
     uint8_t bytes[3] = { a, b, c };
     sink(context, bytes, 3);
 }
 
-static void put_cc(mh_midi1_sink sink, void *context, uint8_t channel,
+static void put_cc(ump_midi1_sink sink, void *context, uint8_t channel,
                    uint8_t controller, uint8_t value)
 {
     put3(sink, context, (uint8_t)(0xb0 | channel), controller, value);
 }
 
-static void midi2_voice_down(const uint32_t *words, mh_midi1_sink sink, void *context)
+static void midi2_voice_down(const uint32_t *words, ump_midi1_sink sink, void *context)
 {
     unsigned opcode = (words[0] >> 20) & 0x0f;
     uint8_t channel = (uint8_t)((words[0] >> 16) & 0x0f);
@@ -193,25 +193,25 @@ static void midi2_voice_down(const uint32_t *words, mh_midi1_sink sink, void *co
     switch (opcode) {
     case 0x8: /* Note Off */
         put3(sink, context, (uint8_t)(0x80 | channel), byte2 & 0x7f,
-             (uint8_t)mh_ump_scale_down(data >> 16, 16, 7));
+             (uint8_t)ump_scale_down(data >> 16, 16, 7));
         break;
     case 0x9: { /* Note On: 0 would mean Note Off in MIDI 1.0 */
-        uint8_t velocity = (uint8_t)mh_ump_scale_down(data >> 16, 16, 7);
+        uint8_t velocity = (uint8_t)ump_scale_down(data >> 16, 16, 7);
         put3(sink, context, (uint8_t)(0x90 | channel), byte2 & 0x7f,
              velocity ? velocity : 1);
         break;
     }
     case 0xa: /* Poly Pressure */
         put3(sink, context, (uint8_t)(0xa0 | channel), byte2 & 0x7f,
-             (uint8_t)mh_ump_scale_down(data, 32, 7));
+             (uint8_t)ump_scale_down(data, 32, 7));
         break;
     case 0xb: /* Control Change */
         put_cc(sink, context, channel, byte2 & 0x7f,
-               (uint8_t)mh_ump_scale_down(data, 32, 7));
+               (uint8_t)ump_scale_down(data, 32, 7));
         break;
     case 0x2: /* Registered Controller: RPN */
     case 0x3: /* Assignable Controller: NRPN */
-        value14 = mh_ump_scale_down(data, 32, 14);
+        value14 = ump_scale_down(data, 32, 14);
         put_cc(sink, context, channel, opcode == 0x2 ? 101 : 99, byte2 & 0x7f);
         put_cc(sink, context, channel, opcode == 0x2 ? 100 : 98, byte3 & 0x7f);
         put_cc(sink, context, channel, 6, (uint8_t)(value14 >> 7));
@@ -228,11 +228,11 @@ static void midi2_voice_down(const uint32_t *words, mh_midi1_sink sink, void *co
         break;
     case 0xd: /* Channel Pressure */
         bytes[0] = (uint8_t)(0xd0 | channel);
-        bytes[1] = (uint8_t)mh_ump_scale_down(data, 32, 7);
+        bytes[1] = (uint8_t)ump_scale_down(data, 32, 7);
         sink(context, bytes, 2);
         break;
     case 0xe: /* Pitch Bend */
-        value14 = mh_ump_scale_down(data, 32, 14);
+        value14 = ump_scale_down(data, 32, 14);
         put3(sink, context, (uint8_t)(0xe0 | channel), (uint8_t)(value14 & 0x7f),
              (uint8_t)(value14 >> 7));
         break;
@@ -243,21 +243,21 @@ static void midi2_voice_down(const uint32_t *words, mh_midi1_sink sink, void *co
     }
 }
 
-int mh_ump_to_midi1(struct mh_ump_to_midi1 *state, const uint32_t *words,
-                    unsigned count, mh_midi1_sink sink, void *context)
+int ump_to_midi1(struct ump_to_midi1 *state, const uint32_t *words,
+                    unsigned count, ump_midi1_sink sink, void *context)
 {
     unsigned type = words[0] >> 28;
-    unsigned needed = mh_ump_words(words[0]);
+    unsigned needed = ump_words(words[0]);
     uint8_t status;
 
     if (count < needed)
         return -1;
-    if (type != MH_UMP_UTILITY && type != MH_UMP_STREAM &&
+    if (type != UMP_UTILITY && type != UMP_STREAM &&
         ((words[0] >> 24) & 0x0f) != state->group)
         return 0;
 
     switch (type) {
-    case MH_UMP_SYSTEM:
+    case UMP_SYSTEM:
         status = (uint8_t)(words[0] >> 16);
         if (status >= 0xf8 || status == 0xf6 || status == 0xf4 || status == 0xf5) {
             sink(context, &status, 1);
@@ -269,7 +269,7 @@ int mh_ump_to_midi1(struct mh_ump_to_midi1 *state, const uint32_t *words,
                  (uint8_t)(words[0] & 0x7f));
         }
         break;
-    case MH_UMP_MIDI1_VOICE: {
+    case UMP_MIDI1_VOICE: {
         uint8_t bytes[3];
         status = (uint8_t)(words[0] >> 16);
         if (status < 0x80 || status >= 0xf0)
@@ -280,7 +280,7 @@ int mh_ump_to_midi1(struct mh_ump_to_midi1 *state, const uint32_t *words,
         sink(context, bytes, midi1_data_bytes(status) + 1);
         break;
     }
-    case MH_UMP_DATA64: {
+    case UMP_DATA64: {
         unsigned kind = (words[0] >> 20) & 0x0f;
         unsigned n = (words[0] >> 16) & 0x0f;
         uint8_t bytes[8], *out = bytes;
@@ -310,7 +310,7 @@ int mh_ump_to_midi1(struct mh_ump_to_midi1 *state, const uint32_t *words,
         sink(context, bytes, (size_t)(out - bytes));
         break;
     }
-    case MH_UMP_MIDI2_VOICE:
+    case UMP_MIDI2_VOICE:
         midi2_voice_down(words, sink, context);
         break;
     default:
@@ -321,38 +321,38 @@ int mh_ump_to_midi1(struct mh_ump_to_midi1 *state, const uint32_t *words,
 
 /* UMP Stream messages */
 
-unsigned mh_ump_stream_status(const uint32_t *words)
+unsigned ump_stream_status(const uint32_t *words)
 {
     return (words[0] >> 16) & 0x3ff;
 }
 
 static uint32_t stream_word0(unsigned form, unsigned status)
 {
-    return ((uint32_t)MH_UMP_STREAM << 28) | ((uint32_t)form << 26) |
+    return ((uint32_t)UMP_STREAM << 28) | ((uint32_t)form << 26) |
            ((uint32_t)status << 16);
 }
 
-void mh_ump_endpoint_info(uint32_t *words, unsigned protocols)
+void ump_endpoint_info(uint32_t *words, unsigned protocols)
 {
     /* UMP version 1.1; static function blocks, none declared. */
-    words[0] = stream_word0(0, MH_UMP_ENDPOINT_INFO) | 0x0101;
+    words[0] = stream_word0(0, UMP_ENDPOINT_INFO) | 0x0101;
     words[1] = 0x80000000u |
-               ((protocols & MH_UMP_PROTOCOL_MIDI2) ? 0x200u : 0) |
-               ((protocols & MH_UMP_PROTOCOL_MIDI1) ? 0x100u : 0);
+               ((protocols & UMP_PROTOCOL_MIDI2) ? 0x200u : 0) |
+               ((protocols & UMP_PROTOCOL_MIDI1) ? 0x100u : 0);
     words[2] = 0;
     words[3] = 0;
 }
 
-void mh_ump_stream_config(uint32_t *words, unsigned protocol)
+void ump_stream_config(uint32_t *words, unsigned protocol)
 {
-    words[0] = stream_word0(0, MH_UMP_STREAM_CONFIG_NOTIFY) |
+    words[0] = stream_word0(0, UMP_STREAM_CONFIG_NOTIFY) |
                ((uint32_t)(protocol & 0xff) << 8);
     words[1] = 0;
     words[2] = 0;
     words[3] = 0;
 }
 
-unsigned mh_ump_stream_text(uint32_t *words, size_t capacity_words,
+unsigned ump_stream_text(uint32_t *words, size_t capacity_words,
                             unsigned status, const char *text, size_t length)
 {
     unsigned packets = (unsigned)(length ? (length + 13) / 14 : 1);

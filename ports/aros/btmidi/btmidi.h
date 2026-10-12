@@ -14,7 +14,7 @@
 #include <libraries/bluetooth.h>
 #include <libraries/btclass.h>
 
-#include <midihub/ble_midi.h>
+#include <blemidi/ble_midi.h>
 #include "camd_bridge.h"
 
 #include "btmidi_cfg.h"
@@ -73,7 +73,7 @@ struct btmidi_binding {
     char out_name[BTMIDI_NAME_SIZE];
     UBYTE notify_buf[512];
     UBYTE read_buf[512];
-    struct mh_ble_midi_stream stream;
+    struct blemidi_midi_stream stream;
 };
 
 struct BTMidiBase {

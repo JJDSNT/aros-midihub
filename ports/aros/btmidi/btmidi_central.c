@@ -31,7 +31,7 @@
 
 static BOOL is_ble_midi(struct Library *bluetooth, struct BtService *service)
 {
-    static const UBYTE uuid[16] = MH_BLE_MIDI_SERVICE_UUID;
+    static const UBYTE uuid[16] = BLEMIDI_MIDI_SERVICE_UUID;
     IPTR proto = 0;
     UBYTE *service_uuid = NULL;
 
@@ -43,7 +43,7 @@ static BOOL is_ble_midi(struct Library *bluetooth, struct BtService *service)
 struct btmidi_binding *btmidi_force_binding(struct BTMidiBase *base,
                                             struct BtService *service)
 {
-    static const UBYTE io_uuid[16] = MH_BLE_MIDI_IO_UUID;
+    static const UBYTE io_uuid[16] = BLEMIDI_MIDI_IO_UUID;
     struct Library *bluetooth;
     struct btmidi_binding *binding = NULL;
     struct BtDevice *device = NULL;
@@ -68,7 +68,7 @@ struct btmidi_binding *btmidi_force_binding(struct BTMidiBase *base,
         binding->endpoint = endpoint;
         binding->handle = handle;
         binding->camd.signal_bit = -1;
-        mh_ble_midi_port_names((const char *)device_name, binding->node_name,
+        blemidi_midi_port_names((const char *)device_name, binding->node_name,
                                binding->in_name, binding->out_name,
                                BTMIDI_NAME_SIZE);
 
@@ -170,7 +170,7 @@ static int send_to_device(void *context, const uint8_t *message, size_t length)
     if (length >= 2 && message[0] == 0xf0 && message[length - 1] == 0xf7) {
         size_t offset = 0;
         while (offset < length)
-            if (mh_ble_midi_encode_sysex_chunk(message, length, &offset,
+            if (blemidi_midi_encode_sysex_chunk(message, length, &offset,
                                                 timestamp, packet,
                                                 binding->packet_limit,
                                                 &written) ||
@@ -178,7 +178,7 @@ static int send_to_device(void *context, const uint8_t *message, size_t length)
                 return -1;
         return 0;
     }
-    if (mh_ble_midi_encode_message(message, length, timestamp, packet,
+    if (blemidi_midi_encode_message(message, length, timestamp, packet,
                                    binding->packet_limit, &written))
         return -1;
     return write_packet(binding, packet, written);
@@ -233,7 +233,7 @@ static void channel_done(struct btmidi_binding *binding, APTR channel)
             return;
         }
         if (actual)
-            mh_ble_midi_stream_feed(&binding->stream, binding->notify_buf,
+            blemidi_midi_stream_feed(&binding->stream, binding->notify_buf,
                                     actual);
         if (!(SetSignal(0, 0) & SIGBREAKF_CTRL_C))
             start_requests(binding);
@@ -253,7 +253,7 @@ static void device_event(struct btmidi_binding *binding, struct Message *message
     if (event == BEHMB_DEVICEDISCONNECTED) {
         binding->connected = FALSE;
         binding->primed = FALSE;
-        mh_ble_midi_stream_reset(&binding->stream);
+        blemidi_midi_stream_reset(&binding->stream);
     } else if (event == BEHMB_DEVICECONNECTED) {
         binding->connected = TRUE;
         binding->primed = FALSE;
@@ -288,7 +288,7 @@ static BOOL setup(struct btmidi_binding *binding)
     if (aros_camd_bridge_open_named(&binding->camd, binding->node_name,
                                     binding->in_name, binding->out_name))
         return FALSE;
-    mh_ble_midi_stream_init(&binding->stream, deliver, binding);
+    blemidi_midi_stream_init(&binding->stream, deliver, binding);
     binding->packet_limit = 20;
     binding->event_handler = btAddEventHandler(binding->event_port,
                                                BEHMF_DEVICECONNECTED |

@@ -1,4 +1,4 @@
-#include <midihub/ble_midi.h>
+#include <blemidi/ble_midi.h>
 #include <midihub/config.h>
 #include <midihub/routes.h>
 #include "MIDIHubPrefsClass.h"
@@ -452,7 +452,7 @@ static void collect_ble(struct MHPrefsData *data)
                 bound = TRUE;
         }
         if (bound)
-            mh_ble_midi_port_names((const char *)device_name, node_name, in, out,
+            blemidi_midi_port_names((const char *)device_name, node_name, in, out,
                                    sizeof(node_name));
         btUnlockDevice(device);
         if (bound) {

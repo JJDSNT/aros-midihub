@@ -257,10 +257,10 @@ until that system service is available.
 | MIDIHub today | Native AROS target | Action |
 |---|---|---|
 | `ports/aros/midihub/main.c` | shared incubation/runtime glue for `applemidi.device` and `networkmidi2.device` | split transport ownership while retaining reusable AROS adapters |
-| `src/applemidi.c` | portable engine used by `applemidi.device` | retain/move with minimal OS coupling |
-| `src/rtpmidi.c` | portable engine used by `applemidi.device` | retain/move |
-| `src/session.c` | session engine | retain/move |
-| `src/peers.c` | peer/session manager | retain/move |
+| `network/rtpmidi/applemidi.c` | portable engine used by `applemidi.device` | retain/move with minimal OS coupling |
+| `network/rtpmidi/rtpmidi.c` | portable engine used by `applemidi.device` | retain/move |
+| `network/rtpmidi/session.c` | session engine | retain/move |
+| `network/rtpmidi/peers.c` | peer/session manager | retain/move |
 | `src/netmidi2.c` | portable engine used by `networkmidi2.device` | retain/move |
 | `src/ump.c` | UMP engine/edge translation used by `networkmidi2.device` | retain/move |
 | `network/mdns/embedded.c` | none in Network MIDI | remove after system mDNS migration |
@@ -296,14 +296,13 @@ The important part is responsibility separation.
 
 The namespace should make the eventual ownership of each layer explicit:
 
-- RTP-MIDI and AppleMIDI are system code, the base a driver is built on,
-  and carry no MIDIHub name: `rtpmidi_*` for the payload, the journal, the
-  sender, the receiver and timing, `applemidi_*` for the session protocol
-  and the peer table, with their headers in `include/rtpmidi/`. Their text
-  output names no program either;
-- `mh_*` is left only on code that has not been given its home yet (BLE
-  MIDI, UMP, Network MIDI 2.0) and on MIDIHub's own programs (router,
-  synth, preferences). Do not add to it;
+- The protocol code is system code, the base a driver is built on, and
+  carries no MIDIHub name in its identifiers, its include paths or its text:
+  `rtpmidi_*` and `applemidi_*` (sources in `network/rtpmidi/`, headers in
+  `include/rtpmidi/`), `blemidi_*` (`include/blemidi/`), `ump_*`
+  (`include/ump/`) and `netmidi2_*` (`include/netmidi2/`);
+- `mh_*` is left only on MIDIHub's own programs: the router, the synth and
+  the preferences. Do not use it for anything else;
 - `netmidi_*` is used by new AROS-facing Network MIDI runtime code, including
   the `network.c`, `camd.c` and future `config.c` boundaries;
 - `aros_*` is used by adapters shared by more than one AROS subsystem, such as

@@ -1,5 +1,5 @@
-#include <midihub/ble_midi.h>
-#include <midihub/ble_peripheral.h>
+#include <blemidi/ble_midi.h>
+#include <blemidi/ble_peripheral.h>
 
 #include <assert.h>
 #include <stdio.h>
@@ -21,14 +21,14 @@ static int capture_byte(void *context, uint16_t time, uint8_t byte)
     return 0;
 }
 
-static void check(struct mh_ble_midi_decoder *decoder,
+static void check(struct blemidi_midi_decoder *decoder,
                   const uint8_t *packet, size_t length,
                   const uint8_t *expected, size_t expected_length,
                   uint16_t timestamp)
 {
     struct capture result = {{0}, {0}, 0};
     size_t i;
-    assert(mh_ble_midi_decode(decoder, packet, length,
+    assert(blemidi_midi_decode(decoder, packet, length,
                               capture_byte, &result) == 0);
     assert(result.count == expected_length);
     assert(memcmp(result.bytes, expected, expected_length) == 0);
@@ -38,11 +38,11 @@ static void check(struct mh_ble_midi_decoder *decoder,
 
 static void check_advertising(void)
 {
-    uint8_t advertising[MH_BLE_LEGACY_AD_MAX];
-    uint8_t scan_response[MH_BLE_LEGACY_AD_MAX];
+    uint8_t advertising[BLEMIDI_LEGACY_AD_MAX];
+    uint8_t scan_response[BLEMIDI_LEGACY_AD_MAX];
     size_t advertising_length = 0, scan_length = 0;
 
-    assert(mh_ble_peripheral_advertising("AROS MIDIHub", advertising,
+    assert(blemidi_peripheral_advertising("AROS MIDIHub", advertising,
                                          sizeof(advertising), &advertising_length,
                                          scan_response, sizeof(scan_response),
                                          &scan_length) == 0);
@@ -54,11 +54,11 @@ static void check_advertising(void)
     assert(scan_length == strlen("AROS MIDIHub") + 2);
     assert(memcmp(scan_response + 2, "AROS MIDIHub", strlen("AROS MIDIHub")) == 0);
 
-    assert(mh_ble_peripheral_advertising("AROS MIDIHub peripheral name is too long",
+    assert(blemidi_peripheral_advertising("AROS MIDIHub peripheral name is too long",
                                          advertising, sizeof(advertising),
                                          &advertising_length, scan_response,
                                          sizeof(scan_response), &scan_length) == 0);
-    assert(scan_length == MH_BLE_LEGACY_AD_MAX);
+    assert(scan_length == BLEMIDI_LEGACY_AD_MAX);
     assert(scan_response[1] == 0x08);
 }
 
@@ -82,19 +82,19 @@ static int capture_big(void *context, uint16_t time, uint8_t byte)
 static size_t sysex_packets(const uint8_t *sysex, size_t length,
                             size_t capacity)
 {
-    struct mh_ble_midi_decoder decoder;
+    struct blemidi_midi_decoder decoder;
     struct big_capture result;
     uint8_t packet[244];
     size_t offset = 0, written, packets = 0;
 
-    mh_ble_midi_decoder_init(&decoder);
+    blemidi_midi_decoder_init(&decoder);
     memset(&result, 0, sizeof(result));
     while (offset < length) {
-        assert(mh_ble_midi_encode_sysex_chunk(sysex, length, &offset, 77,
+        assert(blemidi_midi_encode_sysex_chunk(sysex, length, &offset, 77,
                                               packet, capacity,
                                               &written) == 0);
         assert(written <= capacity);
-        assert(mh_ble_midi_decode(&decoder, packet, written,
+        assert(blemidi_midi_decode(&decoder, packet, written,
                                   capture_big, &result) == 0);
         packets++;
     }
@@ -137,7 +137,7 @@ static void log_message(void *context, const uint8_t *message, size_t length)
    spans packets must each stay with their own stream. */
 static void check_streams(void)
 {
-    static struct mh_ble_midi_stream a, b;
+    static struct blemidi_midi_stream a, b;
     struct message_log log_a, log_b;
     /* A: a Note On, then two more using running status */
     const uint8_t a1[] = {0x80, 0x81, 0x90, 60, 100};
@@ -154,12 +154,12 @@ static void check_streams(void)
 
     memset(&log_a, 0, sizeof(log_a));
     memset(&log_b, 0, sizeof(log_b));
-    mh_ble_midi_stream_init(&a, log_message, &log_a);
-    mh_ble_midi_stream_init(&b, log_message, &log_b);
-    assert(mh_ble_midi_stream_feed(&a, a1, sizeof(a1)) == 0);
-    assert(mh_ble_midi_stream_feed(&b, b1, sizeof(b1)) == 0);
-    assert(mh_ble_midi_stream_feed(&a, a2, sizeof(a2)) == 0);
-    assert(mh_ble_midi_stream_feed(&b, b2, sizeof(b2)) == 0);
+    blemidi_midi_stream_init(&a, log_message, &log_a);
+    blemidi_midi_stream_init(&b, log_message, &log_b);
+    assert(blemidi_midi_stream_feed(&a, a1, sizeof(a1)) == 0);
+    assert(blemidi_midi_stream_feed(&b, b1, sizeof(b1)) == 0);
+    assert(blemidi_midi_stream_feed(&a, a2, sizeof(a2)) == 0);
+    assert(blemidi_midi_stream_feed(&b, b2, sizeof(b2)) == 0);
     assert(log_a.messages == 3 && log_a.length == sizeof(a_expected));
     assert(memcmp(log_a.bytes, a_expected, sizeof(a_expected)) == 0);
     assert(log_b.messages == 2 && log_b.length == sizeof(b_expected));
@@ -172,8 +172,8 @@ static void check_streams(void)
     big[2] = 0xf0;
     for (i = 3; i < sizeof(big); i++)
         big[i] = 0x11;
-    assert(mh_ble_midi_stream_feed(&a, big, sizeof(big)) == -1);
-    assert(mh_ble_midi_stream_feed(&a, a1, sizeof(a1)) == 0);
+    assert(blemidi_midi_stream_feed(&a, big, sizeof(big)) == -1);
+    assert(blemidi_midi_stream_feed(&a, a1, sizeof(a1)) == 0);
     assert(log_a.messages == 1 && log_a.bytes[0] == 0x90);
 }
 
@@ -181,23 +181,23 @@ static void check_port_names(void)
 {
     char node[32], in[32], out[32];
 
-    mh_ble_midi_port_names("KORG microKEY  ", node, in, out, sizeof(node));
+    blemidi_midi_port_names("KORG microKEY  ", node, in, out, sizeof(node));
     assert(!strcmp(node, "KORG microKEY"));
     assert(!strcmp(in, "KORG microKEY In"));
     assert(!strcmp(out, "KORG microKEY Out"));
-    mh_ble_midi_port_names("A very long Bluetooth device name indeed",
+    blemidi_midi_port_names("A very long Bluetooth device name indeed",
                            node, in, out, sizeof(node));
     assert(strlen(out) == sizeof(out) - 1 && !strcmp(out + strlen(out) - 4, " Out"));
     assert(!strncmp(in, node, strlen(node)));
-    mh_ble_midi_port_names(NULL, node, in, out, sizeof(node));
+    blemidi_midi_port_names(NULL, node, in, out, sizeof(node));
     assert(!strcmp(in, "BLE MIDI device In"));
-    mh_ble_midi_port_names("   ", node, in, out, sizeof(node));
+    blemidi_midi_port_names("   ", node, in, out, sizeof(node));
     assert(!strcmp(out, "BLE MIDI device Out"));
 }
 
 int main(void)
 {
-    struct mh_ble_midi_decoder decoder;
+    struct blemidi_midi_decoder decoder;
     uint8_t packet[8];
     size_t written = 0;
     const uint8_t note[] = {0x90, 0x3c, 0x64};
@@ -220,28 +220,28 @@ int main(void)
     struct capture result = {{0}, {0}, 0};
     struct capture roundtrip = {{0}, {0}, 0};
     size_t offset = 0;
-    mh_ble_midi_decoder_init(&decoder);
-    assert(mh_ble_midi_encode_message(note, sizeof(note), 129,
+    blemidi_midi_decoder_init(&decoder);
+    assert(blemidi_midi_encode_message(note, sizeof(note), 129,
                                        packet, sizeof(packet), &written) == 0);
     check(&decoder, packet, written, note, sizeof(note), 129);
-    assert(mh_ble_midi_encode_message(program, sizeof(program), 130,
+    assert(blemidi_midi_encode_message(program, sizeof(program), 130,
                                        packet, sizeof(packet), &written) == 0);
     check(&decoder, packet, written, program, sizeof(program), 130);
     check(&decoder, running_packet, sizeof(running_packet),
           running_expected, sizeof(running_expected), 1);
     check(&decoder, sysex_start, sizeof(sysex_start),
           sysex_first_expected, sizeof(sysex_first_expected), 2);
-    assert(mh_ble_midi_decode(&decoder, sysex_continue,
+    assert(blemidi_midi_decode(&decoder, sysex_continue,
                               sizeof(sysex_continue),
                               capture_byte, &result) == 0);
     assert(result.count == sizeof(sysex_last_expected));
     assert(memcmp(result.bytes, sysex_last_expected,
                   sizeof(sysex_last_expected)) == 0);
     while (offset < sizeof(long_sysex)) {
-        assert(mh_ble_midi_encode_sysex_chunk(long_sysex,
+        assert(blemidi_midi_encode_sysex_chunk(long_sysex,
                     sizeof(long_sysex), &offset, 384, packet,
                     sizeof(packet), &written) == 0);
-        assert(mh_ble_midi_decode(&decoder, packet, written,
+        assert(blemidi_midi_decode(&decoder, packet, written,
                                   capture_byte, &roundtrip) == 0);
     }
     assert(roundtrip.count == sizeof(long_sysex));
@@ -250,18 +250,18 @@ int main(void)
     offset = 0;
     memset(&roundtrip, 0, sizeof(roundtrip));
     while (offset < sizeof(boundary_sysex)) {
-        assert(mh_ble_midi_encode_sysex_chunk(boundary_sysex,
+        assert(blemidi_midi_encode_sysex_chunk(boundary_sysex,
                     sizeof(boundary_sysex), &offset, 384, packet,
                     sizeof(packet), &written) == 0);
         assert(written <= sizeof(packet));
-        assert(mh_ble_midi_decode(&decoder, packet, written,
+        assert(blemidi_midi_decode(&decoder, packet, written,
                                   capture_byte, &roundtrip) == 0);
     }
     assert(roundtrip.count == sizeof(boundary_sysex));
     assert(memcmp(roundtrip.bytes, boundary_sysex,
                   sizeof(boundary_sysex)) == 0);
     memset(&result, 0, sizeof(result));
-    assert(mh_ble_midi_decode(&decoder, wrap_packet, sizeof(wrap_packet),
+    assert(blemidi_midi_decode(&decoder, wrap_packet, sizeof(wrap_packet),
                               capture_byte, &result) == 0);
     assert(result.count == sizeof(wrap_expected));
     assert(memcmp(result.bytes, wrap_expected, sizeof(wrap_expected)) == 0);

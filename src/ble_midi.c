@@ -1,4 +1,4 @@
-#include <midihub/ble_midi.h>
+#include <blemidi/ble_midi.h>
 
 #include <string.h>
 
@@ -17,20 +17,20 @@ static unsigned message_size(uint8_t status)
     return 0;
 }
 
-void mh_ble_midi_decoder_init(struct mh_ble_midi_decoder *decoder)
+void blemidi_midi_decoder_init(struct blemidi_midi_decoder *decoder)
 {
     memset(decoder, 0, sizeof(*decoder));
 }
 
-static int emit(void *context, mh_ble_midi_byte_callback callback,
+static int emit(void *context, blemidi_midi_byte_callback callback,
                 uint16_t timestamp, uint8_t byte)
 {
     return callback(context, timestamp, byte) == 0 ? 0 : -1;
 }
 
-int mh_ble_midi_decode(struct mh_ble_midi_decoder *decoder,
+int blemidi_midi_decode(struct blemidi_midi_decoder *decoder,
                        const uint8_t *packet, size_t length,
-                       mh_ble_midi_byte_callback callback, void *context)
+                       blemidi_midi_byte_callback callback, void *context)
 {
     size_t i;
     uint8_t running = 0, pending = 0, need = 0;
@@ -156,7 +156,7 @@ int mh_ble_midi_decode(struct mh_ble_midi_decoder *decoder,
     return 0;
 }
 
-int mh_ble_midi_encode_sysex_chunk(const uint8_t *message, size_t length,
+int blemidi_midi_encode_sysex_chunk(const uint8_t *message, size_t length,
                                     size_t *offset, uint16_t timestamp,
                                     uint8_t *packet, size_t capacity,
                                     size_t *written)
@@ -191,7 +191,7 @@ int mh_ble_midi_encode_sysex_chunk(const uint8_t *message, size_t length,
     return 0;
 }
 
-int mh_ble_midi_encode_message(const uint8_t *message, size_t length,
+int blemidi_midi_encode_message(const uint8_t *message, size_t length,
                                 uint16_t timestamp, uint8_t *packet,
                                 size_t capacity, size_t *written)
 {
@@ -209,25 +209,25 @@ int mh_ble_midi_encode_message(const uint8_t *message, size_t length,
     return 0;
 }
 
-void mh_ble_midi_stream_init(struct mh_ble_midi_stream *stream,
-                             mh_ble_midi_message_callback callback,
+void blemidi_midi_stream_init(struct blemidi_midi_stream *stream,
+                             blemidi_midi_message_callback callback,
                              void *context)
 {
     stream->callback = callback;
     stream->context = context;
-    mh_ble_midi_stream_reset(stream);
+    blemidi_midi_stream_reset(stream);
 }
 
-void mh_ble_midi_stream_reset(struct mh_ble_midi_stream *stream)
+void blemidi_midi_stream_reset(struct blemidi_midi_stream *stream)
 {
-    mh_ble_midi_decoder_init(&stream->decoder);
+    blemidi_midi_decoder_init(&stream->decoder);
     stream->message_length = stream->message_needed = 0;
     stream->sysex_length = 0;
 }
 
 static int stream_byte(void *context, uint16_t timestamp, uint8_t byte)
 {
-    struct mh_ble_midi_stream *stream = context;
+    struct blemidi_midi_stream *stream = context;
 
     (void)timestamp;
     if (byte >= 0xf8) {
@@ -280,18 +280,18 @@ static int stream_byte(void *context, uint16_t timestamp, uint8_t byte)
     return 0;
 }
 
-int mh_ble_midi_stream_feed(struct mh_ble_midi_stream *stream,
+int blemidi_midi_stream_feed(struct blemidi_midi_stream *stream,
                             const uint8_t *packet, size_t length)
 {
-    if (mh_ble_midi_decode(&stream->decoder, packet, length, stream_byte,
+    if (blemidi_midi_decode(&stream->decoder, packet, length, stream_byte,
                            stream)) {
-        mh_ble_midi_stream_reset(stream);
+        blemidi_midi_stream_reset(stream);
         return -1;
     }
     return 0;
 }
 
-void mh_ble_midi_port_names(const char *device_name, char *node, char *in,
+void blemidi_midi_port_names(const char *device_name, char *node, char *in,
                             char *out, size_t size)
 {
     size_t n = 0, limit = size > 5 ? size - 5 : 0;

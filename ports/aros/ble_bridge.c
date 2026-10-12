@@ -1,4 +1,4 @@
-#include <midihub/ble_midi.h>
+#include <blemidi/ble_midi.h>
 #include <rtpmidi/rtpmidi.h>
 #include "camd_bridge.h"
 
@@ -17,7 +17,7 @@ struct Library *BluetoothBase;
 
 struct ble_runtime {
     struct aros_camd_bridge camd;
-    struct mh_ble_midi_stream stream;
+    struct blemidi_midi_stream stream;
     APTR write_channel;
     unsigned long received;
     unsigned long sent;
@@ -53,7 +53,7 @@ static int send_to_ble(void *context, const uint8_t *message, size_t length)
         message[length - 1] == 0xf7) {
         size_t offset = 0;
         while (offset < length) {
-            if (mh_ble_midi_encode_sysex_chunk(message, length, &offset,
+            if (blemidi_midi_encode_sysex_chunk(message, length, &offset,
                                                 timestamp, packet,
                                                 runtime->packet_limit,
                                                 &written) ||
@@ -61,7 +61,7 @@ static int send_to_ble(void *context, const uint8_t *message, size_t length)
                 return -1;
         }
     } else {
-        if (mh_ble_midi_encode_message(message, length, timestamp, packet,
+        if (blemidi_midi_encode_message(message, length, timestamp, packet,
                                         runtime->packet_limit, &written) ||
             btDoChannel(runtime->write_channel, packet, written))
             return -1;
@@ -72,8 +72,8 @@ static int send_to_ble(void *context, const uint8_t *message, size_t length)
 
 int main(int argc, char **argv)
 {
-    static const uint8_t service_uuid[16] = MH_BLE_MIDI_SERVICE_UUID;
-    static const uint8_t io_uuid[16] = MH_BLE_MIDI_IO_UUID;
+    static const uint8_t service_uuid[16] = BLEMIDI_MIDI_SERVICE_UUID;
+    static const uint8_t io_uuid[16] = BLEMIDI_MIDI_IO_UUID;
     static char node_name[] = "MIDIHub BLE";
     static char incoming_name[] = "MIDIHub BLE In";
     static char outgoing_name[] = "MIDIHub BLE Out";
@@ -96,7 +96,7 @@ int main(int argc, char **argv)
     }
     memset(&runtime, 0, sizeof(runtime));
     runtime.camd.signal_bit = -1;
-    mh_ble_midi_stream_init(&runtime.stream, deliver, &runtime);
+    blemidi_midi_stream_init(&runtime.stream, deliver, &runtime);
     BluetoothBase = OpenLibrary((CONST_STRPTR)"bluetooth.library", 1);
     if (!BluetoothBase) {
         printf("bluetooth.library is unavailable\n");
@@ -181,7 +181,7 @@ int main(int argc, char **argv)
                     LONG error = btGetChannelError(channel);
                     if (!error) {
                         ULONG actual = btGetChannelActual(channel);
-                        if (mh_ble_midi_stream_feed(&runtime.stream,
+                        if (blemidi_midi_stream_feed(&runtime.stream,
                                                     read_buffer, actual))
                             printf("Malformed BLE MIDI notification\n");
                     } else {

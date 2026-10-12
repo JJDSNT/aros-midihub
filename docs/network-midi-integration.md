@@ -9,8 +9,8 @@ it inside MIDIHub.
 
 | part | file | state |
 |---|---|---|
-| AppleMIDI session (IN, OK, NO, BY, CK, RS) | `src/applemidi.c`, `src/session.c`, `src/peers.c` | up to eight peers, either role; host tests |
-| RTP-MIDI payload, recovery journal | `src/rtpmidi.c`, `src/sender.c`, `src/timing.c` | chapters N, C, P, W, M, E, Q, F, X; host tests |
+| AppleMIDI session (IN, OK, NO, BY, CK, RS) | `network/rtpmidi/applemidi.c`, `network/rtpmidi/session.c`, `network/rtpmidi/peers.c` | up to eight peers, either role; host tests |
+| RTP-MIDI payload, recovery journal | `network/rtpmidi/rtpmidi.c`, `network/rtpmidi/sender.c`, `network/rtpmidi/timing.c` | chapters N, C, P, W, M, E, Q, F, X; host tests |
 | mDNS for `_apple-midi._udp` | `network/mdns/embedded.c` | interim embedded advertiser and query responder; to be replaced by `bonami.library` and `mdnsd` (`network/mdns/aros`) |
 | Universal MIDI Packet, MIDI 1.0 translation | `src/ump.c` | host tests |
 | Network MIDI 2.0 (UDP), M2-124-UM | `src/netmidi2.c` | Host and Client sessions, FEC; host tests |

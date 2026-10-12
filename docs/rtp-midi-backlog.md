@@ -15,7 +15,7 @@ MIDI 2.0 (`src/netmidi2.c`) and the mDNS service have their own documents:
   and segmented SysEx; the recovery journal's chapters P, C, M, W, N, E, T
   and A for a channel and D, V, Q, F and X for the system, decoded and
   encoded. `tests/protocol.c` covers them on the host.
-- `src/peers.c` keeps up to eight sessions, either role, and is tested, but
+- `network/rtpmidi/peers.c` keeps up to eight sessions, either role, and is tested, but
   nothing on AROS calls it.
 - The AROS program `MIDIHub` talks to **one** peer. It answers an invitation
   or invites the address in its configuration, synchronises clocks, sends
@@ -41,7 +41,7 @@ commit and the test that shows it.
 
 | # | What was done |
 |---|---|
-| R03 | The receiver's state and the repair from a journal are `struct rtpmidi_receiver` in `src/receiver.c`, the counterpart of `struct rtpmidi_sender`: output through three callbacks, the clock handed in, no OS calls. `ports/aros/midihub/main.c` went from 1907 lines to 930 and keeps sockets, clock and CAMD. `receiver_recovery` in `tests/protocol.c` sends a stream to two receivers, one of which loses packets, and compares them after chapters N, P, W, C, M, T, A, the system chapters and X; switching off any one of the six repair steps fails it. The text of the reports is unchanged, so `tests/network_loopback.py` passes as before. Not covered on the host: chapter E's counts, the enhanced form of chapter C, MTC, and a Note On queued for later. |
+| R03 | The receiver's state and the repair from a journal are `struct rtpmidi_receiver` in `network/rtpmidi/receiver.c`, the counterpart of `struct rtpmidi_sender`: output through three callbacks, the clock handed in, no OS calls. `ports/aros/midihub/main.c` went from 1907 lines to 930 and keeps sockets, clock and CAMD. `receiver_recovery` in `tests/protocol.c` sends a stream to two receivers, one of which loses packets, and compares them after chapters N, P, W, C, M, T, A, the system chapters and X; switching off any one of the six repair steps fails it. The text of the reports is unchanged, so `tests/network_loopback.py` passes as before. Not covered on the host: chapter E's counts, the enhanced form of chapter C, MTC, and a Note On queued for later. |
 
 Found while doing it: `tests/network_loopback.py` failed about once in forty
 runs, before the change as after, because a journal-only guard packet could
@@ -61,7 +61,7 @@ packet in either order (60 runs without a failure).
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
 | R06 | Never run against another implementation. | First rtpmidid on Linux, which needs no hardware: a runner in `tools/` beside the mDNS ones, hosted AROS on the veth pair, notes and SysEx in both directions, a session opened from each side, packets dropped with `tc netem` to make the journal work. Then macOS, iOS and rtpMIDI for Windows when the machines are at hand ([the iPhone procedure](iphone-smoke-test.md) is written for Linux and needs redoing for AROS). | `tools/rtpmidi-rtpmidid-hosted.sh` passes; a table in this file says which peer was tried, when, and what failed. |
-| R07 | One peer on AROS. | Put `src/peers.c` under the event loop: sender, receiver (R03), clock offset, queue and SysEx assembler per peer. | Two scripted peers connected at once, each recovering its own losses. |
+| R07 | One peer on AROS. | Put `network/rtpmidi/peers.c` under the event loop: sender, receiver (R03), clock offset, queue and SysEx assembler per peer. | Two scripted peers connected at once, each recovering its own losses. |
 | R05 | An invitation from anyone is accepted while there is room; the only rule is the table's size. The SSRC of RTP, CK and RS is already checked against the session's. | An accept rule in the configuration, as Apple's "who may connect to me": anyone, a list of addresses or names, nobody. Goes with R07, where a second peer first becomes possible. | Host tests for an accepted and a refused invitation under each rule. |
 | R08 | A CAMD client, not a driver. | A `DEVS:Midi` driver with a fixed number of ports, each bound to a peer while the session lasts, as `btmidi` does. Needs D1 and D2 below. | A CAMD program opens `applemidi.out.0` and a peer hears it; `MIDIHub In`/`Out` are gone. |
 | R09 | The embedded mDNS responder. | Register `_apple-midi._udp` through the system service and remove `network/mdns/embedded.c` from this program. Waits for the registration half of the service to exist upstream (AROS issue #1559, PR #1560). | `avahi-browse` sees the session with `mdnsd` running and no second socket on port 5353. |
@@ -102,7 +102,7 @@ rules are the ones the earlier pull requests taught us
 | # | What |
 |---|---|
 | U1 | Where it lives: under `workbench/devs/midi/` as the driver, with the session code beside it, or in contrib first. A question for the maintainers, to ask with working code to show. |
-| U2 | Names and layout by AROS convention. Done for the names on 2026-10-12: `rtpmidi_*` and `applemidi_*`, headers in `include/rtpmidi/`, no program name in the code or its text. Still to do: the sources share `src/` with MIDIHub's own code, and `config.c` and the embedded responder (`netmidi_*`) belong to the program, not to this code. |
+| U2 | Names and layout by AROS convention. Done on 2026-10-12: `rtpmidi_*` and `applemidi_*`, sources in `network/rtpmidi/`, headers in `include/rtpmidi/`, no program name in the code or its text. `config.c` and the embedded responder (`netmidi_*`) belong to the program and stay with it. |
 | U3 | The Codacy gate: no new finding. Variables declared at first use, no `strcpy`/`strncpy`/`strlen`, `SocketBase` passed as a parameter. `main.c` uses `strcpy` and `printf` freely today. |
 | U4 | Origin of the code. The README names MIDIKit and librtpmidid as references. Confirm that nothing was copied from either and say so in the pull request; if anything was, its licence and notice go with it. |
 | U5 | A first cut small enough to review: the codecs and their tests alone, then the session layer, then the driver. |
