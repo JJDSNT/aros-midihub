@@ -335,9 +335,10 @@ void rtpmidi_sender_record(struct rtpmidi_sender *sender, uint16_t sequence,
             event->parameter_valid = 1;
             event->parameter_nrpn = sender->parameter_nrpn[channel];
             {
-                struct rtpmidi_parameter_counter *counter = parameter_counter(
-                    sender->parameter_counts, channel,
-                    event->parameter_nrpn, event->parameter, 0);
+                const struct rtpmidi_parameter_counter *counter =
+                    parameter_counter(sender->parameter_counts, channel,
+                                      event->parameter_nrpn, event->parameter,
+                                      0);
                 if (counter) {
                     event->parameter_count_known = 1;
                     event->parameter_count = counter->count;
@@ -402,8 +403,6 @@ int rtpmidi_sender_record_sysex(struct rtpmidi_sender *sender, uint16_t sequence
                            size_t length)
 {
     struct rtpmidi_sent_event *event;
-    struct rtpmidi_sent_sysex *log;
-    size_t pending = 0;
     size_t i;
     int is_mtc;
     if (!sender || !message || length < 2 || message[0] != 0xf0 ||
@@ -422,6 +421,7 @@ int rtpmidi_sender_record_sysex(struct rtpmidi_sender *sender, uint16_t sequence
     }
     if (!is_mtc) {
         size_t drop = 0;
+        size_t pending = 0;
         for (i = 0; i < sender->sysex_log_count; ++i)
             pending += sender->sysex_logs[i].length;
         /* The oldest logs give way; the notes and controllers sent before
@@ -460,6 +460,8 @@ int rtpmidi_sender_record_sysex(struct rtpmidi_sender *sender, uint16_t sequence
         sender->mtc_partial_mask = 0;
         sender->mtc_qf_direction = RTPMIDI_MTC_UNKNOWN;
     } else {
+        struct rtpmidi_sent_sysex *log;
+
         event->system_kind = RTPMIDI_SYSTEM_SYSEX;
         ++sender->sysex_count;
         log = &sender->sysex_logs[sender->sysex_log_count++];
@@ -565,7 +567,6 @@ static int build_parameters(const struct rtpmidi_sender *sender,
         if (j == log_count) {
             logs[j].number = event->parameter;
             logs[j].nrpn = event->parameter_nrpn;
-            logs[j].last_event = (int)i;
             logs[j].entry_msb = -1;
             logs[j].entry_lsb = -1;
             logs[j].adjust = 0;
@@ -949,9 +950,6 @@ static int build_system(const struct rtpmidi_sender *sender, uint16_t sequence,
     int mtc = -1;
     size_t i;
     size_t start;
-    size_t d_header = 0;
-    uint8_t d_flags = 0;
-    int d_recent = 0;
     if (!sender || !data || !length || !recent) return -1;
     for (i = 0; i < sender->count; ++i) {
         switch (sender->events[i].bytes[0]) {
@@ -985,6 +983,10 @@ static int build_system(const struct rtpmidi_sender *sender, uint16_t sequence,
     data[start + 1] = 0;
     *recent = 0;
     if (reset >= 0 || tune >= 0 || song >= 0) {
+        size_t d_header;
+        uint8_t d_flags = 0;
+        int d_recent = 0;
+
         if (*length >= capacity) return -1;
         d_header = (*length)++;
         if (reset >= 0) {
@@ -1086,9 +1088,9 @@ static int build_system(const struct rtpmidi_sender *sender, uint16_t sequence,
         }
         if (sender->mtc_partial_mask) {
             for (i = 0; i < 8; i += 2) {
-                uint8_t high = sender->mtc_partial_mask & (1u << i) ?
+                uint8_t high = (sender->mtc_partial_mask & (1u << i)) ?
                                sender->mtc_qf_nibbles[i] : 0;
-                uint8_t low = sender->mtc_partial_mask & (1u << (i + 1)) ?
+                uint8_t low = (sender->mtc_partial_mask & (1u << (i + 1))) ?
                               sender->mtc_qf_nibbles[i + 1] : 0;
                 if (put(data, capacity, length,
                         (uint8_t)((high << 4) | low)) < 0)
@@ -1216,7 +1218,7 @@ int rtpmidi_sender_packet_list(struct rtpmidi_sender *sender,
     previous = messages[0].timestamp;
     for (n = 0; n < count; ++n) {
         const struct rtpmidi_timed_message *m = &messages[n];
-        uint8_t delta[4];
+        uint8_t delta[4] = {0, 0, 0, 0};
         size_t delta_length = 0;
         /* A channel command whose status is that of the channel command
            before it goes without its status (RFC 6295 section 3.2, as on

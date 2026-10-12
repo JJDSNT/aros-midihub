@@ -172,16 +172,14 @@ void rtpmidi_receiver_deliver(struct rtpmidi_receiver *rx, const uint8_t *bytes,
         } else if ((controller == 100 || controller == 98) &&
                    rx->parameter_type_known[channel] &&
                    rx->parameter_nrpn[channel] == (controller == 98)) {
-            struct rtpmidi_parameter_counter *counter;
-            uint16_t number;
             rx->parameter_lsb[channel] = bytes[2];
             rx->parameter_pending[channel] = 0;
             rx->parameter_valid[channel] =
                 rx->parameter_msb[channel] != 0x7f || bytes[2] != 0x7f;
             if (rx->parameter_valid[channel]) {
-                number = (uint16_t)(
+                uint16_t number = (uint16_t)(
                     ((uint16_t)rx->parameter_msb[channel] << 7) | bytes[2]);
-                counter = parameter_counter(
+                struct rtpmidi_parameter_counter *counter = parameter_counter(
                     rx, channel, rx->parameter_nrpn[channel], number, 1);
                 if (counter)
                     counter->count = (uint8_t)((counter->count + 1) & 0x7f);
@@ -230,11 +228,11 @@ void rtpmidi_receiver_deliver(struct rtpmidi_receiver *rx, const uint8_t *bytes,
 void rtpmidi_receiver_deliver_sysex(struct rtpmidi_receiver *rx, const uint8_t *message,
                           size_t length)
 {
-    size_t i;
     int mtc = length == 10 && message[0] == 0xf0 && message[1] == 0x7f &&
               message[3] == 0x01 && message[4] == 0x01 &&
               message[9] == 0xf7;
     if (mtc) {
+        size_t i;
         for (i = 1; i < 9 && !(message[i] & 0x80); ++i) {}
         if (i == 9) {
             memcpy(rx->mtc_full_frame, message + 5, 4);
@@ -472,10 +470,10 @@ static void recover_controls(struct rtpmidi_receiver *rx,
         }
         for (j = 0; j < controls.count; ++j) {
             const struct rtpmidi_journal_control_log *log = &controls.logs[j];
-            size_t k;
-            int repeated = 0;
-
             if (controls.enhanced) {
+                size_t k;
+                int repeated = 0;
+
                 for (k = 0; k < controls.count; ++k)
                     if (controls.logs[k].number == log->number &&
                         controls.logs[k].command != log->command) {
@@ -833,7 +831,6 @@ static void recover_system(struct rtpmidi_receiver *rx,
     uint8_t message[3];
     uint32_t clock;
     uint32_t remainder;
-    unsigned int i;
     int start_at_zero;
     if (state->has_reset &&
         (!single_loss || !state->reset_single_packet_safe) &&
@@ -1012,6 +1009,8 @@ static void recover_system(struct rtpmidi_receiver *rx,
     rtpmidi_receiver_deliver(rx, message, 3);
     remainder = clock % 6;
     if (state->downbeat_played) {
+        unsigned int i;
+
         message[0] = 0xfb;
         rtpmidi_receiver_deliver(rx, message, 1);
         message[0] = 0xf8;

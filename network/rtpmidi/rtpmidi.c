@@ -392,7 +392,6 @@ int rtpmidi_journal_decode_system(const struct rtpmidi_journal *journal,
         decoded = 1;
     }
     if (offset != length) return -1;
-    if (offset > length) return -1;
     return decoded;
 }
 
@@ -406,8 +405,6 @@ int rtpmidi_journal_decode_sysex(const struct rtpmidi_journal_system_state *stat
     while (offset < state->sysex_length) {
         struct rtpmidi_journal_sysex_log *log;
         uint8_t flags;
-        unsigned int bytes = 0;
-        uint32_t first = 0;
         if (sysex->count == RTPMIDI_JOURNAL_SYSEX_LOGS) return -1;
         log = &sysex->logs[sysex->count++];
         flags = state->sysex[offset++];
@@ -426,6 +423,8 @@ int rtpmidi_journal_decode_sysex(const struct rtpmidi_journal_system_state *stat
         }
         if (flags & 0x10) {
             uint8_t value;
+            unsigned int bytes = 0;
+            uint32_t first = 0;
             log->has_first = 1;
             do {
                 if (offset >= state->sysex_length || bytes++ == 4)
@@ -457,12 +456,6 @@ int rtpmidi_journal_decode_aftertouch(const struct rtpmidi_journal_channel *chan
     size_t offset = 3;
     size_t size;
     size_t logs;
-    size_t off_count;
-    unsigned int low;
-    unsigned int high;
-    size_t i;
-    uint8_t seen[16] = {0};
-    uint8_t number;
     if (!channel || !aftertouch || !channel->data || channel->length < 3)
         return -1;
     memset(aftertouch, 0, sizeof(*aftertouch));
@@ -490,6 +483,10 @@ int rtpmidi_journal_decode_aftertouch(const struct rtpmidi_journal_channel *chan
         offset += 2;
     }
     if (channel->chapters & 0x08) {
+        size_t off_count;
+        unsigned int low;
+        unsigned int high;
+
         if (length - offset < 2) return -1;
         logs = data[offset] & 0x7f;
         low = data[offset + 1] >> 4;
@@ -519,6 +516,9 @@ int rtpmidi_journal_decode_aftertouch(const struct rtpmidi_journal_channel *chan
         ++offset;
     }
     if (channel->chapters & 0x01) {
+        size_t i;
+        uint8_t seen[16] = {0};
+
         if (length - offset < 1) return -1;
         logs = (data[offset] & 0x7f) + 1;
         size = 1 + 2 * logs;
@@ -527,7 +527,7 @@ int rtpmidi_journal_decode_aftertouch(const struct rtpmidi_journal_channel *chan
         aftertouch->poly_count = logs;
         for (i = 0; i < logs; ++i) {
             struct rtpmidi_journal_poly_pressure *log = &aftertouch->poly[i];
-            number = data[offset] & 0x7f;
+            uint8_t number = data[offset] & 0x7f;
             if (seen[number / 8] & (0x80u >> (number % 8))) return -1;
             seen[number / 8] |= (uint8_t)(0x80u >> (number % 8));
             log->number = number;
@@ -553,7 +553,6 @@ int rtpmidi_journal_decode_notes(const struct rtpmidi_journal_channel *channel,
     unsigned int high;
     uint8_t seen[16] = {0};
     size_t i;
-    uint8_t number;
 
     if (!channel || !notes || !channel->data ||
         channel->length < 3)
@@ -603,7 +602,7 @@ int rtpmidi_journal_decode_notes(const struct rtpmidi_journal_channel *channel,
     for (i = 0; i < logs; ++i) {
         const uint8_t *log = data + offset + 2 + i * 2;
         struct rtpmidi_journal_note_log *entry = &notes->logs[i];
-        number = log[0] & 0x7f;
+        uint8_t number = log[0] & 0x7f;
         if (!((log[1] & 0x7f)) ||
             (seen[number / 8] & (0x80u >> (number % 8))))
             return -1;
@@ -631,10 +630,7 @@ int rtpmidi_journal_decode_note_extras(
     size_t offset = 3;
     size_t size;
     size_t logs;
-    size_t off_count;
     size_t i;
-    unsigned int low;
-    unsigned int high;
     uint8_t seen_count[16] = {0};
     uint8_t seen_velocity[16] = {0};
 
@@ -666,6 +662,10 @@ int rtpmidi_journal_decode_note_extras(
         offset += 2;
     }
     if (channel->chapters & 0x08) {
+        size_t off_count;
+        unsigned int low;
+        unsigned int high;
+
         if (length - offset < 2) return -1;
         logs = data[offset] & 0x7f;
         low = data[offset + 1] >> 4;
@@ -764,7 +764,6 @@ int rtpmidi_journal_decode_controls(const struct rtpmidi_journal_channel *channe
     uint8_t command_mask[128] = {0};
     uint8_t expected_mask[128] = {0};
     uint8_t repeated[128] = {0};
-    uint8_t number;
     uint8_t tool;
     if (!channel || !controls || !channel->data || channel->length < 3)
         return -1;
@@ -785,7 +784,7 @@ int rtpmidi_journal_decode_controls(const struct rtpmidi_journal_channel *channe
     for (i = 0; i < count; ++i) {
         const uint8_t *log = data + offset + 1 + i * 2;
         struct rtpmidi_journal_control_log *entry = &controls->logs[i];
-        number = log[0] & 0x7f;
+        uint8_t number = log[0] & 0x7f;
         entry->number = number;
         entry->alternate = !!(log[1] & 0x80);
         entry->count_tool = entry->alternate && !!(log[1] & 0x40);
