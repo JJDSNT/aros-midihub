@@ -88,6 +88,70 @@ mdnsRegAppendSrv(UBYTE *rdata, const UBYTE *targetWire, LONG targetLen,
 /* a response stays within one Ethernet frame */
 #define MDNS_RESPONSE_MAX 1400L
 
+/* a record that went to the group this many seconds ago or less may be
+ * answered to the asker alone when the question allows it: a quarter of
+ * the life of the shortest-lived records, the host's */
+#define MDNS_UNICAST_SECONDS (MDNS_TTL_HOST / 4)
+
+/*
+ * Starts a response in pkt and returns where its records begin. An answer
+ * for a resolver that speaks plain DNS repeats the ID and the question it
+ * sent (RFC 6762 section 6.7).
+ */
+static LONG
+response_begin(struct MDNSEngineToken *tok, UBYTE *pkt)
+{
+    struct MDNSHeader *hdr = (struct MDNSHeader *)pkt;
+    LONG pos;
+
+    if (tok->et_ReplyAddr != 0 && tok->et_ReplyLegacy &&
+        tok->et_ReplyQuestion != NULL &&
+        mdnsBuildQuery(pkt, (LONG)MDNS_MAX_PACKET, tok->et_ReplyId,
+            tok->et_ReplyQuestion->qname, tok->et_ReplyQuestion->qtype,
+            (UWORD)(tok->et_ReplyQuestion->qclass & 0x7fff), &pos) == 0) {
+        hdr->flags = htons((unsigned short)(DNS_FLAG_QR | DNS_FLAG_AA));
+        return pos;
+    }
+    mdnsInitHeader(hdr, DNS_FLAG_QR | DNS_FLAG_AA, 0);
+    return (LONG)sizeof(struct MDNSHeader);
+}
+
+/* Such a resolver keeps no mDNS cache: ten seconds at most, and no
+ * cache-flush bit, which it would read as another class. */
+static ULONG
+reply_ttl(struct MDNSEngineToken *tok, ULONG ttl)
+{
+    return (tok->et_ReplyAddr != 0 && tok->et_ReplyLegacy && ttl > 10)
+        ? 10 : ttl;
+}
+
+static UWORD
+reply_class(struct MDNSEngineToken *tok, UWORD rclass)
+{
+    return (tok->et_ReplyAddr != 0 && tok->et_ReplyLegacy)
+        ? (UWORD)(rclass & 0x7fff) : rclass;
+}
+
+/* The answer in hand goes to the one who asked, or to the group again. */
+static void
+reply_to_asker(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
+    BOOL legacy)
+{
+    tok->et_ReplyAddr = tok->et_QueryAddr;
+    tok->et_ReplyPort = legacy ? tok->et_QueryPort : MDNS_DNS_PORT;
+    tok->et_ReplyLegacy = legacy;
+    tok->et_ReplyQuestion = q;
+}
+
+static void
+reply_to_group(struct MDNSEngineToken *tok)
+{
+    tok->et_ReplyAddr = 0;
+    tok->et_ReplyPort = 0;
+    tok->et_ReplyLegacy = FALSE;
+    tok->et_ReplyQuestion = NULL;
+}
+
 /*
  * Appends a service's records to a response that is being built: PTR, SRV,
  * TXT and, with withAddr, the address record of its host. Returns FALSE and
@@ -101,8 +165,9 @@ service_append(struct MDNSEngineToken *tok,
     /* The address record names the interface it leaves on, unless the
      * service stands for another host. */
     ULONG addr = rs->rs_Proxy ? rs->rs_HostAddr : tok->et_Ifs[ifindex].mi_Addr;
-    ULONG ttl = goodbye ? 0 : MDNS_TTL_OTHER;
-    ULONG hostttl = goodbye ? 0 : MDNS_TTL_HOST;
+    ULONG ttl = reply_ttl(tok, goodbye ? 0 : MDNS_TTL_OTHER);
+    ULONG hostttl = reply_ttl(tok, goodbye ? 0 : MDNS_TTL_HOST);
+    UWORD unique = reply_class(tok, DNS_CLASS_IN | 0x8000);
     LONG pos = *posp;
     UWORD ancount = *ancountp;
     BOOL fits = TRUE;
@@ -147,7 +212,7 @@ service_append(struct MDNSEngineToken *tok,
 
     srvlen = mdnsRegAppendSrv(srvdata, hostwire, hostwirelen, rs->rs_Port);
     fits = fits && mdnsAppendRecord(pkt, MDNS_RESPONSE_MAX, &pos, &ancount,
-        instfqdn, DNS_TYPE_SRV, DNS_CLASS_IN | 0x8000, hostttl, srvdata,
+        instfqdn, DNS_TYPE_SRV, unique, hostttl, srvdata,
         (UWORD)srvlen) == 0;
 
     /*
@@ -181,7 +246,7 @@ service_append(struct MDNSEngineToken *tok,
         txtdata[txtlen++] = 0;
     }
     fits = fits && mdnsAppendRecord(pkt, MDNS_RESPONSE_MAX, &pos, &ancount,
-        instfqdn, DNS_TYPE_TXT, DNS_CLASS_IN | 0x8000, ttl, txtdata,
+        instfqdn, DNS_TYPE_TXT, unique, ttl, txtdata,
         (UWORD)txtlen) == 0;
 
     /*
@@ -198,7 +263,7 @@ service_append(struct MDNSEngineToken *tok,
         addrdata[2] = (UBYTE)((addr >> 8) & 0xFF);
         addrdata[3] = (UBYTE)(addr & 0xFF);
         fits = fits && mdnsAppendRecord(pkt, MDNS_RESPONSE_MAX, &pos,
-            &ancount, hostfqdn, DNS_TYPE_A, DNS_CLASS_IN | 0x8000, hostttl,
+            &ancount, hostfqdn, DNS_TYPE_A, unique, hostttl,
             addrdata, (UWORD)4) == 0;
     }
 
@@ -217,17 +282,20 @@ mdnsRegSendServiceOn(struct MDNSEngineToken *tok,
 {
     UBYTE *pkt;
     struct MDNSHeader *hdr;
-    LONG pos = (LONG)sizeof(struct MDNSHeader);
+    LONG pos;
     UWORD ancount = 0;
 
     if (tok == NULL || rs == NULL || (pkt = tok->et_TxBuf) == NULL) {
         return;
     }
     hdr = (struct MDNSHeader *)pkt;
-    mdnsInitHeader(hdr, DNS_FLAG_QR | DNS_FLAG_AA, 0);
+    pos = response_begin(tok, pkt);
     if (service_append(tok, rs, goodbye, ifindex, pkt, &pos, &ancount, TRUE)) {
         hdr->ancount = htons(ancount);
         mdnsNetSendOn(tok, ifindex, pkt, pos);
+        if (tok->et_ReplyAddr == 0 && !goodbye) {
+            rs->rs_Multicast = mdnsEngineNow();
+        }
     }
 }
 
@@ -326,7 +394,11 @@ answers_flush(struct MDNSEngineToken *tok, ULONG now)
     }
     for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
         n = n->ln_Succ) {
-        ((struct MDNSRegisteredService *)n)->rs_AnswerTick = 0;
+        rs = (struct MDNSRegisteredService *)n;
+        if (rs->rs_AnswerTick != 0) {
+            rs->rs_Multicast = mdnsEngineNow();
+        }
+        rs->rs_AnswerTick = 0;
     }
     tok->et_AnswerPending = FALSE;
 }
@@ -578,17 +650,20 @@ host_send_addr(struct MDNSEngineToken *tok, BOOL goodbye)
         if (tok->et_SendIf >= 0 && i != tok->et_SendIf) {
             continue;
         }
-        mdnsInitHeader(hdr, DNS_FLAG_QR | DNS_FLAG_AA, 0);
-        pos = (LONG)sizeof(struct MDNSHeader);
+        pos = response_begin(tok, pkt);
         ancount = 0;
         host_addr_data(tok->et_Ifs[i].mi_Addr, addrdata);
         if (mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, fqdn,
-                DNS_TYPE_A, DNS_CLASS_IN | 0x8000,
-                goodbye ? 0 : MDNS_TTL_HOST, addrdata, 4) != 0) {
+                DNS_TYPE_A, reply_class(tok, DNS_CLASS_IN | 0x8000),
+                reply_ttl(tok, goodbye ? 0 : MDNS_TTL_HOST), addrdata,
+                4) != 0) {
             continue;
         }
         hdr->ancount = htons(ancount);
         mdnsNetSendOn(tok, i, pkt, pos);
+        if (tok->et_ReplyAddr == 0 && !goodbye) {
+            tok->et_HostMulticast = mdnsEngineNow();
+        }
     }
 }
 
@@ -902,10 +977,10 @@ mdnsRegSendTypes(struct MDNSEngineToken *tok)
     struct Node *n, *m;
     char typefqdn[256];
     UBYTE target[256];
-    LONG pos = (LONG)sizeof(struct MDNSHeader), targetlen;
+    LONG pos, targetlen;
     UWORD ancount = 0;
 
-    mdnsInitHeader(hdr, DNS_FLAG_QR | DNS_FLAG_AA, 0);
+    pos = response_begin(tok, pkt);
     for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
         n = n->ln_Succ) {
         rs = (struct MDNSRegisteredService *)n;
@@ -929,7 +1004,8 @@ mdnsRegSendTypes(struct MDNSEngineToken *tok)
                 &targetlen) == 0) {
             mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount,
                 MDNS_TYPE_SERVICES_DNS_SD "." MDNS_DOMAIN_LOCAL, DNS_TYPE_PTR,
-                DNS_CLASS_IN, MDNS_TTL_OTHER, target, (UWORD)targetlen);
+                DNS_CLASS_IN, reply_ttl(tok, MDNS_TTL_OTHER), target,
+                (UWORD)targetlen);
         }
     }
     if (ancount != 0) {
@@ -950,17 +1026,33 @@ mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
     char fqdn[256];
     struct MDNSRegisteredService *rs;
     struct Node *n;
-    BOOL any, answer, shared;
+    BOOL any, answer, shared, legacy, direct;
+    ULONG now;
     LONG k;
 
     if (tok == NULL || q == NULL) {
         return;
     }
     any = q->qtype == DNS_TYPE_ANY;
+    now = mdnsEngineNow();
+    /*
+     * A question from another port than 5353 comes from a resolver that
+     * speaks plain DNS: it gets its answer back alone, at once (RFC 6762
+     * section 6.7). A question with the unicast-response bit may be
+     * answered to the asker alone when the group has had the records not
+     * long ago, and goes to the group otherwise (section 5.4).
+     */
+    legacy = tok->et_QueryAddr != 0 && tok->et_QueryPort != MDNS_DNS_PORT;
+    direct = tok->et_QueryAddr != 0 && !legacy &&
+        (q->qclass & DNS_QU_BIT) != 0;
 
     if ((any || q->qtype == DNS_TYPE_PTR) &&
         Stricmp(q->qname, MDNS_TYPE_SERVICES_DNS_SD "." MDNS_DOMAIN_LOCAL) == 0) {
+        if (legacy) {
+            reply_to_asker(tok, q, TRUE);
+        }
         mdnsRegSendTypes(tok);
+        reply_to_group(tok);
         return;
     }
 
@@ -970,7 +1062,12 @@ mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
         mdnsRegBuildHostFqdn(fqdn, (LONG)sizeof(fqdn), tok->et_HostName,
             MDNS_DOMAIN_LOCAL);
         if (Stricmp(q->qname, fqdn) == 0) {
+            if (legacy || (direct && tok->et_HostMulticast != 0 &&
+                    now - tok->et_HostMulticast <= MDNS_UNICAST_SECONDS)) {
+                reply_to_asker(tok, q, legacy);
+            }
             host_send_addr(tok, FALSE);
+            reply_to_group(tok);
             return;
         }
     }
@@ -1015,7 +1112,15 @@ mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
                 }
             }
         }
-        if (answer && shared) {
+        if (answer && (legacy || (direct && rs->rs_Multicast != 0 &&
+                now - rs->rs_Multicast <= MDNS_UNICAST_SECONDS))) {
+            /* to the asker alone, and at once: nobody else is waiting to
+             * answer on a channel of two */
+            rs->rs_Answered = tok->et_PacketSerial;
+            reply_to_asker(tok, q, legacy);
+            mdnsRegSendService(tok, rs, FALSE);
+            reply_to_group(tok);
+        } else if (answer && shared) {
             /* a browse question: answered a little later, with the others */
             rs->rs_Answered = tok->et_PacketSerial;
             if (rs->rs_AnswerTick == 0) {

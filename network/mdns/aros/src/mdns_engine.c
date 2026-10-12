@@ -31,7 +31,7 @@ static struct MDNSRecord proposed[MDNS_PROPOSED_MAX];
 
 void
 MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
-    const UBYTE *pkt, LONG pktlen, ULONG srcaddr)
+    const UBYTE *pkt, LONG pktlen, ULONG srcaddr, UWORD srcport)
 {
     struct MDNSHeader *hdr;
     struct MDNSQuestion q;
@@ -103,9 +103,15 @@ MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
             mdnsRegHandleProbe(tok, proposed, nproposed, pkt, pktlen);
         }
         tok->et_PacketSerial++;
+        /* who asked, for the answers that go back to the asker alone */
+        tok->et_QueryAddr = srcaddr;
+        tok->et_QueryPort = srcport;
+        tok->et_ReplyId = ntohs(hdr->id);
         for (i = 0; i < nq; i++) {
             mdnsRegHandleQuery(tok, &questions[i], known, nknown);
         }
+        tok->et_QueryAddr = 0;
+        tok->et_QueryPort = 0;
         return;
     }
 

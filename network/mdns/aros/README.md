@@ -244,10 +244,16 @@ Protocol:
 - Answers to a browse question wait 20 to 120 ms, picked at random, and go
   out together in one response with the host's address once
   (`tools/mdns-answer-delay-hosted.sh`); a question for one name is
-  answered at once. Not done: answering by unicast when the question asks
-  for it, the answer to "which service types are there" is still sent at
-  once, and a record that was multicast less than a second ago is sent
-  again all the same.
+  answered at once. Not done: the answer to "which service types are
+  there" is still sent at once, and a record that was multicast less than
+  a second ago is sent again all the same.
+- A question from another port than 5353, from a resolver that knows plain
+  DNS, is answered to that port alone with its ID and question, records
+  that live ten seconds at most and no cache-flush bit. A question with
+  the unicast-response bit is answered to the asker alone when the group
+  had the records within the last 30 seconds, and to the group otherwise
+  (`tools/mdns-unicast-hosted.sh`). Several services of one type go to a
+  plain DNS resolver as one packet each, not as one answer.
 - IPv4 only.
 - At most eight interfaces. An address that changes is noticed within three
   seconds, not at once.

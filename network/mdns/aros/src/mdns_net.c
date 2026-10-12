@@ -320,8 +320,14 @@ mdnsNetSendOn(struct MDNSEngineToken *tok, LONG index, const UBYTE *pkt,
 
     memset(&sin, 0, sizeof(sin));
     sin.sin_family = AF_INET;
-    sin.sin_port = htons(MDNS_DNS_PORT);
-    sin.sin_addr.s_addr = inet_addr(MDNS_MCAST_ADDR);
+    if (tok->et_ReplyAddr != 0) {
+        /* an answer for the one who asked */
+        sin.sin_port = htons(tok->et_ReplyPort);
+        sin.sin_addr.s_addr = htonl(tok->et_ReplyAddr);
+    } else {
+        sin.sin_port = htons(MDNS_DNS_PORT);
+        sin.sin_addr.s_addr = inet_addr(MDNS_MCAST_ADDR);
+    }
     if (sendto((int)tok->et_Ifs[index].mi_Socket, (char *)pkt, (int)pktlen, 0,
             (struct sockaddr *)&sin, sizeof(sin)) < 0) {
         return MDNSERR_NETWORK;

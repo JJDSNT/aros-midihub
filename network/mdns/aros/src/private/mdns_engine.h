@@ -55,6 +55,8 @@ struct MDNSRegisteredService
     BOOL            rs_Proxy;       /* host and address given by the client */
     BOOL            rs_NIPC;        /* the host's Envoy publication */
     ULONG           rs_HostAddr;
+    ULONG           rs_Multicast;   /* mdnsEngineNow() when its records last
+                                     * went to the group */
     ULONG           rs_AnswerTick;  /* when an answer to a browse question is
                                      * due, or 0 for none */
     LONG            rs_AnswerIf;    /* to which interface, or -1 for all */
@@ -181,6 +183,8 @@ struct MDNSHostEntry
     ULONG           he_Link;        /* address of the interface it was heard on */
 };
 
+struct MDNSQuestion;
+
 struct MDNSEngineToken
 {
     ULONG                   et_Magic;       /* MDNS_TOKEN_MAGIC when valid */
@@ -219,6 +223,24 @@ struct MDNSEngineToken
                                             /* what the system calls itself */
     ULONG                   et_HostSuffix;  /* 0, or the number after it */
     BOOL                    et_AnswerPending; /* an rs_AnswerTick is set */
+    /*
+     * Where the answer being sent goes when it is not for the group: to
+     * the one who asked (RFC 6762 sections 5.4 and 6.7). et_ReplyAddr is 0
+     * for the group. et_ReplyLegacy: the question came from another port
+     * than 5353, from a resolver that knows plain DNS only, and the answer
+     * repeats its ID and question, lives ten seconds at most and has no
+     * cache-flush bit.
+     */
+    ULONG                   et_ReplyAddr;   /* 0xAABBCCDD == A.B.C.D */
+    UWORD                   et_ReplyPort;
+    UWORD                   et_ReplyId;
+    BOOL                    et_ReplyLegacy;
+    struct MDNSQuestion    *et_ReplyQuestion;
+    ULONG                   et_QueryAddr;   /* who sent the query in hand */
+    UWORD                   et_QueryPort;
+    ULONG                   et_HostMulticast; /* mdnsEngineNow() when the
+                                             * host's address last went to
+                                             * the group */
     UWORD                   et_HostState;   /* MDNS_RS_*, as for a service */
     UWORD                   et_HostStep;
     ULONG                   et_HostNextTick;
@@ -242,7 +264,7 @@ struct MDNSEngineToken
 
 BOOL MDNSEngineDispatch(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);
 void MDNSEngineHandlePacket(struct MDNSEngineToken *tok,
-    const UBYTE *pkt, LONG pktlen, ULONG srcaddr);
+    const UBYTE *pkt, LONG pktlen, ULONG srcaddr, UWORD srcport);
 void MDNSEngineTick(struct MDNSEngineToken *tok);
 
 LONG MDNSEngineRegister(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg);

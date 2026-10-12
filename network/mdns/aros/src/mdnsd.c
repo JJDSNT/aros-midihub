@@ -295,7 +295,8 @@ wait_and_receive(struct MDNSEngineToken *tok, ULONG sigmask, BOOL probing)
             /* what this packet causes to be sent goes back to its link */
             tok->et_SendIf = i;
             MDNSEngineHandlePacket(tok, tok->et_RxBuf, (LONG)got,
-                (ULONG)ntohl((unsigned long)from.sin_addr.s_addr));
+                (ULONG)ntohl((unsigned long)from.sin_addr.s_addr),
+                (UWORD)ntohs(from.sin_port));
             tok->et_SendIf = -1;
         }
     }
