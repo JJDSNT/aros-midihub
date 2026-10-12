@@ -1,2 +1,4 @@
 /build/
 /build-aros-linux/
+# Specifications under the MIDI Association's copyright: kept locally, never committed.
+/docs/*.pdf
