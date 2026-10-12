@@ -72,6 +72,12 @@
                                                     * host (proxy) */
 #define MDNS_QueryRef           (MDNS_Dummy + 15)  /* MDNSQueryRef output */
 #define MDNS_Timeout            (MDNS_Dummy + 16)  /* ULONG seconds, LookupHostA */
+#define MDNS_TimeToLive         (MDNS_Dummy + 17)  /* ULONG seconds, 1 to 4500:
+                                                    * of a registered service's
+                                                    * own records; without it
+                                                    * RFC 6762's 75 minutes, 2
+                                                    * for the one naming the
+                                                    * host */
 
 /* GetMDNSStatusA output counters (ti_Data = ULONG *) */
 #define MDNS_StatusRxPackets    (MDNS_Dummy + 20)  /* ULONG * RX datagram count */

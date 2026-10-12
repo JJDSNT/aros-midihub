@@ -27,5 +27,6 @@
 #define MDNS_MAX_DOMAIN         16
 #define MDNS_MAX_HOST           64
 #define MDNS_MAX_TXT            256
+#define MDNS_MAX_TTL            4500    /* seconds: 75 minutes */
 
 #endif /* BONAMI_PRIVATE_BONAMI_LIMITS_H */

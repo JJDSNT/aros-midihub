@@ -14,7 +14,7 @@
 #include "private/bonami_limits.h"
 
 #define BONAMI_ENGINE_PORT  "BonAmi"
-#define BONAMI_IPC_VERSION  4
+#define BONAMI_IPC_VERSION  5
 
 #define BONAMI_MSG_REGISTER     1
 #define BONAMI_MSG_UNREGISTER   2
@@ -58,6 +58,7 @@ struct MDNSIPCMsg
     UWORD           bim_Port;
     UWORD           bim_Pad;
     ULONG           bim_HostAddr;
+    ULONG           bim_TTL;        /* REGISTER: seconds, 0 for the defaults */
     struct Hook    *bim_Hook;
     struct Task    *bim_Task;
     ULONG           bim_Dbg0;       /* STATUS: records entering browse handler */

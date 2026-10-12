@@ -59,7 +59,6 @@ flowchart LR
     end
 
     subgraph NM[Network MIDI 2.0]
-        NM08["NM08 discovery"]
         NM09["NM09 timed delivery"]
         NM11["NM11 reach CAMD<br/>through a driver"]
         NM14["NM14 MIDI 2.0<br/>protocol"]
@@ -88,7 +87,6 @@ flowchart LR
 
     subgraph MDNS[mDNS]
         MD01["MD01 events outside<br/>the daemon"]
-        MD19["MD19 a time to live<br/>from the client"]:::ready
         MD03["MD03 tell a client<br/>its final name"]
         MD06["MD06 meet Bonjour and<br/>a second AROS"]
         MD14["MD14 IPv6"]
@@ -139,7 +137,6 @@ flowchart LR
     I1559 --> MU5
     MD01 --> MD03
     MD01 --> MU3
-    MD19 --> NM08
     MDD1 --> MD15
     MDD2 --> MU6
     P1560 --> MU1
@@ -158,8 +155,8 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 102 open items, 65 have nothing in front of them, 31 sit behind something
-outside our hands or behind a decision, and 6 wait only for other work of
+Of 100 open items, 64 have nothing in front of them, 31 sit behind something
+outside our hands or behind a decision, and 5 wait only for other work of
 ours.
 
 **What opens the most**, counting everything that follows directly or
@@ -191,11 +188,9 @@ the work that others waited on has been done.
 - *Hardware* holds the one thing we promised a reviewer: T01.
 - *PR #1560* holds only mDNS's later cuts.
 
-**mDNS and the transports meet in one place.** Network MIDI 2.0 cannot
-advertise itself (NM08) until a client can give its records a time to live
-(MD19); the other thing it needed, spaces in a text record, was done on
-2026-10-12. Everything else in mDNS is independent of the MIDI work, and
-the reverse.
+**mDNS and the transports no longer wait for each other.** What Network
+MIDI 2.0 needed of the service to advertise itself (NM08), spaces in a
+text record and a time to live from the client, was done on 2026-10-12.
 
 **The decisions** are due. D1, D2 and D4 are needed by one item, the
 driver (AM08), and everything that item waited for in our own work is done. The two in mDNS each hold a
@@ -208,10 +203,10 @@ their own backlog, not from this graph.
 
 | Backlog | Items |
 |---|---|
-| RTP-MIDI | R11, R14, R18, R19, R20, R22, R31, R29, R24, R25, R30 |
+| RTP-MIDI | R11, R14, R18, R19, R20, R22, R29, R24, R25, R30 |
 | AppleMIDI | AM11, AM13, AM15, AM17, AM18, AM21 |
 | UMP | UP06, UP07, UP08, UP13, UP15 |
-| Network MIDI 2.0 | NM12, NM13, NM17, NM18, NM19 |
+| Network MIDI 2.0 | NM08, NM12, NM13, NM17, NM18, NM19 |
 | CAMD | B16, B22 |
 | BLE MIDI | L01, L06, T04, T06, L05, W03, W05, W06, L15, L09, L04, L07, L14, L16, L17, L18 |
 | mDNS | MD20, MD21, MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
@@ -239,8 +234,9 @@ stood free have been closed.
 
 7. **BLE MIDI**: T01 the day the hardware is at hand. W01, L08 and L13
    (the codec read against its specification) were done on 2026-10-12.
-8. **mDNS**: MD19 before Network MIDI 2.0's discovery; the rest of its P1
-   and P2 whenever the transports are waiting on something.
+8. **mDNS**: MD19 was done on 2026-10-12, and with it NM08, Network MIDI
+   2.0's discovery, has nothing in front of it. The rest of mDNS's P1 and
+   P2 whenever the transports are waiting on something.
 
 CAMD's B16 and B22 fit anywhere. B29 to B32 wait for the maintainer; opening
 the issue with the sketch of the driver-side block, which was promised in

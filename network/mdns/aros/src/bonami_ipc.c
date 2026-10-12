@@ -60,6 +60,7 @@ MDNSTagsToRegisterMsg(struct TagItem *tags, struct MDNSIPCMsg *msg)
     msg->bim_Port = 0;
     msg->bim_HostName[0] = '\0';
     msg->bim_HostAddr = 0;
+    msg->bim_TTL = 0;
     strcpy(msg->bim_Domain, MDNS_DOMAIN_LOCAL);
 
     cur = tags;
@@ -81,6 +82,14 @@ MDNSTagsToRegisterMsg(struct TagItem *tags, struct MDNSIPCMsg *msg)
             break;
         case MDNS_Port:
             msg->bim_Port = (UWORD)tag->ti_Data;
+            break;
+        case MDNS_TimeToLive:
+            /* none shorter than a second, which would be a goodbye, and
+             * none longer than RFC 6762 section 10 recommends */
+            if (tag->ti_Data < 1 || tag->ti_Data > MDNS_MAX_TTL) {
+                return MDNSERR_BADPARAM;
+            }
+            msg->bim_TTL = (ULONG)tag->ti_Data;
             break;
         case MDNS_TXTRecord:
             s = (STRPTR)tag->ti_Data;

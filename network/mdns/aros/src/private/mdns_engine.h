@@ -46,6 +46,7 @@ struct MDNSRegisteredService
     char            rs_TXT[MDNS_MAX_TXT + 1];
     UWORD           rs_Port;
     UWORD           rs_Pad;
+    ULONG           rs_TTL;         /* of its records, 0 for the defaults */
     APTR            rs_ClientRef;
     struct Task    *rs_Task;        /* the client that registered it */
     UWORD           rs_State;       /* MDNS_RS_* */

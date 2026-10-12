@@ -165,8 +165,13 @@ service_append(struct MDNSEngineToken *tok,
     /* The address record names the interface it leaves on, unless the
      * service stands for another host. */
     ULONG addr = rs->rs_Proxy ? rs->rs_HostAddr : tok->et_Ifs[ifindex].mi_Addr;
-    ULONG ttl = reply_ttl(tok, goodbye ? 0 : MDNS_TTL_OTHER);
+    /* The service's own three records live as long as its client said;
+     * the address record is the host's, and other services' too. */
+    ULONG ttl = reply_ttl(tok, goodbye ? 0 :
+        (rs->rs_TTL != 0 ? rs->rs_TTL : MDNS_TTL_OTHER));
     ULONG hostttl = reply_ttl(tok, goodbye ? 0 : MDNS_TTL_HOST);
+    ULONG srvttl = reply_ttl(tok, goodbye ? 0 :
+        (rs->rs_TTL != 0 ? rs->rs_TTL : MDNS_TTL_HOST));
     UWORD unique = reply_class(tok, DNS_CLASS_IN | 0x8000);
     LONG pos = *posp;
     UWORD ancount = *ancountp;
@@ -212,7 +217,7 @@ service_append(struct MDNSEngineToken *tok,
 
     srvlen = mdnsRegAppendSrv(srvdata, hostwire, hostwirelen, rs->rs_Port);
     fits = fits && mdnsAppendRecord(pkt, MDNS_RESPONSE_MAX, &pos, &ancount,
-        instfqdn, DNS_TYPE_SRV, unique, hostttl, srvdata,
+        instfqdn, DNS_TYPE_SRV, unique, srvttl, srvdata,
         (UWORD)srvlen) == 0;
 
     /*
@@ -1184,6 +1189,7 @@ MDNSEngineRegister(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
         tok->et_HostName, MDNS_DOMAIN_LOCAL);
     strcpy(rs->rs_TXT, msg->bim_TXT);
     rs->rs_Port = msg->bim_Port;
+    rs->rs_TTL = msg->bim_TTL;
     rs->rs_HostAddr = tok->et_HostAddr;
     rs->rs_Task = msg->bim_Task;
     rs->rs_NIPC = (msg->bim_Flags & BONAMI_REGF_NIPC) ? TRUE : FALSE;

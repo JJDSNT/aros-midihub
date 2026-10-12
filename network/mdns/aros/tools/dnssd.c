@@ -341,12 +341,22 @@ DSRegister(CONST_STRPTR name, CONST_STRPTR type, CONST_STRPTR domain,
     UWORD port, CONST_STRPTR proxyHost, ULONG proxyAddr,
     int txtArgc, char **txtArgv)
 {
-    struct TagItem tags[10];
+    struct TagItem tags[12];
     char txt[MDNS_MAX_TXT + 1];
     MDNSRegisterRef ref;
     LONG rc;
+    LONG ttl = 0;
+    BOOL haveTtl = FALSE;
     int i;
     int nt;
+
+    /* "-t seconds" before the text: how long the records may live */
+    if (txtArgc >= 2 && BAStrEqual(txtArgv[0], "-t")) {
+        ttl = BAParseNum(txtArgv[1]);
+        haveTtl = TRUE;
+        txtArgc -= 2;
+        txtArgv += 2;
+    }
 
     if (!DSDomainLocal(domain)) {
         BAPrintf("(note: domain \"%s\" not served; registering in local)\n",
@@ -398,6 +408,11 @@ DSRegister(CONST_STRPTR name, CONST_STRPTR type, CONST_STRPTR domain,
         nt++;
         tags[nt].ti_Tag = MDNS_HostAddr;
         tags[nt].ti_Data = (IPTR)proxyAddr;
+        nt++;
+    }
+    if (haveTtl) {
+        tags[nt].ti_Tag = MDNS_TimeToLive;
+        tags[nt].ti_Data = (IPTR)ttl;
         nt++;
     }
     tags[nt].ti_Tag = MDNS_RegisterRef;
@@ -643,7 +658,7 @@ DSUsage(void)
     BAPrintf("dnssd - AmigaOS DNS-SD tool (bonami.library)\n\n");
     BAPrintf("  dnssd -E                      list registration domains\n");
     BAPrintf("  dnssd -F                      list browsing domains\n");
-    BAPrintf("  dnssd -R name type dom port [k=v ...]  register a service\n");
+    BAPrintf("  dnssd -R name type dom port [-t seconds] [k=v ...]  register a service\n");
     BAPrintf("  dnssd -B type [domain]        browse a service type\n");
     BAPrintf("  dnssd -L name type [domain]   look up (resolve) an instance\n");
     BAPrintf("  dnssd -Z type [domain]        browse, zone-file output\n");

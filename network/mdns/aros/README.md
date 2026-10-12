@@ -138,6 +138,7 @@ The AROS library is version 40.2 and adds, after Bonami's functions:
 | `LookupHostA(host, &addr, tags)` | Waits for a host's IPv4 address, at most `MDNS_Timeout` seconds (default 3). `addr` is in network byte order. A name without a dot is taken in `.local`. This host's own name is answered without asking. |
 | `QueryRecordA(name, rrtype, hook, tags)`, `StopQuery(ref)` | A standing question for any record. Each answer goes to the hook as a `struct MDNSRecordMsg`; names inside PTR and SRV data are written out in full. |
 | `MDNS_HostName` with `MDNS_HostAddr` in `RegisterServiceA()` | Registers a service for another host, which need not speak mDNS itself. |
+| `MDNS_TimeToLive` in `RegisterServiceA()` | How long the service's own records may live, 1 to 4500 seconds. Without it, RFC 6762's 75 minutes, and 2 for the record that names the host. |
 
 They close the three "dns-sd feature gaps" of Bonami's `TODO.md` and are
 meant to be offered to Bonami, not to stay an AROS dialect.
