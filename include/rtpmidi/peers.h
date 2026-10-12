@@ -28,7 +28,10 @@ struct applemidi_peer {
 enum applemidi_peer_event {
     APPLEMIDI_PEER_NONE,
     APPLEMIDI_PEER_CONNECTED,          /* the session reached the data port */
-    APPLEMIDI_PEER_LEFT                /* BY received, refused or expired */
+    APPLEMIDI_PEER_LEFT,               /* BY received, refused or expired */
+    APPLEMIDI_PEER_RESTARTED           /* it invited again without BY: what
+                                          was kept for it has to go, and
+                                          CONNECTED follows as for a new one */
 };
 
 struct applemidi_peers {
@@ -37,6 +40,7 @@ struct applemidi_peers {
     uint8_t name[64];
     size_t name_length;
     int accept;                 /* answer invitations from new peers */
+    unsigned int ssrc_collisions;   /* peers refused for having our SSRC */
 };
 
 int applemidi_peers_init(struct applemidi_peers *peers, uint32_t local_ssrc,

@@ -70,6 +70,7 @@ int applemidi_peers_receive(struct applemidi_peers *peers, uint32_t address, uin
 {
     uint16_t control_port;
     int i, result;
+    unsigned int restarts, collisions;
     struct applemidi_peer *peer;
 
     if (!peers || !in || !out || !out_data_port || !index || !event ||
@@ -99,9 +100,25 @@ int applemidi_peers_receive(struct applemidi_peers *peers, uint32_t address, uin
     if (in->command == APPLEMIDI_IN || in->command == APPLEMIDI_OK)
         remember_name(peer, in);
 
+    restarts = peer->session.restarts;
+    collisions = peer->session.ssrc_collisions;
     result = applemidi_session_receive(&peer->session, on_data_port, in, out, out_data_port);
     if (result < 0)
         return -1;
+    if (peer->session.ssrc_collisions != collisions) {
+        /* refused: it has our SSRC, which every session of ours carries */
+        ++peers->ssrc_collisions;
+        *event = peer->connected_reported ? APPLEMIDI_PEER_LEFT :
+                                            APPLEMIDI_PEER_NONE;
+        release(peers, i);
+        *index = *event == APPLEMIDI_PEER_NONE ? -1 : i;
+        return result;
+    }
+    if (peer->session.restarts != restarts) {
+        peer->connected_reported = 0;
+        *event = APPLEMIDI_PEER_RESTARTED;
+        return result;
+    }
 
     if (peer->session.phase == APPLEMIDI_SESSION_CONNECTED && !peer->connected_reported) {
         peer->connected_reported = 1;

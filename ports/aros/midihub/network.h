@@ -39,6 +39,9 @@ int netmidi_network_receive(const struct netmidi_network_runtime *runtime,
                             int data_port, void *bytes, size_t capacity,
                             struct sockaddr_in *source,
                             socklen_t *source_length);
+/* Fills the buffer from the system's random source: entropy.resource on
+ * AROS. Returns -1 when there is none or it gave less than was asked. */
+int netmidi_network_random(void *buffer, size_t length);
 int netmidi_network_wait(const struct netmidi_network_runtime *runtime,
                          int auxiliary_fd, long timeout_us,
                          int wake_signal_bit, unsigned int *events);

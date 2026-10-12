@@ -45,14 +45,12 @@ flowchart LR
     end
 
     subgraph AM[AppleMIDI]
-        AM02["AM02 clock object<br/>per peer"]:::ready
-        AM05["AM05 several peers<br/>on AROS"]
+        AM05["AM05 several peers<br/>on AROS"]:::ready
         AM06["AM06 run against<br/>rtpmidid"]:::ready
         AM07["AM07 who may<br/>connect"]
         AM08["AM08 DEVS:Midi<br/>driver"]
         AM09["AM09 register through<br/>system mDNS"]:::ready
         AM10["AM10 browse<br/>for peers"]
-        AM11["AM11 clock<br/>intervals"]
         AM12["AM12 reconnection"]
         AM14["AM14 IPv6"]
         AM15["AM15 table size"]
@@ -130,8 +128,6 @@ flowchart LR
     AM06 --> R23
     AM06 --> AM19
 
-    AM02 --> AM05
-    AM02 --> AM11
     AM05 --> AM07
     AM05 --> AM08
     AM05 --> AM12
@@ -217,8 +213,8 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 120 open items, 55 have nothing in front of them, 50 sit behind something
-outside our hands or behind a decision, and 15 wait only for other work of
+Of 116 open items, 53 have nothing in front of them, 50 sit behind something
+outside our hands or behind a decision, and 13 wait only for other work of
 ours.
 
 **What opens the most**, counting everything that follows directly or
@@ -228,8 +224,7 @@ through other items:
 |---|---|---|
 | Have the specification texts | 23 | All of UMP's and Network MIDI 2.0's conformance work, CAMD's B32, and through it BLE's timestamps |
 | UP01, check UMP against the text | 15 | The rest of UMP, B32, timed delivery and the MIDI 2.0 protocol over the network |
-| AM02, the clock object | 14 | Several peers, and through them the driver, the accept rule, reconnection, configuration, and Network MIDI 2.0's whole runtime |
-| AM05, several peers on AROS | 12 | The same as AM02 less the clock intervals |
+| AM05, several peers on AROS | 12 | The driver, the accept rule, reconnection, configuration, and Network MIDI 2.0's whole runtime |
 | A yes in PR #1507 | 10 | B29 to B32, and what BLE MIDI lost to the driver model: names, presence, identity, time |
 | Answers in issue #1559 | 9 | Event delivery in mDNS and every cut of it after the first, and the three IPv6 items |
 | NM02, the session knows its peer | 8 | The session table, the runtime and everything run on it |
@@ -240,7 +235,7 @@ through other items:
 **The longest chains** are four steps of our own work after something
 outside: the texts, UP01, B32 and then BLE's timestamps; and #1560, then
 the three further cuts of mDNS. Within our own hands the longest is
-AM02 → AM05 → NM07 → NM10 → NM17, from AppleMIDI into Network MIDI 2.0,
+AM05 → NM07 → NM10 → NM17, from AppleMIDI into Network MIDI 2.0,
 which is why AppleMIDI goes first.
 
 **Five things outside our hands hold most of the 50:**
@@ -271,24 +266,22 @@ their own backlog, not from this graph.
 | Backlog | Items |
 |---|---|
 | RTP-MIDI | R11, R14, R18, R19, R20, R22, R24, R25 |
-| AppleMIDI | AM01, AM03, AM04, AM13, AM17, AM18, AM21 |
+| AppleMIDI | AM11, AM13, AM17, AM18, AM21 |
 | UMP | UP02, UP14, UP15 |
 | Network MIDI 2.0 | NM03, NM18, NM19 |
 | CAMD | B16, B22 |
 | BLE MIDI | L01, L06, T04, T06, L05, W03, W05, W06, L09, L04, L07 |
 | mDNS | MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
 
-AM01, AM03, AM04, UP02 and NM03 are P0 in their own
+UP02 and NM03 are P0 in their own
 lists: defects in code as it is. That they open nothing else is no reason to leave them.
 
 ## An order that follows from it
 
-1. **The P0 defects that are free**, on portable code with host tests:
-   AM01, AM03, AM04. RTP-MIDI's (R01, R02, R04, R27) were done on
-   2026-10-12.
-2. **AM02**, the clock object, because of what it opens; then **AM06**, the
-   run against rtpmidid, before building further on code that has met no
-   other implementation.
+1. Done on 2026-10-12: the P0 defects of RTP-MIDI (R01, R02, R04, R27) and
+   of AppleMIDI (AM01 to AM04).
+2. **AM06**, the run against rtpmidid, before building further on code
+   that has met no other implementation.
 3. **AM05**, several peers. Here the driver's decisions (D1, D2, D4) become
    due.
 4. **AM08**, the driver, and **AM09**/**AM10**, discovery through the system

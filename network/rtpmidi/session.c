@@ -68,11 +68,40 @@ int applemidi_session_receive(struct applemidi_session *session, int on_data_por
         return 0;
     }
 
+    if ((in->command == APPLEMIDI_IN || in->command == APPLEMIDI_OK) &&
+        in->ssrc == session->local_ssrc) {
+        /* Two ends of a stream cannot share an SSRC. */
+        if (in->command == APPLEMIDI_OK &&
+            (session->phase != APPLEMIDI_SESSION_INVITING_CONTROL &&
+             session->phase != APPLEMIDI_SESSION_INVITING_DATA))
+            return 0;
+        if (in->command == APPLEMIDI_OK && in->token != session->token)
+            return 0;
+        ++session->ssrc_collisions;
+        memset(out, 0, sizeof(*out));
+        out->command = in->command == APPLEMIDI_IN ? APPLEMIDI_NO :
+                                                     APPLEMIDI_BY;
+        out->token = in->token;
+        out->ssrc = session->local_ssrc;
+        if (in->command == APPLEMIDI_OK)
+            session->phase = APPLEMIDI_SESSION_IDLE;
+        return 1;
+    }
     if (in->command == APPLEMIDI_IN) {
         if (!on_data_port && session->phase == APPLEMIDI_SESSION_IDLE) {
             session->token = in->token;
             session->peer_ssrc = in->ssrc;
             session->phase = APPLEMIDI_SESSION_WAITING_DATA;
+        } else if (!on_data_port &&
+                   (session->phase == APPLEMIDI_SESSION_WAITING_DATA ||
+                    session->phase == APPLEMIDI_SESSION_CONNECTED) &&
+                   (in->token != session->token ||
+                    in->ssrc != session->peer_ssrc)) {
+            /* The peer began again without saying goodbye. */
+            session->token = in->token;
+            session->peer_ssrc = in->ssrc;
+            session->phase = APPLEMIDI_SESSION_WAITING_DATA;
+            ++session->restarts;
         } else if (in->token != session->token ||
                    in->ssrc != session->peer_ssrc ||
                    !((!on_data_port && session->phase == APPLEMIDI_SESSION_WAITING_DATA) ||
@@ -107,6 +136,15 @@ int applemidi_session_receive(struct applemidi_session *session, int on_data_por
     if (on_data_port && session->phase == APPLEMIDI_SESSION_INVITING_DATA &&
         in->ssrc == session->peer_ssrc)
         session->phase = APPLEMIDI_SESSION_CONNECTED;
+    return 0;
+}
+
+int applemidi_session_renew(struct applemidi_session *session,
+                            uint32_t local_ssrc)
+{
+    if (!session || session->phase != APPLEMIDI_SESSION_IDLE)
+        return -1;
+    session->local_ssrc = local_ssrc;
     return 0;
 }
 

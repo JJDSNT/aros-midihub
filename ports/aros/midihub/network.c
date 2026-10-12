@@ -13,11 +13,33 @@
 #include <exec/libraries.h>
 #include <exec/tasks.h>
 #include <proto/bsdsocket.h>
+#include <proto/entropy.h>
 #include <proto/exec.h>
+#include <resources/entropy.h>
 struct Library *SocketBase;
 #else
+#include <fcntl.h>
 #include <unistd.h>
 #endif
+
+int netmidi_network_random(void *buffer, size_t length)
+{
+#ifdef __AROS__
+    /* a base of our own for the call's inline; resources are not closed */
+    struct Library *EntropyBase = OpenResource((CONST_STRPTR)ENTROPYNAME);
+    if (!EntropyBase || !buffer)
+        return -1;
+    return GetEntropy(buffer, (ULONG)length) == (LONG)length ? 0 : -1;
+#else
+    int fd = open("/dev/urandom", O_RDONLY);
+    ssize_t got;
+    if (fd < 0 || !buffer)
+        return -1;
+    got = read(fd, buffer, length);
+    close(fd);
+    return got == (ssize_t)length ? 0 : -1;
+#endif
+}
 
 void netmidi_network_close_socket(int fd)
 {

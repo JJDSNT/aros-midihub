@@ -1,4 +1,5 @@
 #include "rtpmidi/applemidi.h"
+#include "rtpmidi/clock.h"
 #include "rtpmidi/receiver.h"
 #include "rtpmidi/rtpmidi.h"
 #include "rtpmidi/session.h"
@@ -30,20 +31,42 @@ static void apple_exchange(void)
     assert(applemidi_encode(&packet, encoded, sizeof(encoded), &length) == 0);
     assert(length == sizeof(invitation));
     assert(!memcmp(encoded, invitation, length));
-    for (i = 0; i < 16; ++i)
-        assert(applemidi_decode(invitation, i, &packet) == -1);
+    for (i = 0; i < 4; ++i)
+        assert(applemidi_decode(invitation, i, &packet) ==
+               APPLEMIDI_NOT_APPLEMIDI);
+    for (i = 4; i < 16; ++i)
+        assert(applemidi_decode(invitation, i, &packet) ==
+               APPLEMIDI_TRUNCATED);
     assert(applemidi_decode(invitation, 16, &packet) == 0);
-    for (i = 17; i < sizeof(invitation); ++i)
-        assert(applemidi_decode(invitation, i, &packet) == -1);
+    assert(packet.name_length == 0);
     memcpy(encoded, invitation, sizeof(invitation));
     encoded[7] = 3;
-    assert(applemidi_decode(encoded, sizeof(invitation), &packet) == -1);
+    assert(applemidi_decode(encoded, sizeof(invitation), &packet) ==
+           APPLEMIDI_BAD_VERSION);
+    /* What a strict reading would refuse and a peer may well send: a name
+     * cut short of its terminator, a name with none, bytes after it. */
+    for (i = 17; i < sizeof(invitation); ++i) {
+        assert(applemidi_decode(invitation, i, &packet) == 0);
+        assert(packet.name_length == i - 16 &&
+               !memcmp(packet.name, "AROS", i - 16));
+    }
     memcpy(encoded, invitation, sizeof(invitation));
     encoded[sizeof(invitation) - 1] = 'X';
-    assert(applemidi_decode(encoded, sizeof(invitation), &packet) == -1);
+    assert(applemidi_decode(encoded, sizeof(invitation), &packet) == 0);
+    assert(packet.name_length == 5 && !memcmp(packet.name, "AROSX", 5));
     memcpy(encoded, invitation, sizeof(invitation));
     encoded[18] = 0;
-    assert(applemidi_decode(encoded, sizeof(invitation), &packet) == -1);
+    assert(applemidi_decode(encoded, sizeof(invitation), &packet) == 0);
+    assert(packet.name_length == 2 && !memcmp(packet.name, "AR", 2));
+    /* Apple's bit-rate limit, and anything else we have no use for. */
+    memcpy(encoded, invitation, sizeof(invitation));
+    encoded[2] = 'R';
+    encoded[3] = 'L';
+    assert(applemidi_decode(encoded, sizeof(invitation), &packet) ==
+           APPLEMIDI_UNKNOWN_COMMAND);
+    encoded[0] = 0x80;
+    assert(applemidi_decode(encoded, sizeof(invitation), &packet) ==
+           APPLEMIDI_NOT_APPLEMIDI);
 }
 
 static void apple_sync(void)
@@ -65,9 +88,112 @@ static void apple_sync(void)
     assert(packet.timestamps[2] == UINT64_C(0x0000000500000006));
     assert(applemidi_encode(&packet, encoded, sizeof(encoded), &length) == 0);
     assert(length == sizeof(sync) && !memcmp(encoded, sync, length));
-    assert(applemidi_decode(sync, sizeof(sync) - 1, &packet) == -1);
+    assert(applemidi_decode(sync, sizeof(sync) - 1, &packet) ==
+           APPLEMIDI_TRUNCATED);
     encoded[8] = 3;
-    assert(applemidi_decode(encoded, sizeof(encoded), &packet) == -1);
+    assert(applemidi_decode(encoded, sizeof(encoded), &packet) ==
+           APPLEMIDI_MALFORMED);
+    /* the three bytes after the count are nobody's: any value passes */
+    memcpy(encoded, sync, sizeof(sync));
+    encoded[9] = 0xff;
+    encoded[10] = 0x12;
+    encoded[11] = 0x34;
+    assert(applemidi_decode(encoded, sizeof(encoded), &packet) == 0);
+    assert(packet.sync_count == 2 &&
+           packet.timestamps[1] == UINT64_C(0x0000000300000004));
+}
+
+/* Two clocks that differ by a known amount, a path that takes a known
+ * time each way, and the exchange carried between them by hand. */
+static void apple_clock(void)
+{
+    struct applemidi_clock inviter;
+    struct applemidi_clock invited;
+    struct applemidi_packet ck0;
+    struct applemidi_packet ck1;
+    struct applemidi_packet ck2;
+    struct applemidi_packet none;
+    const uint64_t ahead = 5000000;     /* the invited side's clock leads */
+    const uint64_t path = 30;
+    uint64_t t = 1000;                  /* the inviter's time */
+    unsigned int round;
+
+    applemidi_clock_init(&inviter, 1, t);
+    applemidi_clock_init(&invited, 0, t + ahead);
+    assert(!inviter.synchronized && !invited.synchronized);
+    /* the invited side never starts */
+    assert(applemidi_clock_poll(&invited, 2, t + ahead, &none) == 0);
+
+    for (round = 0; round < 5; ++round) {
+        assert(applemidi_clock_poll(&inviter, 1, t, &ck0) == 1);
+        assert(ck0.command == APPLEMIDI_CK && ck0.ssrc == 1 &&
+               ck0.sync_count == 0 && ck0.timestamps[0] == t);
+        /* not again before the interval, however often it is asked */
+        assert(applemidi_clock_poll(&inviter, 1, t + 1, &none) == 0);
+        assert(applemidi_clock_receive(&invited, 2, &ck0, t + path + ahead,
+                                       &ck1) == 1);
+        assert(ck1.ssrc == 2 && ck1.sync_count == 1 &&
+               ck1.timestamps[0] == t &&
+               ck1.timestamps[1] == t + path + ahead);
+        assert(applemidi_clock_receive(&inviter, 1, &ck1, t + 2 * path,
+                                       &ck2) == 1);
+        assert(ck2.ssrc == 1 && ck2.sync_count == 2 &&
+               ck2.timestamps[2] == t + 2 * path);
+        assert(inviter.synchronized && inviter.completed == round + 1);
+        /* the peer's clock leads: its times come down to ours */
+        assert(inviter.peer_to_local == -(int64_t)ahead);
+        assert(applemidi_clock_receive(&invited, 2, &ck2,
+                                       t + 3 * path + ahead, &none) == 0);
+        assert(invited.synchronized && invited.completed == round + 1);
+        assert(invited.peer_to_local == (int64_t)ahead);
+        /* the third packet a second time belongs to no exchange */
+        assert(applemidi_clock_receive(&invited, 2, &ck2,
+                                       t + 4 * path + ahead, &none) == 0);
+        assert(invited.completed == round + 1);
+
+        if (round < APPLEMIDI_CLOCK_FIRST_EXCHANGES - 1) {
+            assert(applemidi_clock_poll(&inviter, 1,
+                       t + APPLEMIDI_CLOCK_FIRST_INTERVAL - 1, &none) == 0);
+            t += APPLEMIDI_CLOCK_FIRST_INTERVAL;
+        } else {
+            assert(applemidi_clock_poll(&inviter, 1,
+                       t + APPLEMIDI_CLOCK_INTERVAL - 1, &none) == 0);
+            t += APPLEMIDI_CLOCK_INTERVAL;
+        }
+    }
+
+    /* An answer to a CK we did not send, or sent before, changes nothing. */
+    assert(applemidi_clock_poll(&inviter, 1, t, &ck0) == 1);
+    ck1 = ck0;
+    ck1.sync_count = 1;
+    ck1.timestamps[0] = t - 7;
+    ck1.timestamps[1] = 123;
+    assert(applemidi_clock_receive(&inviter, 1, &ck1, t + 9, &none) == 0);
+    assert(inviter.completed == 5 &&
+           inviter.peer_to_local == -(int64_t)ahead);
+    /* nor does a third packet whose times are not the ones we answered */
+    assert(applemidi_clock_receive(&invited, 2, &ck0, t + ahead, &ck1) == 1);
+    ck2 = ck1;
+    ck2.sync_count = 2;
+    ck2.timestamps[1] += 1;
+    ck2.timestamps[2] = t + 60;
+    assert(applemidi_clock_receive(&invited, 2, &ck2, t + ahead, &none) == 0);
+    assert(invited.completed == 5 && invited.peer_to_local == (int64_t)ahead);
+    /* an inviter does not answer a first packet, an invited not a second */
+    assert(applemidi_clock_receive(&inviter, 1, &ck0, t, &none) == 0);
+    ck1.sync_count = 1;
+    assert(applemidi_clock_receive(&invited, 2, &ck1, t, &none) == 0);
+
+    /* Silence: only the side that waits for the other to start gives up,
+     * counted from the last exchange the other began. */
+    assert(!applemidi_clock_expired(&invited,
+               t + ahead + APPLEMIDI_CLOCK_TIMEOUT - 1));
+    assert(applemidi_clock_expired(&invited,
+               t + ahead + APPLEMIDI_CLOCK_TIMEOUT));
+    assert(!applemidi_clock_expired(&inviter, t + 10 * APPLEMIDI_CLOCK_TIMEOUT));
+    applemidi_clock_init(&invited, 0, 777);
+    assert(!applemidi_clock_expired(&invited, 777 + APPLEMIDI_CLOCK_TIMEOUT - 1));
+    assert(applemidi_clock_expired(&invited, 777 + APPLEMIDI_CLOCK_TIMEOUT));
 }
 
 static void apple_feedback(void)
@@ -85,7 +211,8 @@ static void apple_feedback(void)
     assert(packet.feedback_sequence == 0x00010002);
     assert(applemidi_encode(&packet, encoded, sizeof(encoded), &length) == 0);
     assert(length == sizeof(feedback) && !memcmp(encoded, feedback, length));
-    assert(applemidi_decode(feedback, sizeof(feedback) - 1, &packet) == -1);
+    assert(applemidi_decode(feedback, sizeof(feedback) - 1, &packet) ==
+           APPLEMIDI_TRUNCATED);
     assert(applemidi_encode(&packet, encoded, sizeof(encoded) - 1,
                            &length) == -1);
 }
@@ -1832,10 +1959,133 @@ static void sender_journal_limits(void)
     assert(sender.events[0].bytes[0] == 0x90 && sender.unjournalled == 1);
 }
 
+/* A peer that went away without BY and invites again, and a peer that
+ * turns out to have our SSRC. */
+static void session_restart_and_collision(void)
+{
+    struct applemidi_session session;
+    struct applemidi_packet in;
+    struct applemidi_packet out;
+    struct applemidi_peers peers;
+    enum applemidi_peer_event event;
+    int data_port;
+    int index;
+    static const uint32_t ours = 0x0a0b0c0d;
+
+    assert(applemidi_session_init(&session, ours,
+                                  (const uint8_t *)"AROS", 4) == 0);
+    memset(&in, 0, sizeof(in));
+    in.command = APPLEMIDI_IN;
+    in.token = 0x111;
+    in.ssrc = 0x222;
+    assert(applemidi_session_receive(&session, 0, &in, &out, &data_port) == 1);
+    assert(applemidi_session_receive(&session, 1, &in, &out, &data_port) == 1);
+    assert(session.phase == APPLEMIDI_SESSION_CONNECTED &&
+           session.restarts == 0);
+
+    /* the same invitation again is a retransmission, not a new start */
+    assert(applemidi_session_receive(&session, 1, &in, &out, &data_port) == 1);
+    assert(session.phase == APPLEMIDI_SESSION_CONNECTED &&
+           session.restarts == 0);
+
+    /* a new token and SSRC on the control port: the peer began again */
+    in.token = 0x333;
+    in.ssrc = 0x444;
+    assert(applemidi_session_receive(&session, 0, &in, &out, &data_port) == 1);
+    assert(out.command == APPLEMIDI_OK && out.token == 0x333 && !data_port);
+    assert(session.phase == APPLEMIDI_SESSION_WAITING_DATA &&
+           session.restarts == 1 && session.peer_ssrc == 0x444);
+    assert(applemidi_session_receive(&session, 1, &in, &out, &data_port) == 1);
+    assert(session.phase == APPLEMIDI_SESSION_CONNECTED && data_port);
+    /* the old session's BY, arriving late, does not end the new one */
+    in.command = APPLEMIDI_BY;
+    in.token = 0x111;
+    in.ssrc = 0x222;
+    assert(applemidi_session_receive(&session, 0, &in, &out, &data_port) == 0);
+    assert(session.phase == APPLEMIDI_SESSION_CONNECTED);
+    /* a new token on the data port alone starts nothing */
+    in.command = APPLEMIDI_IN;
+    in.token = 0x555;
+    in.ssrc = 0x666;
+    assert(applemidi_session_receive(&session, 1, &in, &out, &data_port) == 0);
+    assert(session.phase == APPLEMIDI_SESSION_CONNECTED &&
+           session.restarts == 1 && session.peer_ssrc == 0x444);
+    /* and one that comes while we are the ones inviting is left alone */
+    assert(applemidi_session_init(&session, ours,
+                                  (const uint8_t *)"AROS", 4) == 0);
+    assert(applemidi_session_invite(&session, 0x777, &out) == 0);
+    assert(applemidi_session_receive(&session, 0, &in, &out, &data_port) == 0);
+    assert(session.phase == APPLEMIDI_SESSION_INVITING_CONTROL &&
+           session.restarts == 0);
+
+    /* An invitation from a peer with our SSRC is refused. */
+    assert(applemidi_session_init(&session, ours,
+                                  (const uint8_t *)"AROS", 4) == 0);
+    in.command = APPLEMIDI_IN;
+    in.token = 0x888;
+    in.ssrc = ours;
+    assert(applemidi_session_receive(&session, 0, &in, &out, &data_port) == 1);
+    assert(out.command == APPLEMIDI_NO && out.token == 0x888 && !data_port);
+    assert(session.phase == APPLEMIDI_SESSION_IDLE &&
+           session.ssrc_collisions == 1);
+    /* An acceptance from one is answered with BY, and we may take another
+     * SSRC once the session is idle, not before. */
+    assert(applemidi_session_invite(&session, 0x999, &out) == 0);
+    assert(applemidi_session_renew(&session, 1) == -1);
+    in.command = APPLEMIDI_OK;
+    in.token = 0x999;
+    assert(applemidi_session_receive(&session, 0, &in, &out, &data_port) == 1);
+    assert(out.command == APPLEMIDI_BY && out.token == 0x999);
+    assert(session.phase == APPLEMIDI_SESSION_IDLE &&
+           session.ssrc_collisions == 2);
+    assert(applemidi_session_renew(&session, 0x0e0f1011) == 0);
+    assert(applemidi_session_invite(&session, 0xaaa, &out) == 0 &&
+           out.ssrc == 0x0e0f1011);
+    /* an acceptance with our SSRC for a token we never sent is noise */
+    assert(applemidi_session_init(&session, ours,
+                                  (const uint8_t *)"AROS", 4) == 0);
+    assert(applemidi_session_invite(&session, 0xbbb, &out) == 0);
+    in.token = 0xccc;
+    assert(applemidi_session_receive(&session, 0, &in, &out, &data_port) == 0);
+    assert(session.phase == APPLEMIDI_SESSION_INVITING_CONTROL &&
+           session.ssrc_collisions == 0);
+
+    /* The peer table says so. */
+    assert(applemidi_peers_init(&peers, ours, (const uint8_t *)"AROS", 4) == 0);
+    in.command = APPLEMIDI_IN;
+    in.token = 0x111;
+    in.ssrc = 0x222;
+    assert(applemidi_peers_receive(&peers, 0xc0a80001, 5004, 0, &in, 10,
+                                   &out, &data_port, &index, &event) == 1);
+    assert(applemidi_peers_receive(&peers, 0xc0a80001, 5005, 1, &in, 11,
+                                   &out, &data_port, &index, &event) == 1);
+    assert(event == APPLEMIDI_PEER_CONNECTED && index == 0);
+    in.token = 0x333;
+    in.ssrc = 0x444;
+    assert(applemidi_peers_receive(&peers, 0xc0a80001, 5004, 0, &in, 12,
+                                   &out, &data_port, &index, &event) == 1);
+    assert(event == APPLEMIDI_PEER_RESTARTED && index == 0 &&
+           out.command == APPLEMIDI_OK);
+    assert(applemidi_peers_find_data(&peers, 0xc0a80001, 5005) == -1);
+    assert(applemidi_peers_receive(&peers, 0xc0a80001, 5005, 1, &in, 13,
+                                   &out, &data_port, &index, &event) == 1);
+    assert(event == APPLEMIDI_PEER_CONNECTED && index == 0);
+    assert(applemidi_peers_find_data(&peers, 0xc0a80001, 5005) == 0);
+    /* a second peer with our SSRC takes no place in the table */
+    in.token = 0x555;
+    in.ssrc = ours;
+    assert(applemidi_peers_receive(&peers, 0xc0a80002, 5004, 0, &in, 14,
+                                   &out, &data_port, &index, &event) == 1);
+    assert(out.command == APPLEMIDI_NO && index == -1 &&
+           event == APPLEMIDI_PEER_NONE && peers.ssrc_collisions == 1);
+    assert(!peers.peer[1].used && peers.peer[0].used);
+}
+
 int main(void)
 {
     apple_exchange();
     apple_sync();
+    apple_clock();
     apple_feedback();
     applemidi_peers();
     rtp_short();
@@ -1856,6 +2106,7 @@ int main(void)
     rtp_sysex();
     session_handshake();
     session_rejection();
+    session_restart_and_collision();
     clock_and_queue();
     receiver_recovery();
     puts("protocol tests passed");

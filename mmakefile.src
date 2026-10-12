@@ -48,6 +48,7 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
            $(MIDIHUB_ROOT)/src/config \
            $(MIDIHUB_ROOT)/network/rtpmidi/timing $(MIDIHUB_ROOT)/network/rtpmidi/sender \
            $(MIDIHUB_ROOT)/network/rtpmidi/receiver \
+           $(MIDIHUB_ROOT)/network/rtpmidi/clock \
            $(MIDIHUB_ROOT)/network/mdns/embedded $(MIDIHUB_ROOT)/src/routes \
            $(MIDIHUB_ROOT)/src/ble_midi \
            $(MIDIHUB_ROOT)/src/ble_peripheral \

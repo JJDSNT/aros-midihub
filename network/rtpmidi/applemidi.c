@@ -51,42 +51,43 @@ int applemidi_decode(const uint8_t *data, size_t length,
     size_t i;
 
     if (!data || !packet || length < 4 || read16(data) != 0xffff)
-        return -1;
+        return APPLEMIDI_NOT_APPLEMIDI;
     command = read16(data + 2);
     memset(packet, 0, sizeof(*packet));
     packet->command = (enum applemidi_command)command;
-
     if (exchange_command(command)) {
-        if (length < 16 || read32(data + 4) != 2)
-            return -1;
+        if (length < 16)
+            return APPLEMIDI_TRUNCATED;
+        if (read32(data + 4) != 2)
+            return APPLEMIDI_BAD_VERSION;
         packet->token = read32(data + 8);
         packet->ssrc = read32(data + 12);
         if (length == 16)
-            return 0;
+            return APPLEMIDI_DECODED;
         for (i = 16; i < length && data[i]; ++i) {}
-        if (i != length - 1)
-            return -1;
         packet->name = data + 16;
         packet->name_length = i - 16;
-        return 0;
+        return APPLEMIDI_DECODED;
     }
     if (command == APPLEMIDI_CK) {
-        if (length != 36 || data[9] || data[10] || data[11] || data[8] > 2)
-            return -1;
+        if (length < 36)
+            return APPLEMIDI_TRUNCATED;
+        if (data[8] > 2)
+            return APPLEMIDI_MALFORMED;
         packet->ssrc = read32(data + 4);
         packet->sync_count = data[8];
         for (i = 0; i < 3; ++i)
             packet->timestamps[i] = read64(data + 12 + i * 8);
-        return 0;
+        return APPLEMIDI_DECODED;
     }
     if (command == APPLEMIDI_RS) {
-        if (length != 12)
-            return -1;
+        if (length < 12)
+            return APPLEMIDI_TRUNCATED;
         packet->ssrc = read32(data + 4);
         packet->feedback_sequence = read32(data + 8);
-        return 0;
+        return APPLEMIDI_DECODED;
     }
-    return -1;
+    return APPLEMIDI_UNKNOWN_COMMAND;
 }
 
 int applemidi_encode(const struct applemidi_packet *packet, uint8_t *data,

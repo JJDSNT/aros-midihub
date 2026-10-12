@@ -26,7 +26,23 @@ struct applemidi_packet {
     uint32_t feedback_sequence;
 };
 
-/* Returns 0 for success, -1 for invalid data or insufficient capacity. */
+/* Why a packet was not taken. All are negative, so a caller that only
+ * wants to know tests for zero. */
+enum applemidi_decode_result {
+    APPLEMIDI_DECODED = 0,
+    APPLEMIDI_NOT_APPLEMIDI = -1,   /* no FF FF in front: RTP, or noise */
+    APPLEMIDI_UNKNOWN_COMMAND = -2, /* one this code has no use for */
+    APPLEMIDI_TRUNCATED = -3,
+    APPLEMIDI_BAD_VERSION = -4,     /* not protocol version 2 */
+    APPLEMIDI_MALFORMED = -5
+};
+
+/* Decoding takes the fields it uses and nothing else: bytes after a name's
+ * terminator, a name that runs to the end of the packet without one, and
+ * whatever stands in a CK packet's three unused bytes are all accepted.
+ * This protocol has no specification to hold a peer to.
+ * Encoding returns 0 for success, -1 for invalid data or insufficient
+ * capacity. */
 int applemidi_decode(const uint8_t *data, size_t length,
                     struct applemidi_packet *packet);
 int applemidi_encode(const struct applemidi_packet *packet, uint8_t *data,

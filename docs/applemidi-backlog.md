@@ -20,10 +20,8 @@ Apple's behaviour and from other implementations, so an item that says
   by IPv4 address and control port, with accept or refuse, a name per peer,
   and expiry by silence. Both are tested on the host.
 - Nothing on AROS uses the peer table. The program `MIDIHub` holds one
-  `applemidi_session` and one peer address; a second invitation is not
-  answered at all.
-- The clock exchange is driven from the program: 41 lines of `main.c` touch
-  its state. Only the arithmetic (`rtpmidi_clock_offset`) is portable.
+  `applemidi_session` and one peer address; an invitation from a second
+  peer is not answered at all.
 - The program is a CAMD **client** with the clusters `MIDIHub In` and
   `MIDIHub Out`, which is the shape the review of `btmidi.class` turned
   down.
@@ -36,28 +34,32 @@ before a first use with a real peer, **P2** before an upstream proposal,
 
 ## Done
 
-Nothing yet under this backlog.
+On 2026-10-12, with host tests in `tests/protocol.c`; the whole host suite,
+the network loopback and the build for hosted AROS pass. None of it has run
+inside AROS or against another implementation.
+
+| # | What was done |
+|---|---|
+| AM01 | An invitation on the control port with another token or SSRC, in a session the peer had reached (waiting for its data port, or connected), ends that session and begins the new one. `restarts` in the session counts it, the peer table reports `APPLEMIDI_PEER_RESTARTED`, and the program then drops what it kept for the old stream and releases its notes. Not done for a session we are still inviting: two invitations crossing is another case. The old session's BY arriving late is ignored. Tested in `session_restart_and_collision`; the program's side of it (releasing notes) is not in any test. |
+| AM02 | `struct applemidi_clock` in `network/rtpmidi/clock.c` holds one session's exchange: when to start one, the answer to each packet, the offset, and the silence after which the invited side gives up. The program passes packets and time and keeps none of it. `apple_clock` carries five exchanges between two clocks five hundred seconds apart over a path of known delay, checks the offset at both ends to the tick, and feeds each side the packets that belong to no exchange. The intervals are the ones the program had; AM11 is still open. |
+| AM03 | `applemidi_decode()` takes the fields it uses and no more: a name without its terminator, bytes after the terminator, and any value in a CK packet's three unused bytes are accepted. What it refuses it refuses with a reason (`enum applemidi_decode_result`): not AppleMIDI, unknown command, truncated, wrong version, malformed. Nothing counts the reasons yet: that is with the counters of RTP-MIDI backlog R18. |
+| AM04 | SSRC, tokens and the first sequence number come from `entropy.resource` on AROS and `/dev/urandom` on the host, through `netmidi_network_random()`; with neither, the program says so once and falls back to the clock. A peer with our SSRC is refused, NO for its invitation and BY for its acceptance, `ssrc_collisions` counts it, and the program takes another SSRC and invites again. The AROS branch compiles and has not run. |
 
 ## P0 — wrong or unsafe as it is
 
-| # | Limit or defect | What to do | Done when |
-|---|---|---|---|
-| AM01 | A peer that restarts without sending BY cannot come back. Its new IN has a new token; `applemidi_session_receive()` ignores an IN whose token or SSRC differs from the session's, in every phase but idle, and sends nothing. The peer retries into silence until our side times out, two minutes later. | An IN on the control port from the address of an existing session, with another token, ends that session (as a BY would) and starts the new one. | A host test: connect, then invite again with a new token and SSRC, and be connected at once; the first session's notes are released. |
-| AM02 | The clock exchange lives in the AROS program: who started it, the three timestamps, how many were done, when the next is due, when the peer was last heard. It exists once, for one peer, and no host test reaches it. | A clock object per peer beside the session, in `network/rtpmidi/`: fed with CK packets and the time, it says what to send and gives the offset. | The CK tests in `tests/protocol.c` drive a whole exchange in both roles without a socket; `main.c` only passes packets. |
-| AM03 | `applemidi_decode()` rejects a CK packet whose three bytes after the count are not zero, and an exchange packet with anything after the name's terminator. Whether real peers always send them so is not known; a peer that does not is ignored without a trace. | Accept what the fields we use allow; do not test padding. Count what is rejected, by reason. | Host tests with non-zero padding; the count is visible (RTP-MIDI backlog R18). |
-| AM04 | Tokens and SSRC come from `rand()` seeded with the time of day, in the program. Two machines started by the same script get the same SSRC, and a token can be guessed. | Take them from the system's random source on AROS, and detect an SSRC equal to a peer's: pick another and start again. | A host test for the collision; no `srand()` left. |
+Nothing open.
 
 ## P1 — before a first use with a real peer
 
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
-| AM05 | One peer on AROS. | Put `applemidi_peers` under the event loop, with a sender, a receiver, a clock (AM02), a queue and a SysEx assembler per peer. | Two scripted peers connected at once, each recovering its own losses. |
+| AM05 | One peer on AROS. | Put `applemidi_peers` under the event loop, with a sender, a receiver, a clock, a queue and a SysEx assembler per peer. | Two scripted peers connected at once, each recovering its own losses. |
 | AM06 | Never run against another implementation. | First rtpmidid on Linux, which needs no hardware: a runner in `tools/` beside the mDNS ones, hosted AROS on the veth pair, notes and SysEx in both directions, a session opened from each side, packets dropped with `tc netem` to make the journal work. Then macOS, iOS and rtpMIDI for Windows when the machines are at hand ([the iPhone procedure](iphone-smoke-test.md) is written for Linux and needs redoing for AROS). | `tools/applemidi-rtpmidid-hosted.sh` passes; a table in this file says which peer was tried, when, and what failed. |
 | AM07 | An invitation from anyone is accepted while there is room; the only rule is the table's size. | An accept rule, as Apple's "who may connect to me": anyone, a list of addresses or names, nobody. | Host tests for an accepted and a refused invitation under each rule. |
 | AM08 | A CAMD client, not a driver. | A `DEVS:Midi` driver with a fixed number of ports, each bound to a peer while the session lasts, as `btmidi` does. Needs D1 and D2 below. | A CAMD program opens `applemidi.out.0` and a peer hears it; `MIDIHub In`/`Out` are gone. |
 | AM09 | The embedded mDNS responder. | Register `_apple-midi._udp` through the system service and take `network/mdns/embedded.c` out. The service's registration half is not upstream yet (AROS issue #1559, PR #1560), but `bonami.library` and `mdnsd` work in this repository, so this can be done against them now and adjusted to what upstream accepts. | `avahi-browse` sees the session with `mdnsd` running and no second socket on port 5353. |
 | AM10 | Peers are found only by typing an address. | Browse `_apple-midi._udp` and keep a list of sessions seen, for Preferences to show and for a configured name to be invited when it appears. | A session announced by Avahi on the host shows up and can be invited by name. |
-| AM11 | Clock exchange every 50 seconds once three have been done, and a session is dropped after 120 seconds without CK. The intervals other implementations use are, from memory and to be confirmed on a capture, 10 seconds and about a minute. No exchange is thrown away for a long round trip, so one delayed CK moves every timestamp. | Take the observed intervals. Keep the offset from the exchange with the shortest round trip among the last few. Done in the object of AM02. | A host test with one delayed CK among eight: the offset does not move. |
+| AM11 | Clock exchange every 50 seconds once three have been done, and a session is dropped after 120 seconds without CK. The intervals other implementations use are, from memory and to be confirmed on a capture, 10 seconds and about a minute. No exchange is thrown away for a long round trip, so one delayed CK moves every timestamp. | Take the observed intervals. Keep the offset from the exchange with the shortest round trip among the last few. In `network/rtpmidi/clock.c`. | A host test with one delayed CK among eight: the offset does not move. |
 | AM12 | Reconnection is nobody's job: after a timeout or a BY the program goes back to idle and stays there unless the peer invites again. | For a peer we invited: invite again, backing off, while it is configured or still advertised. | A scripted peer that goes away and comes back is connected again without a restart. |
 | AM13 | Retries and timeouts are constants scattered in the program: an invitation every second, twelve times; two minutes for a data-port invitation that never comes. | State them once, beside the peer table, with the reason for each number. | One place to read them; the host tests name them. |
 
