@@ -109,16 +109,15 @@ Nothing open.
 
 ## Decisions needed
 
-| # | Question | Leaning |
+| # | Question | Leaning, or what was decided |
 |---|---|---|
-| D1 | Who owns the sockets. A CAMD driver is loaded by `camd.library` and never unloaded, and each task needs its own `bsdsocket.library` base. Either the driver starts a process of its own on `Init()`, or a service under the AROSTCP service manager (as `mdnsd` is) owns the sessions and the driver in `DEVS:Midi` is a stub that attaches to it, the way `btmidi`'s stub attaches to the class. | The service: it follows the network going up and down, which a driver loaded once cannot, and it is the shape the reviewer has already accepted twice. |
-| D2 | How peers map to ports. A fixed pool (`btmidi` has 16); a port bound to a named session by configuration, or the first free port to whoever connects. | Bound by configuration where a name is configured, first free otherwise, so a route to "the iPad" survives a reconnection. Identity beyond that waits for CAMD backlog B29. |
+| D1 | Who owns the sockets. A CAMD driver is loaded by `camd.library` and never unloaded, and each task needs its own `bsdsocket.library` base. Either the driver starts a process of its own on `Init()`, or a service under the AROSTCP service manager (as `mdnsd` is) owns the sessions and the driver in `DEVS:Midi` is a stub that attaches to it, the way `btmidi`'s stub attaches to the class. | **Decided on 2026-10-12 by the project owner: the service.** It follows the network going up and down, which a driver loaded once cannot, and it is the shape the reviewer has already accepted twice. |
+| D2 | How peers map to ports. A fixed pool (`btmidi` has 16); a port bound to a named session by configuration, or the first free port to whoever connects. | **Decided on 2026-10-12 by the project owner:** bound by configuration where a name is configured, first free otherwise, so a route to "the iPad" survives a reconnection. Identity beyond that waits for CAMD backlog B29. |
 | D3 | Whether one port can be several peers at once (what a Mac's session does: every participant hears every other). | One peer per port first. A shared port is a later option of the pool, not a second design. |
-| D4 | What the driver boundary costs. A driver hands over bytes and is given bytes: the time a message was meant for cannot cross it (CAMD backlog B32). Either accept that for now (the runtime plays a received event at its due time, and a sent one carries the time it left CAMD), or hold the driver until CAMD has a timed path for drivers. | Accept it and say so in the limits; holding the driver puts the whole transport behind an extension that has not been proposed to the maintainer yet. |
+| D4 | What the driver boundary costs. A driver hands over bytes and is given bytes: the time a message was meant for cannot cross it (CAMD backlog B32). Either accept that for now (the runtime plays a received event at its due time, and a sent one carries the time it left CAMD), or hold the driver until CAMD has a timed path for drivers. | **Decided on 2026-10-12 by the project owner: accept it** and say so in the limits; holding the driver would put the whole transport behind an extension that has not been proposed to the maintainer yet. |
 
-None of the four is taken. AM08 needs D1, D2 and D4; nothing else here
-needs any of them. With AM05 done, AM08 is next in line, so the three are
-due now.
+D1, D2 and D4 are taken; D3 is open and nothing waits for it. AM08, which
+needed the three, has nothing in front of it.
 
 ## Not scheduled here
 
