@@ -62,6 +62,10 @@ struct applemidi_peers {
     unsigned int refused;       /* invitations answered with NO by the rule
                                    or for want of room */
     unsigned int ssrc_collisions;   /* peers refused for having our SSRC */
+    int limit;                  /* peers at once: APPLEMIDI_PEERS_MAX after
+                                   applemidi_peers_init, or fewer when the
+                                   caller says so; one more is refused
+                                   with NO and counted in refused */
 };
 
 /* How long a caller waits, in the session's unit, a ten-thousandth of a

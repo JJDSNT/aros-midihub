@@ -175,6 +175,7 @@ static void config_round_trip(void)
     written.peer_port = 5104;
     strcpy(written.peer_name, "Host Session");
     written.latency_ms = 40;
+    written.max_peers = 2;
     strcpy(written.accept, "192.0.2.7,the iPad");
     written.midi2_port = 5673;
     strcpy(written.midi2_peer_ip, "192.0.2.9");
@@ -300,6 +301,49 @@ static void apple_names(void)
         assert(applemidi_decode(rtp, sizeof(rtp), &packet) ==
                APPLEMIDI_NOT_APPLEMIDI);
     }
+}
+
+/* AM15: a table told to hold two peers refuses the third, and takes one
+ * again when one of the two has left. */
+static void apple_peers_limit(void)
+{
+    static struct applemidi_peers peers;
+    struct applemidi_packet in, reply;
+    int data_port, index;
+    enum applemidi_peer_event event;
+    uint32_t n;
+
+    assert(applemidi_peers_init(&peers, 0x01020304,
+                                (const uint8_t *)"Two", 3) == 0);
+    assert(peers.limit == APPLEMIDI_PEERS_MAX);
+    peers.limit = 2;
+    memset(&in, 0, sizeof(in));
+    in.command = APPLEMIDI_IN;
+    in.name = (const uint8_t *)"Peer";
+    in.name_length = 4;
+    for (n = 0; n < 3; ++n) {
+        in.token = 100 + n;
+        in.ssrc = 0xbb000000u + n;
+        assert(applemidi_peers_receive(&peers, 0xc0a80010u + n, 5004, 0, &in,
+                                       10, &reply, &data_port, &index,
+                                       &event) == 1);
+        assert(reply.token == 100 + n);
+        if (n < 2)
+            assert(reply.command == APPLEMIDI_OK && index == (int)n);
+        else
+            assert(reply.command == APPLEMIDI_NO && index == -1);
+    }
+    assert(peers.refused == 1);
+    /* the first is ended: there is room for one again */
+    (void)applemidi_peers_end(&peers, 0, &reply);
+    assert(!peers.peer[0].used);
+    in.command = APPLEMIDI_IN;
+    in.token = 200;
+    in.ssrc = 0xbb000009u;
+    assert(applemidi_peers_receive(&peers, 0xc0a80019u, 5004, 0, &in, 30,
+                                   &reply, &data_port, &index, &event) == 1 &&
+           reply.command == APPLEMIDI_OK);
+    assert(peers.refused == 1);
 }
 
 static void apple_ports(void)
@@ -2569,6 +2613,7 @@ int main(void)
     apple_sync();
     apple_clock();
     apple_ports();
+    apple_peers_limit();
     apple_names();
     sysex_dump();
     config_round_trip();

@@ -13,6 +13,7 @@ int applemidi_peers_init(struct applemidi_peers *peers, uint32_t local_ssrc,
         memcpy(peers->name, name, name_length);
     peers->name_length = name_length;
     peers->accept = APPLEMIDI_ACCEPT_ANYONE;
+    peers->limit = APPLEMIDI_PEERS_MAX;
     return 0;
 }
 
@@ -69,6 +70,11 @@ static int allocate(struct applemidi_peers *peers, uint32_t address, uint16_t co
                     uint32_t now_ms)
 {
     int i;
+    int used = 0;
+    for (i = 0; i < APPLEMIDI_PEERS_MAX; ++i)
+        used += peers->peer[i].used;
+    if (used >= peers->limit)
+        return -1;
     for (i = 0; i < APPLEMIDI_PEERS_MAX; ++i) {
         struct applemidi_peer *peer = &peers->peer[i];
         if (peer->used)

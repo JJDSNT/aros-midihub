@@ -64,6 +64,8 @@ int netmidi_config_save(const char *path,
                 (unsigned)config->peer_port);
     if (config->peer_name[0])
         fprintf(file, "peer_name=%s\n", config->peer_name);
+    if (config->max_peers)
+        fprintf(file, "max_peers=%d\n", config->max_peers);
     if (config->latency_ms)
         fprintf(file, "latency_ms=%d\n", config->latency_ms);
     if (config->accept[0])
@@ -136,6 +138,15 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
             if (!*value || strlen(value) >= sizeof(next.peer_name))
                 goto done;
             strcpy(next.peer_name, value);
+        } else if (strcmp(key, "max_peers") == 0) {
+            char *end;
+            unsigned long peers;
+
+            errno = 0;
+            peers = strtoul(value, &end, 10);
+            if (errno || end == value || *end || peers < 1 || peers > 8)
+                goto done;
+            next.max_peers = (int)peers;
         } else if (strcmp(key, "latency_ms") == 0) {
             char *end;
             unsigned long ms;

@@ -158,6 +158,11 @@ command we have no use for is counted and left, not tried as RTP.
 `apple_names` in `tests/protocol.c` has both. The count is in the runtime
 and nobody reads it yet.
 
+AM15, the same day: how many peers there may be at once is a setting,
+`max_peers`, from one to the eight the table has room for; one more is
+answered with NO and counted among the refused, which `NetMIDIStatus`
+shows. `apple_peers_limit` fills a table of two.
+
 **AM08 is done by its own measure**: a CAMD program opens a driver's port
 and plays to a peer. What it leaves is AM25 to AM27 below and AM16.
 The time a message was meant for does not cross the driver (decision D4):
@@ -169,7 +174,6 @@ carries the time the service took it from the port's ring.
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
 | AM14 | IPv4 only: `struct applemidi_peer` holds a `uint32_t` address. | An address type that holds either family. Waits for the IPv6 answer in AROS issue #1559; do not start before it. | — |
-| AM15 | Eight peers, a constant. | A number from configuration with eight as the default, and a NO with a reason in the log when the table is full. | A test fills a table of two. |
 | AM16 | Configuration is one text file, `ENV:NetMIDI`, with one AppleMIDI peer to invite and one Network MIDI 2.0 Host. Done on 2026-10-12: every setting the runtime has is in it (ports kept for peers, a peer wanted by name, latency, who may connect, the Network MIDI 2.0 port and Host); a session nobody named is called as the machine is (`netmidi_network_hostname()`), so two machines differ; and a change to the file is taken without anyone restarting the service: it looks at the file every two seconds and, when it has changed, ends its sessions with a goodbye and begins anew under what the file says. `run_config_change_case` in `tests/network_loopback.py`; on hosted AROS, a name written to `ENV:NetMIDI` replaces the advertised session (`tools/applemidi-discovery-hosted.sh`). Left: every change costs every session, also one that concerns none of them (the latency, a port kept for a peer not there); several peers to invite; and the window of Preferences has no fields for what is new (AM27). | A change taken setting by setting; a list of peers to invite. | Changing the latency drops no session. |
 | AM27 | Preferences and the router follow the drivers in what could be done without running a window, since 2026-10-12: `MIDIHub.prefs` reads and writes the service's `ENV:NetMIDI` (taking what an older version saved in `ENV:MidiHub/Network` where there is none), through `netmidi_config_save()`, which writes every setting, also those the window does not show; a cluster named `applemidi.*`, `networkmidi2.*` or `btmidi.*` is listed under its transport; and routes saved with `MIDIHub In`, `MIDIHub Out`, `BLE MIDI In` or `BLE MIDI Out` are read as the first port of the driver that took their place (`mh_routes_migrate()`), by Preferences and by the router. `config_round_trip` in `tests/protocol.c` and `tests/routes.c`. **None of it was seen in the window**: Preferences is a MUI program and was built, not run. The window has no fields for a wanted peer's name, latency, who may connect, the Network MIDI 2.0 port or the ports kept for peers; and a change saved reaches the service only when it starts again. | Run it; the missing fields; a way to have the service take a change (AM16). | A route made in Preferences reaches a network peer, seen on a screen. |
 | AM25 | A CAMD client sees `applemidi.in.3`, not the peer's name, and every port is there whether a peer is or not. A SysEx message from a second port while one is being gathered from a first is left out. | Names and presence wait for the driver-side block in CAMD (its backlog, B30 and B31); a buffer per port for SysEx. | — |

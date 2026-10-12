@@ -1747,6 +1747,8 @@ static int run(int argc, char **argv)
                         (const uint8_t *)config.session_name,
                         strlen(config.session_name)) != 0)
         goto cleanup;
+    if (config.max_peers)
+        rt.peers.limit = config.max_peers;
     if (accept_rule && strcmp(accept_rule, "anyone") != 0) {
         static char list[512];
         char *entry;

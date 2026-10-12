@@ -31,6 +31,9 @@ struct netmidi_network_config {
      * is due, 0 to 2000. "accept": anyone, nobody, or a list of addresses
      * and session names with commas between. */
     char peer_name[64];
+    /* "max_peers": AppleMIDI peers at once, 1 to 8; 0 for all there is
+     * room for */
+    int max_peers;
     int latency_ms;
     char accept[256];
 };
