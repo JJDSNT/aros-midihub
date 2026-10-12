@@ -107,3 +107,30 @@ int mh_routes_parse(struct mh_route_table *table, const char *text, size_t lengt
     }
     return 0;
 }
+
+size_t mh_routes_migrate(struct mh_route_table *table)
+{
+    static const char *const renamed[][2] = {
+        {"MIDIHub In", "applemidi.in.0"},
+        {"MIDIHub Out", "applemidi.out.0"},
+        {"BLE MIDI In", "btmidi.in.0"},
+        {"BLE MIDI Out", "btmidi.out.0"}
+    };
+    size_t changed = 0;
+    size_t i, j;
+
+    if (!table)
+        return 0;
+    for (i = 0; i < table->count; ++i)
+        for (j = 0; j < sizeof(renamed) / sizeof(renamed[0]); ++j) {
+            if (strcmp(table->routes[i].source, renamed[j][0]) == 0) {
+                strcpy(table->routes[i].source, renamed[j][1]);
+                ++changed;
+            }
+            if (strcmp(table->routes[i].destination, renamed[j][0]) == 0) {
+                strcpy(table->routes[i].destination, renamed[j][1]);
+                ++changed;
+            }
+        }
+    return changed;
+}

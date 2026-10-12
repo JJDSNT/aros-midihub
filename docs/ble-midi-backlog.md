@@ -24,7 +24,7 @@ it matters. The detail of each entry is in the three parts below.
 | P0 | T01 | The driver version has never run on a radio; the PR promises the test | A Pi 3 and a phone |
 | P1 | L01 | A device's port number depends on which other devices are bound | Nothing in the class; B29 for the real answer |
 | P1 | L06 | A sixteenth device is refused without a word | Nothing; with L01 |
-| P1 | L10 | MIDIHub.prefs does not know the driver's ports; saved routes break | Nothing |
+| P1 | L10 | MIDIHub.prefs does not show a port's device; the rest was done on 2026-10-12 and not seen in the window | A query in the class for a port's device |
 | P1 | L11 | This repository still builds the old client copy of the class | L10, and the PR merged |
 | P1 | T04 | Never run with an unpatched `camd.library` | Nothing |
 | P1 | T06 | A port that outlives its binding was read, never run | Nothing |
@@ -89,6 +89,16 @@ Entries new on 2026-10-12, with no row in the parts below:
   them, and hand them on. MIDI 1.0 (page 6) has a receiver ignore an
   undefined status. Done when the codec leaves the two out in both
   directions, as part of one rule for the three codecs (R29).
+- **L10, in part, on 2026-10-12.** `MIDIHub.prefs` lists a cluster named
+  `btmidi.in.<n>` or `btmidi.out.<n>` as BLE MIDI, and a saved route that
+  names `BLE MIDI In` or `BLE MIDI Out` is read as `btmidi.in.0` or
+  `btmidi.out.0`, the peripheral role those clusters were
+  (`mh_routes_migrate()`, tested in `tests/routes.c`; the router reads
+  routes the same way). Built, not run: Preferences is a MUI program.
+  Routes that named a bound device's own clusters (`<device> In`) are not
+  migrated, since nothing says which port the device has now; and the
+  Overview still cannot show which device a port is, which needs the
+  class to answer that.
 
 ## Done
 

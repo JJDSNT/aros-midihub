@@ -6,6 +6,7 @@
 #include "rtpmidi/sender.h"
 #include "rtpmidi/peers.h"
 #include "rtpmidi/ports.h"
+#include <midihub/config.h>
 #include "rtpmidi/timing.h"
 
 #include <assert.h>
@@ -160,6 +161,39 @@ static void apple_clock_delayed(void)
 }
 
 /* Which port a peer is given (decision D2 of the AppleMIDI backlog). */
+/* What is saved is what is read back, every setting of it. */
+static void config_round_trip(void)
+{
+    static struct netmidi_network_config written, read_back;
+    const char *path = "build/config-round-trip.tmp";
+
+    netmidi_config_defaults(&written);
+    written.local_port = 5010;
+    strcpy(written.session_name, "A Session");
+    strcpy(written.peer_ip, "192.0.2.7");
+    written.peer_port = 5104;
+    strcpy(written.peer_name, "Host Session");
+    written.latency_ms = 40;
+    strcpy(written.accept, "192.0.2.7,the iPad");
+    written.midi2_port = 5673;
+    strcpy(written.port_name[3], "the iPad");
+    strcpy(written.midi2_port_name[15], "A Workbench");
+    assert(netmidi_config_save(path, &written) == 0);
+    netmidi_config_defaults(&read_back);
+    assert(netmidi_config_load(path, &read_back) == 0);
+    assert(memcmp(&written, &read_back, sizeof(written)) == 0);
+    remove(path);
+
+    /* nothing but the defaults: a file that reads as the defaults */
+    netmidi_config_defaults(&written);
+    assert(netmidi_config_save(path, &written) == 0);
+    memset(&read_back, 0xff, sizeof(read_back));
+    netmidi_config_defaults(&read_back);
+    assert(netmidi_config_load(path, &read_back) == 0);
+    assert(memcmp(&written, &read_back, sizeof(written)) == 0);
+    remove(path);
+}
+
 static void apple_ports(void)
 {
     struct applemidi_ports ports;
@@ -2346,6 +2380,7 @@ int main(void)
     apple_sync();
     apple_clock();
     apple_ports();
+    config_round_trip();
     apple_clock_delayed();
     apple_feedback();
     applemidi_peers();

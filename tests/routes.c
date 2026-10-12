@@ -31,6 +31,21 @@ int main(void)
         CHECK(mh_routes_parse(&table, cycle, sizeof(cycle) - 1, &line) != 0);
         CHECK(line == 0 && table.count == 0);
     }
+    {
+        static const char old[] =
+            "route\t1\t1\tMIDIHub In\tMIDIHub Synth\n"
+            "route\t1\t0\tUSB MIDI In\tMIDIHub Out\n"
+            "route\t1\t1\tBLE MIDI In\tBLE MIDI Out 2\n";
+        CHECK(mh_routes_parse(&table, old, sizeof(old) - 1, &line) == 0);
+        CHECK(mh_routes_migrate(&table) == 3);
+        CHECK(strcmp(table.routes[0].source, "applemidi.in.0") == 0);
+        CHECK(strcmp(table.routes[0].destination, "MIDIHub Synth") == 0);
+        CHECK(strcmp(table.routes[1].destination, "applemidi.out.0") == 0);
+        CHECK(strcmp(table.routes[2].source, "btmidi.in.0") == 0);
+        /* a name is taken whole: this one is somebody else's */
+        CHECK(strcmp(table.routes[2].destination, "BLE MIDI Out 2") == 0);
+        CHECK(mh_routes_migrate(&table) == 0);
+    }
     puts("route configuration OK");
     return 0;
 }

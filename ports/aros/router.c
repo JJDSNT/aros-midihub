@@ -108,6 +108,8 @@ static int load_routes(struct mh_route_table *table)
         return -1;
     }
     free(text);
+    /* names of clusters the transports had before they were drivers */
+    (void)mh_routes_migrate(table);
     return 0;
 }
 

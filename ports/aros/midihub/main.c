@@ -1317,11 +1317,6 @@ int main(int argc, char **argv)
         }
 #endif
     }
-#ifdef NETMIDI_SERVICE
-    /* a service is no program of that name */
-    if (strcmp(config.session_name, "AROS MIDIHub") == 0)
-        strcpy(config.session_name, "AROS");
-#endif
     /* what the configuration says holds unless an argument says otherwise */
     midi2_port = config.midi2_port;
     latency_ms = config.latency_ms;

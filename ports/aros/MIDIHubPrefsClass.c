@@ -67,6 +67,10 @@ static int contains_ci(CONST_STRPTR text, CONST_STRPTR needle)
 static CONST_STRPTR endpoint_transport(CONST_STRPTR name)
 {
     if (contains_ci(name, "synth")) return "Software";
+    /* the transports' drivers in DEVS:Midi: <driver>.in.<n>, <driver>.out.<n> */
+    if (!strncmp(name, "applemidi.", 10)) return "AppleMIDI";
+    if (!strncmp(name, "networkmidi2.", 13)) return "Network MIDI 2.0";
+    if (!strncmp(name, "btmidi.", 7)) return "BLE MIDI";
     /* btmidi.class's own ports are known from bluetooth.library; these
        catch its defaults without it, and MIDIHubBLE's diagnostic ports */
     if (!strncmp(name, BTMIDI_DEFAULT_NODE " ", sizeof(BTMIDI_DEFAULT_NODE)) ||
@@ -162,6 +166,8 @@ static int load_routes_path(struct MHPrefsData *data, CONST_STRPTR path)
         free(text); return -1;
     }
     free(text);
+    /* names of clusters the transports had before they were drivers */
+    (void)mh_routes_migrate(&next);
     data->routes = next;
     return 0;
 }
@@ -199,16 +205,11 @@ static int write_routes(struct MHPrefsData *data, CONST_STRPTR path)
     return fclose(file) ? -1 : 0;
 }
 
+/* The network service's configuration: what this window edits, and with
+   it every setting it does not show, as it was read. */
 static int write_network(struct MHPrefsData *data, CONST_STRPTR path)
 {
-    FILE *file = fopen(path, "wb");
-    if (!file) return -1;
-    fprintf(file, "local_port=%u\nsession_name=%s\n",
-            (unsigned)data->network.local_port, data->network.session_name);
-    if (data->network.peer_ip[0])
-        fprintf(file, "peer_ip=%s\npeer_port=%u\n", data->network.peer_ip,
-                (unsigned)data->network.peer_port);
-    return fclose(file) ? -1 : 0;
+    return netmidi_config_save((const char *)path, &data->network);
 }
 
 static int write_value(CONST_STRPTR path, CONST_STRPTR value)
@@ -1026,7 +1027,7 @@ static int apply_settings(struct MHPrefsData *data, BOOL persistent)
     get(data->synth_backend, MUIA_Cycle_Active, &backend);
     backend_name = backend == 1 ? "fluid" : "tiny";
     if (write_routes(data, "ENV:MidiHub/Routes") ||
-        write_network(data, "ENV:MidiHub/Network") ||
+        write_network(data, "ENV:NetMIDI") ||
         (soundfont && soundfont[0] &&
          write_value("ENV:MidiHub/SoundFont", soundfont)) ||
         write_value("ENV:MidiHub/Backend", backend_name) ||
@@ -1036,7 +1037,7 @@ static int apply_settings(struct MHPrefsData *data, BOOL persistent)
         (void)DeleteFile("ENV:MidiHub/SoundFont");
     if (persistent && (ensure_directory("ENVARC:MidiHub") ||
         write_routes(data, "ENVARC:MidiHub/Routes") ||
-        write_network(data, "ENVARC:MidiHub/Network") ||
+        write_network(data, "ENVARC:NetMIDI") ||
         (soundfont && soundfont[0] &&
          write_value("ENVARC:MidiHub/SoundFont", soundfont)) ||
         write_value("ENVARC:MidiHub/Backend", backend_name) ||
@@ -1762,7 +1763,11 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
             set(data->ble_button, MUIA_Disabled, BluetoothBase == NULL);
             if (load_routes(data)) set_status(data, "The route configuration is invalid.");
             netmidi_config_defaults(&data->network);
-            if (netmidi_config_load("ENV:MidiHub/Network", &data->network) != 0)
+            /* the service's file; what an older version of this program
+               saved is taken where there is none yet */
+            if (netmidi_config_load("ENV:NetMIDI", &data->network) != 0 &&
+                netmidi_config_load("ENVARC:NetMIDI", &data->network) != 0 &&
+                netmidi_config_load("ENV:MidiHub/Network", &data->network) != 0)
                 (void)netmidi_config_load("ENVARC:MidiHub/Network", &data->network);
             set(data->network_session, MUIA_String_Contents, data->network.session_name);
             set(data->network_local_port, MUIA_String_Integer, data->network.local_port);

@@ -34,4 +34,9 @@ void netmidi_config_defaults(struct netmidi_network_config *config);
  * or another I/O error. A failed parse leaves *config unchanged. */
 int netmidi_config_load(const char *path, struct netmidi_network_config *config);
 
+/* Writes every setting to path, in the form netmidi_config_load reads.
+ * Returns 0, or -1 when the file could not be written whole. */
+int netmidi_config_save(const char *path,
+                        const struct netmidi_network_config *config);
+
 #endif

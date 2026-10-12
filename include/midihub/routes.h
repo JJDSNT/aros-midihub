@@ -24,4 +24,12 @@ struct mh_route_table {
 int mh_routes_parse(struct mh_route_table *table, const char *text, size_t length,
                     size_t *error_line);
 
+/* The transports were programs with clusters of their own and are drivers
+ * now: a route saved with a cluster's old name is given the name of the
+ * driver's port that took its place. "MIDIHub In" and "MIDIHub Out" become
+ * the first port of the driver applemidi, "BLE MIDI In" and "BLE MIDI Out"
+ * that of btmidi, which is the peripheral role as those clusters were.
+ * Returns how many names were changed. */
+size_t mh_routes_migrate(struct mh_route_table *table);
+
 #endif
