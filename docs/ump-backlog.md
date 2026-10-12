@@ -56,7 +56,7 @@ Nothing open.
 
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
-| UP06 | One group per translator; the others are counted and nothing more. An endpoint with several groups in use would need one translator each, and nothing says which groups a peer uses. | Give the caller the group of what was passed over, so a runtime can open a port for it. | A host test with two groups. |
+| UP06 | A translator is of one group still, and since 2026-10-12 says which groups it has seen messages for (`groups_seen`), so a caller can tell that a peer uses others and give each a translator; `test_two_groups`. The service does not: it has one translator a session, for group 0, and one port. | In the service, a translator and a port for each group a peer is seen to use; whether a port to a group is what a user wants is to be asked first. | A peer's second group plays on a second port. |
 | UP08 | Device Identity is asked for in Endpoint Discovery (filter bit 2) and not answered. Section 7.1.3 says an endpoint may answer, not that it shall. | Write the notification (figure 14), with the manufacturer and model identifiers from the caller. Which identifiers AROS may use is a question to answer first: a SysEx ID is assigned, not chosen. | The message is written; the question has an answer here. |
 
 ## P2 — complete before an upstream proposal

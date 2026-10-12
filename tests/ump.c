@@ -217,6 +217,33 @@ static void take_timed(void *context, const uint8_t *bytes, size_t length)
     ++jr_count;
 }
 
+/* UP06: a peer that uses two groups is seen to, and a translator to each
+   group takes its own messages. */
+static void test_two_groups(void)
+{
+    static const uint32_t stream[] = {
+        0x20903c64u,            /* group 0 */
+        0x25903d64u,            /* group 5 */
+        0x00100064u,            /* a JR Clock: of no group */
+        0x25803d00u,
+        0x20803c00u
+    };
+    struct ump_to_midi1 first, second;
+    unsigned i;
+
+    ump_to_midi1_init(&first, 0);
+    ump_to_midi1_init(&second, 5);
+    jr_count = 0;
+    for (i = 0; i < sizeof(stream) / sizeof(stream[0]); ++i) {
+        CHECK(ump_to_midi1(&first, &stream[i], 1, take_timed, NULL) == 0);
+        CHECK(ump_to_midi1(&second, &stream[i], 1, take_timed, NULL) == 0);
+    }
+    CHECK(jr_count == 4);                   /* two messages each */
+    CHECK(first.groups_seen == ((1u << 0) | (1u << 5)));
+    CHECK(second.groups_seen == first.groups_seen);
+    CHECK(first.dropped.other_group == 2 && second.dropped.other_group == 2);
+}
+
 static void test_jr_timestamps(void)
 {
     static const uint32_t stream[] = {
@@ -707,6 +734,7 @@ int main(void)
     test_midi1_to_ump();
     test_ump_to_midi1();
     test_jr_timestamps();
+    test_two_groups();
     test_jr_clock();
     test_midi2_down();
     test_against_specification();

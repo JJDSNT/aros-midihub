@@ -480,6 +480,7 @@ int ump_to_midi1(struct ump_to_midi1 *state, const uint32_t *words,
         ++state->dropped.not_translated;
         return 0;
     }
+    state->groups_seen |= (uint16_t)(1u << ((words[0] >> 24) & 0x0f));
     if (((words[0] >> 24) & 0x0f) != state->group) {
         ++state->dropped.other_group;
         return 0;

@@ -114,6 +114,10 @@ struct ump_to_midi1 {
     size_t sysex_length;
     struct ump_dropped dropped;
     struct ump_jr jr;
+    uint16_t groups_seen;       /* a bit to a group that messages came for,
+                                   this translator's and the others': how
+                                   a caller learns which groups a peer
+                                   uses and may want a translator for */
 };
 
 /* How long after the sender's last clock the messages now passing are
