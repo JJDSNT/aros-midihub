@@ -27,6 +27,9 @@ static void write32(uint8_t *p, uint32_t value)
     p[3] = (uint8_t)value;
 }
 
+/* The length of a message by its status: tables II, V and VI of the
+   Complete MIDI 1.0 Detailed Specification 96.1 (4.2.1). 0 for SysEx and
+   for F4, F5, F9 and FD, which the tables leave undefined. */
 static size_t short_length(uint8_t status)
 {
     if (status >= 0x80 && status <= 0xef)
@@ -975,6 +978,9 @@ int rtpmidi_reader_next(struct rtpmidi_reader *reader,
     status = midi[offset];
     has_status = !!(status & 0x80);
     if (has_status) {
+        /* Running status is for Voice and Mode messages; any other
+           status stops it, System Real Time excepted (MIDI 1.0, pages 5
+           and 30; RFC 6295 section 3.2 says the same of the list) */
         ++offset;
         if (status >= 0x80 && status <= 0xef)
             reader->running_status = status;
@@ -1013,6 +1019,10 @@ int rtpmidi_reader_next(struct rtpmidi_reader *reader,
     else if (status >= 0xf8 && status != 0xf9 && status != 0xfd)
         needed = 0;
     else
+        /* F4, F5, F9, FD. MIDI 1.0 (page 6) has a receiver ignore them;
+           RFC 6295 section 3.2 forbids them in the list unless the
+           session was set up to carry them, and we set up no such
+           session. The caller drops the packet: backlog R29. */
         return -2;
     if (packet->midi_length - offset < needed)
         return -1;

@@ -79,6 +79,7 @@ static int system_status_defined(uint8_t status)
            status == 0xff;
 }
 
+/* Tables II, V and VI of the MIDI 1.0 Detailed Specification. */
 static unsigned midi1_data_bytes(uint8_t status)
 {
     switch (status & 0xf0) {
@@ -130,30 +131,29 @@ static void emit_short(struct ump_from_midi1 *state, uint8_t status,
     sink(context, &word, 1);
 }
 
+/* The rules of a MIDI 1.0 byte stream are those of the Complete MIDI 1.0
+ * Detailed Specification 96.1 (version 4.2.1); pages are its own. */
 void ump_from_midi1_byte(struct ump_from_midi1 *state, uint8_t byte,
                             ump_sink sink, void *context)
 {
     if (byte >= 0xf8) {
-        /* Real time: may come anywhere, even inside SysEx. */
+        /* System Real Time may come anywhere, between the bytes of
+         * another message and inside SysEx, and is no new status
+         * (page 30). F9 and FD are undefined and left out (page 6). */
         if (system_status_defined(byte))
             emit_short(state, byte, 0, 0, sink, context);
         return;
     }
-    if (byte == 0xf0) {
-        state->in_sysex = 1;
-        state->sysex_started = 0;
-        state->sysex_count = 0;
-        state->status = 0;
-        return;
-    }
     if (state->in_sysex) {
-        if (byte == 0xf7 || byte & 0x80) {
+        if (byte & 0x80) {
+            /* EOX ends a SysEx, and so does any other status but Real
+             * Time, which then starts its own message (page 29); a new
+             * F0 is one of them. */
             emit_sysex7(state, state->sysex_started ? SYSEX7_END : SYSEX7_COMPLETE,
                         sink, context);
             state->in_sysex = 0;
             if (byte == 0xf7)
                 return;
-            /* Any other status ends the SysEx and starts a message. */
         } else {
             if (state->sysex_count == 6) {
                 emit_sysex7(state, state->sysex_started ? SYSEX7_CONTINUE : SYSEX7_START,
@@ -164,21 +164,32 @@ void ump_from_midi1_byte(struct ump_from_midi1 *state, uint8_t byte,
             return;
         }
     }
+    if (byte == 0xf0) {
+        state->in_sysex = 1;
+        state->sysex_started = 0;
+        state->sysex_count = 0;
+        state->status = 0;
+        return;
+    }
     if (byte & 0x80) {
+        /* A new status is adopted even if the message before it was not
+         * complete (page 5). Running status is for Voice and Mode
+         * messages only, and any other status stops it: a System Common
+         * message, an EOX with no SysEx to end, the undefined F4 and F5. */
+        state->have = 0;
+        state->status = 0;
         if (byte == 0xf7)
             return;
         state->need = (uint8_t)midi1_data_bytes(byte);
-        state->have = 0;
         if (state->need == 0) {
-            if (byte < 0xf0 || system_status_defined(byte))
+            if (system_status_defined(byte))
                 emit_short(state, byte, 0, 0, sink, context);
-            state->status = 0;
             return;
         }
-        /* System Common messages cancel running status. */
         state->status = byte;
         return;
     }
+    /* data with no status before it is ignored (page 6) */
     if (!state->status)
         return;
     state->data[state->have++] = byte;

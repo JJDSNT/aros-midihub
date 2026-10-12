@@ -162,6 +162,43 @@ static void test_midi1_to_ump(void)
     CHECK(ump_count == 3);
     CHECK(ump[0] == 0x10f80000u);
     CHECK(ump[1] == 0x30027e7fu);
+
+    {   /* MIDI 1.0, page 29: any status but Real Time ends a SysEx. A
+           second F0 ends the first, which is not left open. */
+        static const uint8_t twice[] = { 0xf0, 1, 2, 3, 4, 5, 6, 7,
+                                         0xf0, 8, 9, 0xf7 };
+        static const uint8_t cut[] = { 0xf0, 1, 2, 0x90, 60, 100 };
+
+        to_ump(twice, sizeof(twice), 0);
+        CHECK(ump_count == 6);
+        CHECK(ump[0] == 0x30160102u && ump[1] == 0x03040506u);
+        CHECK(ump[2] == 0x30310700u);              /* End, one byte */
+        CHECK(ump[4] == 0x30020809u);              /* Complete */
+        to_ump(cut, sizeof(cut), 0);
+        CHECK(ump_count == 3);
+        CHECK(ump[0] == 0x30020102u && ump[2] == 0x20903c64u);
+    }
+    {   /* page 5: a new status is adopted though the message before it
+           was not complete; any status but a Voice or Mode one stops
+           running status, a stray EOX and an undefined one too; page 30:
+           Real Time does not. Page 6: data with no status is ignored. */
+        static const uint8_t cut[] = { 0x90, 60, 0x80, 61, 0 };
+        static const uint8_t eox[] = { 0x90, 60, 100, 0xf7, 61, 100 };
+        static const uint8_t undefined[] = { 0x90, 60, 100, 0xf4, 61, 100 };
+        static const uint8_t common[] = { 0x90, 60, 100, 0xf3, 5, 61, 100 };
+        static const uint8_t clock[] = { 0x90, 60, 100, 0xf8, 61, 0xf8, 100 };
+
+        to_ump(cut, sizeof(cut), 0);
+        CHECK(ump_count == 1 && ump[0] == 0x20803d00u);
+        to_ump(eox, sizeof(eox), 0);
+        CHECK(ump_count == 1 && ump[0] == 0x20903c64u);
+        to_ump(undefined, sizeof(undefined), 0);
+        CHECK(ump_count == 1 && ump[0] == 0x20903c64u);
+        to_ump(common, sizeof(common), 0);
+        CHECK(ump_count == 2 && ump[1] == 0x10f30500u);
+        to_ump(clock, sizeof(clock), 0);
+        CHECK(ump_count == 4 && ump[3] == 0x20903d64u);
+    }
 }
 
 static void test_ump_to_midi1(void)

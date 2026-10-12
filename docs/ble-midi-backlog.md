@@ -46,6 +46,7 @@ it matters. The detail of each entry is in the three parts below.
 | P3 | L14 | A message begun inside an unfinished SysEx costs its whole packet | A device seen doing it |
 | P3 | L16 | The class asks for no encryption, which the specification recommends | T01, to see what phones do |
 | P3 | L17 | As the central we never ask for a short interval ourselves | T02 |
+| P3 | L18 | F9 and FD, undefined in MIDI 1.0, pass as System Real Time | Nothing; with RTP-MIDI backlog R29 |
 
 Entries new on 2026-10-12, with no row in the parts below:
 
@@ -83,6 +84,11 @@ Entries new on 2026-10-12, with no row in the parts below:
   shorter interval when the peripheral asks; one that does not ask stays
   there. Done when a real peripheral has been watched (T02) and, if any
   stays long, the class can ask the stack for a short link.
+- **L18.** The decoder and the writer take every status from F8 up as a
+  System Real Time message of one byte, the undefined F9 and FD among
+  them, and hand them on. MIDI 1.0 (page 6) has a receiver ignore an
+  undefined status. Done when the codec leaves the two out in both
+  directions, as part of one rule for the three codecs (R29).
 
 ## Done
 

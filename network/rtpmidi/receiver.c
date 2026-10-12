@@ -132,6 +132,8 @@ void rtpmidi_receiver_deliver(struct rtpmidi_receiver *rx, const uint8_t *bytes,
         }
     } else if (length == 3 && (status & 0xf0) == 0xb0 &&
                (bytes[1] == 120 || bytes[1] >= 123)) {
+        /* All Sound Off, and 123 to 127, which all work as All Notes
+           Off (MIDI 1.0, pages 20 and 24, table IV). Not 121 and 122. */
         memset(rx->active_notes[channel], 0,
                sizeof(rx->active_notes[channel]));
         memset(rx->note_count[channel], 0,
@@ -152,6 +154,12 @@ void rtpmidi_receiver_deliver(struct rtpmidi_receiver *rx, const uint8_t *bytes,
         }
         rx->controllers[channel][bytes[1]] = bytes[2];
         rx->controller_known[channel][bytes[1]] = 1;
+        /* MIDI 1.0, page 17: a parameter is chosen by the two numbers,
+           99 and 98 or 101 and 100, and Data Entry, Increment and
+           Decrement then apply to it. A number of which only the first
+           half has come is no parameter here until the second does;
+           the text's rule 4 would have the receiver take either half
+           alone: backlog R30. */
         if (controller == 101 || controller == 99) {
             rx->parameter_nrpn[channel] = controller == 99;
             rx->parameter_type_known[channel] = 1;

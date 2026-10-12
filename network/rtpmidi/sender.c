@@ -382,6 +382,8 @@ void rtpmidi_sender_record(struct rtpmidi_sender *sender, uint16_t sequence,
             sender->parameter_pending[channel] = 0;
             sender->parameter_valid[channel] = 0;
         }
+        /* All Sound Off, and 123 to 127, which all work as All Notes
+           Off (MIDI 1.0, pages 20 and 24, table IV) */
         if (message[1] == 120 || message[1] >= 123) {
             memset(sender->active_notes[channel], 0,
                    sizeof(sender->active_notes[channel]));
