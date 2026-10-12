@@ -229,9 +229,9 @@ Protocol:
   up, announced, answered for whether or not a service is registered, and
   changed to `name-2`, `name-3` when another host has it, with the
   services pointing at the new name (`tools/mdns-hostname-hosted.sh`).
-  Not tested: losing the name after it was announced, and the tie-break
-  for two hosts probing the same host name at once; both are implemented.
-  The number is not remembered across a restart of mdnsd.
+  The same script checks losing the name after it was announced and the
+  tie-break for two hosts probing the same host name at once. The number
+  is not remembered across a restart of mdnsd.
 - Two hosts that probe the same service name at the same moment are told
   apart by the tie-break of RFC 6762 section 8.2: the one whose SRV record
   sorts earlier waits a second and probes again
