@@ -1,15 +1,66 @@
-# BLE MIDI as a CAMD driver: what it cost and what is owed
+# BLE MIDI backlog — what the driver cost and what is owed
 
-**Written:** 2026-10-11, after `btmidi.class` was rewritten from a CAMD client
-into a CAMD driver for AROS PR #1507 (commits `a45711131d`, `db7145795c` on
-`btmidi-class-v2`; worktree `~/AROS-btmidi`).
-**Purpose:** a list to come back to. Each entry says what was lost or left
-weak, what it affects, and how it could be fixed. Delete an entry when it is
-fixed; when the list is empty, delete the file.
+**Scope:** `btmidi.class` as sent to AROS in PR #1507 (worktree
+`~/AROS-btmidi`, branch `btmidi-class-v2`), the packet codec in
+`src/ble_midi.c`, the older copy of the class in `ports/aros/btmidi`, and
+what MIDIHub's own programs have to change for the driver. This file was
+`ble-midi-driver-limitations.md`, written on 2026-10-11 after the class was
+rewritten from a CAMD client into a CAMD driver; the entries keep their
+numbers (L lost against the client version, W weak in the code sent, T not
+yet tested), because other documents cite them.
 
 Background: [BLE MIDI](ble-midi.md), [the review](upstream-prs.md),
 [what the driver model cannot say](camd-integration.md), and the amendment to
 [the architecture decision](camd-endpoint-architecture-decision.md).
+
+## Priorities
+
+As in the other backlogs: **P0** wrong or unsafe as it is, **P1** before a
+first real use, **P2** before the work is complete, **P3** only if use shows
+it matters. The detail of each entry is in the three parts below.
+
+| Priority | Item | In one line | Waits for |
+|---|---|---|---|
+| P0 | T01 | The driver version has never run on a radio; the PR promises the test | A Pi 3 and a phone |
+| P0 | W01 | The structure shared by class and driver stub has no version | Nothing; before the merge |
+| P0 | L08 | A malformed packet leaves a partial message in CAMD's parser | Nothing |
+| P1 | L01 | A device's port number depends on which other devices are bound | Nothing in the class; B29 for the real answer |
+| P1 | L06 | A sixteenth device is refused without a word | Nothing; with L01 |
+| P1 | L10 | MIDIHub.prefs does not know the driver's ports; saved routes break | Nothing |
+| P1 | L11 | This repository still builds the old client copy of the class | L10, and the PR merged |
+| P1 | T04 | Never run with an unpatched `camd.library` | Nothing |
+| P1 | T06 | A port that outlives its binding was read, never run | Nothing |
+| P1 | T03 | The decoder has run on the host only | T01 |
+| P2 | L05 | A class cannot make CAMD look at `DEVS:Midi` again | Nothing; with W03 |
+| P2 | W03 | The patched USB class opens `camd.library`, which the review forbids | Nothing; with L05 |
+| P2 | W05 | Closing a port was not examined for SMP | Someone who knows AROS's SMP rules |
+| P2 | W06, T05 | Never built or run for m68k | Nothing |
+| P2 | T02 | The central role has never met a real peripheral | A BLE MIDI device |
+| P2 | L09 | The driver has to be written to disk | A build decision |
+| P2 | L02 | A port has a number, not the device's name | CAMD backlog B31 |
+| P2 | L03 | All sixteen ports always look present | CAMD backlog B30 |
+| P2 | W04 | USB and BLE name a device's port in two ways | CAMD backlog B29 |
+| P2 | W02 | Input lost in CAMD is invisible to the class | CAMD backlog B32 |
+| P2 | L12 | The time a BLE packet carries is thrown away | CAMD backlog B32 |
+| P3 | L04 | A program cannot link to a port before its device exists | The maintainer's agreement |
+| P3 | L07 | Two centrals cannot send SysEx at once | Nothing; only if it matters |
+
+Two entries are new on 2026-10-12 and have no row in the parts below:
+
+- **L11.** `ports/aros/btmidi` is the client version of the class, and
+  `contrib-aros-midihub` builds it under the same name as the upstream
+  class. Remove it and the `camd_bridge` it shares once MIDIHub works with
+  the upstream class (L10) and the pull request is merged. Done when the
+  hosted tree has one `btmidi.class`, built from the AROS tree.
+- **L12.** A BLE MIDI packet carries a 13-bit millisecond timestamp per
+  message. The decoder parses it and the class drops it: a driver hands
+  CAMD bytes, and bytes have no time. Messages reach clients when the
+  packet arrives, with the connection interval's jitter. Done when a client
+  sees the sender's spacing; that needs a timed receive for drivers (B32).
+
+## Done
+
+Nothing yet under this backlog.
 
 **How far each statement was checked.** *Run* means it was seen on hosted
 AROS with this repository's CAMD patches. *Read* means it follows from the
@@ -78,8 +129,8 @@ Not losses: things the driver version does that should be better.
 2. W01 and L08, small and safe, as one more commit to the PR.
 3. L01, the address-to-port map, with L06's message. Ask in the PR first
    whether he wants it there or afterwards.
-4. L10, so MIDIHub works with the upstream class, then remove the copy in
-   `ports/aros/btmidi`.
+4. L10, so MIDIHub works with the upstream class, then L11.
 5. L05 and W03 together: one rescan trigger for both classes.
-6. L02, L03, W02 and W04 with the extension, if upstream is open to it.
+6. L02, L03, W02, W04 and L12 with the driver-side block, if upstream is
+   open to it.
 7. L04 and L07 only if use shows they matter.

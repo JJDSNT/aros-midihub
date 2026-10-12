@@ -114,7 +114,7 @@ knows about a transport is what a driver can tell it; see the amendment in
 [the architecture decision](camd-endpoint-architecture-decision.md). These
 wait for the maintainer's answer in AROS PR #1507 and for an agreed sketch,
 and are not started. What each one would repair in `btmidi.class` is in
-[the driver's limitations](ble-midi-driver-limitations.md).
+[the driver's limitations](ble-midi-backlog.md).
 
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|

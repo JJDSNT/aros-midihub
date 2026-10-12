@@ -1,9 +1,11 @@
 # What depends on what across the backlogs
 
-One graph over the five lists of work owed:
+One graph over the seven lists of work owed:
 [CAMD](camd-backlog.md) (B), [RTP-MIDI](rtp-midi-backlog.md) (R),
-[AppleMIDI](applemidi-backlog.md) (AM), [UMP](ump-backlog.md) (UP) and
-[Network MIDI 2.0](network-midi2-backlog.md) (NM). Written on 2026-10-12
+[AppleMIDI](applemidi-backlog.md) (AM), [UMP](ump-backlog.md) (UP),
+[Network MIDI 2.0](network-midi2-backlog.md) (NM),
+[BLE MIDI](ble-midi-backlog.md) (L, W, T) and [mDNS](mdns-backlog.md)
+(MD, MU). Written on 2026-10-12
 from those files; when an item is added, closed or renumbered there, change
 it here in the same commit.
 
@@ -23,6 +25,8 @@ flowchart LR
         SPEC[/"Specification texts<br/>M2-104-UM, M2-124-UM"/]:::outside
         I1559[/"AROS issue #1559<br/>IPv6 answer"/]:::outside
         P1507[/"AROS PR #1507<br/>yes to a driver-side block"/]:::outside
+        P1560[/"AROS PR #1560<br/>review"/]:::outside
+        HW[/"Hardware: Pi 3, phone,<br/>a BLE MIDI device, a Mac"/]:::outside
     end
 
     subgraph DEC[Decisions to take]
@@ -30,6 +34,8 @@ flowchart LR
         D2{{"D2 peers to ports"}}:::decision
         D4{{"D4 no time across<br/>the driver"}}:::decision
         ND1{{"NM D1 one driver<br/>or two"}}:::decision
+        MDD1{{"mDNS D1 byte<br/>order style"}}:::decision
+        MDD2{{"mDNS D2 tell the<br/>original Bonami"}}:::decision
     end
 
     subgraph RTP[RTP-MIDI]
@@ -94,6 +100,34 @@ flowchart LR
         B32["B32 UMP and time<br/>from a driver"]
     end
 
+    subgraph BLE[BLE MIDI]
+        T01["T01 driver on<br/>a radio"]
+        T02["T02 central role with<br/>a real peripheral"]
+        T03["T03 decoder<br/>inside AROS"]
+        L10["L10 MIDIHub.prefs knows<br/>the driver's ports"]:::ready
+        L11["L11 remove the<br/>old client copy"]
+        L02["L02 a name<br/>per port"]
+        L03["L03 presence<br/>per port"]
+        W04["W04 one way to<br/>name a device"]
+        W02["W02 input loss<br/>visible"]
+        L12["L12 packet<br/>timestamps"]
+    end
+
+    subgraph MDNS[mDNS]
+        MD01["MD01 events outside<br/>the daemon"]
+        MD02["MD02 spaces in<br/>text records"]:::ready
+        MD03["MD03 tell a client<br/>its final name"]
+        MD06["MD06 meet Bonjour and<br/>a second AROS"]
+        MD14["MD14 IPv6"]
+        MD15["MD15 one byte<br/>order style"]
+        MU1["MU1 PR #1560<br/>merged"]
+        MU2["MU2 second cut:<br/>register a service"]
+        MU3["MU3 third cut:<br/>browse and resolve"]
+        MU4["MU4 tools, commodity,<br/>Envoy"]
+        MU5["MU5 where the<br/>tests go"]
+        MU6["MU6 the original<br/>Bonami's issue"]
+    end
+
     R02 --> R11
     AM06 --> R21
     AM06 --> R23
@@ -148,6 +182,32 @@ flowchart LR
     UP11 --> NM14
     B32 --> NM14
 
+    HW --> T01
+    HW --> T02
+    HW --> MD06
+    T01 --> T03
+    T01 -- "then the PR can merge" --> L11
+    L10 --> L11
+    B31 --> L02
+    B30 --> L03
+    B29 --> W04
+    B32 --> W02
+    B32 --> L12
+
+    I1559 --> MD01
+    I1559 --> MD14
+    I1559 --> MU2
+    I1559 --> MU5
+    MD01 --> MD03
+    MD01 --> MU3
+    MD02 --> NM08
+    MDD1 --> MD15
+    MDD2 --> MU6
+    P1560 --> MU1
+    MU1 --> MU2
+    MU2 --> MU3
+    MU3 --> MU4
+
     P1507 --> B29
     B29 --> B30
     B29 --> B31
@@ -160,7 +220,7 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 78 open items, 32 have nothing in front of them, 30 sit behind something
+Of 125 open items, 59 have nothing in front of them, 50 sit behind something
 outside our hands or behind a decision, and 16 wait only for other work of
 ours.
 
@@ -169,30 +229,42 @@ through other items:
 
 | Do this | It opens | Which is |
 |---|---|---|
-| Have the specification texts | 21 | All of UMP's and Network MIDI 2.0's conformance work, and CAMD's B32 |
+| Have the specification texts | 23 | All of UMP's and Network MIDI 2.0's conformance work, CAMD's B32, and through it BLE's timestamps |
+| UP01, check UMP against the text | 15 | The rest of UMP, B32, timed delivery and the MIDI 2.0 protocol over the network |
 | AM02, the clock object | 14 | Several peers, and through them the driver, the accept rule, reconnection, configuration, and Network MIDI 2.0's whole runtime |
-| UP01, check UMP against the text | 13 | The rest of UMP, B32, timed delivery and the MIDI 2.0 protocol over the network |
 | AM05, several peers on AROS | 12 | The same as AM02 less the clock intervals |
+| A yes in PR #1507 | 10 | B29 to B32, and what BLE MIDI lost to the driver model: names, presence, identity, time |
+| Answers in issue #1559 | 9 | Event delivery in mDNS and every cut of it after the first, and the three IPv6 items |
 | NM02, the session knows its peer | 8 | The session table, the runtime and everything run on it |
-| A yes in PR #1507 | 5 | B29 to B32 and, last, the MIDI 2.0 protocol over the network |
+| Hardware | 5 | The test owed to PR #1507, and with it the PR's merge and the removal of the old class here |
 | D2, peers to ports | 4 | The driver, configuration, and Network MIDI 2.0's way into CAMD |
+| PR #1560 reviewed | 4 | Every later cut of mDNS |
 
-**The longest chain of our own work** is five steps:
-AM02 → AM05 → NM07 → NM10 → NM17. It starts in AppleMIDI and ends in
-Network MIDI 2.0, which is why AppleMIDI goes first: its runtime is the one
-the other transport is built beside.
+**The longest chains** are four steps of our own work after something
+outside: the texts, UP01, B32 and then BLE's timestamps; and #1560, then
+the three further cuts of mDNS. Within our own hands the longest is
+AM02 → AM05 → NM07 → NM10 → NM17, from AppleMIDI into Network MIDI 2.0,
+which is why AppleMIDI goes first.
 
-**Three things outside our hands hold the rest:**
+**Five things outside our hands hold 50 items between them:**
 
 - *The specification texts* hold the most and cost the least to get: they
   are documents to obtain and read, not answers to wait for.
-- *PR #1507* holds only CAMD's driver-side block. Nothing in RTP-MIDI or
-  AppleMIDI waits for it.
-- *Issue #1559* holds only the two IPv6 items.
+- *PR #1507* holds CAMD's driver-side block and, behind it, most of what
+  BLE MIDI lost. Nothing in RTP-MIDI or AppleMIDI waits for it.
+- *Issue #1559* holds mDNS's way upstream after the first cut. It does not
+  hold AppleMIDI's use of the service, which can be built on the library in
+  this repository.
+- *Hardware* holds the one thing we promised a reviewer: T01.
+- *PR #1560* holds only mDNS's later cuts.
 
-**The decisions** hold little now and much later. D1, D2 and D4 are needed
-by one item, the driver (AM08), and that item is three steps into
-AppleMIDI. They can wait until AM05 is done without delaying anything.
+**mDNS and the transports meet in one place.** MD02, spaces in a text
+record, has to be done before Network MIDI 2.0 can advertise itself (NM08).
+Everything else in mDNS is independent of the MIDI work, and the reverse.
+
+**The decisions** hold little now. D1, D2 and D4 are needed by one item,
+the driver (AM08), three steps into AppleMIDI. The two in mDNS each hold a
+single item.
 
 ## Free: nothing before, nothing after
 
@@ -206,9 +278,11 @@ their own backlog, not from this graph.
 | UMP | UP02, UP14, UP15 |
 | Network MIDI 2.0 | NM03, NM18, NM19 |
 | CAMD | B16, B22 |
+| BLE MIDI | W01, L08, L01, L06, T04, T06, L05, W03, W05, W06, L09, L04, L07 |
+| mDNS | MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
 
-R01, R04, AM01, AM03, AM04, UP02 and NM03 are P0 in their own lists: defects
-in code as it is. That they open nothing else is no reason to leave them.
+R01, R04, AM01, AM03, AM04, UP02, NM03, W01 and L08 are P0 in their own
+lists: defects in code as it is. That they open nothing else is no reason to leave them.
 
 ## An order that follows from it
 
@@ -225,6 +299,12 @@ in code as it is. That they open nothing else is no reason to leave them.
    **UP01** and **NM01**. They are reading, they need nothing from AROS, and
    between them they open a quarter of everything here.
 6. **Network MIDI 2.0's runtime** (NM02, NM06, NM07) after step 3.
+
+7. **BLE MIDI**: W01 and L08 as one more commit to PR #1507 now, since both
+   are small and the first is an ABI matter better settled before a merge;
+   T01 the day the hardware is at hand.
+8. **mDNS**: MD02 before step 6 reaches discovery; the rest of its P1 and P2
+   whenever the transports are waiting on something.
 
 CAMD's B16 and B22 fit anywhere. B29 to B32 wait for the maintainer; opening
 the issue with the sketch of the driver-side block, which was promised in

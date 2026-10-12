@@ -124,7 +124,9 @@ MIDI 2.0 Channel Voice message is 64. So, in two steps:
    priorities, in four backlogs: [RTP-MIDI](rtp-midi-backlog.md) (the
    payload and its journal), [AppleMIDI](applemidi-backlog.md) (sessions,
    peers, discovery, the runtime and the driver), [UMP](ump-backlog.md) and
-   [Network MIDI 2.0](network-midi2-backlog.md). How their items depend
+   [Network MIDI 2.0](network-midi2-backlog.md); beside them,
+   [BLE MIDI](ble-midi-backlog.md), [mDNS](mdns-backlog.md) and
+   [CAMD](camd-backlog.md) have theirs. How their items depend
    on one another, and the order that follows, is in
    [the dependency graph](backlog-dependencies.md).
 2. Connect the portable multi-peer AppleMIDI manager to the AROS event loop
