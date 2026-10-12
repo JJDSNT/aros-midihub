@@ -19,9 +19,8 @@ Apple's behaviour and from other implementations, so an item that says
   SSRC checked on every step. `applemidi_peers` keeps eight of them, found
   by IPv4 address and control port, with accept or refuse, a name per peer,
   and expiry by silence. Both are tested on the host.
-- Nothing on AROS uses the peer table. The program `MIDIHub` holds one
-  `applemidi_session` and one peer address; an invitation from a second
-  peer is not answered at all.
+- The program `MIDIHub` held one session and one peer address until AM05,
+  below; it now serves up to eight peers at once through the peer table.
 - The program is a CAMD **client** with the clusters `MIDIHub In` and
   `MIDIHub Out`, which is the shape the review of `btmidi.class` turned
   down.
@@ -45,6 +44,7 @@ inside AROS or against another implementation.
 | AM03 | `applemidi_decode()` takes the fields it uses and no more: a name without its terminator, bytes after the terminator, and any value in a CK packet's three unused bytes are accepted. What it refuses it refuses with a reason (`enum applemidi_decode_result`): not AppleMIDI, unknown command, truncated, wrong version, malformed. Nothing counts the reasons yet: that is with the counters of RTP-MIDI backlog R18. |
 | AM04 | SSRC, tokens and the first sequence number come from `entropy.resource` on AROS and `/dev/urandom` on the host, through `netmidi_network_random()`; with neither, the program says so once and falls back to the clock. A peer with our SSRC is refused, NO for its invitation and BY for its acceptance, `ssrc_collisions` counts it, and the program takes another SSRC and invites again. The AROS branch compiles and has not run. |
 | AM22 | Found by the first run against another implementation: the RS packet. Its four bytes hold the 16-bit sequence number being acknowledged, and we wrote and read it in the last two, as a 32-bit number. Apple's form has it in the first two (Wireshark's dissector reads it so, node-rtpmidi writes it so); rtpmidid writes it our old way. So a peer of the first kind read every acknowledgement of ours as zero, and we read each of theirs as zero: the journal was never trimmed, and a journal-only packet went out every second for as long as the session lasted. We now send Apple's form and read both, taking the reading nearer behind what we last sent (`applemidi_feedback_acked()`). Seen on the wire: node-rtpmidi reports our acknowledgement at its own sequence number, and after its RS our journal-only packets stop. |
+| AM05 | The program keeps `applemidi_peers` and, beside each slot, a stream of its own: clock, sequence numbers both ways, sender and journal, receiver, queue and SysEx assembler. Packets are sorted to a peer by address and port. What a CAMD program sends goes to every connected peer, each with its own sequence numbers and journal; what the peers send is merged into the one cluster `MIDIHub In`, and a peer that leaves has its sounding notes released without touching the others'. `run_two_peers_case` in `tests/network_loopback.py` has two scripted peers connected at once, each losing a packet and repaired from its own journal, one leaving and coming back; `tools/applemidi-node-hosted.sh` has two node-rtpmidi peers on hosted AROS, a scale from a CAMD program reaching both and what each sends reaching CAMD. Merging every peer into one pair of clusters is what a CAMD client can do; a port per peer is the driver's (AM08). |
 
 ## Peers met
 
@@ -73,7 +73,6 @@ Nothing open.
 
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
-| AM05 | One peer on AROS. | Put `applemidi_peers` under the event loop, with a sender, a receiver, a clock, a queue and a SysEx assembler per peer. | Two scripted peers connected at once, each recovering its own losses. |
 | AM06 | Run against other implementations. One has been met: see "Peers met" below. | rtpmidid, which needs a Linux with the ALSA sequencer (this machine's WSL kernel has none, and Ubuntu 24.04 has no package). Then macOS, iOS and rtpMIDI for Windows when the machines are at hand ([the iPhone procedure](iphone-smoke-test.md) is written for Linux and needs redoing for AROS). With a peer that has the recovery journal: packets dropped with `tc netem`, to see a loss repaired in each direction. | Every row of "Peers met" is filled. |
 | AM07 | An invitation from anyone is accepted while there is room; the only rule is the table's size. | An accept rule, as Apple's "who may connect to me": anyone, a list of addresses or names, nobody. | Host tests for an accepted and a refused invitation under each rule. |
 | AM08 | A CAMD client, not a driver. | A `DEVS:Midi` driver with a fixed number of ports, each bound to a peer while the session lasts, as `btmidi` does. Needs D1 and D2 below. | A CAMD program opens `applemidi.out.0` and a peer hears it; `MIDIHub In`/`Out` are gone. |
@@ -111,7 +110,8 @@ Nothing open.
 | D4 | What the driver boundary costs. A driver hands over bytes and is given bytes: the time a message was meant for cannot cross it (CAMD backlog B32). Either accept that for now (the runtime plays a received event at its due time, and a sent one carries the time it left CAMD), or hold the driver until CAMD has a timed path for drivers. | Accept it and say so in the limits; holding the driver puts the whole transport behind an extension that has not been proposed to the maintainer yet. |
 
 None of the four is taken. AM08 needs D1, D2 and D4; nothing else here
-needs any of them.
+needs any of them. With AM05 done, AM08 is next in line, so the three are
+due now.
 
 ## Not scheduled here
 

@@ -160,6 +160,24 @@ int applemidi_peers_retry(const struct applemidi_peers *peers, int index,
     return applemidi_session_retry(&peers->peer[index].session, out, out_data_port);
 }
 
+int applemidi_peers_find_control(const struct applemidi_peers *peers,
+                                 uint32_t address, uint16_t control_port)
+{
+    return peers ? find(peers, address, control_port) : -1;
+}
+
+int applemidi_peers_renew(struct applemidi_peers *peers, uint32_t local_ssrc)
+{
+    int i;
+    if (!peers)
+        return -1;
+    for (i = 0; i < APPLEMIDI_PEERS_MAX; ++i)
+        if (peers->peer[i].used)
+            return -1;
+    peers->local_ssrc = local_ssrc;
+    return 0;
+}
+
 int applemidi_peers_find_data(const struct applemidi_peers *peers, uint32_t address,
                        uint16_t data_port)
 {

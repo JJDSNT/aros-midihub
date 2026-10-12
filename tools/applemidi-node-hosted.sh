@@ -18,7 +18,12 @@
 #            CAMD program has to print all four: they crossed the network,
 #            the session, and CAMD.
 #
-# Each case is one boot. Exit status: 0 when both passed.
+#   two      AROS starts "MIDIHub 5004" and the same listener. Two peers on
+#            the host invite it. A CAMD program then plays a scale and a
+#            SysEx message into the cluster "MIDIHub Out": both peers have
+#            to show them, and the listener what each of the two sent.
+#
+# Each case is one boot. Exit status: 0 when all three passed.
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -133,6 +138,42 @@ if grep -q 'session connected' "$work/hub-invited.log" 2> /dev/null &&
     echo "ok: node-rtpmidi invited AROS; a CAMD program received its Note On, Note Off, Control Change and SysEx, and AROS acknowledged"
 else
     echo "FAIL: node-rtpmidi inviting AROS"
+    status=1
+fi
+# two: both invite; what AROS sends goes to both, what each sends arrives
+prepare "Run >SYS:hub-two.log $c/MIDIHub 5004
+Wait 2
+Run >SYS:camd-two.log $c/MIDIHubCAMDProbe --monitor \"MIDIHub In\" 40
+Wait 16
+$c/MIDIHubCAMDProbe >SYS:camd-two-send.log --send \"MIDIHub Out\"
+Wait 14"
+(
+    for attempt in $(seq 1 60); do
+        ping -c 1 -W 1 192.168.166.2 > /dev/null 2>&1 && break
+        sleep 1
+    done
+    sleep 12
+    timeout 30 node "$peer" 5124 192.168.166.2 5004 > "$work/two-peer-a.log" 2>&1 &
+    timeout 30 node "$peer" 5134 192.168.166.2 5004 > "$work/two-peer-b.log" 2>&1
+    wait
+) &
+boot 120 two
+wait || true
+cp "$sys/hub-two.log" "$sys/camd-two.log" "$sys/camd-two-send.log" "$work/" 2> /dev/null || true
+both=1
+for log in "$work/two-peer-a.log" "$work/two-peer-b.log"; do
+    # the scale's first and last notes, and the SysEx
+    grep -q '^message 903c64$' "$log" 2> /dev/null &&
+    grep -q '^message 804800$' "$log" &&
+    grep -q '^message f07e7f0601f7$' "$log" || both=0
+done
+if [ "$both" = 1 ] &&
+   [ "$(grep -c 'session connected' "$work/hub-two.log" 2> /dev/null)" = 2 ] &&
+   [ "$(grep -c '^CAMDProbe: 90 45 50$' "$work/camd-two.log" 2> /dev/null)" = 2 ] &&
+   [ "$(grep -c '^CAMDProbe: SysEx 6 bytes: f0 7d 01 02 03 f7' "$work/camd-two.log")" = 2 ]; then
+    echo "ok: two node-rtpmidi peers at once; a scale and a SysEx sent by a CAMD program reached both, and what each sent reached CAMD"
+else
+    echo "FAIL: two peers at once"
     status=1
 fi
 echo "logs: $work"

@@ -69,6 +69,13 @@ int applemidi_peers_invite(struct applemidi_peers *peers, uint32_t address, uint
 int applemidi_peers_retry(const struct applemidi_peers *peers, int index,
                    struct applemidi_packet *out, int *out_data_port);
 
+/* The peer whose control port is address:control_port, in any phase, or
+ * -1. */
+int applemidi_peers_find_control(const struct applemidi_peers *peers,
+                                 uint32_t address, uint16_t control_port);
+/* Another SSRC for this side. Every session carries the one SSRC, so this
+ * is only possible while the table is empty; -1 otherwise. */
+int applemidi_peers_renew(struct applemidi_peers *peers, uint32_t local_ssrc);
 /* The connected peer that sends RTP from address:data_port, or -1. */
 int applemidi_peers_find_data(const struct applemidi_peers *peers, uint32_t address,
                        uint16_t data_port);

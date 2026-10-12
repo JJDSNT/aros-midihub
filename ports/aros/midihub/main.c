@@ -6,6 +6,7 @@
 #include <midihub/config.h>
 #include <midihub/mdns.h>
 #include <rtpmidi/clock.h>
+#include <rtpmidi/peers.h>
 #include <rtpmidi/receiver.h>
 #include <rtpmidi/rtpmidi.h>
 #include <rtpmidi/session.h>
@@ -36,39 +37,44 @@ static void stop_signal(int signal_number)
 }
 #endif
 
-struct runtime {
-    struct netmidi_network_runtime network;
-    int mdns;
-    struct sockaddr_in peer_control;
-    struct sockaddr_in peer_data;
-    int have_peer;
-    int initiating;
-    int probe_note;
-    int probe_sysex;
-    int probe_state;
+/* What is kept for one peer's stream, beside its session in the peer
+ * table at the same index. */
+struct stream {
+    int initiating;             /* we sent the invitation */
     struct applemidi_clock clock;
     int have_received_sequence;
-    uint16_t sequence;
+    uint16_t sequence;          /* of the next packet to this peer */
     uint32_t received_sequence;
     uint64_t last_invite;
     uint64_t last_rtp_send;
-    uint64_t note_time;
     uint64_t last_activity;
     unsigned int retries;
+    struct rtpmidi_sysex_assembler sysex;
+    struct rtpmidi_event_queue queue;
+    struct rtpmidi_sender sender;
+    struct rtpmidi_receiver receiver;
+};
+
+struct runtime {
+    struct netmidi_network_runtime network;
+    int mdns;
+    int configured;             /* a peer was named to invite */
+    uint32_t configured_address;
+    uint16_t configured_port;
+    int probe_note;
+    int probe_sysex;
+    int probe_state;
+    uint64_t note_time;
     uint8_t mdns_ip[4];
     char mdns_host[64];
     char mdns_session[64];
     uint16_t local_port;
     uint64_t last_mdns_announce;
     unsigned int mdns_announcements;
-    struct applemidi_session session;
-    struct rtpmidi_sysex_assembler sysex;
-    struct rtpmidi_event_queue queue;
-    struct rtpmidi_sender sender;
-    struct rtpmidi_receiver receiver;
+    struct applemidi_peers peers;
+    struct stream stream[APPLEMIDI_PEERS_MAX];
     struct netmidi_camd_runtime camd;
 };
-
 
 static uint64_t now_ticks(void)
 {
@@ -187,45 +193,43 @@ static void receive_mdns(struct runtime *rt)
               unicast ? (uint16_t)((packet[0] << 8) | packet[1]) : 0);
 }
 
-static int same_endpoint(const struct sockaddr_in *a,
-                         const struct sockaddr_in *b)
+
+static void peer_address(const struct applemidi_peer *peer, int data_port,
+                         struct sockaddr_in *address)
 {
-    return a->sin_family == AF_INET && b->sin_family == AF_INET &&
-           a->sin_addr.s_addr == b->sin_addr.s_addr &&
-           a->sin_port == b->sin_port;
+    memset(address, 0, sizeof(*address));
+    address->sin_family = AF_INET;
+    address->sin_addr.s_addr = htonl(peer->address);
+    address->sin_port = htons((uint16_t)(peer->control_port +
+                                         (data_port ? 1 : 0)));
 }
 
-static int send_apple(struct runtime *rt, int data_port,
-                      const struct applemidi_packet *packet)
+static int send_apple_to(struct runtime *rt, int data_port,
+                         const struct sockaddr_in *address,
+                         const struct applemidi_packet *packet)
 {
     uint8_t bytes[128];
     size_t length;
-    const struct sockaddr_in *address = data_port ? &rt->peer_data :
-                                                  &rt->peer_control;
     if (applemidi_encode(packet, bytes, sizeof(bytes), &length) != 0)
         return -1;
     return netmidi_network_send(&rt->network, data_port, bytes, length,
                                 address);
 }
 
-static void send_sync(struct runtime *rt, uint64_t now)
+static int send_apple(struct runtime *rt, int index, int data_port,
+                      const struct applemidi_packet *packet)
 {
-    struct applemidi_packet sync;
-    if (applemidi_clock_poll(&rt->clock, rt->session.local_ssrc, now, &sync))
-        send_apple(rt, 1, &sync);
+    struct sockaddr_in address;
+    peer_address(&rt->peers.peer[index], data_port, &address);
+    return send_apple_to(rt, data_port, &address, packet);
 }
 
-/* Everything kept for the stream of a session that is over. */
-static void forget_stream(struct runtime *rt, uint64_t now)
+static void send_sync(struct runtime *rt, int index, uint64_t now)
 {
-    applemidi_clock_init(&rt->clock, rt->initiating, now);
-    rt->have_received_sequence = 0;
-    rtpmidi_sysex_reset(&rt->sysex);
-    rtpmidi_queue_reset(&rt->queue);
-    rtpmidi_receiver_release_notes(&rt->receiver);
-    rtpmidi_receiver_reset_channels(&rt->receiver);
-    rtpmidi_receiver_reset_system(&rt->receiver);
-    rtpmidi_sender_reset(&rt->sender);
+    struct applemidi_packet sync;
+    if (applemidi_clock_poll(&rt->stream[index].clock, rt->peers.local_ssrc,
+                             now, &sync))
+        send_apple(rt, index, 1, &sync);
 }
 
 /* A value nobody can guess, for an SSRC or a token. */
@@ -242,31 +246,6 @@ static uint32_t random32(uint64_t now)
         value = ((uint32_t)rand() << 16) ^ (uint32_t)rand();
     }
     return value;
-}
-
-static int send_feedback(struct runtime *rt, uint16_t sequence)
-{
-    struct applemidi_packet feedback;
-    int16_t advance;
-    int fresh = 1;
-
-    if (!rt->have_received_sequence) {
-        rt->received_sequence = sequence;
-        rt->have_received_sequence = 1;
-    } else {
-        advance = (int16_t)(sequence - (uint16_t)rt->received_sequence);
-        if (advance <= 0)
-            fresh = 0;
-        else
-            rt->received_sequence += (uint16_t)advance;
-    }
-    memset(&feedback, 0, sizeof(feedback));
-    feedback.command = APPLEMIDI_RS;
-    feedback.ssrc = rt->session.local_ssrc;
-    feedback.feedback_sequence =
-        applemidi_feedback_field((uint16_t)rt->received_sequence);
-    send_apple(rt, 0, &feedback);
-    return fresh;
 }
 
 static void output_message(void *context, const uint8_t *bytes,
@@ -293,32 +272,92 @@ static const struct rtpmidi_receiver_output receiver_output = {
     output_message, output_sysex, output_report
 };
 
-static void receive_sync(struct runtime *rt,
-                         const struct applemidi_packet *incoming,
+/* A slot of the peer table has a new occupant: nothing of the last one's
+ * stream may be left in it. */
+static void stream_begin(struct runtime *rt, int index, int initiating,
                          uint64_t now)
 {
-    struct applemidi_packet response;
-    unsigned int completed = rt->clock.completed;
-    if (rt->session.phase != APPLEMIDI_SESSION_CONNECTED ||
-        incoming->ssrc != rt->session.peer_ssrc)
-        return;
-    if (applemidi_clock_receive(&rt->clock, rt->session.local_ssrc, incoming,
-                                now, &response))
-        send_apple(rt, 1, &response);
-    if (rt->clock.completed != completed)
-        puts("MIDIHub: clock exchange completed");
+    struct stream *stream = &rt->stream[index];
+    rtpmidi_queue_reset(&stream->queue);
+    memset(stream, 0, sizeof(*stream));
+    stream->initiating = initiating;
+    stream->last_invite = now;
+    stream->last_activity = now;
+    stream->sequence = (uint16_t)random32(now);
+    applemidi_clock_init(&stream->clock, initiating, now);
+    rtpmidi_sysex_reset(&stream->sysex);
+    rtpmidi_queue_reset(&stream->queue);
+    rtpmidi_sender_reset(&stream->sender);
+    rtpmidi_receiver_init(&stream->receiver, &receiver_output, rt,
+                          &stream->queue);
 }
 
-static void receive_packet(struct runtime *rt, int data_port)
+/* The session is over, or began again: what the peer left sounding is
+ * released and what was kept for its stream goes. */
+static void stream_forget(struct runtime *rt, int index, uint64_t now)
 {
-    struct sockaddr_in source;
-    socklen_t source_length = sizeof(source);
-    uint8_t bytes[1500];
-    int count = netmidi_network_receive(&rt->network, data_port, bytes,
-                                        sizeof(bytes), &source,
-                                        &source_length);
-    struct applemidi_packet packet;
-    struct applemidi_packet response;
+    struct stream *stream = &rt->stream[index];
+    applemidi_clock_init(&stream->clock, stream->initiating, now);
+    stream->have_received_sequence = 0;
+    rtpmidi_sysex_reset(&stream->sysex);
+    rtpmidi_queue_reset(&stream->queue);
+    if (stream->receiver.output) {
+        rtpmidi_receiver_release_notes(&stream->receiver);
+        rtpmidi_receiver_reset_channels(&stream->receiver);
+        rtpmidi_receiver_reset_system(&stream->receiver);
+    }
+    rtpmidi_sender_reset(&stream->sender);
+}
+
+static int invite_configured(struct runtime *rt, uint64_t now)
+{
+    struct applemidi_packet invite;
+    int index = applemidi_peers_invite(&rt->peers, rt->configured_address,
+                                       rt->configured_port, random32(now),
+                                       (uint32_t)(now / 10), &invite);
+    if (index < 0)
+        return -1;
+    stream_begin(rt, index, 1, now);
+    return send_apple(rt, index, 0, &invite);
+}
+
+static int configured_index(const struct runtime *rt)
+{
+    return rt->configured ?
+           applemidi_peers_find_control(&rt->peers, rt->configured_address,
+                                        rt->configured_port) : -1;
+}
+
+static int send_feedback(struct runtime *rt, int index, uint16_t sequence)
+{
+    struct stream *stream = &rt->stream[index];
+    struct applemidi_packet feedback;
+    int16_t advance;
+    int fresh = 1;
+
+    if (!stream->have_received_sequence) {
+        stream->received_sequence = sequence;
+        stream->have_received_sequence = 1;
+    } else {
+        advance = (int16_t)(sequence - (uint16_t)stream->received_sequence);
+        if (advance <= 0)
+            fresh = 0;
+        else
+            stream->received_sequence += (uint16_t)advance;
+    }
+    memset(&feedback, 0, sizeof(feedback));
+    feedback.command = APPLEMIDI_RS;
+    feedback.ssrc = rt->peers.local_ssrc;
+    feedback.feedback_sequence =
+        applemidi_feedback_field((uint16_t)stream->received_sequence);
+    send_apple(rt, index, 0, &feedback);
+    return fresh;
+}
+
+static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
+                        size_t count)
+{
+    struct stream *stream = &rt->stream[index];
     struct rtpmidi_packet midi;
     struct rtpmidi_journal journal;
     struct rtpmidi_journal_system_state system_state;
@@ -327,10 +366,7 @@ static void receive_packet(struct runtime *rt, int data_port)
     struct rtpmidi_event event;
     const uint8_t *sysex_message;
     size_t sysex_length;
-    int response_port;
     int action;
-    unsigned int restarts;
-    unsigned int collisions;
     int sysex_result;
     int system_decoded = 0;
     int16_t sequence_advance = 0;
@@ -338,92 +374,8 @@ static void receive_packet(struct runtime *rt, int data_port)
     uint64_t now;
     size_t i;
 
-    if (count <= 0 || source_length < sizeof(source) ||
-        source.sin_family != AF_INET)
-        return;
-    if (rt->have_peer) {
-        if (!same_endpoint(&source, data_port ? &rt->peer_data :
-                                               &rt->peer_control))
-            return;
-    } else if (data_port || applemidi_decode(bytes, (size_t)count,
-                                            &packet) != 0 ||
-               packet.command != APPLEMIDI_IN ||
-               rt->session.phase != APPLEMIDI_SESSION_IDLE ||
-               ntohs(source.sin_port) == 65535) {
-        return;
-    } else {
-        rt->peer_control = source;
-        rt->peer_data = source;
-        rt->peer_data.sin_port = htons((uint16_t)(ntohs(source.sin_port) + 1));
-        rt->have_peer = 1;
-    }
-
-    now = now_ticks();
-    rt->last_activity = now;
-    if (applemidi_decode(bytes, (size_t)count, &packet) == 0) {
-        if (packet.command == APPLEMIDI_CK) {
-            if (data_port)
-                receive_sync(rt, &packet, now);
-            return;
-        }
-        if (packet.command == APPLEMIDI_RS) {
-            if (!data_port && rt->session.phase == APPLEMIDI_SESSION_CONNECTED &&
-                packet.ssrc == rt->session.peer_ssrc)
-                rtpmidi_sender_ack(&rt->sender, applemidi_feedback_acked(
-                    packet.feedback_sequence, (uint16_t)(rt->sequence - 1)));
-            return;
-        }
-        restarts = rt->session.restarts;
-        collisions = rt->session.ssrc_collisions;
-        action = applemidi_session_receive(&rt->session, data_port, &packet,
-                                    &response, &response_port);
-        if (action == 1)
-            send_apple(rt, response_port, &response);
-        if (rt->session.restarts != restarts) {
-            puts("MIDIHub: peer began again");
-            forget_stream(rt, now);
-        }
-        if (rt->session.ssrc_collisions != collisions) {
-            puts("MIDIHub: peer has our SSRC; taking another");
-            if (rt->session.phase == APPLEMIDI_SESSION_IDLE) {
-                applemidi_session_renew(&rt->session, random32(now));
-                if (rt->initiating &&
-                    applemidi_session_invite(&rt->session, random32(now),
-                                             &response) == 0) {
-                    send_apple(rt, 0, &response);
-                    rt->last_invite = now;
-                    rt->retries = 0;
-                } else if (!rt->initiating) {
-                    rt->have_peer = 0;
-                }
-            }
-            return;
-        }
-        if (packet.command == APPLEMIDI_OK && action == 1 &&
-            response.command == APPLEMIDI_IN) {
-            rt->last_invite = now;
-            rt->retries = 0;
-        }
-        if (rt->session.phase == APPLEMIDI_SESSION_CONNECTED &&
-            packet.command == APPLEMIDI_OK && data_port && rt->initiating) {
-            puts("MIDIHub: session connected");
-            applemidi_clock_init(&rt->clock, 1, now);
-            send_sync(rt, now);
-        } else if (rt->session.phase == APPLEMIDI_SESSION_CONNECTED &&
-                   packet.command == APPLEMIDI_IN && data_port) {
-            puts("MIDIHub: session connected");
-            applemidi_clock_init(&rt->clock, 0, now);
-        } else if (packet.command == APPLEMIDI_BY &&
-                   rt->session.phase == APPLEMIDI_SESSION_IDLE) {
-            puts("MIDIHub: peer disconnected");
-            rt->have_peer = 0;
-            forget_stream(rt, now);
-        }
-        return;
-    }
-    if (!data_port || rt->session.phase != APPLEMIDI_SESSION_CONNECTED ||
-        rtpmidi_decode(bytes, (size_t)count, &midi) != 0 ||
-        midi.ssrc != rt->session.peer_ssrc)
+    if (rtpmidi_decode(bytes, count, &midi) != 0 ||
+        midi.ssrc != rt->peers.peer[index].session.peer_ssrc)
         return;
     if (midi.journal &&
         rtpmidi_journal_decode(midi.journal, midi.journal_length,
@@ -449,8 +401,8 @@ static void receive_packet(struct runtime *rt, int data_port)
         puts("MIDIHub: unsupported or malformed MIDI command");
         return;
     }
-    if (rt->have_received_sequence) {
-        previous_sequence = (uint16_t)rt->received_sequence;
+    if (stream->have_received_sequence) {
+        previous_sequence = (uint16_t)stream->received_sequence;
         sequence_advance = (int16_t)(midi.sequence -
                                      previous_sequence);
         if (sequence_advance > 1) {
@@ -463,16 +415,16 @@ static void receive_packet(struct runtime *rt, int data_port)
                                              "does not cover gap");
         }
     }
-    if (!send_feedback(rt, midi.sequence))
+    if (!send_feedback(rt, index, midi.sequence))
         return; /* A duplicate or older packet must not replay MIDI events. */
     if (sequence_advance > 1 && midi.journal &&
         rtpmidi_journal_covers_gap(previous_sequence, midi.sequence,
                               journal.checkpoint)) {
         struct rtpmidi_receiver_clock clock;
-        clock.synchronized = rt->clock.synchronized;
-        clock.peer_to_local = rt->clock.peer_to_local;
+        clock.synchronized = stream->clock.synchronized;
+        clock.peer_to_local = stream->clock.peer_to_local;
         clock.now = now_ticks();
-        rtpmidi_receiver_recover(&rt->receiver, &journal,
+        rtpmidi_receiver_recover(&stream->receiver, &journal,
                             system_decoded > 0 ? &system_state : NULL,
                             sequence_advance == 2, midi.timestamp, &clock);
     }
@@ -489,47 +441,178 @@ static void receive_packet(struct runtime *rt, int data_port)
     rtpmidi_reader_init(&reader, &midi);
     while ((action = rtpmidi_reader_next(&reader, &event)) == 1) {
         if (event.sysex) {
-            sysex_result = rtpmidi_sysex_feed(&rt->sysex, &event, midi.sequence,
+            sysex_result = rtpmidi_sysex_feed(&stream->sysex, &event,
+                                          midi.sequence,
                                           &sysex_message, &sysex_length);
             if (sysex_result == 1) {
                 uint64_t due;
                 printf("MIDIHub: SysEx complete bytes=%lu\n",
                        (unsigned long)sysex_length);
                 now = now_ticks();
-                if (rt->clock.synchronized &&
-                    rtpmidi_clock_due(rt->sysex.timestamp, now,
-                                 rt->clock.peer_to_local, &due) == 0 && due > now) {
+                if (stream->clock.synchronized &&
+                    rtpmidi_clock_due(stream->sysex.timestamp, now,
+                                 stream->clock.peer_to_local, &due) == 0 &&
+                    due > now) {
                     if (due - now > 100000 ||
-                        rtpmidi_queue_push_sysex(&rt->queue, due, sysex_message,
+                        rtpmidi_queue_push_sysex(&stream->queue, due,
+                                            sysex_message,
                                             sysex_length) != 0)
                         puts("MIDIHub: future SysEx event discarded");
                     continue;
                 }
-                rtpmidi_receiver_deliver_sysex(&rt->receiver, sysex_message, sysex_length);
+                rtpmidi_receiver_deliver_sysex(&stream->receiver,
+                                               sysex_message, sysex_length);
             } else if (sysex_result < 0)
                 puts("MIDIHub: SysEx segment discarded");
         } else {
             uint64_t due;
             now = now_ticks();
-            if (rt->clock.synchronized &&
-                rtpmidi_clock_due(event.timestamp, now, rt->clock.peer_to_local,
-                             &due) == 0 && due > now) {
+            if (stream->clock.synchronized &&
+                rtpmidi_clock_due(event.timestamp, now,
+                             stream->clock.peer_to_local, &due) == 0 &&
+                due > now) {
                 if (due - now > 100000 ||
-                    rtpmidi_queue_push(&rt->queue, due, event.bytes,
+                    rtpmidi_queue_push(&stream->queue, due, event.bytes,
                                   event.length) != 0)
                     puts("MIDIHub: future MIDI event discarded");
                 continue;
             }
-            rtpmidi_receiver_deliver(&rt->receiver, event.bytes, event.length);
+            rtpmidi_receiver_deliver(&stream->receiver, event.bytes,
+                                     event.length);
         }
     }
     if (action < 0)
         puts("MIDIHub: unsupported or malformed MIDI command");
 }
 
-static int send_midi(void *context, const uint8_t *message, size_t length)
+static void receive_packet(struct runtime *rt, int data_port)
 {
-    struct runtime *rt = context;
+    struct sockaddr_in source;
+    socklen_t source_length = sizeof(source);
+    uint8_t bytes[1500];
+    int count = netmidi_network_receive(&rt->network, data_port, bytes,
+                                        sizeof(bytes), &source,
+                                        &source_length);
+    struct applemidi_packet packet;
+    struct applemidi_packet response;
+    enum applemidi_peer_event event;
+    uint32_t address;
+    uint16_t port;
+    unsigned int collisions;
+    unsigned int completed;
+    int response_port;
+    int index;
+    int action;
+    uint64_t now;
+
+    if (count <= 0 || source_length < sizeof(source) ||
+        source.sin_family != AF_INET)
+        return;
+    address = ntohl(source.sin_addr.s_addr);
+    port = ntohs(source.sin_port);
+    if (port == 65535 || (data_port && port == 0))
+        return;
+    now = now_ticks();
+    if (applemidi_decode(bytes, (size_t)count, &packet) != 0) {
+        index = data_port ?
+                applemidi_peers_find_data(&rt->peers, address, port) : -1;
+        if (index >= 0) {
+            rt->stream[index].last_activity = now;
+            applemidi_peers_seen(&rt->peers, index, (uint32_t)(now / 10));
+            receive_rtp(rt, index, bytes, (size_t)count);
+        }
+        return;
+    }
+    if (packet.command == APPLEMIDI_CK) {
+        index = data_port ?
+                applemidi_peers_find_data(&rt->peers, address, port) : -1;
+        if (index < 0 ||
+            packet.ssrc != rt->peers.peer[index].session.peer_ssrc)
+            return;
+        rt->stream[index].last_activity = now;
+        applemidi_peers_seen(&rt->peers, index, (uint32_t)(now / 10));
+        completed = rt->stream[index].clock.completed;
+        if (applemidi_clock_receive(&rt->stream[index].clock,
+                                    rt->peers.local_ssrc, &packet, now,
+                                    &response))
+            send_apple(rt, index, 1, &response);
+        if (rt->stream[index].clock.completed != completed)
+            puts("MIDIHub: clock exchange completed");
+        return;
+    }
+    if (packet.command == APPLEMIDI_RS) {
+        index = data_port ? -1 :
+                applemidi_peers_find_control(&rt->peers, address, port);
+        if (index >= 0 &&
+            rt->peers.peer[index].session.phase ==
+                APPLEMIDI_SESSION_CONNECTED &&
+            packet.ssrc == rt->peers.peer[index].session.peer_ssrc)
+            rtpmidi_sender_ack(&rt->stream[index].sender,
+                applemidi_feedback_acked(packet.feedback_sequence,
+                    (uint16_t)(rt->stream[index].sequence - 1)));
+        return;
+    }
+
+    /* IN, OK, NO, BY: the peer table's business. Whether the packet made a
+     * new peer is seen from the slot it comes back with. */
+    index = applemidi_peers_find_control(&rt->peers, address,
+                (uint16_t)(data_port ? port - 1 : port));
+    collisions = rt->peers.ssrc_collisions;
+    {
+        int known = index;
+        action = applemidi_peers_receive(&rt->peers, address, port, data_port,
+                                         &packet, (uint32_t)(now / 10),
+                                         &response, &response_port, &index,
+                                         &event);
+        if (action < 0)
+            return;
+        if (known < 0 && index >= 0)
+            stream_begin(rt, index, 0, now);
+    }
+    if (action == 1) {
+        /* a refusal goes to someone who has no place in the table */
+        source.sin_port = htons((uint16_t)(data_port == response_port ?
+            port : response_port ? port + 1 : port - 1));
+        send_apple_to(rt, response_port, &source, &response);
+    }
+    if (rt->peers.ssrc_collisions != collisions) {
+        puts("MIDIHub: peer has our SSRC");
+        if (applemidi_peers_renew(&rt->peers, random32(now)) == 0) {
+            puts("MIDIHub: taking another SSRC");
+            if (rt->configured)
+                invite_configured(rt, now);
+        }
+        return;
+    }
+    if (index < 0)
+        return;
+    rt->stream[index].last_activity = now;
+    if (packet.command == APPLEMIDI_OK && action == 1 &&
+        response.command == APPLEMIDI_IN) {
+        rt->stream[index].last_invite = now;
+        rt->stream[index].retries = 0;
+    }
+    if (event == APPLEMIDI_PEER_RESTARTED) {
+        puts("MIDIHub: peer began again");
+        stream_forget(rt, index, now);
+    } else if (event == APPLEMIDI_PEER_CONNECTED) {
+        puts("MIDIHub: session connected");
+        applemidi_clock_init(&rt->stream[index].clock,
+                             rt->stream[index].initiating, now);
+        send_sync(rt, index, now);
+    } else if (event == APPLEMIDI_PEER_LEFT) {
+        puts(packet.command == APPLEMIDI_NO ?
+             "MIDIHub: invitation refused" : "MIDIHub: peer disconnected");
+        stream_forget(rt, index, now);
+    }
+}
+
+/* One message from CAMD to one peer. */
+static int send_midi_to(struct runtime *rt, int index, const uint8_t *message,
+                        size_t length)
+{
+    struct stream *stream = &rt->stream[index];
+    struct sockaddr_in data;
     uint8_t wire[1100];
     uint8_t segment[1002];
     size_t wire_length;
@@ -539,41 +622,32 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
     size_t segment_length;
     uint8_t head;
     uint8_t tail;
-    size_t i;
-    uint32_t timestamp;
+    uint32_t timestamp = (uint32_t)now_ticks();
     uint16_t first_sequence;
 
-    if (rt->session.phase != APPLEMIDI_SESSION_CONNECTED || !message || !length)
-        return -1;
+    peer_address(&rt->peers.peer[index], 1, &data);
     if (message[0] != 0xf0) {
-        timestamp = (uint32_t)now_ticks();
-        if (rtpmidi_sender_packet(&rt->sender, rt->sequence, timestamp,
-                                  rt->session.local_ssrc, message, length,
+        if (rtpmidi_sender_packet(&stream->sender, stream->sequence, timestamp,
+                                  rt->peers.local_ssrc, message, length,
                                   wire, sizeof(wire), &wire_length) != 0 ||
             netmidi_network_send(&rt->network, 1, wire, wire_length,
-                                 &rt->peer_data) != 0)
+                                 &data) != 0)
             return -1;
-        ++rt->sequence;
-        rt->last_rtp_send = now_ticks();
+        ++stream->sequence;
+        stream->last_rtp_send = now_ticks();
         return 0;
     }
-    if (length < 2 || length > RTPMIDI_SYSEX_MAX || message[length - 1] != 0xf7)
-        return -1;
-    for (i = 1; i + 1 < length; ++i)
-        if (message[i] & 0x80)
-            return -1;
-    timestamp = (uint32_t)now_ticks();
-    first_sequence = rt->sequence;
+    first_sequence = stream->sequence;
     if (length <= 1002) {
-        if (rtpmidi_encode_list(rt->sequence, timestamp,
-                               rt->session.local_ssrc, message, length,
+        if (rtpmidi_encode_list(stream->sequence, timestamp,
+                               rt->peers.local_ssrc, message, length,
                                wire, sizeof(wire), &wire_length) != 0 ||
             netmidi_network_send(&rt->network, 1, wire, wire_length,
-                                 &rt->peer_data) != 0)
+                                 &data) != 0)
             return -1;
-        ++rt->sequence;
-        rt->last_rtp_send = now_ticks();
-        rtpmidi_sender_record_sysex(&rt->sender, first_sequence, timestamp,
+        ++stream->sequence;
+        stream->last_rtp_send = now_ticks();
+        rtpmidi_sender_record_sysex(&stream->sender, first_sequence, timestamp,
                                     message, length);
         return 0;
     }
@@ -589,50 +663,81 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
         memcpy(segment + 1, message + 1 + offset, chunk);
         segment[chunk + 1] = tail;
         segment_length = chunk + 2;
-        if (rtpmidi_encode_list(rt->sequence, timestamp,
-                               rt->session.local_ssrc, segment,
+        if (rtpmidi_encode_list(stream->sequence, timestamp,
+                               rt->peers.local_ssrc, segment,
                                segment_length, wire, sizeof(wire),
                                &wire_length) != 0 ||
             netmidi_network_send(&rt->network, 1, wire, wire_length,
-                                 &rt->peer_data) != 0)
+                                 &data) != 0)
             return -1;
-        ++rt->sequence;
-        rt->last_rtp_send = now_ticks();
+        ++stream->sequence;
+        stream->last_rtp_send = now_ticks();
         offset += chunk;
     }
-    rtpmidi_sender_record_sysex(&rt->sender, first_sequence, timestamp,
+    rtpmidi_sender_record_sysex(&stream->sender, first_sequence, timestamp,
                                 message, length);
     return 0;
 }
 
-static void send_guard(struct runtime *rt, uint64_t now)
+/* What a CAMD program sends goes to every connected peer, each with its
+ * own sequence numbers and its own journal. */
+static int send_midi(void *context, const uint8_t *message, size_t length)
 {
+    struct runtime *rt = context;
+    size_t i;
+    int index;
+    int result = -1;
+
+    if (!message || !length)
+        return -1;
+    if (message[0] == 0xf0) {
+        if (length < 2 || length > RTPMIDI_SYSEX_MAX ||
+            message[length - 1] != 0xf7)
+            return -1;
+        for (i = 1; i + 1 < length; ++i)
+            if (message[i] & 0x80)
+                return -1;
+    }
+    for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
+        if (rt->peers.peer[index].used &&
+            rt->peers.peer[index].session.phase ==
+                APPLEMIDI_SESSION_CONNECTED &&
+            send_midi_to(rt, index, message, length) == 0)
+            result = 0;
+    return result;
+}
+
+static void send_guard(struct runtime *rt, int index, uint64_t now)
+{
+    struct stream *stream = &rt->stream[index];
+    struct sockaddr_in data;
     uint8_t wire[1100];
     size_t wire_length;
     size_t journal_length;
     uint32_t timestamp = (uint32_t)now;
-    if (rtpmidi_encode_list(rt->sequence, timestamp, rt->session.local_ssrc,
+    if (rtpmidi_encode_list(stream->sequence, timestamp, rt->peers.local_ssrc,
                            NULL, 0, wire, sizeof(wire), &wire_length) != 0 ||
-        rtpmidi_sender_journal(&rt->sender, rt->sequence, timestamp,
+        rtpmidi_sender_journal(&stream->sender, stream->sequence, timestamp,
                           wire + wire_length, sizeof(wire) - wire_length,
                           &journal_length) != 0)
         return;
     wire[12] |= 0x40;
     wire_length += journal_length;
+    peer_address(&rt->peers.peer[index], 1, &data);
     if (netmidi_network_send(&rt->network, 1, wire, wire_length,
-                             &rt->peer_data) == 0) {
-        ++rt->sequence;
-        rt->last_rtp_send = now;
+                             &data) == 0) {
+        ++stream->sequence;
+        stream->last_rtp_send = now;
     }
 }
 
-static void send_note(struct runtime *rt, uint8_t velocity)
+static void send_note(struct runtime *rt, int index, uint8_t velocity)
 {
     uint8_t message[3] = {0x90, 60, velocity};
-    send_midi(rt, message, sizeof(message));
+    send_midi_to(rt, index, message, sizeof(message));
 }
 
-static void send_probe_sysex(struct runtime *rt)
+static void send_probe_sysex(struct runtime *rt, int index)
 {
     static uint8_t large[2004];
     static const uint8_t small[] = {0xf0, 0x7d, 0x01, 0xf7};
@@ -642,23 +747,89 @@ static void send_probe_sysex(struct runtime *rt)
     for (i = 2; i + 1 < sizeof(large); ++i)
         large[i] = (uint8_t)(i & 0x7f);
     large[sizeof(large) - 1] = 0xf7;
-    send_midi(rt, small, sizeof(small));
-    send_midi(rt, large, sizeof(large));
+    send_midi_to(rt, index, small, sizeof(small));
+    send_midi_to(rt, index, large, sizeof(large));
 }
 
-static void periodic(struct runtime *rt, uint64_t now)
+/* Ends a peer from our side, with BY when a session had been reached. */
+static void drop_peer(struct runtime *rt, int index, uint64_t now)
 {
+    struct applemidi_packet goodbye;
+    struct sockaddr_in control;
+    peer_address(&rt->peers.peer[index], 0, &control);
+    stream_forget(rt, index, now);
+    if (applemidi_peers_end(&rt->peers, index, &goodbye) == 0)
+        send_apple_to(rt, 0, &control, &goodbye);
+}
+
+static void periodic_peer(struct runtime *rt, int index, uint64_t now)
+{
+    struct stream *stream = &rt->stream[index];
+    struct applemidi_session *session = &rt->peers.peer[index].session;
     struct applemidi_packet packet;
     struct rtpmidi_queued_event event;
     int data_port;
 
-    while (rtpmidi_queue_pop_due(&rt->queue, now, &event)) {
+    while (rtpmidi_queue_pop_due(&stream->queue, now, &event)) {
         if (event.sysex)
-            rtpmidi_receiver_deliver_sysex(&rt->receiver, event.sysex, event.sysex_length);
+            rtpmidi_receiver_deliver_sysex(&stream->receiver, event.sysex,
+                                           event.sysex_length);
         else
-            rtpmidi_receiver_deliver(&rt->receiver, event.bytes, event.length);
+            rtpmidi_receiver_deliver(&stream->receiver, event.bytes,
+                                     event.length);
         rtpmidi_queue_event_release(&event);
     }
+
+    if (session->phase == APPLEMIDI_SESSION_INVITING_CONTROL ||
+        session->phase == APPLEMIDI_SESSION_INVITING_DATA) {
+        if (elapsed_ticks(now, stream->last_invite) >= 10000) {
+            if (++stream->retries > 12) {
+                puts("MIDIHub: invitation timed out");
+                drop_peer(rt, index, now);
+            } else if (applemidi_peers_retry(&rt->peers, index, &packet,
+                                             &data_port) == 0) {
+                send_apple(rt, index, data_port, &packet);
+                stream->last_invite = now;
+            }
+        }
+    } else if (session->phase == APPLEMIDI_SESSION_CONNECTED) {
+        int probing = index == configured_index(rt);
+        if (applemidi_clock_expired(&stream->clock, now)) {
+            puts("MIDIHub: peer synchronization timed out");
+            drop_peer(rt, index, now);
+            return;
+        }
+        send_sync(rt, index, now);
+        if (stream->sender.count &&
+            elapsed_ticks(now, stream->last_rtp_send) >= 10000)
+            send_guard(rt, index, now);
+        if (!probing)
+            return;
+        if (rt->probe_sysex && stream->clock.synchronized &&
+            rt->probe_state == 0) {
+            send_probe_sysex(rt, index);
+            rt->probe_state = 2;
+        }
+        if (rt->probe_note && stream->clock.synchronized &&
+            rt->probe_state == 0) {
+            send_note(rt, index, 100);
+            rt->note_time = now;
+            rt->probe_state = 1;
+        } else if (rt->probe_state == 1 &&
+                   elapsed_ticks(now, rt->note_time) >= 2500) {
+            send_note(rt, index, 0);
+            rt->probe_state = 2;
+        }
+    } else if (session->phase == APPLEMIDI_SESSION_WAITING_DATA &&
+               elapsed_ticks(now, stream->last_activity) >= 120000) {
+        puts("MIDIHub: data invitation timed out");
+        drop_peer(rt, index, now);
+    }
+}
+
+static void periodic(struct runtime *rt, uint64_t now)
+{
+    int index;
 
     if (rt->mdns >= 0 &&
         (rt->mdns_announcements == 0 ||
@@ -668,66 +839,15 @@ static void periodic(struct runtime *rt, uint64_t now)
         rt->last_mdns_announce = now;
         if (rt->mdns_announcements < 2) ++rt->mdns_announcements;
     }
-
-    if (rt->session.phase == APPLEMIDI_SESSION_INVITING_CONTROL ||
-        rt->session.phase == APPLEMIDI_SESSION_INVITING_DATA) {
-        if (elapsed_ticks(now, rt->last_invite) >= 10000) {
-            if (++rt->retries > 12) {
-                puts("MIDIHub: invitation timed out");
-                rt->session.phase = APPLEMIDI_SESSION_IDLE;
-                rt->have_peer = 0;
-            } else if (applemidi_session_retry(&rt->session, &packet,
-                                        &data_port) == 0) {
-                send_apple(rt, data_port, &packet);
-                rt->last_invite = now;
-            }
-        }
-    } else if (rt->session.phase == APPLEMIDI_SESSION_CONNECTED) {
-        if (applemidi_clock_expired(&rt->clock, now)) {
-            struct applemidi_packet goodbye;
-            puts("MIDIHub: peer synchronization timed out");
-            if (applemidi_session_end(&rt->session, &goodbye) == 0)
-                send_apple(rt, 0, &goodbye);
-            rt->have_peer = 0;
-            forget_stream(rt, now);
-            return;
-        }
-        send_sync(rt, now);
-        if (rt->sender.count &&
-            elapsed_ticks(now, rt->last_rtp_send) >= 10000)
-            send_guard(rt, now);
-        if (rt->probe_sysex && rt->clock.synchronized && rt->probe_state == 0) {
-            send_probe_sysex(rt);
-            rt->probe_state = 2;
-        }
-        if (rt->probe_note && rt->clock.synchronized && rt->probe_state == 0) {
-            send_note(rt, 100);
-            rt->note_time = now;
-            rt->probe_state = 1;
-        } else if (rt->probe_state == 1 &&
-                   elapsed_ticks(now, rt->note_time) >= 2500) {
-            send_note(rt, 0);
-            rt->probe_state = 2;
-        }
-    } else if (rt->session.phase == APPLEMIDI_SESSION_WAITING_DATA &&
-               elapsed_ticks(now, rt->last_activity) >= 120000) {
-        puts("MIDIHub: data invitation timed out");
-        rt->session.phase = APPLEMIDI_SESSION_IDLE;
-        rt->have_peer = 0;
-        applemidi_clock_init(&rt->clock, rt->initiating, now);
-        rt->have_received_sequence = 0;
-        rtpmidi_receiver_forget_notes(&rt->receiver);
-        rtpmidi_sysex_reset(&rt->sysex);
-        rtpmidi_queue_reset(&rt->queue);
-    }
+    for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
+        if (rt->peers.peer[index].used)
+            periodic_peer(rt, index, now);
 }
 
 int main(int argc, char **argv)
 {
     static struct runtime rt;
-    struct sockaddr_in peer;
-    struct applemidi_packet invite;
-    struct applemidi_packet goodbye;
+    struct in_addr peer_address_bytes;
     uint16_t local_port;
     uint16_t peer_port;
     struct netmidi_network_config config;
@@ -735,6 +855,7 @@ int main(int argc, char **argv)
     uint64_t now;
     uint64_t next_due;
     uint64_t wait_ticks;
+    int index;
     int argi = 1;
     int remaining;
 #ifdef __AROS__
@@ -781,12 +902,11 @@ int main(int argc, char **argv)
     if (remaining >= 3)
         peer_ip = argv[argi + 1];
     memset(&rt, 0, sizeof(rt));
-    rtpmidi_receiver_init(&rt.receiver, &receiver_output, &rt, &rt.queue);
     netmidi_network_init(&rt.network);
     rt.mdns = -1;
     rt.local_port = local_port;
     strcpy(rt.mdns_session, config.session_name);
-    rt.initiating = *peer_ip != 0;
+    rt.configured = *peer_ip != 0;
     rt.probe_note = remaining == 4 &&
                     strcmp(argv[argi + 3], "--probe-note") == 0;
     rt.probe_sysex = remaining == 4 &&
@@ -800,23 +920,18 @@ int main(int argc, char **argv)
     signal(SIGINT, stop_signal);
     signal(SIGTERM, stop_signal);
 #endif
-    if (rt.initiating) {
-        memset(&peer, 0, sizeof(peer));
-        peer.sin_family = AF_INET;
-        peer.sin_port = htons(peer_port);
+    if (rt.configured) {
 #ifdef __AROS__
-        peer.sin_addr.s_addr = inet_addr(peer_ip);
-        if (peer.sin_addr.s_addr == INADDR_NONE) {
+        peer_address_bytes.s_addr = inet_addr(peer_ip);
+        if (peer_address_bytes.s_addr == INADDR_NONE) {
 #else
-        if (inet_pton(AF_INET, peer_ip, &peer.sin_addr) != 1) {
+        if (inet_pton(AF_INET, peer_ip, &peer_address_bytes) != 1) {
 #endif
             fputs("MIDIHub: peer must be an IPv4 address\n", stderr);
             goto cleanup;
         }
-        rt.peer_control = peer;
-        peer.sin_port = htons((uint16_t)(peer_port + 1));
-        rt.peer_data = peer;
-        rt.have_peer = 1;
+        rt.configured_address = ntohl(peer_address_bytes.s_addr);
+        rt.configured_port = peer_port;
     }
     if (netmidi_network_open_pair(&rt.network, local_port) != 0) {
         fputs("MIDIHub: cannot bind UDP port pair\n", stderr);
@@ -827,23 +942,18 @@ int main(int argc, char **argv)
         goto cleanup;
     }
     now = now_ticks();
-    if (applemidi_session_init(&rt.session, random32(now),
+    if (applemidi_peers_init(&rt.peers, random32(now),
                         (const uint8_t *)config.session_name,
                         strlen(config.session_name)) != 0)
         goto cleanup;
-    rt.sequence = (uint16_t)random32(now);
     snprintf(rt.mdns_host, sizeof(rt.mdns_host), "midihub-%04x-%08lx",
              (unsigned int)local_port,
-             (unsigned long)rt.session.local_ssrc);
+             (unsigned long)rt.peers.local_ssrc);
     rt.mdns = open_mdns(rt.mdns_ip);
     if (rt.mdns < 0)
         puts("MIDIHub: Bonjour discovery unavailable");
-    if (rt.initiating) {
-        if (applemidi_session_invite(&rt.session, random32(now),
-                              &invite) != 0 || send_apple(&rt, 0, &invite) != 0)
-            goto cleanup;
-        rt.last_invite = now;
-    }
+    if (rt.configured && invite_configured(&rt, now) != 0)
+        goto cleanup;
     printf("MIDIHub: listening on UDP %u/%u\n", (unsigned int)local_port,
            (unsigned int)local_port + 1);
     fflush(stdout);
@@ -854,10 +964,13 @@ int main(int argc, char **argv)
             break;
 #endif
         wait_us = 100000;
-        if (rtpmidi_queue_next_due(&rt.queue, &next_due)) {
+        for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index) {
+            if (!rt.peers.peer[index].used ||
+                !rtpmidi_queue_next_due(&rt.stream[index].queue, &next_due))
+                continue;
             now = now_ticks();
             wait_ticks = next_due > now ? next_due - now : 0;
-            if (wait_ticks < 1000)
+            if (wait_ticks < 1000 && (long)(wait_ticks * 100) < wait_us)
                 wait_us = (long)(wait_ticks * 100);
         }
         netmidi_network_wait(&rt.network, rt.mdns, wait_us,
@@ -873,12 +986,10 @@ int main(int argc, char **argv)
             receive_mdns(&rt);
         periodic(&rt, now_ticks());
         netmidi_camd_poll(&rt.camd, send_midi, &rt);
-        if (rt.initiating && rt.session.phase == APPLEMIDI_SESSION_IDLE)
+        /* asked to invite one peer: with that session over, so are we */
+        if (rt.configured && configured_index(&rt) < 0)
             break;
     }
-    if (rt.session.phase != APPLEMIDI_SESSION_IDLE &&
-        applemidi_session_end(&rt.session, &goodbye) == 0)
-        send_apple(&rt, 0, &goodbye);
     result = 0;
 
 cleanup:
@@ -886,10 +997,9 @@ cleanup:
         send_mdns(&rt, NULL, 0, 0);
         netmidi_network_close_socket(rt.mdns);
     }
-    if (netmidi_camd_is_open(&rt.camd)) {
-        rtpmidi_queue_reset(&rt.queue);
-        rtpmidi_receiver_release_notes(&rt.receiver);
-    }
+    for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
+        if (rt.peers.peer[index].used)
+            drop_peer(&rt, index, now_ticks());
     netmidi_camd_close(&rt.camd);
     netmidi_network_close(&rt.network);
     return result;

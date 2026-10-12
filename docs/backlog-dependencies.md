@@ -45,15 +45,13 @@ flowchart LR
     end
 
     subgraph AM[AppleMIDI]
-        AM05["AM05 several peers<br/>on AROS"]:::ready
         AM06["AM06 run against<br/>rtpmidid"]:::ready
-        AM07["AM07 who may<br/>connect"]
+        AM07["AM07 who may<br/>connect"]:::ready
         AM08["AM08 DEVS:Midi<br/>driver"]
         AM09["AM09 register through<br/>system mDNS"]:::ready
         AM10["AM10 browse<br/>for peers"]
         AM12["AM12 reconnection"]
         AM14["AM14 IPv6"]
-        AM15["AM15 table size"]
         AM16["AM16 configuration"]
         AM19["AM19 fuzzing<br/>and captures"]
         AM20["AM20 no command<br/>line"]
@@ -128,10 +126,6 @@ flowchart LR
     AM06 --> R23
     AM06 --> AM19
 
-    AM05 --> AM07
-    AM05 --> AM08
-    AM05 --> AM12
-    AM05 --> AM15
     AM07 --> AM16
     R17 --> AM16
     AM09 --> AM10
@@ -159,7 +153,6 @@ flowchart LR
     NM02 --> NM06
     NM02 --> NM16
     NM06 --> NM07
-    AM05 --> NM07
     NM07 --> NM08
     AM10 --> NM08
     NM07 --> NM09
@@ -213,8 +206,8 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 116 open items, 53 have nothing in front of them, 50 sit behind something
-outside our hands or behind a decision, and 13 wait only for other work of
+Of 115 open items, 54 have nothing in front of them, 50 sit behind something
+outside our hands or behind a decision, and 11 wait only for other work of
 ours.
 
 **What opens the most**, counting everything that follows directly or
@@ -224,7 +217,6 @@ through other items:
 |---|---|---|
 | Have the specification texts | 23 | All of UMP's and Network MIDI 2.0's conformance work, CAMD's B32, and through it BLE's timestamps |
 | UP01, check UMP against the text | 15 | The rest of UMP, B32, timed delivery and the MIDI 2.0 protocol over the network |
-| AM05, several peers on AROS | 12 | The driver, the accept rule, reconnection, configuration, and Network MIDI 2.0's whole runtime |
 | A yes in PR #1507 | 10 | B29 to B32, and what BLE MIDI lost to the driver model: names, presence, identity, time |
 | Answers in issue #1559 | 9 | Event delivery in mDNS and every cut of it after the first, and the three IPv6 items |
 | NM02, the session knows its peer | 8 | The session table, the runtime and everything run on it |
@@ -234,9 +226,9 @@ through other items:
 
 **The longest chains** are four steps of our own work after something
 outside: the texts, UP01, B32 and then BLE's timestamps; and #1560, then
-the three further cuts of mDNS. Within our own hands the longest is
-AM05 → NM07 → NM10 → NM17, from AppleMIDI into Network MIDI 2.0,
-which is why AppleMIDI goes first.
+the three further cuts of mDNS. Within our own hands the longest is now in
+Network MIDI 2.0 alone: NM02 → NM06 → NM07 → NM10 → NM17. AppleMIDI's
+part of it, several peers at once, was done on 2026-10-12.
 
 **Five things outside our hands hold most of the 50:**
 
@@ -254,8 +246,8 @@ which is why AppleMIDI goes first.
 record, has to be done before Network MIDI 2.0 can advertise itself (NM08).
 Everything else in mDNS is independent of the MIDI work, and the reverse.
 
-**The decisions** hold little now. D1, D2 and D4 are needed by one item,
-the driver (AM08), three steps into AppleMIDI. The two in mDNS each hold a
+**The decisions** are due. D1, D2 and D4 are needed by one item, the
+driver (AM08), and everything that item waited for in our own work is done. The two in mDNS each hold a
 single item.
 
 ## Free: nothing before, nothing after
@@ -266,7 +258,7 @@ their own backlog, not from this graph.
 | Backlog | Items |
 |---|---|
 | RTP-MIDI | R11, R14, R18, R19, R20, R22, R24, R25 |
-| AppleMIDI | AM11, AM13, AM17, AM18, AM21 |
+| AppleMIDI | AM11, AM13, AM15, AM17, AM18, AM21 |
 | UMP | UP02, UP14, UP15 |
 | Network MIDI 2.0 | NM03, NM18, NM19 |
 | CAMD | B16, B22 |
@@ -283,14 +275,15 @@ lists: defects in code as it is. That they open nothing else is no reason to lea
 2. **AM06**, the runs against other implementations. The first, against
    node-rtpmidi, was done on 2026-10-12 and found the RS layout defect; rtpmidid
    and Apple's need a machine this one is not.
-3. **AM05**, several peers. Here the driver's decisions (D1, D2, D4) become
-   due.
-4. **AM08**, the driver, and **AM09**/**AM10**, discovery through the system
-   service.
+3. Done on 2026-10-12: AM05, several peers at once.
+4. **AM08**, the driver, which needs the decisions D1, D2 and D4 first;
+   meanwhile **AM09**/**AM10**, discovery through the system service, and
+   **AM07**, who may connect, need nothing.
 5. In parallel with any of the above, whenever the texts are at hand:
    **UP01** and **NM01**. They are reading, they need nothing from AROS, and
    between them they open a quarter of everything here.
-6. **Network MIDI 2.0's runtime** (NM02, NM06, NM07) after step 3.
+6. **Network MIDI 2.0's runtime** (NM02, NM06, NM07), which no longer
+   waits for anything of AppleMIDI's.
 
 7. **BLE MIDI**: T01 the day the hardware is at hand. W01 and L08 were done
    on 2026-10-12.

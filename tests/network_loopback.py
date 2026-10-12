@@ -706,6 +706,129 @@ def run_mdns_case(binary):
         sock.close()
 
 
+class ScriptedPeer:
+    """One AppleMIDI peer played by hand: a control and a data socket, a
+    session with MIDIHub, and the RTP packets it sends."""
+
+    def __init__(self, hub_port, offset, token, ssrc, name):
+        self.hub_port = hub_port
+        self.token = token
+        self.ssrc = ssrc
+        self.control = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.data = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.control.bind(("127.0.0.1", hub_port + offset))
+        self.data.bind(("127.0.0.1", hub_port + offset + 1))
+        self.control.settimeout(0.2)
+        self.data.settimeout(2)
+        self.invite = (b"\xff\xffIN" + struct.pack(">III", 2, token, ssrc) +
+                       name + b"\0")
+
+    def connect(self):
+        deadline = time.monotonic() + 3
+        while True:
+            self.control.sendto(self.invite, ("127.0.0.1", self.hub_port))
+            try:
+                reply, _ = self.control.recvfrom(128)
+                break
+            except socket.timeout:
+                if time.monotonic() >= deadline:
+                    raise AssertionError("invitation was not accepted")
+        assert reply[:4] == b"\xff\xffOK" and reply[8:12] == self.invite[8:12]
+        self.data.sendto(self.invite, ("127.0.0.1", self.hub_port + 1))
+        reply, _ = self.data.recvfrom(128)
+        assert reply[:4] == b"\xff\xffOK" and reply[8:12] == self.invite[8:12]
+        self.control.settimeout(2)
+
+    def send(self, sequence, payload):
+        """An RTP packet; returns the sequence number MIDIHub acknowledges."""
+        packet = struct.pack(">BBHII", 0x80, 0xe1, sequence, 100, self.ssrc)
+        self.data.sendto(packet + payload, ("127.0.0.1", self.hub_port + 1))
+        feedback, source = self.control.recvfrom(128)
+        assert source[1] == self.hub_port
+        assert feedback[:4] == b"\xff\xffRS" and len(feedback) == 12
+        acked, unused = struct.unpack(">HH", feedback[8:12])
+        assert unused == 0
+        return acked
+
+    def quiet(self):
+        """Nothing is waiting on either socket."""
+        for sock in (self.control, self.data):
+            sock.settimeout(0.3)
+            try:
+                sock.recvfrom(128)
+            except socket.timeout:
+                pass
+            else:
+                raise AssertionError("a packet for the other peer came here")
+            sock.settimeout(2)
+
+    def goodbye(self):
+        self.control.sendto(
+            b"\xff\xffBY" + struct.pack(">III", 2, self.token, self.ssrc),
+            ("127.0.0.1", self.hub_port))
+
+    def close(self):
+        self.control.close()
+        self.data.close()
+
+
+def run_two_peers_case(binary):
+    """Two peers at once: each has its own sequence numbers, its own
+    acknowledgements and its own repair, and one leaving leaves the other."""
+    port = free_port_pair()
+    log = tempfile.TemporaryFile(mode="w+b")
+    process = subprocess.Popen(
+        [binary, str(port)], stdout=log, stderr=subprocess.STDOUT
+    )
+    first = ScriptedPeer(port, 2, 0x11111111, 0xAAAA0001, b"First")
+    second = ScriptedPeer(port, 4, 0x22222222, 0xBBBB0002, b"Second")
+    note_on = b"\x03\x90\x3c\x64"
+    other_on = b"\x03\x91\x40\x50"
+    # a journal whose Chapter N says that note 60 of channel 0 is off
+    note_off_journal = b"\x40\x20\x00\x64\x00\x06\x08\x00\x77\x08"
+    # the same for note 64 of channel 1
+    other_off_journal = b"\x40\x20\x03\xe8\x08\x06\x08\x00\x88\x80"
+    try:
+        first.connect()
+        second.connect()
+        # sequence numbers far apart, so one stream's could not be taken
+        # for the other's
+        assert first.send(100, note_on) == 100
+        assert second.send(1000, other_on) == 1000
+        assert first.send(101, b"\x03\xb0\x07\x64") == 101
+        first.quiet()
+        second.quiet()
+        # each loses a packet and sends a journal that repairs its own note
+        assert first.send(103, note_off_journal) == 103
+        assert second.send(1002, other_off_journal) == 1002
+        # one says goodbye; the other goes on
+        first.goodbye()
+        assert second.send(1003, other_on) == 1003
+        # and the one that left can come back, as a new session
+        first.close()
+        first = ScriptedPeer(port, 2, 0x33333333, 0xCCCC0003, b"First")
+        first.connect()
+        assert first.send(7, note_on) == 7
+        assert second.send(1004, b"\x03\x81\x40\x00") == 1004
+    finally:
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        first.close()
+        second.close()
+        log.seek(0)
+        output = log.read().decode("utf-8", "replace")
+        log.close()
+    assert output.count("session connected") == 3, output
+    assert output.count("peer disconnected") == 1, output
+    assert "recovered Note Off channel=0 note=60" in output, output
+    assert "recovered Note Off channel=1 note=64" in output, output
+    assert "malformed" not in output, output
+
+
 def main():
     binary = sys.argv[1]
     run_case(binary, "--probe-note", ("bytes=903c64", "bytes=903c00"))
@@ -714,6 +837,7 @@ def main():
     run_case(binary, None, (), use_config=True)
     run_feedback_case(binary)
     run_outgoing_journal_case(binary)
+    run_two_peers_case(binary)
     run_mdns_case(binary)
     with tempfile.TemporaryDirectory() as directory:
         bad_config = Path(directory) / "invalid.conf"
