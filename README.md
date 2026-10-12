@@ -437,8 +437,9 @@ The sender retains up to 32 packets and removes confirmed history when
 AppleMIDI `RS` feedback arrives. While unconfirmed history remains, it sends
 an empty MIDI guard packet once per
 second so the peer can recover a lost final event. The initiator exchanges
-clocks three times during startup, then every 50 seconds. A responder closes
-a session after two minutes without peer clock
+clocks three times during startup, then every 10 seconds, and each side
+takes the offset of the quickest of the last eight exchanges. A responder
+closes a session after a minute without peer clock
 synchronization and releases active notes.
 
 Run the portable codec tests with `make test`. For an AROS source checkout,

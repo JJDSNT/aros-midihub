@@ -104,6 +104,60 @@ static void apple_sync(void)
 
 /* Two clocks that differ by a known amount, a path that takes a known
  * time each way, and the exchange carried between them by hand. */
+/* One exchange between an inviter and the side it invited, whose clock is
+ * ahead by `ahead`; the answer takes `back` to return instead of `path`. */
+static void clock_exchange(struct applemidi_clock *inviter,
+                           struct applemidi_clock *invited, uint64_t *t,
+                           uint64_t ahead, uint64_t path, uint64_t back)
+{
+    struct applemidi_packet ck0, ck1, ck2, none;
+
+    assert(applemidi_clock_poll(inviter, 1, *t, &ck0) == 1);
+    assert(applemidi_clock_receive(invited, 2, &ck0, *t + path + ahead,
+                                   &ck1) == 1);
+    assert(applemidi_clock_receive(inviter, 1, &ck1, *t + path + back,
+                                   &ck2) == 1);
+    assert(applemidi_clock_receive(invited, 2, &ck2,
+                                   *t + path + back + path + ahead,
+                                   &none) == 0);
+    *t += APPLEMIDI_CLOCK_INTERVAL;
+}
+
+/* AM11: one CK held up among eight does not move the offset, at either
+ * end; and what was learned on a slow path gives way to a quicker one. */
+static void apple_clock_delayed(void)
+{
+    struct applemidi_clock inviter, invited;
+    uint64_t t = 5000000;
+    const uint64_t ahead = 123456;
+    unsigned int i;
+
+    applemidi_clock_init(&inviter, 1, t);
+    applemidi_clock_init(&invited, 0, t + ahead);
+    for (i = 0; i < 8; ++i) {
+        /* the fifth answer is 30 ms late: alone it would say 15 ms */
+        clock_exchange(&inviter, &invited, &t, ahead, 20, i == 4 ? 320 : 20);
+        assert(inviter.peer_to_local == -(int64_t)ahead);
+        assert(invited.peer_to_local == (int64_t)ahead);
+    }
+    assert(inviter.completed == 8 && invited.completed == 8);
+
+    /* a first exchange that was held up is believed until a better one */
+    applemidi_clock_init(&inviter, 1, t);
+    applemidi_clock_init(&invited, 0, t + ahead);
+    clock_exchange(&inviter, &invited, &t, ahead, 20, 320);
+    assert(inviter.synchronized &&
+           inviter.peer_to_local == -(int64_t)ahead + 150);
+    clock_exchange(&inviter, &invited, &t, ahead, 20, 20);
+    assert(inviter.peer_to_local == -(int64_t)ahead);
+
+    /* and a path that became slower for good is followed once the
+     * quicker exchanges are no longer among those kept */
+    for (i = 0; i < APPLEMIDI_CLOCK_KEPT; ++i)
+        clock_exchange(&inviter, &invited, &t, ahead, 20, 320);
+    assert(inviter.peer_to_local == -(int64_t)ahead + 150);
+}
+
 static void apple_clock(void)
 {
     struct applemidi_clock inviter;
@@ -2251,6 +2305,7 @@ int main(void)
     apple_exchange();
     apple_sync();
     apple_clock();
+    apple_clock_delayed();
     apple_feedback();
     applemidi_peers();
     applemidi_accept_rule();

@@ -64,6 +64,25 @@ struct applemidi_peers {
     unsigned int ssrc_collisions;   /* peers refused for having our SSRC */
 };
 
+/* How long a caller waits, in the session's unit, a ten-thousandth of a
+ * second. The table keeps no time itself; these are for whoever runs it,
+ * so that every runtime waits alike.
+ *
+ * An invitation is sent again every second, twelve times, and then given
+ * up: what Benoit Bouchez's RTP-MIDI class does (RTP_MIDI.cpp), and close
+ * to node-rtpmidi's 1.5 seconds, forty times (Stream.js). */
+#define APPLEMIDI_INVITE_INTERVAL 10000u
+#define APPLEMIDI_INVITE_TRIES 12
+/* A peer that invited us on the control port and never does on the data
+ * port is forgotten after twelve seconds: as long as we would go on
+ * inviting it ourselves. */
+#define APPLEMIDI_DATA_INVITE_TIMEOUT 120000u
+/* A peer wanted by name that does not answer is invited again after five
+ * seconds, then after twice as long each time, up to a minute: it is
+ * advertised, so it is there, and may be refusing us on purpose. */
+#define APPLEMIDI_WANTED_FIRST_WAIT 50000u
+#define APPLEMIDI_WANTED_LONGEST_WAIT 600000u
+
 int applemidi_peers_init(struct applemidi_peers *peers, uint32_t local_ssrc,
                   const uint8_t *name, size_t name_length);
 

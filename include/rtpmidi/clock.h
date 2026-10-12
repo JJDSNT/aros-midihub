@@ -13,14 +13,23 @@
  * Times are in the session's unit, a ten-thousandth of a second. The
  * caller owns the socket and the clock; no OS calls occur here. */
 
-/* An exchange a second for the first three, then one in fifty seconds; a
- * session whose inviter has sent no CK for two minutes is taken for dead.
- * These are this implementation's numbers, not observed ones: see AM11 in
- * docs/applemidi-backlog.md. */
+/* An exchange a second for the first three, then one in ten seconds; a
+ * session whose inviter has sent no CK for a minute is taken for dead.
+ * Ten seconds is what the other implementations read do: node-rtpmidi
+ * 1.0.0 (Stream.js) and Benoit Bouchez's RTP-MIDI class (RTP_MIDI.cpp)
+ * both begin with exchanges 1.5 seconds apart and go on with one in ten
+ * seconds, and the second gives up a session after four of its timer's
+ * turns, about forty seconds, without one. A longer interval than that
+ * would lose us such a peer. The first three a second apart, and the
+ * minute, are ours. */
 #define APPLEMIDI_CLOCK_FIRST_EXCHANGES 3
 #define APPLEMIDI_CLOCK_FIRST_INTERVAL 10000u
-#define APPLEMIDI_CLOCK_INTERVAL 500000u
-#define APPLEMIDI_CLOCK_TIMEOUT 1200000u
+#define APPLEMIDI_CLOCK_INTERVAL 100000u
+#define APPLEMIDI_CLOCK_TIMEOUT 600000u
+/* Of this many exchanges, the last ones, the one with the shortest round
+ * trip gives the offset: a CK held up on its way says less about the
+ * clocks than one that was not. */
+#define APPLEMIDI_CLOCK_KEPT 8
 
 struct applemidi_clock {
     int initiator;              /* this side sent the invitation */
@@ -37,6 +46,13 @@ struct applemidi_clock {
     uint64_t peer_time;         /* the time it carried */
     uint64_t own_time;          /* the time we answered with */
     uint64_t heard;             /* when the peer last began an exchange */
+    /* the last exchanges: how long each took and what offset it gave */
+    struct {
+        uint64_t round_trip;
+        int64_t offset;
+    } kept[APPLEMIDI_CLOCK_KEPT];
+    unsigned int kept_count;
+    unsigned int kept_next;
 };
 
 /* At the moment the session is connected. */

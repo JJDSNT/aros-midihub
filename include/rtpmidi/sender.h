@@ -89,6 +89,13 @@ struct rtpmidi_sender {
     uint32_t unjournalled;
 };
 
+/* After this long with nothing sent and something still unacknowledged, a
+ * caller sends a packet with the journal alone, so that a loss of the last
+ * packets is repaired without waiting for the next note (RFC 6295 section
+ * 4.2 calls it a guard packet and leaves the time open): a second, in
+ * ten-thousandths. */
+#define RTPMIDI_GUARD_INTERVAL 10000u
+
 void rtpmidi_sender_reset(struct rtpmidi_sender *sender);
 void rtpmidi_sender_clear_history(struct rtpmidi_sender *sender);
 int rtpmidi_sender_supported(const uint8_t *message, size_t length);

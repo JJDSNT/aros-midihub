@@ -12,6 +12,29 @@ void applemidi_clock_init(struct applemidi_clock *clock, int initiator,
     clock->heard = now;
 }
 
+/* An exchange came to its end: keeps it, and takes the offset of the
+ * quickest among those kept, the newest of them when several took as
+ * long. */
+static void exchange_done(struct applemidi_clock *clock, uint64_t round_trip,
+                          int64_t offset)
+{
+    unsigned int i;
+    unsigned int best;
+
+    clock->kept[clock->kept_next].round_trip = round_trip;
+    clock->kept[clock->kept_next].offset = offset;
+    best = clock->kept_next;
+    clock->kept_next = (clock->kept_next + 1) % APPLEMIDI_CLOCK_KEPT;
+    if (clock->kept_count < APPLEMIDI_CLOCK_KEPT)
+        ++clock->kept_count;
+    for (i = 0; i < clock->kept_count; ++i)
+        if (clock->kept[i].round_trip < clock->kept[best].round_trip)
+            best = i;
+    clock->peer_to_local = clock->kept[best].offset;
+    clock->synchronized = 1;
+    ++clock->completed;
+}
+
 int applemidi_clock_poll(struct applemidi_clock *clock, uint32_t local_ssrc,
                          uint64_t now, struct applemidi_packet *out)
 {
@@ -57,23 +80,29 @@ int applemidi_clock_receive(struct applemidi_clock *clock,
         out->ssrc = local_ssrc;
         out->sync_count = 2;
         out->timestamps[2] = now;
-        if (rtpmidi_clock_offset(out->timestamps, 1,
-                                 &clock->peer_to_local) == 0) {
-            clock->synchronized = 1;
-            clock->outstanding = 0;
-            if (clock->early < APPLEMIDI_CLOCK_FIRST_EXCHANGES)
-                ++clock->early;
-            ++clock->completed;
+        {
+            int64_t offset;
+
+            if (rtpmidi_clock_offset(out->timestamps, 1, &offset) == 0) {
+                clock->outstanding = 0;
+                if (clock->early < APPLEMIDI_CLOCK_FIRST_EXCHANGES)
+                    ++clock->early;
+                exchange_done(clock, now - clock->sent, offset);
+            }
         }
         return 1;
     }
     if (in->sync_count == 2 && !clock->initiator && clock->answered &&
         in->timestamps[0] == clock->peer_time &&
-        in->timestamps[1] == clock->own_time &&
-        rtpmidi_clock_offset(in->timestamps, 0, &clock->peer_to_local) == 0) {
-        clock->synchronized = 1;
-        clock->answered = 0;
-        ++clock->completed;
+        in->timestamps[1] == clock->own_time) {
+        int64_t offset;
+
+        /* the round trip is the peer's to measure: its two times */
+        if (rtpmidi_clock_offset(in->timestamps, 0, &offset) == 0) {
+            clock->answered = 0;
+            exchange_done(clock, in->timestamps[2] - in->timestamps[0],
+                          offset);
+        }
     }
     return 0;
 }

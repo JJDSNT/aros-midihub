@@ -405,7 +405,7 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
                     rtpmidi_clock_due(stream->sysex.timestamp, now,
                                  stream->clock.peer_to_local, &due) == 0 &&
                     stream_due(rt, stream, now, &due)) {
-                    if (due - now > 100000 ||
+                    if (due - now > RTPMIDI_QUEUE_HORIZON ||
                         rtpmidi_queue_push_sysex(&stream->queue, due,
                                             sysex_message,
                                             sysex_length) != 0)
@@ -423,7 +423,7 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
                 rtpmidi_clock_due(event.timestamp, now,
                              stream->clock.peer_to_local, &due) == 0 &&
                 stream_due(rt, stream, now, &due)) {
-                if (due - now > 100000 ||
+                if (due - now > RTPMIDI_QUEUE_HORIZON ||
                     rtpmidi_queue_push(&stream->queue, due, event.bytes,
                                   event.length) != 0)
                     puts("MIDIHub: future MIDI event discarded");
@@ -985,8 +985,9 @@ static void periodic_peer(struct runtime *rt, int index, uint64_t now)
 
     if (session->phase == APPLEMIDI_SESSION_INVITING_CONTROL ||
         session->phase == APPLEMIDI_SESSION_INVITING_DATA) {
-        if (elapsed_ticks(now, stream->last_invite) >= 10000) {
-            if (++stream->retries > 12) {
+        if (elapsed_ticks(now, stream->last_invite) >=
+                APPLEMIDI_INVITE_INTERVAL) {
+            if (++stream->retries > APPLEMIDI_INVITE_TRIES) {
                 puts("MIDIHub: invitation timed out");
                 drop_peer(rt, index, now);
             } else if (applemidi_peers_retry(&rt->peers, index, &packet,
@@ -1004,7 +1005,8 @@ static void periodic_peer(struct runtime *rt, int index, uint64_t now)
         }
         send_sync(rt, index, now);
         if (stream->sender.count &&
-            elapsed_ticks(now, stream->last_rtp_send) >= 10000)
+            elapsed_ticks(now, stream->last_rtp_send) >=
+                RTPMIDI_GUARD_INTERVAL)
             send_guard(rt, index, now);
         if (!probing)
             return;
@@ -1024,7 +1026,8 @@ static void periodic_peer(struct runtime *rt, int index, uint64_t now)
             rt->probe_state = 2;
         }
     } else if (session->phase == APPLEMIDI_SESSION_WAITING_DATA &&
-               elapsed_ticks(now, stream->last_activity) >= 120000) {
+               elapsed_ticks(now, stream->last_activity) >=
+                   APPLEMIDI_DATA_INVITE_TIMEOUT) {
         puts("MIDIHub: data invitation timed out");
         drop_peer(rt, index, now);
     }
@@ -1077,9 +1080,10 @@ static void periodic(struct runtime *rt, uint64_t now)
             printf("MIDIHub: inviting \"%s\"\n", rt->wanted);
             invite_configured(rt, now);
             rt->wanted_tried = now ? now : 1;
-            rt->wanted_wait = rt->wanted_wait ? rt->wanted_wait * 2 : 50000;
-            if (rt->wanted_wait > 600000)
-                rt->wanted_wait = 600000;
+            rt->wanted_wait = rt->wanted_wait ? rt->wanted_wait * 2 :
+                              APPLEMIDI_WANTED_FIRST_WAIT;
+            if (rt->wanted_wait > APPLEMIDI_WANTED_LONGEST_WAIT)
+                rt->wanted_wait = APPLEMIDI_WANTED_LONGEST_WAIT;
         }
     }
     for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
