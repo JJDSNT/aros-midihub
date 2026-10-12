@@ -65,11 +65,9 @@ flowchart LR
     subgraph NM[Network MIDI 2.0]
         NM08["NM08 discovery"]
         NM09["NM09 timed delivery"]
-        NM10["NM10 run against<br/>another implementation"]:::ready
         NM11["NM11 reach CAMD<br/>through a driver"]
         NM14["NM14 MIDI 2.0<br/>protocol"]
         NM15["NM15 IPv6"]
-        NM17["NM17 vectors, fuzzing,<br/>captures"]
     end
 
     subgraph CAMD[CAMD]
@@ -127,7 +125,6 @@ flowchart LR
     AM10 --> NM08
     UP09 --> NM09
     R17 --> NM09
-    NM10 --> NM17
     AM08 --> NM11
     ND1 --> NM11
     UP11 --> NM14
@@ -170,8 +167,8 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 100 open items, 61 have nothing in front of them, 31 sit behind something
-outside our hands or behind a decision, and 8 wait only for other work of
+Of 99 open items, 61 have nothing in front of them, 31 sit behind something
+outside our hands or behind a decision, and 7 wait only for other work of
 ours.
 
 **What opens the most**, counting everything that follows directly or
@@ -221,7 +218,7 @@ their own backlog, not from this graph.
 | RTP-MIDI | R11, R14, R18, R19, R20, R22, R24, R25, R28 |
 | AppleMIDI | AM11, AM13, AM15, AM17, AM18, AM21 |
 | UMP | UP06, UP07, UP08, UP13, UP15 |
-| Network MIDI 2.0 | NM12, NM13, NM18, NM19 |
+| Network MIDI 2.0 | NM12, NM13, NM17, NM18, NM19 |
 | CAMD | B16, B22 |
 | BLE MIDI | L13, L01, L06, T04, T06, L05, W03, W05, W06, L09, L04, L07 |
 | mDNS | MD19, MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |

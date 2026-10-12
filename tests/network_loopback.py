@@ -604,12 +604,12 @@ def run_outgoing_journal_case(binary):
         ck2, _ = data.recvfrom(128)
         assert ck2[:4] == b"\xff\xffCK" and ck2[8] == 2
         first, _ = data.recvfrom(128)
-        assert first[:2] == b"\x80\xe1" and first[12] & 0x40
+        assert first[:2] == b"\x80\x61" and first[12] & 0x40
         first_sequence = struct.unpack(">H", first[2:4])[0]
         assert first[13:16] == b"\x90\x3c\x64"
         assert first[16:] == struct.pack(">BH", 0x80, first_sequence)
         second, _ = data.recvfrom(128)
-        assert second[:2] == b"\x80\xe1" and second[12] & 0x40
+        assert second[:2] == b"\x80\x61" and second[12] & 0x40
         assert struct.unpack(">H", second[2:4])[0] == (first_sequence + 1) & 0xffff
         assert second[13:16] == b"\x90\x3c\x00"
         journal = second[16:]

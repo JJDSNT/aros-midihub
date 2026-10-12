@@ -67,8 +67,12 @@ int rtpmidi_encode_list(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
     if (capacity < header_length + midi_length)
         return -1;
     data[0] = 0x80;
-    /* The marker says whether there are commands (RFC 6295 section 2.1). */
-    data[1] = (uint8_t)((midi_length ? 0x80 : 0) | RTPMIDI_PAYLOAD_TYPE);
+    /* The marker bit is left clear, with commands or without. RFC 6295
+     * section 2.1 would have it set when there are commands, but AppleMIDI
+     * implementations do not follow that: node-rtpmidi and Benoit Bouchez's
+     * RTP-MIDI class both send it clear, and the second takes no packet
+     * that has it set. */
+    data[1] = RTPMIDI_PAYLOAD_TYPE;
     write16(data + 2, sequence);
     write32(data + 4, timestamp);
     write32(data + 8, ssrc);

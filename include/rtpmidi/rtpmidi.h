@@ -275,8 +275,9 @@ int rtpmidi_reader_next(struct rtpmidi_reader *reader,
 
 /* Builds a single, complete MIDI 1.0 command with implicit delta time zero
  * and no recovery journal. Returns 0 for success, -1 for invalid input. */
-/* The marker bit is set when the list has commands and clear when it is
- * empty, as RFC 6295 section 2.1 requires. */
+/* The marker bit is sent clear always: that is what AppleMIDI
+ * implementations do and one of those we met requires, against RFC 6295
+ * section 2.1, which would set it when the list has commands. */
 int rtpmidi_encode_short(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
                         const uint8_t *midi, size_t midi_length,
                         uint8_t *data, size_t capacity, size_t *length);

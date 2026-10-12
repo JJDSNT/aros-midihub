@@ -311,7 +311,7 @@ static void rtp_short(void)
     static const uint8_t clock[] = {0xf8};
     static const uint8_t invalid_data[] = {0x90, 0x80, 100};
     static const uint8_t expected[] = {
-        0x80, 0xe1, 0x12, 0x34, 0x01, 0x02, 0x03, 0x04,
+        0x80, 0x61, 0x12, 0x34, 0x01, 0x02, 0x03, 0x04,
         0x89, 0xab, 0xcd, 0xef, 3, 0x90, 60, 100
     };
     struct rtpmidi_packet packet;
@@ -1818,10 +1818,12 @@ static void rtp_header_variants(void)
     assert(rtpmidi_decode(bad, sizeof(padded), &packet) == -1);
     assert(rtpmidi_decode(plain, 12, &packet) == -1);
 
-    /* what we send: the marker follows the command section */
+    /* what we send: the marker clear with commands and without, as
+       AppleMIDI implementations do */
     assert(rtpmidi_encode_short(7, 9, 5, note, sizeof(note), wire,
                                 sizeof(wire), &length) == 0);
-    assert(length == sizeof(plain) && memcmp(wire, plain, length) == 0);
+    assert(length == sizeof(marker_clear) &&
+           memcmp(wire, marker_clear, length) == 0);
     assert(rtpmidi_encode_list(8, 9, 5, NULL, 0, wire, sizeof(wire),
                                &length) == 0);
     assert(length == 13 && wire[0] == 0x80 && wire[1] == 0x61 &&

@@ -25,7 +25,7 @@ runtime and the discovery it needs are the ones
   for nobody: a peer is reached by typing its address.
 - Added in one commit on 2026-10-06, with two of the specification's packet
   examples already in its tests, and read against M2-124-UM 1.0 in full on
-  2026-10-12: see NM01 under "Done". It has met no other implementation.
+  2026-10-12: see NM01 under "Done". It met its first other implementation the same day: see NM10.
 
 Priorities as in the other backlogs.
 
@@ -45,6 +45,7 @@ undefined-behaviour sanitizers) and the whole host suite passing.
 | NM20 | The limits cite their sections: 64 words (7.1), 1400 bytes (5.1.1). The 64 commands a packet is parsed into is ours, and more than a 1400-byte packet can hold of anything but empty commands. |
 | NM06 | `struct netmidi2_table`: eight sessions on one port, each found by the address and port its packets come from, as Host for those who invite and as Client for those we invite. One more Client than there is room for gets Bye, "too many sessions"; a packet from someone with no session is answered as an idle Host would and takes no slot. `test_table` in `tests/netmidi2.c`. |
 | NM07 | The path runs. `tests/interop/netmidi2_peer.c` is an endpoint on a UDP socket for the host; `tools/netmidi2-host.sh` runs a Host and a Client, then a Host and two Clients at once, each sending a note, a controller and a SysEx message as MIDI 1.0 bytes and printing what the other end's became. On AROS, `MIDIHub --midi2 <port>` opens a third socket beside AppleMIDI's two: UMPs received are translated for the cluster `MIDIHub In`, what a CAMD program sends to `MIDIHub Out` goes out as UMPs to every established session, and a session that ends, is reset or loses data is followed by All Notes Off on every channel. `tools/netmidi2-hosted.sh` has the host as Client of hosted AROS over the veth pair, with a CAMD program at the AROS end of each direction. Both ends are our own code. |
+| NM10 | Met another implementation: Benoit Bouchez's NetUMP class (commit f74b0b8, MIT, the engine of his UMP-OX), built on this host around `tests/interop/netump_peer.cpp`. `tools/interop-bouchez-host.sh`: as Client of our Host and as Host of our Client, sessions open with names and product ids exchanged, UMPs cross both ways word for word (three MIDI 1.0 channel voice messages and a SysEx7 pair), and Bye is understood in each direction with its reason. A twelve-second capture showed no NAK from either side: it takes our idle commands and our repeats, and answers our ping. Nothing had to change in our code. Not shown: loss and its repair, a reset, more than one session, MIDI 2.0 channel voice, and UMP-OX itself, which is released for Windows and macOS only and has no source. Not run on hosted AROS. |
 
 ## P0 — wrong or unsafe as it is
 
@@ -56,7 +57,6 @@ Nothing open.
 |---|---|---|---|
 | NM08 | No discovery. Section 4 has a Host advertise `_midi2._udp` with a TXT record holding `UMPEndpointName` and `ProductInstanceId`, the same two strings as in the Invitation Reply, and keep the records' time to live at a minute or less (4.6). A Client browses for it. | Through the system mDNS service, after AppleMIDI has done the same for its own name (AppleMIDI backlog AM09, AM10). The TXT value has spaces in it (mDNS backlog MD02), and the minute needs the service to take a time to live from its client. | `avahi-browse -r _midi2._udp` shows the endpoint and its TXT record. |
 | NM09 | No time. A UMP is delivered when its packet arrives. The jitter-reduction timestamps that would say when it was meant are dropped by the translator (UMP backlog UP09). | Use them once UP09 hands them over, with the same latency setting as RTP-MIDI (its backlog, R17). | With 20 ms of jitter from `tc netem`, intervals between notes at the receiver are those of the sender. |
-| NM10 | Never run against another implementation: every test has our code at both ends, so an error made the same way twice passes. | Find one that runs without hardware. Candidates to check for availability, none confirmed: Windows MIDI Services' network transport, the MIDI Association's reference tools, an ALSA bridge on Linux. `tests/interop/netmidi2_peer.c` is the other end to point at it. | A table here says which peer was tried, when, and what failed. |
 | NM11 | A peer reaches CAMD only as MIDI 1.0, and only through the clusters of the program `MIDIHub`, where it is mixed with every other peer of either protocol. That is a CAMD client, the shape the review of `btmidi.class` turned down for a transport. | A port per session in a `DEVS:Midi` driver: the one AppleMIDI builds (its backlog, AM08), or a second: decision D1. Native UMP to a CAMD client is CAMD backlog B32. | A CAMD program opens a driver's port and plays to a Network MIDI 2.0 peer. |
 
 ## P2 — complete before an upstream proposal
