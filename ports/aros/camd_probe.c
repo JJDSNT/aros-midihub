@@ -57,6 +57,34 @@ static int send_to(struct MidiNode *node, char *cluster)
     return 0;
 }
 
+/* Three notes at once, and their ends at once: what a transport that
+   gathers what CAMD hands over together can put in one packet. */
+static int chord_to(struct MidiNode *node, char *cluster)
+{
+    static const UBYTE chord[] = {48, 52, 55};
+    struct TagItem tags[] = {
+        {MLINK_Location, (IPTR)cluster},
+        {TAG_DONE, 0}
+    };
+    struct MidiLink *sender = AddMidiLinkA(node, MLTYPE_Sender, tags);
+    unsigned int i;
+
+    if (!sender) {
+        printf("CAMDProbe: cannot send to %s\n", cluster);
+        return 20;
+    }
+    Delay(25);
+    printf("CAMDProbe: playing a chord to %s\n", cluster);
+    for (i = 0; i < sizeof(chord); ++i)
+        PutMidi(sender, 0x90000000UL | ((ULONG)chord[i] << 16) | (90UL << 8));
+    Delay(25);
+    for (i = 0; i < sizeof(chord); ++i)
+        PutMidi(sender, 0x80000000UL | ((ULONG)chord[i] << 16));
+    Delay(10);
+    RemoveMidiLink(sender);
+    return 0;
+}
+
 static int monitor(struct MidiNode *node, char *cluster, LONG seconds)
 {
     static UBYTE sysex[4096];
@@ -157,11 +185,13 @@ int main(int argc, char **argv)
     int result = 20;
     int synth_mode = argc == 2 && strcmp(argv[1], "--synth") == 0;
     int send_mode = argc == 3 && strcmp(argv[1], "--send") == 0;
+    int chord_mode = argc == 3 && strcmp(argv[1], "--chord") == 0;
     int monitor_mode = (argc == 3 || argc == 4) && strcmp(argv[1], "--monitor") == 0;
     int rethink_mode = argc == 2 && strcmp(argv[1], "--rethink") == 0;
 
-    if (argc != 1 && !synth_mode && !send_mode && !monitor_mode && !rethink_mode) {
-        puts("Usage: MIDIHubCAMDProbe [--synth | --send CLUSTER |"
+    if (argc != 1 && !synth_mode && !send_mode && !chord_mode &&
+        !monitor_mode && !rethink_mode) {
+        puts("Usage: MIDIHubCAMDProbe [--synth | --send CLUSTER | --chord CLUSTER |"
              " --monitor CLUSTER [SECONDS] | --rethink]");
         return 20;
     }
@@ -179,8 +209,9 @@ int main(int argc, char **argv)
     }
     node = CreateMidiA(node_tags);
     if (!node) goto cleanup;
-    if (send_mode || monitor_mode) {
-        result = send_mode ? send_to(node, argv[2]) :
+    if (send_mode || monitor_mode || chord_mode) {
+        result = chord_mode ? chord_to(node, argv[2]) :
+                 send_mode ? send_to(node, argv[2]) :
                  monitor(node, argv[2], argc == 4 ? atol(argv[3]) : 60);
         goto cleanup;
     }

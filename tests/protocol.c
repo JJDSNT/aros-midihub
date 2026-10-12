@@ -2104,9 +2104,12 @@ static void sender_packet_list(void)
     assert(taken == 3);
     assert(rtpmidi_decode(wire, length, &packet) == 0);
     assert(packet.timestamp == 1000 && !packet.z);
-    /* 3 + (1 + 3) + (2 + 3): the delta of 250 takes two bytes */
-    assert(packet.midi_length == 12 && packet.midi[3] == 0 &&
-           packet.midi[7] == 0x81 && packet.midi[8] == 0x7a);
+    /* 3 + (1 + 2) + (2 + 2): the second and third notes go without
+     * their status, which is the first's (R32), and the delta of 250
+     * takes two bytes */
+    assert(packet.midi_length == 10 && packet.midi[3] == 0 &&
+           packet.midi[4] == 64 && packet.midi[6] == 0x81 &&
+           packet.midi[7] == 0x7a && packet.midi[8] == 67);
     rtpmidi_reader_init(&reader, &packet);
     for (i = 0; i < 3; ++i) {
         assert(rtpmidi_reader_next(&reader, &event) == 1);
@@ -2127,6 +2130,37 @@ static void sender_packet_list(void)
     assert(journal.channel_count == 1 &&
            rtpmidi_journal_decode_notes(&journal.channels[0], &notes) == 1 &&
            notes.log_count == 3);
+
+    /* Running status is a channel command's: another status, or a
+     * System Common command, ends it; System Real Time does not. */
+    {
+        struct rtpmidi_timed_message mixed[6] = {
+            {10, 3, {0x90, 60, 100}},
+            {10, 1, {0xf8, 0, 0}},
+            {10, 3, {0x90, 61, 100}},      /* without status: F8 between */
+            {10, 2, {0xf3, 5, 0}},
+            {10, 3, {0x90, 62, 100}},      /* with it again, after F3 */
+            {10, 3, {0x80, 62, 0}}         /* another status */
+        };
+        static const uint8_t list[] = {
+            0x90, 60, 100, 0x00, 0xf8, 0x00, 61, 100, 0x00, 0xf3, 5,
+            0x00, 0x90, 62, 100, 0x00, 0x80, 62, 0
+        };
+
+        rtpmidi_sender_reset(&sender);
+        assert(rtpmidi_sender_packet_list(&sender, sequence, 1, mixed, 6,
+                                          wire, sizeof(wire), &length,
+                                          &taken) == 0 && taken == 6);
+        assert(rtpmidi_decode(wire, length, &packet) == 0);
+        assert(packet.midi_length == sizeof(list) &&
+               !memcmp(packet.midi, list, sizeof(list)));
+        rtpmidi_reader_init(&reader, &packet);
+        for (i = 0; i < 6; ++i)
+            assert(rtpmidi_reader_next(&reader, &event) == 1 &&
+                   event.bytes[0] == mixed[i].bytes[0] &&
+                   event.bytes[1] == mixed[i].bytes[1]);
+        assert(rtpmidi_reader_next(&reader, &event) == 0);
+    }
 
     /* A time that goes backwards is sent as the time before it. */
     chord[1].timestamp = 900;

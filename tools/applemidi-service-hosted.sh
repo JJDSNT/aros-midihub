@@ -173,13 +173,18 @@ fi
 # address. The host listens before AROS is up.
 prepare "Wait 14
 $c/MIDIHubCAMDProbe >SYS:camd-send-invite.log --send applemidi.out.0
-Wait 10"
+Wait 3
+$c/MIDIHubCAMDProbe >SYS:camd-chord.log --chord applemidi.out.0
+Wait 3
+NetMIDIStatus >SYS:counts-invite.log
+Wait 6"
 printf 'peer_ip = 192.168.166.1\npeer_port = 5104\n' > "$sys/Prefs/Env-Archive/NetMIDI"
 timeout 80 node "$peer" 5104 > "$work/invite-peer.log" 2>&1 &
 boot 85 invite
 kill %1 2> /dev/null || true
 wait || true
 cp "$sys/netmidid.log" "$work/netmidid-invite.log" 2> /dev/null || true
+cp "$sys/counts-invite.log" "$work/" 2> /dev/null || true
 if grep -q 'session connected port=0' "$work/netmidid-invite.log" 2> /dev/null &&
    grep -q 'clock exchange completed' "$work/netmidid-invite.log" &&
    grep -q '^message 903c64$' "$work/invite-peer.log" &&
@@ -187,6 +192,20 @@ if grep -q 'session connected port=0' "$work/netmidid-invite.log" 2> /dev/null &
     echo "ok: the service invited the peer its configuration names, exchanged clocks, and a scale sent to applemidi.out.0 arrived there"
 else
     echo "FAIL: the service inviting a configured peer"
+    status=1
+fi
+# The chord: three notes put to CAMD at once, and their three ends. All
+# six have to arrive. Whether they left in fewer packets than messages is
+# told, not asked: the service sends what it finds in a port's ring when
+# it is woken, and it is woken by the first of them.
+sent=$(sed -n 's/^applemidi\.0 .*out \([0-9]*\) messages in \([0-9]*\) packets.*/\1 \2/p' "$work/counts-invite.log" 2> /dev/null)
+messages=${sent% *}; packets=${sent#* }
+if [ "$(grep -c '^message 903[047]5a$' "$work/invite-peer.log" 2> /dev/null)" = 3 ] &&
+   [ "$(grep -c '^message 803[047]00$' "$work/invite-peer.log")" = 3 ] &&
+   [ -n "$messages" ]; then
+    echo "ok: a chord put to CAMD at once reached node-rtpmidi, six notes ($messages messages left in $packets packets in this boot)"
+else
+    echo "FAIL: the chord: sent '$sent'; $(grep -c '^message [89]03[047]' "$work/invite-peer.log" 2> /dev/null) of its six notes arrived"
     status=1
 fi
 echo "logs: $work"

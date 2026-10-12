@@ -1197,6 +1197,7 @@ int rtpmidi_sender_packet_list(struct rtpmidi_sender *sender,
     size_t n = 0;
     size_t i;
     uint32_t previous;
+    uint8_t running = 0;        /* the status a command may leave out */
 
     if (!sender || !messages || !count || !data || !packet_length || !taken ||
         capacity < 14 ||
@@ -1211,6 +1212,11 @@ int rtpmidi_sender_packet_list(struct rtpmidi_sender *sender,
         const struct rtpmidi_timed_message *m = &messages[n];
         uint8_t delta[4];
         size_t delta_length = 0;
+        /* A channel command whose status is that of the channel command
+           before it goes without its status (RFC 6295 section 3.2, as on
+           a MIDI cable). System Real Time leaves the status standing;
+           System Common ends it. */
+        size_t skip = m->bytes[0] == running && m->bytes[0] < 0xf0 ? 1 : 0;
 
         if (!rtpmidi_short_valid(m->bytes, m->length))
             break;
@@ -1221,7 +1227,7 @@ int rtpmidi_sender_packet_list(struct rtpmidi_sender *sender,
             if (ahead & 0x80000000u)
                 ahead = 0;
             delta_length = put_delta(delta, ahead);
-            if (list_length + delta_length + m->length > room)
+            if (list_length + delta_length + m->length - skip > room)
                 break;
             previous += ahead;
         } else if (m->length > room) {
@@ -1229,8 +1235,12 @@ int rtpmidi_sender_packet_list(struct rtpmidi_sender *sender,
         }
         memcpy(list + list_length, delta, delta_length);
         list_length += delta_length;
-        memcpy(list + list_length, m->bytes, m->length);
-        list_length += m->length;
+        memcpy(list + list_length, m->bytes + skip, m->length - skip);
+        list_length += m->length - skip;
+        if (m->bytes[0] < 0xf0)
+            running = m->bytes[0];
+        else if (m->bytes[0] < 0xf8)
+            running = 0;
     }
     if (rtpmidi_encode_list(sequence, messages[0].timestamp, ssrc, list,
                             list_length, data, capacity, &used) != 0)

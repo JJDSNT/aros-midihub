@@ -1173,7 +1173,7 @@ static void send_guard(struct runtime *rt, int index, uint64_t now)
     if (netmidi_network_send(&rt->network, 1, wire, wire_length,
                              &data) == 0) {
         ++stream->sequence;
-        ++stream->count.packets_out;
+        /* a guard packet carries no message and is not counted as one that does */
         stream->last_rtp_send = now;
     }
 }
