@@ -4,7 +4,6 @@
 
 #include <rtpmidi/applemidi.h>
 #include <midihub/config.h>
-#include <midihub/mdns.h>
 #include <netmidi2/netmidi2.h>
 #include <ump/ump.h>
 #include <rtpmidi/clock.h>
@@ -15,6 +14,7 @@
 #include <rtpmidi/sender.h>
 #include <rtpmidi/timing.h>
 #include "camd.h"
+#include "discovery.h"
 #include "network.h"
 
 #include <arpa/inet.h>
@@ -59,7 +59,8 @@ struct stream {
 
 struct runtime {
     struct netmidi_network_runtime network;
-    int mdns;
+    struct netmidi_discovery discovery;
+    int discovered;             /* services the system advertises for us */
     int configured;             /* a peer was named to invite */
     uint32_t configured_address;
     uint16_t configured_port;
@@ -67,12 +68,7 @@ struct runtime {
     int probe_sysex;
     int probe_state;
     uint64_t note_time;
-    uint8_t mdns_ip[4];
-    char mdns_host[64];
-    char mdns_session[64];
-    uint16_t local_port;
-    uint64_t last_mdns_announce;
-    unsigned int mdns_announcements;
+    char session_name[64];
     struct applemidi_peers peers;
     struct stream stream[APPLEMIDI_PEERS_MAX];
     /* Network MIDI 2.0, on a port of its own when one is given */
@@ -107,102 +103,6 @@ static int parse_port(const char *text, uint16_t *port)
     *port = (uint16_t)number;
     return 0;
 }
-
-static int open_mdns(uint8_t address[4])
-{
-    struct sockaddr_in local;
-    struct sockaddr_in multicast;
-    struct ip_mreq membership;
-    socklen_t size = sizeof(local);
-    unsigned char ttl = 255;
-    int reuse = 1;
-    int probe = -1;
-    int fd = -1;
-
-    probe = socket(AF_INET, SOCK_DGRAM, 0);
-    if (probe < 0) return -1;
-    memset(&multicast, 0, sizeof(multicast));
-    multicast.sin_family = AF_INET;
-    multicast.sin_port = htons(NETMIDI_MDNS_PORT);
-    multicast.sin_addr.s_addr = htonl(0xe00000fbUL);
-    if (connect(probe, (const struct sockaddr *)&multicast,
-                sizeof(multicast)) < 0 ||
-        getsockname(probe, (struct sockaddr *)&local, &size) < 0) {
-        netmidi_network_close_socket(probe);
-        return -1;
-    }
-    memcpy(address, &local.sin_addr.s_addr, 4);
-    netmidi_network_close_socket(probe);
-    fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0) return -1;
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const void *)&reuse,
-                   sizeof(reuse)) < 0)
-        goto fail;
-#ifdef SO_REUSEPORT
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, (const void *)&reuse,
-                   sizeof(reuse)) < 0)
-        goto fail;
-#endif
-    memset(&local, 0, sizeof(local));
-    local.sin_family = AF_INET;
-    local.sin_addr.s_addr = htonl(INADDR_ANY);
-    local.sin_port = htons(NETMIDI_MDNS_PORT);
-    if (bind(fd, (const struct sockaddr *)&local, sizeof(local)) < 0)
-        goto fail;
-    memset(&membership, 0, sizeof(membership));
-    membership.imr_multiaddr.s_addr = multicast.sin_addr.s_addr;
-    membership.imr_interface.s_addr = htonl(INADDR_ANY);
-    if (setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP,
-                   (const void *)&membership, sizeof(membership)) < 0 ||
-        setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL,
-                   (const void *)&ttl, sizeof(ttl)) < 0)
-        goto fail;
-    return fd;
-fail:
-    netmidi_network_close_socket(fd);
-    return -1;
-}
-
-static void send_mdns(struct runtime *rt, const struct sockaddr_in *to,
-                      uint32_t ttl, uint16_t query_id)
-{
-    struct sockaddr_in multicast;
-    uint8_t bytes[512];
-    size_t length;
-    if (rt->mdns < 0 ||
-        netmidi_mdns_build(rt->mdns_session, rt->mdns_host, rt->mdns_ip,
-                      rt->local_port, ttl, query_id,
-                      bytes, sizeof(bytes), &length) != 0)
-        return;
-    if (!to) {
-        memset(&multicast, 0, sizeof(multicast));
-        multicast.sin_family = AF_INET;
-        multicast.sin_addr.s_addr = htonl(0xe00000fbUL);
-        multicast.sin_port = htons(NETMIDI_MDNS_PORT);
-        to = &multicast;
-    }
-    sendto(rt->mdns, bytes, (int)length, 0,
-           (const struct sockaddr *)to, sizeof(*to));
-}
-
-static void receive_mdns(struct runtime *rt)
-{
-    struct sockaddr_in source;
-    socklen_t source_length = sizeof(source);
-    uint8_t packet[1500];
-    int unicast = 0;
-    int count = recvfrom(rt->mdns, packet, sizeof(packet), 0,
-                         (struct sockaddr *)&source, &source_length);
-    if (count <= 0 || source_length < sizeof(source) ||
-        source.sin_family != AF_INET ||
-        netmidi_mdns_query(packet, (size_t)count, rt->mdns_session,
-                      rt->mdns_host, &unicast) != 1)
-        return;
-    if (ntohs(source.sin_port) != NETMIDI_MDNS_PORT) unicast = 1;
-    send_mdns(rt, unicast ? &source : NULL, 120,
-              unicast ? (uint16_t)((packet[0] << 8) | packet[1]) : 0);
-}
-
 
 static void peer_address(const struct applemidi_peer *peer, int data_port,
                          struct sockaddr_in *address)
@@ -1033,13 +933,13 @@ static void periodic(struct runtime *rt, uint64_t now)
 {
     int index;
 
-    if (rt->mdns >= 0 &&
-        (rt->mdns_announcements == 0 ||
-         elapsed_ticks(now, rt->last_mdns_announce) >=
-             (rt->mdns_announcements < 2 ? 10000u : 600000u))) {
-        send_mdns(rt, NULL, 120, 0);
-        rt->last_mdns_announce = now;
-        if (rt->mdns_announcements < 2) ++rt->mdns_announcements;
+    /* The system's mDNS service may come up after us, or again. */
+    {
+        int registered = netmidi_discovery_poll(&rt->discovery, now);
+        if (registered > rt->discovered)
+            puts("MIDIHub: advertised by the system mDNS service");
+        if (registered >= 0)
+            rt->discovered = registered;
     }
     for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
         if (rt->peers.peer[index].used)
@@ -1116,9 +1016,9 @@ int main(int argc, char **argv)
         peer_ip = argv[argi + 1];
     memset(&rt, 0, sizeof(rt));
     netmidi_network_init(&rt.network);
-    rt.mdns = -1;
-    rt.local_port = local_port;
-    strcpy(rt.mdns_session, config.session_name);
+    netmidi_discovery_init(&rt.discovery);
+    snprintf(rt.session_name, sizeof(rt.session_name), "%s",
+             config.session_name);
     rt.configured = *peer_ip != 0;
     rt.probe_note = remaining == 4 &&
                     strcmp(argv[argi + 3], "--probe-note") == 0;
@@ -1168,12 +1068,11 @@ int main(int argc, char **argv)
                         (const uint8_t *)config.session_name,
                         strlen(config.session_name)) != 0)
         goto cleanup;
-    snprintf(rt.mdns_host, sizeof(rt.mdns_host), "midihub-%04x-%08lx",
-             (unsigned int)local_port,
-             (unsigned long)rt.peers.local_ssrc);
-    rt.mdns = open_mdns(rt.mdns_ip);
-    if (rt.mdns < 0)
-        puts("MIDIHub: Bonjour discovery unavailable");
+    /* An AppleMIDI session is found under its control port. */
+    netmidi_discovery_add(&rt.discovery, rt.session_name, "_apple-midi._udp",
+                          local_port);
+    if (netmidi_discovery_poll(&rt.discovery, now) < 0)
+        puts("MIDIHub: no system mDNS service; peers have to be given by address");
     if (rt.configured && invite_configured(&rt, now) != 0)
         goto cleanup;
     printf("MIDIHub: listening on UDP %u/%u\n", (unsigned int)local_port,
@@ -1195,7 +1094,7 @@ int main(int argc, char **argv)
             if (wait_ticks < 1000 && (long)(wait_ticks * 100) < wait_us)
                 wait_us = (long)(wait_ticks * 100);
         }
-        netmidi_network_wait(&rt.network, rt.mdns, wait_us,
+        netmidi_network_wait(&rt.network, -1, wait_us,
                              netmidi_camd_signal_bit(&rt.camd),
                              &network_events);
         if (network_events & NETMIDI_NETWORK_EVENT_STOP)
@@ -1204,8 +1103,6 @@ int main(int argc, char **argv)
             receive_packet(&rt, 0);
         if (network_events & NETMIDI_NETWORK_EVENT_DATA)
             receive_packet(&rt, 1);
-        if (network_events & NETMIDI_NETWORK_EVENT_AUXILIARY)
-            receive_mdns(&rt);
         if (network_events & NETMIDI_NETWORK_EVENT_MIDI2)
             midi2_receive(&rt);
         periodic(&rt, now_ticks());
@@ -1217,10 +1114,7 @@ int main(int argc, char **argv)
     result = 0;
 
 cleanup:
-    if (rt.mdns >= 0) {
-        send_mdns(&rt, NULL, 0, 0);
-        netmidi_network_close_socket(rt.mdns);
-    }
+    netmidi_discovery_close(&rt.discovery);
     for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
         if (rt.peers.peer[index].used)
             drop_peer(&rt, index, now_ticks());

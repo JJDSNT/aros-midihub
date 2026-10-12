@@ -47,8 +47,7 @@ flowchart LR
         AM06["AM06 run against<br/>rtpmidid"]:::ready
         AM07["AM07 who may<br/>connect"]:::ready
         AM08["AM08 DEVS:Midi<br/>driver"]
-        AM09["AM09 register through<br/>system mDNS"]:::ready
-        AM10["AM10 browse<br/>for peers"]
+        AM10["AM10 browse<br/>for peers"]:::ready
         AM12["AM12 reconnection"]
         AM14["AM14 IPv6"]
         AM16["AM16 configuration"]
@@ -114,7 +113,6 @@ flowchart LR
 
     AM07 --> AM16
     R17 --> AM16
-    AM09 --> AM10
     AM10 --> AM12
     AM08 --> AM20
     D1 --> AM08
@@ -172,8 +170,8 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 101 open items, 61 have nothing in front of them, 31 sit behind something
-outside our hands or behind a decision, and 9 wait only for other work of
+Of 100 open items, 61 have nothing in front of them, 31 sit behind something
+outside our hands or behind a decision, and 8 wait only for other work of
 ours.
 
 **What opens the most**, counting everything that follows directly or
@@ -239,9 +237,10 @@ stood free have been closed.
    node-rtpmidi, was done on 2026-10-12 and found the RS layout defect; rtpmidid
    and Apple's need a machine this one is not.
 3. Done on 2026-10-12: AM05, several peers at once.
-4. **AM08**, the driver, which needs the decisions D1, D2 and D4 first;
-   meanwhile **AM09**/**AM10**, discovery through the system service, and
-   **AM07**, who may connect, need nothing.
+4. **AM08**, the driver, which needs the decisions D1, D2 and D4 first.
+   Meanwhile: AM09, registering through the system mDNS service, was done
+   on 2026-10-12; **AM10**, browsing for peers, follows it, and **AM07**,
+   who may connect, needs nothing.
 5. Done on 2026-10-12: UP01 and NM01, UMP and Network MIDI 2.0 read
    against their texts, with the corrections they called for.
 6. Done on 2026-10-12: Network MIDI 2.0's table of sessions and runtime

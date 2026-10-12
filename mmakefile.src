@@ -24,7 +24,8 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-mdnstools \
 #MM      contrib-aros-midihub-mdnscx \
 #MM      contrib-aros-midihub-mdnsprobe
-#MM contrib-aros-midihub-program : linklibs-arosmidihub
+#MM contrib-aros-midihub-program : linklibs-arosmidihub \
+#MM      contrib-aros-midihub-bonami
 #MM contrib-aros-midihub-selftest : linklibs-arosmidihub
 #MM contrib-aros-midihub-ble : linklibs-arosmidihub kernel-bluetooth-library-includes
 #MM- contrib-aros-midihub-prefs : contrib-aros-midihub-prefs-icon
@@ -49,7 +50,7 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
            $(MIDIHUB_ROOT)/network/rtpmidi/timing $(MIDIHUB_ROOT)/network/rtpmidi/sender \
            $(MIDIHUB_ROOT)/network/rtpmidi/receiver \
            $(MIDIHUB_ROOT)/network/rtpmidi/clock \
-           $(MIDIHUB_ROOT)/network/mdns/embedded $(MIDIHUB_ROOT)/src/routes \
+           $(MIDIHUB_ROOT)/src/routes \
            $(MIDIHUB_ROOT)/src/ble_midi \
            $(MIDIHUB_ROOT)/src/ble_peripheral \
            $(MIDIHUB_ROOT)/src/ump $(MIDIHUB_ROOT)/src/netmidi2"
@@ -179,6 +180,7 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
     files="$(MIDIHUB_ROOT)/ports/aros/midihub/main \
            $(MIDIHUB_ROOT)/ports/aros/midihub/camd \
            $(MIDIHUB_ROOT)/ports/aros/midihub/network \
+           $(MIDIHUB_ROOT)/ports/aros/midihub/discovery \
            $(MIDIHUB_ROOT)/ports/aros/camd_bridge" \
     uselibs=arosmidihub \
     targetdir=$(MIDIHUB_PACKAGE)/C

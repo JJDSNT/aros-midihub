@@ -69,10 +69,10 @@ the cache, the ownership of names, and the probing and conflict state. Two
 responders in one host can also answer the same question twice, or contest
 each other's names.
 
-mdnsd therefore refuses to start twice, and MIDIHub's own embedded responder
-(`network/mdns/embedded.c`) has to go once Network MIDI uses the service:
-mdnsd ignores packets from the host's own addresses, so the two would not
-see each other.
+mdnsd therefore refuses to start twice. MIDIHub carried a responder of its
+own until 2026-10-12 (`network/mdns/embedded.c`); it went when the program
+began to register through the service, because mdnsd ignores packets from
+the host's own addresses and the two would not have seen each other.
 
 ## Startup and availability
 
@@ -143,10 +143,15 @@ Not in the contract yet:
 ## MIDI migration
 
 1. Done: the service runs and is tested on hosted AROS.
-2. Next: Network MIDI registers and browses `_apple-midi._udp` and
-   `_midi2._udp` through `bonami.library`, and resolves peers with
-   `ResolveServiceA()` and `LookupHostA()`.
-3. Then `network/mdns/embedded.c` and its use of UDP port 5353 are removed.
+2. Done on 2026-10-12 for AppleMIDI's own name: MIDIHub registers
+   `_apple-midi._udp` through `bonami.library`
+   (`ports/aros/midihub/discovery.c`, `tools/applemidi-discovery-hosted.sh`).
+3. Done with it: `network/mdns/embedded.c` and its use of UDP port 5353 are
+   removed.
+4. Next: browsing for `_apple-midi._udp` peers and resolving them with
+   `ResolveServiceA()` and `LookupHostA()`; then `_midi2._udp`, which needs
+   a text record with spaces in it and a time to live of a minute
+   ([the mDNS backlog](mdns-backlog.md), MD02 and MD19).
 
 MIDIHub then consumes the CAMD endpoints exposed by the Network MIDI device.
 Its Preferences program may show discovered peers, but discovery state

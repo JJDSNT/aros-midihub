@@ -107,8 +107,9 @@ Planned support includes:
 - Direct IP connections
 - Network MIDI discovery
 
-MIDIHub advertises `_apple-midi._udp.local` over IPv4 mDNS and answers
-DNS-SD browse queries when the network stack has a multicast-capable interface.
+On AROS, MIDIHub's session is advertised as `_apple-midi._udp.local` by the
+system's mDNS service (`mdnsd`, through `bonami.library`); the program
+holds no mDNS socket of its own.
 
 [Network MIDI in AROS](docs/network-midi-integration.md) proposes where
 RTP-MIDI and AppleMIDI are targeted for `applemidi.device`, while Network MIDI
@@ -401,11 +402,12 @@ between two MIDIHub processes. The packaged `MIDIHubCAMDProbe` independently
 sent Note On and Note Off through `MIDIHub Out` and received both through
 `MIDIHub In` after the network round trip.
 
-MIDIHub advertises its control port as `_apple-midi._udp.local` over IPv4
-Bonjour/mDNS and answers DNS-SD browse queries. The configured session name
-is the visible service name. Discovery requires multicast reachability from
-the peer; WSL NAT and the AROS hosted build's unconfigured TAP interface
-currently prevent this from being an iPhone browse test inside AROS.
+On AROS, MIDIHub registers its control port as `_apple-midi._udp.local`
+with the system's mDNS service, which advertises it and answers for it; the
+configured session name is the visible service name. The Linux build used
+for tests advertises nothing. Discovery requires multicast reachability from
+the peer: on hosted AROS it is tested against Avahi over a veth pair
+(`tools/applemidi-discovery-hosted.sh`), and not yet with a phone.
 
 Outgoing messages now include recovery journals for notes, Control Change,
 Program Change, Pitch Bend, Channel Aftertouch, Poly Aftertouch, System

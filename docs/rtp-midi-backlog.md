@@ -27,8 +27,9 @@ here. Network MIDI 2.0 and UMP have
   `MIDIHub Out`. The upstream review of `btmidi.class` turned that shape
   down: a transport is a `DEVS:Midi` driver (see
   [the CAMD integration design](camd-integration.md)).
-- It advertises `_apple-midi._udp` with an embedded responder of its own,
-  which cannot run beside `mdnsd`, and it never browses for peers.
+- It advertised `_apple-midi._udp` with an embedded responder of its own,
+  since replaced by the system service (AppleMIDI backlog, AM09), and it
+  never browses for peers.
 - It has never exchanged a packet with an implementation that is not
   itself: no iOS, macOS, rtpMIDI for Windows or rtpmidid.
 

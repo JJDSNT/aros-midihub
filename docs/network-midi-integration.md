@@ -11,7 +11,7 @@ it inside MIDIHub.
 |---|---|---|
 | AppleMIDI session (IN, OK, NO, BY, CK, RS) | `network/rtpmidi/applemidi.c`, `network/rtpmidi/session.c`, `network/rtpmidi/peers.c` | up to eight peers, either role; host tests |
 | RTP-MIDI payload, recovery journal | `network/rtpmidi/rtpmidi.c`, `network/rtpmidi/sender.c`, `network/rtpmidi/timing.c` | chapters N, C, P, W, M, E, Q, F, X; host tests |
-| mDNS for `_apple-midi._udp` | `network/mdns/embedded.c` | interim embedded advertiser and query responder; to be replaced by `bonami.library` and `mdnsd` (`network/mdns/aros`) |
+| mDNS for `_apple-midi._udp` | `ports/aros/midihub/discovery.c` | registered through the system service (`bonami.library`, `mdnsd`); the embedded responder is gone; peers are not browsed for yet |
 | Universal MIDI Packet, MIDI 1.0 translation | `src/ump.c` | host tests |
 | Network MIDI 2.0 (UDP), M2-124-UM | `src/netmidi2.c` | Host and Client sessions, FEC; host tests |
 | AROS program bridging to CAMD | `ports/aros/midihub/main.c` | AppleMIDI, one active peer, `MIDIHub In`/`Out` |
@@ -86,10 +86,10 @@ runs and is tested on hosted AROS; see
 responder, several processes would compete for UDP port 5353 and each keep
 its own cache, names and conflict state.
 
-Network MIDI does not use it yet. The step that remains is to register and
-browse `_apple-midi._udp` and `_midi2._udp` through `bonami.library` and to
-remove the embedded responder; the two cannot run side by side, because
-mdnsd ignores packets from the host's own addresses. See
+AppleMIDI uses it since 2026-10-12: the session is registered as
+`_apple-midi._udp` through `bonami.library`, and the embedded responder,
+which could not run beside mdnsd, is gone. What remains is to browse for
+peers and to register `_midi2._udp`. See
 [mDNS and AROSTCP](mdns-arostcp.md).
 
 The service is generic infrastructure: printers and file sharing can use it,

@@ -249,8 +249,10 @@ The intended relationship is:
 Network MIDI consumes registration, browse and resolve APIs. It does not own
 UDP 5353 once the system responder exists.
 
-The current `network/mdns/embedded.c` remains a useful incubation fallback
-until that system service is available.
+`network/mdns/embedded.c` was the incubation fallback until that system
+service was available. It was removed on 2026-10-12, when MIDIHub began to
+register through `bonami.library`; later mentions of it in this document
+describe the plan as it stood before.
 
 ## Mapping from MIDIHub to the target
 
