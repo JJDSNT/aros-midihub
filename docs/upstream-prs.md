@@ -14,6 +14,23 @@ Branches of `JJDSNT/AROS` opened against `aros-development-team/AROS`
 | #1507 | `btmidi-class-v2` | bluetooth: add BLE MIDI class | open, reworked after review |
 | #1543 | `arostcp-ipv4-multicast` | AROSTCP: IPv4 multicast on SANA-II interfaces, with a netdb crash and hosted eth.device multicast | merged, after two reviews |
 | #1558 | `arostcp-close-leaves-groups` | AROSTCP: a closing socket takes its group memberships with it | merged |
+| #1560 | `mdnsd-hostname` | mdnsd: answer for the host's name over multicast DNS | open |
+
+Issue #1559 asks the maintainer where the mDNS service should live, how to
+split it, how clients should get events, which protocol limits block it,
+where its tests go and what to call the library. #1560 is the first cut,
+made so that it needs none of those answers: `workbench/network/mdns` with
+an mdnsd that only answers for `<hostname>.local` (probing, announcing,
+conflicts and tie-break, plain DNS and unicast-response answers, goodbye),
+about 1,600 lines carved out of `network/mdns/aros/src` with the daemon's
+state renamed (`struct MDNSDaemon`, `md_`). No library, no client API, no
+tools. `tools/mdnsd-responder-hosted.sh` tests it alone: five boots, 22
+checks. The cut lives only on the branch (worktree `~/AROS-net`); it is not
+kept in `~/AROS`, where it would install the same `mdnsd` and `services.d`
+entry as `contrib-aros-midihub-mdnsd`. To work on it, copy the directory
+from the branch into `~/AROS/workbench/network/mdns`, build
+`workbench-network-mdnsd`, and afterwards remove it and rebuild
+`contrib-aros-midihub-mdnsd` to get the full daemon back.
 
 #1543 is `patches/net/series` as three commits on upstream `51bffe65a4`
 (worktree `~/AROS-net`). Before it was sent, AROSTCP and the mDNS components
