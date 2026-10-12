@@ -945,6 +945,61 @@ def run_uncovered_gap_case(binary):
                    for d in delivered[:gap]), delivered
 
 
+def run_feedback_rate_case(binary):
+    """A hundred packets in a second and a half are answered with a few
+    RS packets, not a hundred; a gap is answered at once."""
+    port = free_port_pair()
+    log = tempfile.TemporaryFile(mode="w+b")
+    process = subprocess.Popen([binary, str(port)],
+                               stdout=log, stderr=subprocess.STDOUT)
+    peer = ScriptedPeer(port, 2, 0x88888888, 0xCDCD0008, b"Stream")
+    try:
+        peer.connect()
+        peer.control.settimeout(0.001)
+        feedback = []
+
+        def collect():
+            while True:
+                try:
+                    packet, _ = peer.control.recvfrom(128)
+                except socket.timeout:
+                    return
+                if packet[:4] == b"\xff\xffRS":
+                    feedback.append(struct.unpack(">H", packet[8:10])[0])
+
+        for i in range(100):
+            packet = struct.pack(">BBHII", 0x80, 0xe1, 500 + i, 100, peer.ssrc)
+            peer.data.sendto(packet + b"\x03\xb0\x07" + bytes([i]),
+                             ("127.0.0.1", port + 1))
+            time.sleep(0.015)
+            collect()
+        peer.control.settimeout(1.3)
+        collect()
+        # the first at once, then about one a second, the last after the
+        # stream stopped: it says how far the whole of it was received
+        assert 2 <= len(feedback) <= 5, feedback
+        assert feedback[0] == 500 and feedback[-1] == 599, feedback
+        # three packets are lost: told without waiting
+        before = len(feedback)
+        packet = struct.pack(">BBHII", 0x80, 0xe1, 603, 100, peer.ssrc)
+        started = time.monotonic()
+        peer.data.sendto(packet + b"\x03\xb0\x07\x01",
+                         ("127.0.0.1", port + 1))
+        peer.control.settimeout(0.5)
+        collect()
+        assert len(feedback) == before + 1 and feedback[-1] == 603, feedback
+        assert time.monotonic() - started < 0.9
+    finally:
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        peer.close()
+        log.close()
+
+
 def run_latency_cases(binary):
     # With no latency every note is already late when it comes, and is
     # played as it arrives: the spacing is the network's.
@@ -971,6 +1026,7 @@ def main():
     run_latency_cases(binary)
     run_config_change_case(binary)
     run_uncovered_gap_case(binary)
+    run_feedback_rate_case(binary)
     with tempfile.TemporaryDirectory() as directory:
         bad_config = Path(directory) / "invalid.conf"
         bad_config.write_text("local_port=65535\n")

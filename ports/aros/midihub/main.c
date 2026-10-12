@@ -64,6 +64,8 @@ struct stream {
     struct runtime *rt;
     int port;                   /* the port its peer was given, or -1 */
     unsigned long sysex_dropped;    /* SysEx messages too long, or broken */
+    uint64_t feedback_sent;     /* when the peer was last told how far we are */
+    int feedback_owed;          /* packets came since */
     /* what has passed since the session began, for whoever asks (R18) */
     struct netmidi_port_counts count;
 };
@@ -344,11 +346,32 @@ static int configured_index(const struct runtime *rt)
                                         rt->configured_port) : -1;
 }
 
-static int send_feedback(struct runtime *rt, int index, uint16_t sequence)
+/* Tells the peer how far we have received: what it may drop from its
+   journal's history. */
+static void feedback_now(struct runtime *rt, int index, uint64_t now)
 {
     struct stream *stream = &rt->stream[index];
     struct applemidi_packet feedback;
-    int16_t advance;
+
+    memset(&feedback, 0, sizeof(feedback));
+    feedback.command = APPLEMIDI_RS;
+    feedback.ssrc = rt->peers.local_ssrc;
+    feedback.feedback_sequence =
+        applemidi_feedback_field((uint16_t)stream->received_sequence);
+    send_apple(rt, index, 0, &feedback);
+    stream->feedback_sent = now ? now : 1;
+    stream->feedback_owed = 0;
+}
+
+/* A packet came. The peer is told at once after a gap, since its journal
+   was just used, and when one that came before comes again, since it may
+   be asking; otherwise once in RTPMIDI_FEEDBACK_INTERVAL while packets
+   arrive, not for each of them. Returns 0 for a packet already had. */
+static int send_feedback(struct runtime *rt, int index, uint16_t sequence)
+{
+    struct stream *stream = &rt->stream[index];
+    uint64_t now = now_ticks();
+    int16_t advance = 1;
     int fresh = 1;
 
     if (!stream->have_received_sequence) {
@@ -361,12 +384,11 @@ static int send_feedback(struct runtime *rt, int index, uint16_t sequence)
         else
             stream->received_sequence += (uint16_t)advance;
     }
-    memset(&feedback, 0, sizeof(feedback));
-    feedback.command = APPLEMIDI_RS;
-    feedback.ssrc = rt->peers.local_ssrc;
-    feedback.feedback_sequence =
-        applemidi_feedback_field((uint16_t)stream->received_sequence);
-    send_apple(rt, index, 0, &feedback);
+    if (!fresh || advance > 1 || !stream->feedback_sent ||
+        elapsed_ticks(now, stream->feedback_sent) >= RTPMIDI_FEEDBACK_INTERVAL)
+        feedback_now(rt, index, now);
+    else
+        stream->feedback_owed = 1;
     return fresh;
 }
 
@@ -1289,6 +1311,10 @@ static void periodic_peer(struct runtime *rt, int index, uint64_t now)
             return;
         }
         send_sync(rt, index, now);
+        if (stream->feedback_owed &&
+            elapsed_ticks(now, stream->feedback_sent) >=
+                RTPMIDI_FEEDBACK_INTERVAL)
+            feedback_now(rt, index, now);
         if (stream->sender.count &&
             elapsed_ticks(now, stream->last_rtp_send) >=
                 RTPMIDI_GUARD_INTERVAL)

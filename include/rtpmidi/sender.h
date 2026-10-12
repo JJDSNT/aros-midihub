@@ -95,6 +95,12 @@ struct rtpmidi_sender {
  * 4.2 calls it a guard packet and leaves the time open): a second, in
  * ten-thousandths. */
 #define RTPMIDI_GUARD_INTERVAL 10000u
+/* How often a receiver tells the sender how far it has received, while
+ * packets arrive: a second, in ten-thousandths. Benoit Bouchez's class
+ * does it on its timer, when something came since, and warns that
+ * feedback for nothing received crashes Apple's driver; we send none
+ * either. */
+#define RTPMIDI_FEEDBACK_INTERVAL 10000u
 
 void rtpmidi_sender_reset(struct rtpmidi_sender *sender);
 void rtpmidi_sender_clear_history(struct rtpmidi_sender *sender);
