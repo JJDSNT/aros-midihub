@@ -622,9 +622,17 @@ def run_outgoing_journal_case(binary):
                               1, t1, int(time.time() * 10000), 0)
             data.sendto(ck1, ("127.0.0.1", port + 1))
             ck2, _ = data.recvfrom(128)
+            # A journal-only guard packet, due a second after the last
+            # RTP packet, may come before the answer.
+            early = None
+            if ck2[:2] != b"\xff\xff":
+                early = ck2
+                ck2, _ = data.recvfrom(128)
             assert ck2[:4] == b"\xff\xffCK" and ck2[8] == 2
             assert struct.unpack(">Q", ck2[12:20])[0] == t1
-        guard, _ = data.recvfrom(128)
+        guard = early
+        if guard is None:
+            guard, _ = data.recvfrom(128)
         assert guard[:2] == b"\x80\xe1" and guard[12] == 0x40
         assert struct.unpack(">H", guard[2:4])[0] == (first_sequence + 2) & 0xffff
         assert guard[13] & 0x20 and guard[14:16] == first[2:4]

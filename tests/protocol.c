@@ -1,4 +1,5 @@
 #include "midihub/applemidi.h"
+#include "midihub/receiver.h"
 #include "midihub/rtpmidi.h"
 #include "midihub/session.h"
 #include "midihub/sender.h"
@@ -1339,6 +1340,244 @@ static void clock_and_queue(void)
     assert(mh_queue_pop_due(&queue, 400, &event) == 0);
 }
 
+/* A sender, and two receivers of its stream: one is given every packet, the
+ * other loses some and has only the journal of the next packet it gets. */
+struct lossy_link {
+    struct mh_sender sender;
+    struct mh_receiver whole;
+    struct mh_receiver lossy;
+    struct mh_event_queue whole_queue;
+    struct mh_event_queue lossy_queue;
+    uint16_t sequence;
+    uint32_t timestamp;
+    unsigned int lost;
+    int synchronized;
+    unsigned int recovered_messages;
+    unsigned int recovered_sysex;
+    unsigned int reports;
+    int recovering;
+    uint8_t last[3];
+};
+
+static void link_message(void *context, const uint8_t *bytes, size_t length)
+{
+    struct lossy_link *link = context;
+    if (!link->recovering) return;
+    ++link->recovered_messages;
+    memset(link->last, 0, sizeof(link->last));
+    memcpy(link->last, bytes, length);
+}
+
+static void link_sysex(void *context, const uint8_t *message, size_t length)
+{
+    struct lossy_link *link = context;
+    assert(length >= 2 && message[0] == 0xf0 && message[length - 1] == 0xf7);
+    if (link->recovering) ++link->recovered_sysex;
+}
+
+static void link_report(void *context, const char *text)
+{
+    struct lossy_link *link = context;
+    assert(strncmp(text, "MIDIHub: ", 9) == 0);
+    assert(text[strlen(text) - 1] == '\n');
+    ++link->reports;
+}
+
+static void quiet_message(void *context, const uint8_t *bytes, size_t length)
+{
+    (void)context; (void)bytes; (void)length;
+}
+
+static void quiet_sysex(void *context, const uint8_t *message, size_t length)
+{
+    (void)context; (void)message; (void)length;
+}
+
+static const struct mh_receiver_output link_output = {
+    link_message, link_sysex, link_report
+};
+static const struct mh_receiver_output quiet_output = {
+    quiet_message, quiet_sysex, NULL
+};
+
+static void link_init(struct lossy_link *link)
+{
+    memset(link, 0, sizeof(*link));
+    mh_sender_reset(&link->sender);
+    mh_queue_reset(&link->whole_queue);
+    mh_queue_reset(&link->lossy_queue);
+    mh_receiver_init(&link->whole, &quiet_output, link, &link->whole_queue);
+    mh_receiver_init(&link->lossy, &link_output, link, &link->lossy_queue);
+    link->sequence = 500;
+    link->timestamp = 100000;
+}
+
+/* What the receiver that lost packets does with the next one: the journal
+ * first, as ports/aros/midihub/main.c does. */
+static void link_repair(struct lossy_link *link)
+{
+    uint8_t wire[1100];
+    size_t length;
+    struct mh_journal journal;
+    struct mh_journal_system_state system;
+    struct mh_receiver_clock clock;
+    int has_system = 0;
+
+    if (!link->lost) return;
+    assert(mh_sender_journal(&link->sender, link->sequence, link->timestamp,
+                             wire, sizeof(wire), &length) == 0);
+    assert(mh_journal_decode(wire, length, &journal) == 0);
+    assert(mh_journal_covers_gap(
+        (uint16_t)(link->sequence - link->lost - 1), link->sequence,
+        journal.checkpoint));
+    if (journal.system) {
+        assert(mh_journal_decode_system(&journal, &system) > 0);
+        has_system = 1;
+    }
+    clock.synchronized = link->synchronized;
+    clock.peer_to_local = 0;
+    clock.now = link->timestamp;
+    link->recovering = 1;
+    mh_receiver_recover(&link->lossy, &journal, has_system ? &system : NULL,
+                        link->lost == 1, link->timestamp,
+                        link->synchronized ? &clock : NULL);
+    link->recovering = 0;
+    link->lost = 0;
+}
+
+static void link_send(struct lossy_link *link, const uint8_t *message,
+                      size_t length, int lose)
+{
+    if (!lose) link_repair(link);
+    if (message[0] == 0xf0) {
+        mh_receiver_deliver_sysex(&link->whole, message, length);
+        if (!lose) mh_receiver_deliver_sysex(&link->lossy, message, length);
+        assert(mh_sender_record_sysex(&link->sender, link->sequence,
+                                      link->timestamp, message, length));
+    } else {
+        assert(mh_sender_supported(message, length));
+        mh_receiver_deliver(&link->whole, message, length);
+        if (!lose) mh_receiver_deliver(&link->lossy, message, length);
+        mh_sender_record(&link->sender, link->sequence, link->timestamp,
+                         message, length);
+    }
+    if (lose) ++link->lost;
+    ++link->sequence;
+    link->timestamp += 10;
+}
+
+static void receiver_recovery(void)
+{
+    static struct lossy_link link;
+    static const uint8_t on[] = {0x90, 60, 100};
+    static const uint8_t off[] = {0x80, 60, 64};
+    static const uint8_t other_on[] = {0x91, 72, 90};
+    static const uint8_t volume[] = {0xb0, 7, 90};
+    static const uint8_t pan[] = {0xb0, 10, 20};
+    static const uint8_t bank[] = {0xb2, 0, 3};
+    static const uint8_t program[] = {0xc2, 17};
+    static const uint8_t pitch[] = {0xe2, 0x10, 0x50};
+    static const uint8_t channel_pressure[] = {0xd0, 55};
+    static const uint8_t poly_pressure[] = {0xa0, 60, 33};
+    static const uint8_t song[] = {0xf3, 5};
+    static const uint8_t start[] = {0xfa};
+    static const uint8_t rpn_msb[] = {0xb3, 101, 0};
+    static const uint8_t rpn_lsb[] = {0xb3, 100, 0};
+    static const uint8_t data_msb[] = {0xb3, 6, 12};
+    static const uint8_t sysex[] = {0xf0, 0x7d, 1, 2, 3, 0xf7};
+
+    /* Chapter N: a lost Note Off is sent; nothing else is. */
+    link_init(&link);
+    link_send(&link, on, sizeof(on), 0);
+    link_send(&link, off, sizeof(off), 1);
+    assert(link.lossy.active_notes[0][60] == 100);
+    link_send(&link, volume, sizeof(volume), 0);
+    assert(link.recovered_messages == 1 && (link.last[0] & 0xf0) == 0x80 &&
+           link.last[1] == 60);
+    assert(link.lossy.active_notes[0][60] == 0);
+    assert(link.lossy.note_count[0][60] == 0);
+    assert(link.reports == 1);
+
+    /* A lost Note On is not played late without a clock, and is with one. */
+    link_init(&link);
+    link_send(&link, on, sizeof(on), 1);
+    link_send(&link, volume, sizeof(volume), 0);
+    assert(link.recovered_messages == 0);
+    assert(link.lossy.active_notes[0][60] == 0);
+    link_init(&link);
+    link.synchronized = 1;
+    link_send(&link, on, sizeof(on), 1);
+    link_send(&link, volume, sizeof(volume), 0);
+    assert(link.recovered_messages == 1 && link.last[0] == 0x90 &&
+           link.last[1] == 60 && link.last[2] == 100);
+    assert(link.lossy.active_notes[0][60] == 100);
+
+    /* Chapters P, W and C, several packets lost on several channels. */
+    link_init(&link);
+    link_send(&link, pan, sizeof(pan), 0);
+    link_send(&link, bank, sizeof(bank), 1);
+    link_send(&link, program, sizeof(program), 1);
+    link_send(&link, pitch, sizeof(pitch), 1);
+    link_send(&link, volume, sizeof(volume), 1);
+    link_send(&link, other_on, sizeof(other_on), 0);
+    assert(link.lossy.bank_msb[2] == 3 && link.lossy.bank_msb_known[2]);
+    assert(link.lossy.program[2] == 17 && link.lossy.program_known[2]);
+    assert(link.lossy.pitch[2] == link.whole.pitch[2]);
+    assert(link.lossy.pitch[2] == (0x10 | (0x50 << 7)));
+    assert(link.lossy.controllers[0][7] == 90);
+    assert(link.lossy.controllers[0][10] == 20);
+    assert(link.lossy.active_notes[1][72] == 90);
+    /* The same journal again changes nothing: the state already agrees. */
+    link.recovered_messages = 0;
+    link.lost = 1;
+    link_send(&link, pan, sizeof(pan), 0);
+    assert(link.recovered_messages == 0);
+
+    /* Chapters T and A. */
+    link_init(&link);
+    link_send(&link, on, sizeof(on), 0);
+    link_send(&link, channel_pressure, sizeof(channel_pressure), 1);
+    link_send(&link, poly_pressure, sizeof(poly_pressure), 1);
+    link_send(&link, volume, sizeof(volume), 0);
+    assert(link.lossy.channel_pressure[0] == 55);
+    assert(link.lossy.poly_pressure[0][60] == 33);
+
+    /* Chapter M: the selection, the data and the closing null selection. */
+    link_init(&link);
+    link_send(&link, rpn_msb, sizeof(rpn_msb), 1);
+    link_send(&link, rpn_lsb, sizeof(rpn_lsb), 1);
+    link_send(&link, data_msb, sizeof(data_msb), 1);
+    link_send(&link, volume, sizeof(volume), 0);
+    assert(link.lossy.controllers[3][6] == 12);
+    assert(link.recovered_messages >= 3);
+
+    /* System chapters: Song Select, a sequencer Start, SysEx. */
+    link_init(&link);
+    link_send(&link, song, sizeof(song), 1);
+    link_send(&link, start, sizeof(start), 1);
+    link_send(&link, volume, sizeof(volume), 0);
+    assert(link.lossy.song_select_known && link.lossy.song_select == 5);
+    assert(link.lossy.sequencer_running == 1);
+    assert(link.lossy.sequencer_clock == link.whole.sequencer_clock);
+    link_init(&link);
+    link_send(&link, sysex, sizeof(sysex), 1);
+    link_send(&link, volume, sizeof(volume), 0);
+    assert(link.recovered_sysex == 1);
+    assert(link.lossy.sysex_count == link.whole.sysex_count);
+
+    /* The end of a session releases what still sounds. */
+    link_init(&link);
+    link_send(&link, on, sizeof(on), 0);
+    link_send(&link, on, sizeof(on), 0);
+    link_send(&link, other_on, sizeof(other_on), 0);
+    link.recovering = 1;
+    mh_receiver_release_notes(&link.lossy);
+    link.recovering = 0;
+    assert(link.recovered_messages == 3);
+    assert(link.lossy.note_count[0][60] == 0 &&
+           link.lossy.active_notes[1][72] == 0);
+}
+
 int main(void)
 {
     apple_exchange();
@@ -1362,6 +1601,7 @@ int main(void)
     session_handshake();
     session_rejection();
     clock_and_queue();
+    receiver_recovery();
     puts("protocol tests passed");
     return 0;
 }

@@ -5,6 +5,7 @@
 #include <midihub/applemidi.h>
 #include <midihub/config.h>
 #include <midihub/mdns.h>
+#include <midihub/receiver.h>
 #include <midihub/rtpmidi.h>
 #include <midihub/session.h>
 #include <midihub/sender.h>
@@ -70,48 +71,10 @@ struct runtime {
     struct mh_sysex_assembler sysex;
     struct mh_event_queue queue;
     struct mh_sender sender;
-    uint8_t active_notes[16][128];
-    uint8_t note_count[16][128];
-    uint8_t program[16];
-    uint8_t program_known[16];
-    uint8_t bank_msb[16];
-    uint8_t bank_lsb[16];
-    uint8_t bank_msb_known[16];
-    uint8_t bank_lsb_known[16];
-    uint16_t pitch[16];
-    uint8_t controllers[16][128];
-    uint8_t controller_known[16][128];
-    uint8_t switch_toggles[16][6];
-    uint8_t controller_count[16][128];
-    uint8_t parameter_msb[16];
-    uint8_t parameter_lsb[16];
-    uint8_t parameter_nrpn[16];
-    uint8_t parameter_type_known[16];
-    uint8_t parameter_pending[16];
-    uint8_t parameter_valid[16];
-    struct mh_parameter_counter parameter_counts[MH_PARAMETER_STATES];
-    uint8_t channel_pressure[16];
-    uint8_t channel_pressure_known[16];
-    uint8_t poly_pressure[16][128];
-    uint8_t poly_pressure_known[16][128];
-    uint8_t reset_count;
-    uint8_t tune_request_count;
-    uint8_t active_sense_count;
-    uint8_t song_select;
-    uint8_t song_select_known;
-    uint8_t sequencer_known;
-    uint8_t sequencer_running;
-    uint8_t sequencer_downbeat;
-    uint8_t sequencer_start_at_zero;
-    uint32_t sequencer_clock;
-    uint8_t mtc_full_frame[4];
-    uint8_t mtc_full_known;
-    uint8_t sysex_count;
+    struct mh_receiver receiver;
     struct netmidi_camd_runtime camd;
 };
 
-static void reset_channel_state(struct runtime *rt);
-static void reset_system_state(struct runtime *rt);
 
 static uint64_t now_ticks(void)
 {
@@ -288,968 +251,28 @@ static int send_feedback(struct runtime *rt, uint16_t sequence)
     return fresh;
 }
 
-static struct mh_parameter_counter *runtime_parameter_counter(
-    struct runtime *rt, unsigned int channel, int nrpn, uint16_t number,
-    int create)
+static void output_message(void *context, const uint8_t *bytes,
+                           size_t length)
 {
-    size_t i;
-    struct mh_parameter_counter *free_entry = NULL;
-    for (i = 0; i < MH_PARAMETER_STATES; ++i) {
-        struct mh_parameter_counter *entry = &rt->parameter_counts[i];
-        if (entry->used && entry->channel == channel &&
-            entry->nrpn == nrpn && entry->number == number)
-            return entry;
-        if (!entry->used && !free_entry) free_entry = entry;
-    }
-    if (!create || !free_entry) return NULL;
-    memset(free_entry, 0, sizeof(*free_entry));
-    free_entry->used = 1;
-    free_entry->channel = (uint8_t)channel;
-    free_entry->nrpn = (uint8_t)nrpn;
-    free_entry->number = number;
-    return free_entry;
-}
-
-static int count_controller(uint8_t number)
-{
-    return number == 120 || (number >= 123 && number <= 125) ||
-           number == 127;
-}
-
-static void deliver_short(struct runtime *rt, const uint8_t *bytes,
-                          size_t length)
-{
-    uint8_t status = bytes[0];
-    unsigned int channel = status & 0x0f;
-    if (status == 0xff && length == 1) {
-        rt->reset_count = (uint8_t)((rt->reset_count + 1) & 0x7f);
-        rt->tune_request_count = 0;
-        rt->active_sense_count = 0;
-        rt->song_select_known = 0;
-        rt->sequencer_known = 0;
-        rt->sequencer_running = 0;
-        rt->sequencer_downbeat = 0;
-        rt->sequencer_start_at_zero = 0;
-        rt->sequencer_clock = 0;
-        rt->mtc_full_known = 0;
-        memset(rt->active_notes, 0, sizeof(rt->active_notes));
-        memset(rt->note_count, 0, sizeof(rt->note_count));
-        reset_channel_state(rt);
-    } else if (status == 0xf6 && length == 1) {
-        rt->tune_request_count =
-            (uint8_t)((rt->tune_request_count + 1) & 0x7f);
-    } else if (status == 0xfe && length == 1) {
-        rt->active_sense_count =
-            (uint8_t)((rt->active_sense_count + 1) & 0x7f);
-    } else if (status == 0xf3 && length == 2) {
-        rt->song_select = bytes[1];
-        rt->song_select_known = 1;
-    } else if (status == 0xf2 && length == 3) {
-        rt->sequencer_known = 1;
-        rt->sequencer_downbeat = 0;
-        rt->sequencer_start_at_zero = 0;
-        rt->sequencer_clock =
-            ((((uint32_t)bytes[2] << 7) | bytes[1]) * 6) & 0x7ffff;
-    } else if (status == 0xfa && length == 1) {
-        rt->sequencer_known = 1;
-        rt->sequencer_running = 1;
-        rt->sequencer_downbeat = 0;
-        rt->sequencer_start_at_zero = 1;
-        rt->sequencer_clock = 0;
-    } else if (status == 0xfb && length == 1) {
-        rt->sequencer_known = 1;
-        rt->sequencer_running = 1;
-        rt->sequencer_start_at_zero = 0;
-    } else if (status == 0xfc && length == 1) {
-        rt->sequencer_known = 1;
-        rt->sequencer_running = 0;
-        rt->sequencer_start_at_zero = 0;
-    } else if (status == 0xf8 && length == 1) {
-        rt->sequencer_known = 1;
-        rt->sequencer_start_at_zero = 0;
-        if (rt->sequencer_running) {
-            if (!rt->sequencer_downbeat)
-                rt->sequencer_downbeat = 1;
-            else
-                rt->sequencer_clock = (rt->sequencer_clock + 1) & 0x7ffff;
-        }
-    }
-    if (length == 3 && status >= 0x80 && status <= 0x9f) {
-        int note_on = (status & 0xf0) == 0x90 && bytes[2];
-        if (note_on) {
-            if (rt->note_count[channel][bytes[1]] < 127)
-                ++rt->note_count[channel][bytes[1]];
-            rt->active_notes[channel][bytes[1]] = bytes[2];
-        } else {
-            if (rt->note_count[channel][bytes[1]])
-                --rt->note_count[channel][bytes[1]];
-            rt->active_notes[channel][bytes[1]] = 0;
-        }
-    } else if (length == 3 && (status & 0xf0) == 0xb0 &&
-               (bytes[1] == 120 || bytes[1] >= 123)) {
-        memset(rt->active_notes[channel], 0,
-               sizeof(rt->active_notes[channel]));
-        memset(rt->note_count[channel], 0,
-               sizeof(rt->note_count[channel]));
-    }
-    if (length == 2 && (status & 0xf0) == 0xc0) {
-        rt->program[channel] = bytes[1];
-        rt->program_known[channel] = 1;
-    } else if (length == 3 && (status & 0xf0) == 0xb0) {
-        uint8_t controller = bytes[1];
-        rt->controller_count[channel][bytes[1]] =
-            (uint8_t)((rt->controller_count[channel][bytes[1]] + 1) & 0x3f);
-        if (bytes[1] >= 64 && bytes[1] <= 69 &&
-            (rt->controllers[channel][bytes[1]] >= 64) != (bytes[2] >= 64)) {
-            unsigned int switch_index = bytes[1] - 64;
-            rt->switch_toggles[channel][switch_index] = (uint8_t)(
-                (rt->switch_toggles[channel][switch_index] + 1) & 0x3f);
-        }
-        rt->controllers[channel][bytes[1]] = bytes[2];
-        rt->controller_known[channel][bytes[1]] = 1;
-        if (controller == 101 || controller == 99) {
-            rt->parameter_nrpn[channel] = controller == 99;
-            rt->parameter_type_known[channel] = 1;
-            rt->parameter_msb[channel] = bytes[2];
-            rt->parameter_pending[channel] = 1;
-            rt->parameter_valid[channel] = 0;
-        } else if ((controller == 100 || controller == 98) &&
-                   rt->parameter_type_known[channel] &&
-                   rt->parameter_nrpn[channel] == (controller == 98)) {
-            struct mh_parameter_counter *counter;
-            uint16_t number;
-            rt->parameter_lsb[channel] = bytes[2];
-            rt->parameter_pending[channel] = 0;
-            rt->parameter_valid[channel] =
-                rt->parameter_msb[channel] != 0x7f || bytes[2] != 0x7f;
-            if (rt->parameter_valid[channel]) {
-                number = (uint16_t)(
-                    ((uint16_t)rt->parameter_msb[channel] << 7) | bytes[2]);
-                counter = runtime_parameter_counter(
-                    rt, channel, rt->parameter_nrpn[channel], number, 1);
-                if (counter)
-                    counter->count = (uint8_t)((counter->count + 1) & 0x7f);
-            }
-        } else if (controller == 121) {
-            rt->parameter_pending[channel] = 0;
-            rt->parameter_valid[channel] = 0;
-        }
-        if (bytes[1] == 0) {
-            rt->bank_msb[channel] = bytes[2];
-            rt->bank_msb_known[channel] = 1;
-        } else if (bytes[1] == 32) {
-            rt->bank_lsb[channel] = bytes[2];
-            rt->bank_lsb_known[channel] = 1;
-        } else if (bytes[1] == 121) {
-            rt->pitch[channel] = 0x2000;
-            rt->channel_pressure[channel] = 0;
-            rt->channel_pressure_known[channel] = 1;
-            memset(rt->poly_pressure[channel], 0,
-                   sizeof(rt->poly_pressure[channel]));
-            memset(rt->poly_pressure_known[channel], 1,
-                   sizeof(rt->poly_pressure_known[channel]));
-            unsigned int switch_index;
-            for (switch_index = 0; switch_index < 6; ++switch_index) {
-                unsigned int number = switch_index + 64;
-                if (rt->controllers[channel][number] >= 64)
-                    rt->switch_toggles[channel][switch_index] = (uint8_t)(
-                        (rt->switch_toggles[channel][switch_index] + 1) &
-                        0x3f);
-                rt->controllers[channel][number] = 0;
-                rt->controller_known[channel][number] = 1;
-            }
-        }
-    } else if (length == 2 && (status & 0xf0) == 0xd0) {
-        rt->channel_pressure[channel] = bytes[1];
-        rt->channel_pressure_known[channel] = 1;
-    } else if (length == 3 && (status & 0xf0) == 0xa0) {
-        rt->poly_pressure[channel][bytes[1]] = bytes[2];
-        rt->poly_pressure_known[channel][bytes[1]] = 1;
-    } else if (length == 3 && (status & 0xf0) == 0xe0) {
-        rt->pitch[channel] = (uint16_t)(bytes[1] | (bytes[2] << 7));
-    }
+    struct runtime *rt = context;
     netmidi_camd_deliver(&rt->camd, bytes, length);
 }
 
-static void deliver_sysex(struct runtime *rt, const uint8_t *message,
-                          size_t length)
+static void output_sysex(void *context, const uint8_t *message, size_t length)
 {
-    size_t i;
-    int mtc = length == 10 && message[0] == 0xf0 && message[1] == 0x7f &&
-              message[3] == 0x01 && message[4] == 0x01 &&
-              message[9] == 0xf7;
-    if (mtc) {
-        for (i = 1; i < 9 && !(message[i] & 0x80); ++i) {}
-        if (i == 9) {
-            memcpy(rt->mtc_full_frame, message + 5, 4);
-            rt->mtc_full_known = 1;
-        }
-    } else if (length >= 2 && message[0] == 0xf0 &&
-               message[length - 1] == 0xf7)
-        ++rt->sysex_count;
+    struct runtime *rt = context;
     netmidi_camd_deliver_sysex(&rt->camd, message, length);
 }
 
-static void reset_channel_state(struct runtime *rt)
+static void output_report(void *context, const char *text)
 {
-    unsigned int channel;
-    memset(rt->program_known, 0, sizeof(rt->program_known));
-    memset(rt->bank_msb_known, 0, sizeof(rt->bank_msb_known));
-    memset(rt->bank_lsb_known, 0, sizeof(rt->bank_lsb_known));
-    memset(rt->controller_known, 0, sizeof(rt->controller_known));
-    memset(rt->controllers, 0, sizeof(rt->controllers));
-    memset(rt->switch_toggles, 0, sizeof(rt->switch_toggles));
-    memset(rt->controller_count, 0, sizeof(rt->controller_count));
-    memset(rt->parameter_type_known, 0,
-           sizeof(rt->parameter_type_known));
-    memset(rt->parameter_pending, 0, sizeof(rt->parameter_pending));
-    memset(rt->parameter_valid, 0, sizeof(rt->parameter_valid));
-    memset(rt->parameter_counts, 0, sizeof(rt->parameter_counts));
-    memset(rt->channel_pressure_known, 0,
-           sizeof(rt->channel_pressure_known));
-    memset(rt->poly_pressure_known, 0, sizeof(rt->poly_pressure_known));
-    for (channel = 0; channel < 16; ++channel)
-        rt->pitch[channel] = 0x2000;
+    (void)context;
+    fputs(text, stdout);
 }
 
-static void reset_system_state(struct runtime *rt)
-{
-    rt->reset_count = 0;
-    rt->tune_request_count = 0;
-    rt->active_sense_count = 0;
-    rt->song_select = 0;
-    rt->song_select_known = 0;
-    rt->sequencer_known = 0;
-    rt->sequencer_running = 0;
-    rt->sequencer_downbeat = 0;
-    rt->sequencer_start_at_zero = 0;
-    rt->sequencer_clock = 0;
-    rt->mtc_full_known = 0;
-    rt->sysex_count = 0;
-}
-
-static void release_active_notes(struct runtime *rt)
-{
-    uint8_t message[3];
-    unsigned int channel;
-    unsigned int note;
-    message[2] = 0;
-    for (channel = 0; channel < 16; ++channel) {
-        message[0] = (uint8_t)(0x80 | channel);
-        for (note = 0; note < 128; ++note) {
-            message[1] = (uint8_t)note;
-            while (rt->note_count[channel][note])
-                deliver_short(rt, message, sizeof(message));
-            rt->active_notes[channel][note] = 0;
-        }
-    }
-}
-
-static void recover_channel_state(struct runtime *rt,
-                                   const struct mh_journal *journal,
-                                   int single_loss)
-{
-    struct mh_journal_channel_state state;
-    uint8_t message[3];
-    size_t i;
-    unsigned int channel;
-    int bank_changed;
-    uint16_t pitch;
-
-    if (single_loss && journal->single_packet_safe)
-        return;
-    for (i = 0; i < journal->channel_count; ++i) {
-        const struct mh_journal_channel *entry = &journal->channels[i];
-        if (single_loss && entry->single_packet_safe)
-            continue;
-        if (mh_journal_decode_channel_state(entry, &state) <= 0)
-            continue;
-        channel = entry->number;
-        bank_changed = 0;
-        if (state.has_program &&
-            (!single_loss || !state.program_single_packet_safe)) {
-            message[0] = (uint8_t)(0xb0 | channel);
-            if (state.has_bank) {
-                if (!rt->bank_msb_known[channel] ||
-                    rt->bank_msb[channel] != state.bank_msb) {
-                    message[1] = 0;
-                    message[2] = state.bank_msb;
-                    deliver_short(rt, message, 3);
-                    bank_changed = 1;
-                }
-                if (!rt->bank_lsb_known[channel] ||
-                    rt->bank_lsb[channel] != state.bank_lsb) {
-                    message[1] = 32;
-                    message[2] = state.bank_lsb;
-                    deliver_short(rt, message, 3);
-                    bank_changed = 1;
-                }
-            }
-            if (bank_changed || !rt->program_known[channel] ||
-                rt->program[channel] != state.program) {
-                message[0] = (uint8_t)(0xc0 | channel);
-                message[1] = state.program;
-                deliver_short(rt, message, 2);
-                printf("MIDIHub: recovered Program Change channel=%u program=%u\n",
-                       channel, (unsigned int)state.program);
-            }
-        }
-        pitch = (uint16_t)(state.pitch_lsb | (state.pitch_msb << 7));
-        if (state.has_pitch &&
-            (!single_loss || !state.pitch_single_packet_safe) &&
-            rt->pitch[channel] != pitch) {
-            message[0] = (uint8_t)(0xe0 | channel);
-            message[1] = state.pitch_lsb;
-            message[2] = state.pitch_msb;
-            deliver_short(rt, message, 3);
-            printf("MIDIHub: recovered Pitch Bend channel=%u value=%u\n",
-                   channel, (unsigned int)pitch);
-        }
-    }
-}
-
-static void recover_controls(struct runtime *rt,
-                              const struct mh_journal *journal,
-                              int single_loss)
-{
-    struct mh_journal_controls controls;
-    uint8_t message[3];
-    size_t i;
-    size_t j;
-    unsigned int channel;
-    if (single_loss && journal->single_packet_safe)
-        return;
-    for (i = 0; i < journal->channel_count; ++i) {
-        const struct mh_journal_channel *entry = &journal->channels[i];
-        if (single_loss && entry->single_packet_safe)
-            continue;
-        if (mh_journal_decode_controls(entry, &controls) <= 0)
-            continue;
-        channel = entry->number;
-        message[0] = (uint8_t)(0xb0 | channel);
-        if (controls.enhanced) {
-            uint8_t handled[128] = {0};
-            size_t first;
-
-            for (first = 0; first < controls.count; ++first) {
-                uint8_t number = controls.logs[first].number;
-                uint8_t highest = 0;
-                uint8_t command;
-                uint8_t target = 0;
-                int target_known = 0;
-
-                if (handled[number]) continue;
-                handled[number] = 1;
-                for (j = first; j < controls.count; ++j)
-                    if (controls.logs[j].number == number &&
-                        controls.logs[j].command > highest)
-                        highest = controls.logs[j].command;
-                /* A single command does not need enhanced matching. Let the
-                 * ordinary tool handling below process it. */
-                if (!highest) {
-                    handled[number] = 0;
-                    continue;
-                }
-                for (command = 0; command <= highest; ++command) {
-                    const struct mh_journal_control_log *value = NULL;
-                    const struct mh_journal_control_log *toggle = NULL;
-                    const struct mh_journal_control_log *count = NULL;
-                    uint8_t missing;
-                    int all_safe = 1;
-
-                    for (j = first; j < controls.count; ++j) {
-                        const struct mh_journal_control_log *log =
-                            &controls.logs[j];
-                        if (log->number != number || log->command != command)
-                            continue;
-                        if (!log->single_packet_safe) all_safe = 0;
-                        if (!log->alternate) value = log;
-                        else if (log->count_tool) count = log;
-                        else toggle = log;
-                    }
-                    if (count) {
-                        target = count->value;
-                        target_known = 1;
-                    } else if (target_known) {
-                        target = (uint8_t)((target + 1) & 0x3f);
-                    } else {
-                        continue;
-                    }
-                    if (single_loss && all_safe) continue;
-                    missing = (uint8_t)(
-                        (target - rt->controller_count[channel][number]) &
-                        0x3f);
-                    if (!missing) continue;
-                    message[1] = number;
-                    while (missing > 1) {
-                        message[2] = 0;
-                        deliver_short(rt, message, sizeof(message));
-                        --missing;
-                    }
-                    if (value) {
-                        message[2] = value->value;
-                        deliver_short(rt, message, sizeof(message));
-                    } else if (toggle) {
-                        int desired = toggle->value & 1;
-                        int current = rt->controllers[channel][number] >= 64;
-                        if (current == desired) {
-                            message[2] = desired ? 0 : 127;
-                            deliver_short(rt, message, sizeof(message));
-                        }
-                        message[2] = desired ? 127 : 0;
-                        deliver_short(rt, message, sizeof(message));
-                    } else {
-                        message[2] = 0;
-                        deliver_short(rt, message, sizeof(message));
-                    }
-                    /* Multiple tools describe one command. Compensate for a
-                     * toggle's two-message reconstruction and retain the
-                     * count identity from the journal. */
-                    rt->controller_count[channel][number] = target;
-                    printf("MIDIHub: recovered enhanced controller channel=%u controller=%u command=%u count=%u\n",
-                           channel, (unsigned int)number,
-                           (unsigned int)command, (unsigned int)target);
-                }
-            }
-        }
-        for (j = 0; j < controls.count; ++j) {
-            const struct mh_journal_control_log *log = &controls.logs[j];
-            size_t k;
-            int repeated = 0;
-
-            if (controls.enhanced) {
-                for (k = 0; k < controls.count; ++k)
-                    if (controls.logs[k].number == log->number &&
-                        controls.logs[k].command != log->command) {
-                        repeated = 1;
-                        break;
-                    }
-                if (repeated) continue;
-            }
-            if (single_loss && log->single_packet_safe)
-                continue;
-            if (log->alternate) {
-                if (log->number >= 64 && log->number <= 69 &&
-                    !log->count_tool &&
-                    rt->switch_toggles[channel][log->number - 64] !=
-                    log->value) {
-                    message[1] = log->number;
-                    if (rt->controllers[channel][log->number] >= 64) {
-                        message[2] = 0;
-                        deliver_short(rt, message, sizeof(message));
-                    }
-                    if (log->value & 1) {
-                        message[2] = 127;
-                        deliver_short(rt, message, sizeof(message));
-                    }
-                    rt->switch_toggles[channel][log->number - 64] = log->value;
-                    printf("MIDIHub: recovered controller toggle channel=%u controller=%u count=%u\n",
-                           channel, (unsigned int)log->number,
-                           (unsigned int)log->value);
-                } else if (log->count_tool &&
-                           count_controller(log->number) &&
-                           rt->controller_count[channel][log->number] !=
-                           log->value) {
-                    uint8_t missing = (uint8_t)(
-                        (log->value -
-                         rt->controller_count[channel][log->number]) & 0x3f);
-                    message[1] = log->number;
-                    message[2] = 0;
-                    while (missing--)
-                        deliver_short(rt, message, sizeof(message));
-                    printf("MIDIHub: recovered controller count channel=%u controller=%u count=%u\n",
-                           channel, (unsigned int)log->number,
-                           (unsigned int)log->value);
-                }
-                continue;
-            }
-            if (rt->controller_known[channel][log->number] &&
-                rt->controllers[channel][log->number] == log->value)
-                continue;
-            message[1] = log->number;
-            message[2] = log->value;
-            deliver_short(rt, message, sizeof(message));
-            printf("MIDIHub: recovered Control Change channel=%u controller=%u value=%u\n",
-                   channel, (unsigned int)log->number,
-                   (unsigned int)log->value);
-        }
-    }
-}
-
-static void recover_parameters(struct runtime *rt,
-                               const struct mh_journal *journal,
-                               int single_loss)
-{
-    struct mh_journal_parameters parameters;
-    uint8_t message[3];
-    size_t i;
-    size_t j;
-    int replayed = 0;
-    int last_nrpn = 0;
-
-    if (single_loss && journal->single_packet_safe) return;
-    for (i = 0; i < journal->channel_count; ++i) {
-        const struct mh_journal_channel *channel = &journal->channels[i];
-        if (single_loss && channel->single_packet_safe) continue;
-        if (mh_journal_decode_parameters(channel, &parameters) <= 0)
-            continue;
-        message[0] = (uint8_t)(0xb0 | channel->number);
-        replayed = 0;
-        for (j = 0; j < parameters.count; ++j) {
-            const struct mh_journal_parameter_log *log = &parameters.logs[j];
-            struct mh_parameter_counter *counter = runtime_parameter_counter(
-                rt, channel->number, log->nrpn, log->number, 0);
-            int had_counter = counter != NULL;
-            uint8_t previous_count = counter ? counter->count : 0;
-            int count_mismatch = log->has_count &&
-                (!counter || counter->count != log->count);
-            if ((single_loss && log->single_packet_safe) ||
-                (!log->has_entry_msb && !log->has_entry_lsb &&
-                 !log->has_adjust && !count_mismatch))
-                continue;
-            message[1] = (uint8_t)(log->nrpn ? 99 : 101);
-            message[2] = (uint8_t)(log->number >> 7);
-            deliver_short(rt, message, sizeof(message));
-            message[1] = (uint8_t)(log->nrpn ? 98 : 100);
-            message[2] = (uint8_t)(log->number & 0x7f);
-            deliver_short(rt, message, sizeof(message));
-            if (log->has_entry_msb) {
-                message[1] = 6;
-                message[2] = log->entry_msb;
-                deliver_short(rt, message, sizeof(message));
-            }
-            if (log->has_entry_lsb) {
-                message[1] = 38;
-                message[2] = log->entry_lsb;
-                deliver_short(rt, message, sizeof(message));
-            }
-            if (log->has_adjust) {
-                unsigned int count = (unsigned int)(
-                    log->adjust < 0 ? -log->adjust : log->adjust);
-                message[1] = (uint8_t)(log->adjust < 0 ? 97 : 96);
-                message[2] = 0;
-                while (count--) deliver_short(rt, message, sizeof(message));
-            }
-            if (log->has_count) {
-                counter = runtime_parameter_counter(
-                    rt, channel->number, log->nrpn, log->number, 1);
-                if (counter) counter->count = log->count;
-            } else {
-                counter = runtime_parameter_counter(
-                    rt, channel->number, log->nrpn, log->number, 0);
-                if (counter) {
-                    counter->count = previous_count;
-                    if (!had_counter) counter->used = 0;
-                }
-            }
-            replayed = 1;
-            last_nrpn = log->nrpn;
-            printf("MIDIHub: recovered %s parameter=%u entry=%s%u%s adjust=%d",
-                   log->nrpn ? "NRPN" : "RPN",
-                   (unsigned int)log->number,
-                   log->has_entry_msb ? "MSB:" : "",
-                   (unsigned int)(log->has_entry_msb ? log->entry_msb :
-                                  log->entry_lsb),
-                   log->has_entry_lsb ? "+LSB" : "", (int)log->adjust);
-            if (log->has_count)
-                printf(" count=%u", (unsigned int)log->count);
-            putchar('\n');
-        }
-        if (parameters.has_pending &&
-            (!single_loss || !parameters.single_packet_safe)) {
-            message[1] = (uint8_t)(parameters.pending_nrpn ? 99 : 101);
-            message[2] = parameters.pending_msb;
-            deliver_short(rt, message, sizeof(message));
-            printf("MIDIHub: recovered pending %s MSB=%u\n",
-                   parameters.pending_nrpn ? "NRPN" : "RPN",
-                   (unsigned int)parameters.pending_msb);
-        } else if (replayed && !parameters.transaction_open) {
-            message[1] = (uint8_t)(last_nrpn ? 99 : 101);
-            message[2] = 0x7f;
-            deliver_short(rt, message, sizeof(message));
-            message[1] = (uint8_t)(last_nrpn ? 98 : 100);
-            deliver_short(rt, message, sizeof(message));
-        }
-    }
-}
-
-static void recover_notes(struct runtime *rt,
-                          const struct mh_journal *journal,
-                          int single_loss, uint32_t timestamp)
-{
-    struct mh_journal_notes notes;
-    struct mh_journal_note_extras extras;
-    uint8_t message[3];
-    uint8_t release_velocity[128];
-    uint8_t desired_count[128];
-    uint8_t count_known[128];
-    size_t i;
-    size_t log_index;
-    unsigned int octave;
-    unsigned int bit;
-    unsigned int note;
-    size_t cancelled;
-    int decoded;
-    int extras_decoded;
-    uint64_t due;
-    uint64_t now;
-    int timely;
-
-    if (single_loss && journal->single_packet_safe)
-        return;
-    for (i = 0; i < journal->channel_count; ++i) {
-        const struct mh_journal_channel *channel = &journal->channels[i];
-        if (single_loss && channel->single_packet_safe)
-            continue;
-        decoded = mh_journal_decode_notes(channel, &notes);
-        extras_decoded = mh_journal_decode_note_extras(channel, &extras);
-        if (decoded < 0 || extras_decoded < 0 ||
-            (!decoded && !extras_decoded))
-            continue;
-        memset(release_velocity, 64, sizeof(release_velocity));
-        memset(desired_count, 0, sizeof(desired_count));
-        memset(count_known, 0, sizeof(count_known));
-        for (log_index = 0; log_index < extras.count; ++log_index) {
-            const struct mh_journal_note_extra *extra =
-                &extras.logs[log_index];
-            if (single_loss && extra->single_packet_safe)
-                continue;
-            if (extra->velocity)
-                release_velocity[extra->number] = extra->value;
-            else {
-                desired_count[extra->number] = extra->value;
-                count_known[extra->number] = 1;
-            }
-        }
-        message[0] = (uint8_t)(0x80 | channel->number);
-        for (octave = 0; octave < 16 &&
-                         (!single_loss || !notes.offbits_single_packet_safe);
-             ++octave) {
-            for (bit = 0; bit < 8; ++bit) {
-                note = octave * 8 + bit;
-                if (!(notes.offbits[octave] & (0x80u >> bit)))
-                    continue;
-                cancelled = mh_queue_cancel_note_on(&rt->queue,
-                                                    channel->number,
-                                                    (uint8_t)note);
-                if (cancelled)
-                    printf("MIDIHub: cancelled %lu future Note On event(s) channel=%u note=%u\n",
-                           (unsigned long)cancelled,
-                           (unsigned int)channel->number, note);
-                if (!rt->active_notes[channel->number][note] &&
-                    !rt->note_count[channel->number][note])
-                    continue;
-                message[1] = (uint8_t)note;
-                message[2] = release_velocity[note];
-                deliver_short(rt, message, sizeof(message));
-                printf("MIDIHub: recovered Note Off channel=%u note=%u\n",
-                       (unsigned int)channel->number, note);
-            }
-        }
-        now = now_ticks();
-        timely = rt->sync_ready &&
-                 mh_clock_due(timestamp, now, rt->peer_to_local, &due) == 0 &&
-                 (due >= now || now - due <= 200);
-        for (log_index = 0; log_index < notes.log_count; ++log_index) {
-            const struct mh_journal_note_log *log = &notes.logs[log_index];
-            if (single_loss && log->single_packet_safe)
-                continue;
-            if (rt->active_notes[channel->number][log->number] ==
-                log->velocity ||
-                mh_queue_has_note_on(&rt->queue, channel->number,
-                                     log->number))
-                continue;
-            if (rt->active_notes[channel->number][log->number]) {
-                message[0] = (uint8_t)(0x80 | channel->number);
-                message[1] = log->number;
-                message[2] = release_velocity[log->number];
-                deliver_short(rt, message, sizeof(message));
-            }
-            if (!log->simultaneous || !timely)
-                continue;
-            message[0] = (uint8_t)(0x90 | channel->number);
-            message[1] = log->number;
-            message[2] = log->velocity;
-            if (due > now) {
-                if (due - now > 100000 ||
-                    mh_queue_push(&rt->queue, due, message,
-                                  sizeof(message)) != 0)
-                    continue;
-            } else {
-                deliver_short(rt, message, sizeof(message));
-            }
-            printf("MIDIHub: recovered Note On channel=%u note=%u velocity=%u\n",
-                   (unsigned int)channel->number,
-                   (unsigned int)log->number,
-                   (unsigned int)log->velocity);
-        }
-        for (note = 0; note < 128; ++note) {
-            uint8_t velocity = rt->active_notes[channel->number][note];
-            if (!count_known[note]) continue;
-            if (!velocity) {
-                for (log_index = 0; log_index < notes.log_count; ++log_index)
-                    if (notes.logs[log_index].number == note) {
-                        velocity = notes.logs[log_index].velocity;
-                        break;
-                    }
-            }
-            if (!velocity) velocity = 64;
-            while (rt->note_count[channel->number][note] <
-                   desired_count[note]) {
-                message[0] = (uint8_t)(0x90 | channel->number);
-                message[1] = (uint8_t)note;
-                message[2] = velocity;
-                deliver_short(rt, message, sizeof(message));
-                printf("MIDIHub: recovered duplicate Note On channel=%u note=%u count=%u\n",
-                       (unsigned int)channel->number, note,
-                       (unsigned int)rt->note_count[channel->number][note]);
-            }
-            while (rt->note_count[channel->number][note] >
-                   desired_count[note]) {
-                message[0] = (uint8_t)(0x80 | channel->number);
-                message[1] = (uint8_t)note;
-                message[2] = release_velocity[note];
-                deliver_short(rt, message, sizeof(message));
-                printf("MIDIHub: recovered counted Note Off channel=%u note=%u count=%u velocity=%u\n",
-                       (unsigned int)channel->number, note,
-                       (unsigned int)rt->note_count[channel->number][note],
-                       (unsigned int)message[2]);
-            }
-        }
-    }
-}
-
-static void recover_aftertouch(struct runtime *rt,
-                               const struct mh_journal *journal,
-                               int single_loss)
-{
-    struct mh_journal_aftertouch aftertouch;
-    uint8_t message[3];
-    size_t i;
-    size_t j;
-    unsigned int channel;
-    if (single_loss && journal->single_packet_safe) return;
-    for (i = 0; i < journal->channel_count; ++i) {
-        const struct mh_journal_channel *entry = &journal->channels[i];
-        if (single_loss && entry->single_packet_safe) continue;
-        if (mh_journal_decode_aftertouch(entry, &aftertouch) <= 0) continue;
-        channel = entry->number;
-        if (aftertouch.has_channel_pressure &&
-            (!single_loss || !aftertouch.channel_single_packet_safe) &&
-            (!rt->channel_pressure_known[channel] ||
-             rt->channel_pressure[channel] != aftertouch.channel_pressure)) {
-            message[0] = (uint8_t)(0xd0 | channel);
-            message[1] = aftertouch.channel_pressure;
-            deliver_short(rt, message, 2);
-            printf("MIDIHub: recovered Channel Aftertouch channel=%u pressure=%u\n",
-                   channel, (unsigned int)message[1]);
-        }
-        for (j = 0; j < aftertouch.poly_count; ++j) {
-            const struct mh_journal_poly_pressure *log = &aftertouch.poly[j];
-            if ((single_loss && log->single_packet_safe) ||
-                log->reset_notes || !rt->active_notes[channel][log->number] ||
-                (rt->poly_pressure_known[channel][log->number] &&
-                 rt->poly_pressure[channel][log->number] == log->pressure))
-                continue;
-            message[0] = (uint8_t)(0xa0 | channel);
-            message[1] = log->number;
-            message[2] = log->pressure;
-            deliver_short(rt, message, 3);
-            printf("MIDIHub: recovered Poly Aftertouch channel=%u note=%u pressure=%u\n",
-                   channel, (unsigned int)log->number,
-                   (unsigned int)log->pressure);
-        }
-    }
-}
-
-static void recover_system(struct runtime *rt,
-                           const struct mh_journal_system_state *state,
-                           int single_loss)
-{
-    uint8_t message[3];
-    uint32_t clock;
-    uint32_t remainder;
-    unsigned int i;
-    int start_at_zero;
-    if (state->has_reset &&
-        (!single_loss || !state->reset_single_packet_safe) &&
-        rt->reset_count != state->reset_count) {
-        message[0] = 0xff;
-        deliver_short(rt, message, 1);
-        rt->reset_count = state->reset_count;
-        puts("MIDIHub: recovered System Reset");
-    }
-    if (state->has_tune_request &&
-        (!single_loss || !state->tune_single_packet_safe) &&
-        rt->tune_request_count != state->tune_count) {
-        message[0] = 0xf6;
-        deliver_short(rt, message, 1);
-        rt->tune_request_count = state->tune_count;
-        puts("MIDIHub: recovered Tune Request");
-    }
-    if (state->has_song_select &&
-        (!single_loss || !state->song_single_packet_safe) &&
-        (!rt->song_select_known || rt->song_select != state->song)) {
-        message[0] = 0xf3;
-        message[1] = state->song;
-        deliver_short(rt, message, 2);
-        printf("MIDIHub: recovered Song Select song=%u\n",
-               (unsigned int)state->song);
-    }
-    if (state->has_active_sense &&
-        (!single_loss || !state->active_sense_single_packet_safe) &&
-        rt->active_sense_count != state->active_sense_count) {
-        message[0] = 0xfe;
-        deliver_short(rt, message, 1);
-        rt->active_sense_count = state->active_sense_count;
-        puts("MIDIHub: recovered Active Sense");
-    }
-    if (state->has_mtc && state->mtc_has_complete &&
-        !state->mtc_complete_quarter_frame &&
-        (!single_loss || !state->mtc_single_packet_safe) &&
-        (!rt->mtc_full_known ||
-         memcmp(rt->mtc_full_frame, state->mtc_complete, 4) != 0)) {
-        uint8_t full_frame[10] = {
-            0xf0, 0x7f, 0x7f, 0x01, 0x01, 0, 0, 0, 0, 0xf7
-        };
-        memcpy(full_frame + 5, state->mtc_complete, 4);
-        deliver_sysex(rt, full_frame, sizeof(full_frame));
-        printf("MIDIHub: recovered MTC Full Frame %02x:%02x:%02x:%02x\n",
-               (unsigned int)state->mtc_complete[0],
-               (unsigned int)state->mtc_complete[1],
-               (unsigned int)state->mtc_complete[2],
-               (unsigned int)state->mtc_complete[3]);
-    }
-    if (state->has_mtc && state->mtc_has_complete &&
-        state->mtc_complete_quarter_frame &&
-        (!single_loss || !state->mtc_single_packet_safe)) {
-        uint8_t full_frame[10] = {
-            0xf0, 0x7f, 0x7f, 0x01, 0x01, 0, 0, 0, 0, 0xf7
-        };
-        full_frame[5] = (uint8_t)(state->mtc_complete[6] |
-                                  (state->mtc_complete[7] << 4));
-        full_frame[6] = (uint8_t)(state->mtc_complete[4] |
-                                  (state->mtc_complete[5] << 4));
-        full_frame[7] = (uint8_t)(state->mtc_complete[2] |
-                                  (state->mtc_complete[3] << 4));
-        full_frame[8] = (uint8_t)(state->mtc_complete[0] |
-                                  (state->mtc_complete[1] << 4));
-        if (!rt->mtc_full_known ||
-            memcmp(rt->mtc_full_frame, full_frame + 5, 4) != 0) {
-            deliver_sysex(rt, full_frame, sizeof(full_frame));
-            printf("MIDIHub: recovered MTC Quarter Frame position "
-                   "%02x:%02x:%02x:%02x\n",
-                   (unsigned int)full_frame[5],
-                   (unsigned int)full_frame[6],
-                   (unsigned int)full_frame[7],
-                   (unsigned int)full_frame[8]);
-        }
-    }
-    if (state->has_mtc && state->mtc_has_partial &&
-        (!single_loss || !state->mtc_single_packet_safe)) {
-        int point = state->mtc_point;
-        int type = state->mtc_reverse ? 7 : 0;
-        int step = state->mtc_reverse ? -1 : 1;
-        for (;;) {
-            message[0] = 0xf1;
-            message[1] = (uint8_t)((type << 4) |
-                                    state->mtc_partial[type]);
-            deliver_short(rt, message, 2);
-            if (type == point) break;
-            type += step;
-        }
-        printf("MIDIHub: recovered MTC Quarter Frame partial direction=%s point=%u\n",
-               state->mtc_reverse ? "reverse" : "forward",
-               (unsigned int)state->mtc_point);
-    }
-    if (state->sysex) {
-        struct mh_journal_sysex sysex;
-        if (mh_journal_decode_sysex(state, &sysex) > 0) {
-            size_t log_index;
-            for (log_index = 0; log_index < sysex.count; ++log_index) {
-                const struct mh_journal_sysex_log *log =
-                    &sysex.logs[log_index];
-                uint8_t recovered[MH_SYSEX_JOURNAL_MAX + 2];
-                size_t data_index;
-                if ((single_loss && log->single_packet_safe) ||
-                    log->status != 3 || log->has_first || !log->has_count ||
-                    rt->sysex_count == log->count ||
-                    log->data_length > MH_SYSEX_JOURNAL_MAX)
-                    continue;
-                recovered[0] = 0xf0;
-                for (data_index = 0; data_index < log->data_length;
-                     ++data_index)
-                    recovered[data_index + 1] =
-                        (uint8_t)(log->data[data_index] & 0x7f);
-                recovered[log->data_length + 1] = 0xf7;
-                deliver_sysex(rt, recovered, log->data_length + 2);
-                rt->sysex_count = log->count;
-                printf("MIDIHub: recovered SysEx bytes=%lu count=%u\n",
-                       (unsigned long)(log->data_length + 2),
-                       (unsigned int)log->count);
-            }
-        }
-    }
-    if (!state->has_sequencer ||
-        (single_loss && state->sequencer_single_packet_safe) ||
-        state->has_time_tools)
-        return;
-    clock = state->has_clock ? state->clock : 0;
-    start_at_zero = state->sequencer_running &&
-                    !state->downbeat_played && !state->has_clock;
-    if (rt->sequencer_known &&
-        rt->sequencer_running == state->sequencer_running &&
-        rt->sequencer_downbeat == state->downbeat_played &&
-        rt->sequencer_clock == clock &&
-        rt->sequencer_start_at_zero == start_at_zero)
-        return;
-
-    /* C=0, N=1, D=0 is the RFC 6295 encoding for Start at zero. */
-    if (start_at_zero) {
-        message[0] = 0xfa;
-        deliver_short(rt, message, 1);
-        puts("MIDIHub: recovered sequencer Start");
-        return;
-    }
-
-    /* Song Position Pointer plus at most six Clocks recreates every position
-     * representable by MIDI's 14-bit SPP command. */
-    if (clock > 98303) {
-        if (!state->sequencer_running && rt->sequencer_running) {
-            message[0] = 0xfc;
-            deliver_short(rt, message, 1);
-            puts("MIDIHub: recovered sequencer Stop; "
-                 "position exceeds MIDI SPP range");
-        }
-        return;
-    }
-    if (rt->sequencer_running) {
-        message[0] = 0xfc;
-        deliver_short(rt, message, 1);
-    }
-    message[0] = 0xf2;
-    message[1] = (uint8_t)((clock / 6) & 0x7f);
-    message[2] = (uint8_t)(((clock / 6) >> 7) & 0x7f);
-    deliver_short(rt, message, 3);
-    remainder = clock % 6;
-    if (state->downbeat_played) {
-        message[0] = 0xfb;
-        deliver_short(rt, message, 1);
-        message[0] = 0xf8;
-        for (i = 0; i <= remainder; ++i)
-            deliver_short(rt, message, 1);
-        if (!state->sequencer_running) {
-            message[0] = 0xfc;
-            deliver_short(rt, message, 1);
-        }
-    } else if (state->sequencer_running) {
-        message[0] = 0xfb;
-        deliver_short(rt, message, 1);
-    }
-    printf("MIDIHub: recovered sequencer state running=%u clock=%lu downbeat=%u\n",
-           (unsigned int)state->sequencer_running,
-           (unsigned long)clock, (unsigned int)state->downbeat_played);
-}
+static const struct mh_receiver_output receiver_output = {
+    output_message, output_sysex, output_report
+};
 
 static void receive_sync(struct runtime *rt,
                          const struct mh_apple_packet *incoming,
@@ -1384,9 +407,9 @@ static void receive_packet(struct runtime *rt, int data_port)
             rt->have_received_sequence = 0;
             mh_sysex_reset(&rt->sysex);
             mh_queue_reset(&rt->queue);
-            release_active_notes(rt);
-            reset_channel_state(rt);
-            reset_system_state(rt);
+            mh_receiver_release_notes(&rt->receiver);
+            mh_receiver_reset_channels(&rt->receiver);
+            mh_receiver_reset_system(&rt->receiver);
             mh_sender_reset(&rt->sender);
         }
         return;
@@ -1438,15 +461,13 @@ static void receive_packet(struct runtime *rt, int data_port)
     if (sequence_advance > 1 && midi.journal &&
         mh_journal_covers_gap(previous_sequence, midi.sequence,
                               journal.checkpoint)) {
-        if (system_decoded > 0 &&
-            !(sequence_advance == 2 && journal.single_packet_safe))
-            recover_system(rt, &system_state, sequence_advance == 2);
-        recover_channel_state(rt, &journal, sequence_advance == 2);
-        recover_notes(rt, &journal, sequence_advance == 2,
-                      midi.timestamp);
-        recover_parameters(rt, &journal, sequence_advance == 2);
-        recover_controls(rt, &journal, sequence_advance == 2);
-        recover_aftertouch(rt, &journal, sequence_advance == 2);
+        struct mh_receiver_clock clock;
+        clock.synchronized = rt->sync_ready;
+        clock.peer_to_local = rt->peer_to_local;
+        clock.now = now_ticks();
+        mh_receiver_recover(&rt->receiver, &journal,
+                            system_decoded > 0 ? &system_state : NULL,
+                            sequence_advance == 2, midi.timestamp, &clock);
     }
     if (!midi.midi_length)
         return; /* Guard packet: acknowledge its journal without MIDI output. */
@@ -1477,7 +498,7 @@ static void receive_packet(struct runtime *rt, int data_port)
                         puts("MIDIHub: future SysEx event discarded");
                     continue;
                 }
-                deliver_sysex(rt, sysex_message, sysex_length);
+                mh_receiver_deliver_sysex(&rt->receiver, sysex_message, sysex_length);
             } else if (sysex_result < 0)
                 puts("MIDIHub: SysEx segment discarded");
         } else {
@@ -1492,7 +513,7 @@ static void receive_packet(struct runtime *rt, int data_port)
                     puts("MIDIHub: future MIDI event discarded");
                 continue;
             }
-            deliver_short(rt, event.bytes, event.length);
+            mh_receiver_deliver(&rt->receiver, event.bytes, event.length);
         }
     }
     if (action < 0)
@@ -1645,9 +666,9 @@ static void periodic(struct runtime *rt, uint64_t now)
 
     while (mh_queue_pop_due(&rt->queue, now, &event)) {
         if (event.sysex)
-            deliver_sysex(rt, event.sysex, event.sysex_length);
+            mh_receiver_deliver_sysex(&rt->receiver, event.sysex, event.sysex_length);
         else
-            deliver_short(rt, event.bytes, event.length);
+            mh_receiver_deliver(&rt->receiver, event.bytes, event.length);
         mh_queue_event_release(&event);
     }
 
@@ -1687,9 +708,9 @@ static void periodic(struct runtime *rt, uint64_t now)
             rt->have_received_sequence = 0;
             mh_sysex_reset(&rt->sysex);
             mh_queue_reset(&rt->queue);
-            release_active_notes(rt);
-            reset_channel_state(rt);
-            reset_system_state(rt);
+            mh_receiver_release_notes(&rt->receiver);
+            mh_receiver_reset_channels(&rt->receiver);
+            mh_receiver_reset_system(&rt->receiver);
             mh_sender_reset(&rt->sender);
             return;
         }
@@ -1724,7 +745,7 @@ static void periodic(struct runtime *rt, uint64_t now)
         rt->sync_exchanges = 0;
         rt->sync_outstanding = 0;
         rt->have_received_sequence = 0;
-        memset(rt->active_notes, 0, sizeof(rt->active_notes));
+        mh_receiver_forget_notes(&rt->receiver);
         mh_sysex_reset(&rt->sysex);
         mh_queue_reset(&rt->queue);
     }
@@ -1790,7 +811,7 @@ int main(int argc, char **argv)
     if (remaining >= 3)
         peer_ip = argv[argi + 1];
     memset(&rt, 0, sizeof(rt));
-    reset_channel_state(&rt);
+    mh_receiver_init(&rt.receiver, &receiver_output, &rt, &rt.queue);
     netmidi_network_init(&rt.network);
     rt.mdns = -1;
     rt.local_port = local_port;
@@ -1901,7 +922,7 @@ cleanup:
     }
     if (netmidi_camd_is_open(&rt.camd)) {
         mh_queue_reset(&rt.queue);
-        release_active_notes(&rt);
+        mh_receiver_release_notes(&rt.receiver);
     }
     netmidi_camd_close(&rt.camd);
     netmidi_network_close(&rt.network);

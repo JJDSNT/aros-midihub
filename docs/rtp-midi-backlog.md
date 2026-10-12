@@ -39,7 +39,14 @@ commit and the test that shows it.
 
 ## Done
 
-Nothing yet under this backlog. What existed before it is the state above.
+| # | What was done |
+|---|---|
+| R03 | The receiver's state and the repair from a journal are `struct mh_receiver` in `src/receiver.c`, the counterpart of `struct mh_sender`: output through three callbacks, the clock handed in, no OS calls. `ports/aros/midihub/main.c` went from 1907 lines to 930 and keeps sockets, clock and CAMD. `receiver_recovery` in `tests/protocol.c` sends a stream to two receivers, one of which loses packets, and compares them after chapters N, P, W, C, M, T, A, the system chapters and X; switching off any one of the six repair steps fails it. The text of the reports is unchanged, so `tests/network_loopback.py` passes as before. Not covered on the host: chapter E's counts, the enhanced form of chapter C, MTC, and a Note On queued for later. |
+
+Found while doing it: `tests/network_loopback.py` failed about once in forty
+runs, before the change as after, because a journal-only guard packet could
+arrive before the answer to a clock exchange. The test now takes the guard
+packet in either order (60 runs without a failure).
 
 ## P0 — wrong or unsafe as it is
 
@@ -47,7 +54,6 @@ Nothing yet under this backlog. What existed before it is the state above.
 |---|---|---|---|
 | R01 | `mh_rtp_decode()` accepts only the two header bytes `0x80 0xe1`. A packet with the marker bit clear, padding, a CSRC list or a header extension is dropped without a word. RFC 6295 ties the marker bit to a non-empty command section, so a peer's journal-only packet may come with it clear, and our own empty guard packet goes out with it set. | Read the RFC text for the marker bit and write down the rule. Decode by fields: version 2, payload type 97, CSRC count and extension skipped by length, padding removed. Set the marker on sending by the same rule. | Host tests for each header variant; a guard packet from another implementation is acknowledged. |
 | R02 | A message is lost when its journal does not fit. `send_midi()` builds packet and journal in 1100 bytes and returns an error when `mh_sender_journal()` runs out of room, and the caller has no way to try again. A long stretch without RS from the peer makes the journal grow. | Bound the journal: when it would pass the room left, send the command without the chapters that do not fit, oldest first, and count it. Decide the packet size from the path's MTU instead of a constant. | A host test sends with no feedback until the history is full and loses no command. |
-| R03 | The receiver's recovery state (active notes, controllers, parameters, pressure, system state: about 30 fields) and its six `recover_` functions live in `ports/aros/midihub/main.c`, 1900 lines, beside the sockets. Only the Python loopback reaches them, on Linux, with one peer. | Move them to `src/` as a receiver object, the counterpart of `struct mh_sender`: fed with a decoded packet and the previous sequence number, it hands back the commands to deliver. No OS calls. | `tests/protocol.c` drives every chapter's recovery without a socket; `main.c` keeps only sockets, the clock and CAMD. |
 | R04 | A SysEx message going out carries no journal and clears the sender's history when chapter X cannot hold it (more than 512 bytes, or a fifth log), so everything sent before it loses its protection at that moment. | Keep the history when a SysEx message is not journalled; mark chapter X as not covering it. | A host test: note on, large SysEx, lose the note's packet, the next journal still recovers the note. |
 
 ## P1 — before a first use with a real peer
