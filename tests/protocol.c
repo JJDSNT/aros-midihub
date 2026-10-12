@@ -1355,6 +1355,7 @@ struct lossy_link {
     unsigned int recovered_messages;
     unsigned int recovered_sysex;
     unsigned int reports;
+    unsigned int uncovered;
     int recovering;
     uint8_t last[3];
 };
@@ -1427,9 +1428,15 @@ static void link_repair(struct lossy_link *link)
     assert(rtpmidi_sender_journal(&link->sender, link->sequence, link->timestamp,
                              wire, sizeof(wire), &length) == 0);
     assert(rtpmidi_journal_decode(wire, length, &journal) == 0);
-    assert(rtpmidi_journal_covers_gap(
-        (uint16_t)(link->sequence - link->lost - 1), link->sequence,
-        journal.checkpoint));
+    if (!rtpmidi_journal_covers_gap(
+            (uint16_t)(link->sequence - link->lost - 1), link->sequence,
+            journal.checkpoint)) {
+        /* what was lost is older than the journal reaches: nothing is
+         * repaired, as in the program */
+        ++link->uncovered;
+        link->lost = 0;
+        return;
+    }
     if (journal.system) {
         assert(rtpmidi_journal_decode_system(&journal, &system) > 0);
         has_system = 1;
@@ -1452,8 +1459,9 @@ static void link_send(struct lossy_link *link, const uint8_t *message,
     if (message[0] == 0xf0) {
         rtpmidi_receiver_deliver_sysex(&link->whole, message, length);
         if (!lose) rtpmidi_receiver_deliver_sysex(&link->lossy, message, length);
-        assert(rtpmidi_sender_record_sysex(&link->sender, link->sequence,
-                                      link->timestamp, message, length));
+        /* a message too long for chapter X is sent without an entry */
+        (void)rtpmidi_sender_record_sysex(&link->sender, link->sequence,
+                                          link->timestamp, message, length);
     } else {
         assert(rtpmidi_sender_supported(message, length));
         rtpmidi_receiver_deliver(&link->whole, message, length);
@@ -1564,6 +1572,53 @@ static void receiver_recovery(void)
     link_send(&link, volume, sizeof(volume), 0);
     assert(link.recovered_sysex == 1);
     assert(link.lossy.sysex_count == link.whole.sysex_count);
+
+    /* A SysEx received is not delivered again after a later loss: not
+     * when a long one before it was lost for good, and not when several
+     * are still in the journal unacknowledged. */
+    {
+        static uint8_t long_sysex[700];
+        static const uint8_t second[] = {0xf0, 0x7d, 9, 8, 0xf7};
+        unsigned int n;
+
+        memset(long_sysex, 0x22, sizeof(long_sysex));
+        long_sysex[0] = 0xf0;
+        long_sysex[sizeof(long_sysex) - 1] = 0xf7;
+        link_init(&link);
+        link_send(&link, long_sysex, sizeof(long_sysex), 1);
+        link_send(&link, sysex, sizeof(sysex), 0);
+        /* the journal does not claim the packet it has no entry for */
+        assert(link.recovered_sysex == 0 && link.uncovered == 1);
+        link_send(&link, volume, sizeof(volume), 1);
+        link_send(&link, pan, sizeof(pan), 0);
+        assert(link.recovered_sysex == 0);
+        assert(link.lossy.sysex_count == link.sender.sysex_count);
+
+        link_init(&link);
+        for (n = 0; n < 3; ++n)
+            link_send(&link, n & 1 ? second : sysex,
+                      n & 1 ? sizeof(second) : sizeof(sysex), 0);
+        link_send(&link, volume, sizeof(volume), 1);
+        link_send(&link, pan, sizeof(pan), 0);
+        assert(link.recovered_sysex == 0);
+        assert(link.lossy.controllers[0][7] == 90);
+
+        /* Six lost in a row: the four the journal still has are
+         * delivered, the count is taken up from the last, and a seventh
+         * received after that is not repeated. */
+        link_init(&link);
+        for (n = 0; n < 6; ++n)
+            link_send(&link, n & 1 ? second : sysex,
+                      n & 1 ? sizeof(second) : sizeof(sysex), 1);
+        link_send(&link, volume, sizeof(volume), 0);
+        assert(link.recovered_sysex == RTPMIDI_SYSEX_JOURNAL_LOGS);
+        assert(link.lossy.sysex_count == 6);
+        link_send(&link, sysex, sizeof(sysex), 0);
+        link_send(&link, volume, sizeof(volume), 1);
+        link_send(&link, pan, sizeof(pan), 0);
+        assert(link.recovered_sysex == RTPMIDI_SYSEX_JOURNAL_LOGS);
+        assert(link.lossy.sysex_count == 7);
+    }
 
     /* The end of a session releases what still sounds. */
     link_init(&link);
@@ -1737,7 +1792,7 @@ static void sender_journal_limits(void)
     assert(rtpmidi_sender_record_sysex(&sender, 11, 2, sysex,
                                        sizeof(sysex)) == 0);
     assert(sender.count == 1 && sender.unjournalled == 1 &&
-           sender.sysex_count == 1 && sender.sysex_log_count == 0);
+           sender.sysex_count == 0 && sender.sysex_log_count == 0);
     assert(rtpmidi_sender_journal(&sender, 12, 3, wire, sizeof(wire),
                                   &journal_length) == 0);
     assert(rtpmidi_journal_decode(wire, journal_length, &journal) == 0);

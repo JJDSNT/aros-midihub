@@ -413,9 +413,8 @@ int rtpmidi_sender_record_sysex(struct rtpmidi_sender *sender, uint16_t sequence
     is_mtc = length == 10 && message[1] == 0x7f &&
              message[3] == 0x01 && message[4] == 0x01;
     if (!is_mtc && length - 2 > RTPMIDI_SYSEX_JOURNAL_MAX) {
-        /* Too long for chapter X. It was sent all the same, and the
-         * receiver counts it. */
-        ++sender->sysex_count;
+        /* Too long for chapter X, ever. COUNT leaves such commands out
+         * (RFC 6295 appendix B.5.3), and so does the receiver. */
         ++sender->unjournalled;
         return 0;
     }

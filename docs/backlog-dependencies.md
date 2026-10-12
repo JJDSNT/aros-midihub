@@ -217,7 +217,7 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 121 open items, 56 have nothing in front of them, 50 sit behind something
+Of 120 open items, 55 have nothing in front of them, 50 sit behind something
 outside our hands or behind a decision, and 15 wait only for other work of
 ours.
 
@@ -270,7 +270,7 @@ their own backlog, not from this graph.
 
 | Backlog | Items |
 |---|---|
-| RTP-MIDI | R11, R14, R18, R19, R20, R22, R24, R25, R27 |
+| RTP-MIDI | R11, R14, R18, R19, R20, R22, R24, R25 |
 | AppleMIDI | AM01, AM03, AM04, AM13, AM17, AM18, AM21 |
 | UMP | UP02, UP14, UP15 |
 | Network MIDI 2.0 | NM03, NM18, NM19 |
@@ -278,13 +278,14 @@ their own backlog, not from this graph.
 | BLE MIDI | L01, L06, T04, T06, L05, W03, W05, W06, L09, L04, L07 |
 | mDNS | MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
 
-R27, AM01, AM03, AM04, UP02 and NM03 are P0 in their own
+AM01, AM03, AM04, UP02 and NM03 are P0 in their own
 lists: defects in code as it is. That they open nothing else is no reason to leave them.
 
 ## An order that follows from it
 
-1. **The P0 defects that are free**, on portable code with host tests: R27,
-   then AM01, AM03, AM04. R01, R02 and R04 were done on 2026-10-12.
+1. **The P0 defects that are free**, on portable code with host tests:
+   AM01, AM03, AM04. RTP-MIDI's (R01, R02, R04, R27) were done on
+   2026-10-12.
 2. **AM02**, the clock object, because of what it opens; then **AM06**, the
    run against rtpmidid, before building further on code that has met no
    other implementation.

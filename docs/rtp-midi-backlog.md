@@ -46,6 +46,7 @@ commit and the test that shows it.
 | R01 | `rtpmidi_decode()` reads the header by fields (RFC 3550 section 5.1): version 2, payload type 97, contributing sources and a header extension skipped by their lengths, padding removed, the marker bit accepted either way. On sending, the marker is set when the command section has commands and clear when it is empty, as RFC 6295 section 2.1 requires; our journal-only guard packet used to go out with it set. `rtp_header_variants` in `tests/protocol.c` decodes the same Note On in six forms and refuses nine broken ones. Not yet seen: a guard packet from another implementation on the wire (AppleMIDI backlog AM06). |
 | R02 | `rtpmidi_sender_packet()` builds the packet for a message: the command, the journal if it fits, the entry in the history. A journal that does not fit is left out and counted in `journals_omitted`; the command goes. The program's send path is that one call. `sender_journal_limits` sends 400 messages with no feedback and loses none, and sends one into a buffer a byte short for the journal. Not done: the packet size is still the constant 1100 bytes, not the path's MTU, and a journal that does not fit is dropped whole rather than cut chapter by chapter; both are with R11 now. |
 | R04 | A SysEx message too long for chapter X is counted and the history is kept; when chapter X is full, its oldest logs give way instead of everything sent before. A message other than SysEx that the journal cannot describe no longer clears the history either. `unjournalled` counts what no journal covers. The same test: a note sent before a 700-byte SysEx, before six small ones, and before two that pass the limit together is still in the journal afterwards, with the checkpoint where it was. |
+| R27 | Found while closing R04: a SysEx message could be delivered twice. The receiver replayed every log of chapter X whose count differed from its own tally, so after any loss it repeated each SysEx still unacknowledged in the journal except the last. It now takes the count as RFC 6295 appendix B.5.3 defines it, a number modulo 256: a log is replayed when its number is ahead of the last the receiver has, and the receiver takes up the count from the chapter's final log. A SysEx too long for chapter X has no number at either end. `receiver_recovery` covers three received and one unrelated loss, a long one lost for good, and six lost in a row followed by a seventh received; the old receiver fails the first. This agreement on what is too long holds between two of us; what another implementation counts is to be seen (AppleMIDI backlog AM06). |
 
 Found while doing it: `tests/network_loopback.py` failed about once in forty
 runs, before the change as after, because a journal-only guard packet could
@@ -54,11 +55,7 @@ packet in either order (60 runs without a failure).
 
 ## P0 — wrong or unsafe as it is
 
-One, found on 2026-10-12 while closing the others:
-
-| # | Limit or defect | What to do | Done when |
-|---|---|---|---|
-| R27 | A SysEx message can be delivered twice. The receiver keeps its own count of SysEx messages, adding one for each it gets, and replays a message from chapter X whenever the log's count differs from its own. Once one SysEx is lost for good (too long for chapter X, or its log pushed out), the receiver's count is one behind the sender's from then on, and after any later loss every logged SysEx looks new, including those it received. | Read what RFC 6295 appendix B.5.3 means the count for, then compare by it: a log is new when its count is ahead of the count of the last SysEx the receiver took from that sender, not when it differs from a local tally. | A host test in `receiver_recovery`: lose a long SysEx, receive a short one, lose an unrelated packet, and the short one is not delivered again. |
+Nothing open.
 
 ## P1 — before a first use with a real peer
 

@@ -96,9 +96,10 @@ void rtpmidi_sender_record(struct rtpmidi_sender *sender, uint16_t sequence,
                       uint32_t timestamp, const uint8_t *message,
                       size_t length);
 /* Returns 1 when the message went into the journal's history and 0 when it
- * is too long for it; it is counted either way, so the receiver's count of
- * SysEx messages stays in step. The history of what was sent before is
- * kept: when there is no room, the oldest SysEx logs give way. */
+ * is too long for chapter X (more than RTPMIDI_SYSEX_JOURNAL_MAX bytes
+ * between F0 and F7); such a message has no number in the journal's COUNT,
+ * at either end. The history of what was sent before is kept: when there
+ * is no room, the oldest SysEx logs give way. */
 int rtpmidi_sender_record_sysex(struct rtpmidi_sender *sender, uint16_t sequence,
                            uint32_t timestamp, const uint8_t *message,
                            size_t length);

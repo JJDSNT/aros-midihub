@@ -230,7 +230,9 @@ void rtpmidi_receiver_deliver_sysex(struct rtpmidi_receiver *rx, const uint8_t *
             rx->mtc_full_known = 1;
         }
     } else if (length >= 2 && message[0] == 0xf0 &&
-               message[length - 1] == 0xf7)
+               message[length - 1] == 0xf7 &&
+               length - 2 <= RTPMIDI_SYSEX_JOURNAL_MAX)
+        /* the sender's COUNT leaves out what chapter X never holds */
         ++rx->sysex_count;
     rx->output->sysex(rx->context, message, length);
 }
@@ -917,14 +919,24 @@ static void recover_system(struct rtpmidi_receiver *rx,
         struct rtpmidi_journal_sysex sysex;
         if (rtpmidi_journal_decode_sysex(state, &sysex) > 0) {
             size_t log_index;
+            uint8_t last_count = 0;
+            int have_count = 0;
             for (log_index = 0; log_index < sysex.count; ++log_index) {
                 const struct rtpmidi_journal_sysex_log *log =
                     &sysex.logs[log_index];
                 uint8_t recovered[RTPMIDI_SYSEX_JOURNAL_MAX + 2];
                 size_t data_index;
+                if (log->has_count) {
+                    last_count = log->count;
+                    have_count = 1;
+                }
+                /* COUNT numbers the sender's SysEx commands modulo 256
+                 * (RFC 6295 appendix B.5.3): a log is one we missed when
+                 * its number is ahead of the last one we have. */
                 if ((single_loss && log->single_packet_safe) ||
                     log->status != 3 || log->has_first || !log->has_count ||
-                    rx->sysex_count == log->count ||
+                    (uint8_t)(log->count - rx->sysex_count) == 0 ||
+                    (uint8_t)(log->count - rx->sysex_count) >= 128 ||
                     log->data_length > RTPMIDI_SYSEX_JOURNAL_MAX)
                     continue;
                 recovered[0] = 0xf0;
@@ -939,6 +951,11 @@ static void recover_system(struct rtpmidi_receiver *rx,
                        (unsigned long)(log->data_length + 2),
                        (unsigned int)log->count);
             }
+            /* The final log's COUNT is there to take up the count again
+             * after a loss: one whose log had already left the journal
+             * is then not counted against every later one. */
+            if (have_count && (uint8_t)(last_count - rx->sysex_count) < 128)
+                rx->sysex_count = last_count;
         }
     }
     if (!state->has_sequencer ||
