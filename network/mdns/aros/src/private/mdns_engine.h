@@ -138,6 +138,8 @@ struct MDNSCacheEntry
     ULONG           ce_HostAddr;
     ULONG           ce_Link;        /* interface the address was heard on */
     ULONG           ce_Expire;
+    ULONG           ce_PtrTTL;      /* the time to live its PTR record came
+                                     * with; 0 before one was seen */
 };
 
 /* A QueryRecordA question: every record that answers it goes to the hook. */

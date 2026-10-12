@@ -237,8 +237,11 @@ Protocol:
   sorts earlier waits a second and probes again
   (`tools/mdns-tiebreak-hosted.sh`). mdnsd proposes the SRV record only,
   not the TXT record beside it.
-- mdnsd's own questions do not list the answers it already has, and its
-  answers are sent at once rather than delayed and gathered.
+- A browse question lists the answers mdnsd already has, each with more
+  than half its life to go (`tools/mdns-known-answers-hosted.sh`). What
+  does not fit into one 1400-byte packet is left out rather than sent in a
+  second packet with the truncation bit, and only browse questions do it.
+- mdnsd's answers are sent at once rather than delayed and gathered.
 - IPv4 only.
 - At most eight interfaces. An address that changes is noticed within three
   seconds, not at once.

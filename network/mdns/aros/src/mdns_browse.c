@@ -133,7 +133,58 @@ mdnsBrowseSendQuery(struct MDNSEngineToken *tok, const char *type,
     qname[sizeof(qname) - 1] = '\0';
     strncat(qname, ".", sizeof(qname) - 1 - strlen(qname));
     strncat(qname, MDNS_DOMAIN_LOCAL, sizeof(qname) - 1 - strlen(qname));
-    mdnsSendQuestion(tok, qname, DNS_TYPE_PTR, unicast);
+
+    /*
+     * The question goes out with the answers this host already has, so that
+     * the responders who would only repeat them stay silent (RFC 6762
+     * section 7.1): the PTR record of every instance of the type in the
+     * cache that still has more than half its life to go. The services of
+     * this host are not among them, since no other host answers for those.
+     * What does not fit into one packet is left out, which only costs an
+     * answer that was not needed.
+     */
+    {
+/* a question with its known answers stays within one Ethernet frame */
+#define MDNS_QUERY_MAX 1400L
+        static UBYTE pkt[MDNS_QUERY_MAX];   /* mdnsd has one task */
+        struct MDNSHeader *hdr = (struct MDNSHeader *)pkt;
+        struct MDNSCacheEntry *ce;
+        struct Node *n;
+        char instfqdn[256];
+        UBYTE target[256];
+        LONG pos, targetlen;
+        UWORD ancount = 0;
+        ULONG now = mdnsEngineNow();
+
+        if (mdnsBuildQuery(pkt, MDNS_QUERY_MAX, 0, qname, DNS_TYPE_PTR,
+                (UWORD)(DNS_CLASS_IN | (unicast ? DNS_QU_BIT : 0)),
+                &pos) != 0) {
+            return;
+        }
+        for (n = tok->et_Cache.lh_Head; n != NULL && n->ln_Succ != NULL;
+            n = n->ln_Succ) {
+            ce = (struct MDNSCacheEntry *)n;
+            if ((ce->ce_Flags & MDNS_CE_LOCAL) != 0 || ce->ce_PtrTTL == 0 ||
+                ce->ce_Expire <= now ||
+                ce->ce_Expire - now <= ce->ce_PtrTTL / 2 ||
+                Stricmp(ce->ce_Type, (STRPTR)type) != 0) {
+                continue;
+            }
+            strncpy(instfqdn, ce->ce_Instance, sizeof(instfqdn) - 1);
+            instfqdn[sizeof(instfqdn) - 1] = '\0';
+            strncat(instfqdn, ".", sizeof(instfqdn) - 1 - strlen(instfqdn));
+            strncat(instfqdn, qname, sizeof(instfqdn) - 1 - strlen(instfqdn));
+            if (mdnsNameToWire(instfqdn, target, (LONG)sizeof(target),
+                    &targetlen) != 0 ||
+                mdnsAppendRecord(pkt, MDNS_QUERY_MAX, &pos, &ancount,
+                    qname, DNS_TYPE_PTR, DNS_CLASS_IN, ce->ce_Expire - now,
+                    target, (UWORD)targetlen) != 0) {
+                break;
+            }
+        }
+        hdr->ancount = htons(ancount);
+        mdnsNetSendMulticast(tok, pkt, pos);
+    }
 }
 
 void
@@ -475,6 +526,7 @@ mdnsBrowseHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
         ce = mdnsCacheAdd(tok, inst, type, &isNew);
         if (ce != NULL) {
             ce->ce_Expire = mdnsEngineNow() + r->ttl;
+            ce->ce_PtrTTL = r->ttl;
         }
         if (ce != NULL && isNew) {
             ce->ce_Flags |= MDNS_CE_ANNOUNCED;
