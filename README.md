@@ -380,8 +380,7 @@ count logs support switch controllers 64–69, All Sound Off (120), All Notes
 Off (123), Omni Off/On (124/125), and Poly Mode (127). Chapter E now protects
 repeated Note On reference counts and
 non-default
-Note Off release velocities, supplementing Chapter N recovery. Other
-extended Chapter X history remains to be implemented. Enhanced Chapter C
+Note Off release velocities, supplementing Chapter N recovery. Enhanced Chapter C
 lists are decoded and recovered command by command; the sender continues to
 use the default Chapter C form. Channel journals encode CHAN in bits 6..3 and
 reserve bit 2 for the enhanced-controller flag, including on non-zero MIDI
@@ -430,9 +429,13 @@ recovery support contiguous forward and reverse sequences, partial frames,
 the forward two-frame correction, and 29.97 drop-frame rollover.
 Chapter X protects up to four unconfirmed completed non-MTC SysEx commands
 within a shared 512-byte data budget, using ordered list-tool logs and COUNT
-identities, and recovers them after covered loss. Exceeding either bound
-starts a conservative new checkpoint. Larger and unfinished commands remain
-outside Chapter X recovery.
+identities, and recovers them after covered loss. When either bound is
+passed the oldest logs give way. Of the chapter's log (RFC 6295 appendix
+B.5) the sender writes finished commands whole, with the list tool: it
+never writes an unfinished, cancelled or "dropped F7" command (STA 0 to 2),
+a part of a command's data (FIRST), TCOUNT, or the recency tool, because
+what it is given to send are whole messages. A command longer than the
+budget is sent and has no place in the journal.
 The sender retains up to 32 packets and removes confirmed history when
 AppleMIDI `RS` feedback arrives. While unconfirmed history remains, it sends
 an empty MIDI guard packet once per

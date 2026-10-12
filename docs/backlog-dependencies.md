@@ -137,7 +137,7 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 83 open items, 52 have nothing in front of them, 27 sit behind something
+Of 82 open items, 51 have nothing in front of them, 27 sit behind something
 outside our hands or behind a decision, and 4 wait only for other work of
 ours.
 
@@ -187,7 +187,7 @@ their own backlog, not from this graph.
 
 | Backlog | Items |
 |---|---|
-| RTP-MIDI | R32, R18, R22, R24 |
+| RTP-MIDI | R32, R18, R22 |
 | AppleMIDI | AM16, AM27, AM25, AM26, AM21 |
 | UMP | UP06, UP08, UP13, UP15 |
 | Network MIDI 2.0 | NM12, NM13, NM17, NM18, NM19 |

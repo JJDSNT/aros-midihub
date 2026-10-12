@@ -58,6 +58,7 @@ commit and the test that shows it.
 | R30 | The journal's state treats a parameter number with only its MSB sent as no parameter until the LSB comes, and that is right. RFC 6295 appendix A.4 calls such a number pending, carries it in chapter M's PENDING field, and begins a transaction only at the LSB; MIDI 1.0's rule that a receiver take either half alone is for an instrument, not for the journal. Closed by reading, on 2026-10-12; the code cites it. |
 | R25 | After a loss that no journal covers, the notes the peer has on are ended: the end of one may have been in what was lost, and it would sound for ever. Its controllers are left as they are, where the item had asked for the resets of a session's end too: nothing is known to be wrong with them, and a peer that sends no journal, as node-rtpmidi and Bouchez's class do, loses a packet now and then. `run_uncovered_gap_case` in `tests/network_loopback.py`: two notes on, three packets lost, and both notes are ended before the next packet's own note, the controller untouched. |
 | R19 | Receiver feedback goes out once a second while packets arrive (`RTPMIDI_FEEDBACK_INTERVAL`), at once for the first packet, after a gap and when a packet already had comes again, and once more after a stream has stopped; it went out for every packet. `run_feedback_rate_case` in `tests/network_loopback.py`: a hundred packets in a second and a half get between two and five RS, the last saying how far all of it came, and a gap of three is answered within the moment. Both interoperability scripts and the hosted test pass with it. A sender keeps up to a second more of history than before, which is what its journal then carries. |
+| R24 | What chapter X writes is said, in the code and the README, and it is enough. A log is a finished command with its COUNT and all of its data, by the list tool; unfinished, cancelled and "dropped F7" commands, a part of a command's data (FIRST), TCOUNT and the recency tool are not written, because the sender is given whole messages and sends them whole. Four logs within 512 bytes; a longer command has no place in the journal and is counted as unjournalled. The README's sentence about a new checkpoint when the bounds are passed was of before R04 and is corrected. Closed by reading, on 2026-10-12. |
 
 Found while doing it: `tests/network_loopback.py` failed about once in forty
 runs, before the change as after, because a journal-only guard packet could
@@ -88,7 +89,6 @@ Nothing open.
 | # | Limit or defect | What to do |
 |---|---|---|
 | R23 | The sender always writes the default form of chapter C; the enhanced form is only decoded. | Nothing unless a peer needs it; note which peers send it (AM06). |
-| R24 | Chapter X keeps four logs of 512 bytes; "other extended Chapter X history" in the README is not specified further. | Say exactly which tools of chapter X are and are not written, then decide. |
 
 ## The way upstream
 

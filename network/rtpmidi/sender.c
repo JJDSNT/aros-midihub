@@ -1098,6 +1098,12 @@ static int build_system(const struct rtpmidi_sender *sender, uint16_t sequence,
         data[start] |= 0x08;
         *recent |= is_recent;
     }
+    /* Chapter X (RFC 6295 appendix B.5). Each log is a finished command
+       (STA 3) with its COUNT (C) and all of its data (D), by the list tool
+       (L): 0x27, and 0x08 when there is data. Not written, since what we
+       are given to send are whole messages: unfinished, cancelled and
+       "dropped F7" commands (STA 0 to 2), a part of a command's data
+       (FIRST), TCOUNT, and the recency tool. */
     if (sender->sysex_log_count) {
         for (i = 0; i < sender->sysex_log_count; ++i) {
             const struct rtpmidi_sent_sysex *log = &sender->sysex_logs[i];
