@@ -151,6 +151,11 @@ int rtpmidi_decode(const uint8_t *data, size_t length,
                       data + offset + header_length + midi_length : 0;
     packet->journal_length = payload_length - header_length - midi_length;
     packet->z = !!(flags & 0x20);
+    /* P says the first channel command's status was not in the sender's
+       own source stream, which had it by running status (RFC 6295
+       section 3.2). It is about that stream, not about this list, which
+       has the status either way: nothing is done with it. We send it
+       clear, since what we send was handed to us as whole messages. */
     packet->p = !!(flags & 0x10);
     if ((flags & 0x40) && !packet->journal_length)
         return -1;

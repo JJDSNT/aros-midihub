@@ -157,9 +157,12 @@ void rtpmidi_receiver_deliver(struct rtpmidi_receiver *rx, const uint8_t *bytes,
         /* MIDI 1.0, page 17: a parameter is chosen by the two numbers,
            99 and 98 or 101 and 100, and Data Entry, Increment and
            Decrement then apply to it. A number of which only the first
-           half has come is no parameter here until the second does;
-           the text's rule 4 would have the receiver take either half
-           alone: backlog R30. */
+           half has come is no parameter here until the second does.
+           That text's rule 4 has an instrument take either half alone;
+           the journal does not, and on purpose: RFC 6295 appendix A.4
+           calls a number with only its MSB sent pending, carries it in
+           chapter M's PENDING field, and begins a transaction only at
+           the LSB. This state follows the journal's model. */
         if (controller == 101 || controller == 99) {
             rx->parameter_nrpn[channel] = controller == 99;
             rx->parameter_type_known[channel] = 1;

@@ -497,6 +497,124 @@ static int table_reply_is(const struct netmidi2_writer *reply, uint8_t code,
            commands[0].code == code && commands[0].csd1 == csd1;
 }
 
+/* Appendix A.2 and A.3 of M2-124-UM: figures 16 and 18 as sequences of
+   packets. */
+static uint32_t fec_got[16];
+static unsigned fec_count;
+
+static void fec_take(void *context, int index, const uint32_t *words,
+                     size_t count)
+{
+    size_t i;
+    (void)context;
+    (void)index;
+    for (i = 0; i < count && fec_count < 16; ++i)
+        fec_got[fec_count++] = words[i];
+}
+
+/* The sequence numbers of a packet's UMP Data commands and whether each is
+   empty, as "n" or "nz", with commas between. */
+static const char *fec_shape(const uint8_t *packet, size_t length)
+{
+    static char text[64];
+    struct netmidi2_command_packet commands[8];
+    int n = netmidi2_parse(packet, length, commands, 8);
+    int i;
+    size_t at = 0;
+
+    text[0] = 0;
+    for (i = 0; i < n; ++i) {
+        if (commands[i].code != NETMIDI2_UMP_DATA)
+            continue;
+        at += (size_t)snprintf(text + at, sizeof(text) - at, "%s%u%s",
+                               at ? "," : "",
+                               (unsigned)((commands[i].csd1 << 8) |
+                                          commands[i].csd2),
+                               commands[i].payload_words ? "" : "z");
+    }
+    return text;
+}
+
+static void test_appendix_fec(void)
+{
+    static struct netmidi2_table host, client;
+    static uint8_t sent[5][256];
+    size_t sent_length[5];
+    uint8_t in[256], out[256];
+    struct netmidi2_writer packet, reply;
+    struct netmidi2_session *session;
+    int index;
+    unsigned i;
+
+    now = 500000;
+    netmidi2_table_init(&host, "Host", "h", fec_take, NULL);
+    netmidi2_table_init(&client, "Client", "c", fec_take, NULL);
+    host.accept = 1;
+    netmidi2_writer_init(&packet, in, sizeof(in));
+    CHECK(netmidi2_table_invite(&client, 1, now, &packet) == 0);
+    netmidi2_writer_init(&reply, out, sizeof(out));
+    CHECK(netmidi2_table_receive(&host, 2, in, packet.length, now, &reply,
+                                 &index) == 0);
+    netmidi2_writer_init(&packet, in, sizeof(in));
+    CHECK(netmidi2_table_receive(&client, 1, out, reply.length, now, &packet,
+                                 &index) == 0);
+    session = netmidi2_table_session(&client, 0);
+    CHECK(session && session->state == NETMIDI2_ESTABLISHED);
+
+    /* Figure 16: a Client with two repeats. Each packet has the command
+       that is new and the two before it, in the order they were sent. */
+    {
+        static const char *const shape[5] = {
+            "0", "0,1", "0,1,2", "1,2,3", "2,3,4"
+        };
+
+        for (i = 0; i < 5; ++i) {
+            uint32_t word = 0x20900040u | ((uint32_t)(60 + i) << 8);
+
+            netmidi2_writer_init(&packet, sent[i], sizeof(sent[i]));
+            CHECK(netmidi2_send_ump(session, &word, 1, now, &packet) == 0);
+            sent_length[i] = packet.length;
+            CHECK(!strcmp(fec_shape(sent[i], sent_length[i]), shape[i]));
+            now += 5;
+        }
+        /* "if UDP Packets #2 and #3 were dropped, then the receiver can
+           safely continue ... without any loss of data" */
+        fec_count = 0;
+        for (i = 0; i < 5; ++i) {
+            if (i == 1 || i == 2)
+                continue;
+            netmidi2_writer_init(&reply, out, sizeof(out));
+            CHECK(netmidi2_table_receive(&host, 2, sent[i], sent_length[i],
+                                         now, &reply, &index) == 0);
+        }
+        CHECK(fec_count == 5);
+        for (i = 0; i < 5; ++i)
+            CHECK(fec_got[i] == (0x20900040u | ((uint32_t)(60 + i) << 8)));
+        CHECK(netmidi2_table_session(&host, 0)->gaps == 0);
+    }
+
+    /* Figure 18, the second of the two ways to go idle: each packet has a
+       new Zero Length command and the two commands before it. Figure 17,
+       which repeats one Zero Length command and lets the repeats run out,
+       is the other; a receiver takes either, since it goes by sequence
+       numbers. */
+    {
+        static const char *const shape[3] = {"3,4,5z", "4,5z,6z", "5z,6z,7z"};
+
+        for (i = 0; i < 3; ++i) {
+            now += 150;
+            netmidi2_writer_init(&packet, in, sizeof(in));
+            CHECK(netmidi2_table_tick(&client, 0, now, &packet) == 1);
+            CHECK(!strcmp(fec_shape(in, packet.length), shape[i]));
+            netmidi2_writer_init(&reply, out, sizeof(out));
+            CHECK(netmidi2_table_receive(&host, 2, in, packet.length, now,
+                                         &reply, &index) == 0);
+        }
+        CHECK(fec_count == 5);          /* nothing new was delivered */
+        CHECK(netmidi2_table_session(&host, 0)->gaps == 0);
+    }
+}
+
 static void test_table(void)
 {
     static struct netmidi2_table table;
@@ -600,6 +718,7 @@ int main(void)
     test_session();
     test_against_specification();
     test_table();
+    test_appendix_fec();
     if (failures) {
         fprintf(stderr, "Network MIDI 2.0: %d failures\n", failures);
         return EXIT_FAILURE;
