@@ -114,6 +114,28 @@ int rtpmidi_sender_packet(struct rtpmidi_sender *sender, uint16_t sequence,
                           const uint8_t *message, size_t length,
                           uint8_t *data, size_t capacity,
                           size_t *packet_length);
+/* A message other than SysEx with the time it is meant for, in the units
+ * of the RTP timestamp. */
+#define RTPMIDI_LIST_MAX 1024   /* bytes of commands we put in a packet */
+struct rtpmidi_timed_message {
+    uint32_t timestamp;
+    uint8_t length;
+    uint8_t bytes[3];
+};
+/* The same for several messages in one packet (RFC 6295 section 3): the
+ * first at the packet's timestamp, each later one with a delta time from
+ * the one before it. The times must not go backwards; one that does is
+ * sent at the time of the message before it. As many messages are taken,
+ * in order, as the packet holds, and *taken says how many: the caller
+ * sends the rest in a packet of their own. Returns -1 when the first
+ * message is invalid or does not fit; an invalid later one ends the
+ * packet before it and is for the caller to skip. */
+int rtpmidi_sender_packet_list(struct rtpmidi_sender *sender,
+                               uint16_t sequence, uint32_t ssrc,
+                               const struct rtpmidi_timed_message *messages,
+                               size_t count,
+                               uint8_t *data, size_t capacity,
+                               size_t *packet_length, size_t *taken);
 void rtpmidi_sender_ack(struct rtpmidi_sender *sender, uint32_t extended_sequence);
 int rtpmidi_sender_journal(const struct rtpmidi_sender *sender, uint16_t sequence,
                       uint32_t timestamp, uint8_t *data, size_t capacity,

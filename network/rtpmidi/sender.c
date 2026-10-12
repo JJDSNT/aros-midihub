@@ -1165,30 +1165,115 @@ int rtpmidi_sender_journal(const struct rtpmidi_sender *sender, uint16_t sequenc
     return 0;
 }
 
+/* A delta time as RFC 6295 section 3.1 writes it: seven bits to a byte,
+ * the most significant first, every byte but the last with its top bit
+ * set. Four bytes hold any 28 bits; a longer wait is sent as the longest. */
+static size_t put_delta(uint8_t *out, uint32_t delta)
+{
+    size_t n = 0;
+    int shift;
+
+    if (delta > 0x0fffffff)
+        delta = 0x0fffffff;
+    for (shift = 21; shift > 0; shift -= 7)
+        if (delta >> shift)
+            out[n++] = (uint8_t)(0x80 | ((delta >> shift) & 0x7f));
+    out[n++] = (uint8_t)(delta & 0x7f);
+    return n;
+}
+
+int rtpmidi_sender_packet_list(struct rtpmidi_sender *sender,
+                               uint16_t sequence, uint32_t ssrc,
+                               const struct rtpmidi_timed_message *messages,
+                               size_t count,
+                               uint8_t *data, size_t capacity,
+                               size_t *packet_length, size_t *taken)
+{
+    uint8_t list[RTPMIDI_LIST_MAX];
+    size_t list_length = 0;
+    size_t room;
+    size_t used;
+    size_t journal_length;
+    size_t n = 0;
+    size_t i;
+    uint32_t previous;
+
+    if (!sender || !messages || !count || !data || !packet_length || !taken ||
+        capacity < 14 ||
+        !rtpmidi_short_valid(messages[0].bytes, messages[0].length))
+        return -1;
+    /* the list's length is twelve bits, and the header before it 14 bytes */
+    room = capacity - 14;
+    if (room > sizeof(list))
+        room = sizeof(list);
+    previous = messages[0].timestamp;
+    for (n = 0; n < count; ++n) {
+        const struct rtpmidi_timed_message *m = &messages[n];
+        uint8_t delta[4];
+        size_t delta_length = 0;
+
+        if (!rtpmidi_short_valid(m->bytes, m->length))
+            break;
+        if (n) {
+            uint32_t ahead = m->timestamp - previous;
+
+            /* a time that went backwards is the time before it */
+            if (ahead & 0x80000000u)
+                ahead = 0;
+            delta_length = put_delta(delta, ahead);
+            if (list_length + delta_length + m->length > room)
+                break;
+            previous += ahead;
+        } else if (m->length > room) {
+            return -1;
+        }
+        memcpy(list + list_length, delta, delta_length);
+        list_length += delta_length;
+        memcpy(list + list_length, m->bytes, m->length);
+        list_length += m->length;
+    }
+    if (rtpmidi_encode_list(sequence, messages[0].timestamp, ssrc, list,
+                            list_length, data, capacity, &used) != 0)
+        return -1;
+    if (rtpmidi_sender_journal(sender, sequence, messages[0].timestamp,
+                               data + used, capacity - used,
+                               &journal_length) == 0) {
+        data[12] |= 0x40;
+        used += journal_length;
+    } else {
+        ++sender->journals_omitted;
+    }
+    previous = messages[0].timestamp;
+    for (i = 0; i < n; ++i) {
+        const struct rtpmidi_timed_message *m = &messages[i];
+
+        if (!((m->timestamp - previous) & 0x80000000u))
+            previous = m->timestamp;
+        if (rtpmidi_sender_supported(m->bytes, m->length))
+            rtpmidi_sender_record(sender, sequence, previous, m->bytes,
+                                  m->length);
+        else
+            ++sender->unjournalled;
+    }
+    *packet_length = used;
+    *taken = n;
+    return 0;
+}
+
 int rtpmidi_sender_packet(struct rtpmidi_sender *sender, uint16_t sequence,
                           uint32_t timestamp, uint32_t ssrc,
                           const uint8_t *message, size_t length,
                           uint8_t *data, size_t capacity,
                           size_t *packet_length)
 {
-    size_t used;
-    size_t journal_length;
+    struct rtpmidi_timed_message one;
+    size_t taken;
 
-    if (!sender || !packet_length ||
-        rtpmidi_encode_short(sequence, timestamp, ssrc, message, length,
-                             data, capacity, &used) != 0)
+    if (!message || !length || length > sizeof(one.bytes))
         return -1;
-    if (rtpmidi_sender_journal(sender, sequence, timestamp, data + used,
-                               capacity - used, &journal_length) == 0) {
-        data[12] |= 0x40;
-        used += journal_length;
-    } else {
-        ++sender->journals_omitted;
-    }
-    if (rtpmidi_sender_supported(message, length))
-        rtpmidi_sender_record(sender, sequence, timestamp, message, length);
-    else
-        ++sender->unjournalled;
-    *packet_length = used;
-    return 0;
+    one.timestamp = timestamp;
+    one.length = (uint8_t)length;
+    memcpy(one.bytes, message, length);
+    return rtpmidi_sender_packet_list(sender, sequence, ssrc, &one, 1, data,
+                                      capacity, packet_length, &taken);
 }

@@ -91,6 +91,10 @@ struct runtime {
     unsigned long midi2_gaps[NETMIDI2_SESSIONS_MAX];
     unsigned long midi2_resets[NETMIDI2_SESSIONS_MAX];
     struct netmidi_camd_runtime camd;
+    /* What CAMD handed over in one turn of the loop and has not gone out
+       yet: it leaves together, one packet to a peer where it fits. */
+    struct rtpmidi_timed_message outgoing[64];
+    size_t outgoing_count;
 };
 
 static uint64_t now_ticks(void)
@@ -815,6 +819,45 @@ static int send_midi_to(struct runtime *rt, int index, const uint8_t *message,
     return 0;
 }
 
+/* Sends what was gathered to every connected peer: to each as few
+ * packets as hold it, each message with the time it was taken at. */
+static void flush_midi(struct runtime *rt)
+{
+    int index;
+
+    for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index) {
+        struct stream *stream = &rt->stream[index];
+        struct sockaddr_in data;
+        uint8_t wire[1100];
+        size_t wire_length;
+        size_t taken;
+        size_t done = 0;
+
+        if (!rt->peers.peer[index].used ||
+            rt->peers.peer[index].session.phase != APPLEMIDI_SESSION_CONNECTED)
+            continue;
+        peer_address(&rt->peers.peer[index], 1, &data);
+        while (done < rt->outgoing_count) {
+            if (rtpmidi_sender_packet_list(&stream->sender, stream->sequence,
+                                           rt->peers.local_ssrc,
+                                           rt->outgoing + done,
+                                           rt->outgoing_count - done,
+                                           wire, sizeof(wire), &wire_length,
+                                           &taken) != 0) {
+                ++done;         /* not a message we can send */
+                continue;
+            }
+            done += taken;
+            if (netmidi_network_send(&rt->network, 1, wire, wire_length,
+                                     &data) != 0)
+                break;
+            ++stream->sequence;
+            stream->last_rtp_send = now_ticks();
+        }
+    }
+    rt->outgoing_count = 0;
+}
+
 /* What a CAMD program sends goes to every connected peer, each with its
  * own sequence numbers and its own journal. */
 static int send_midi(void *context, const uint8_t *message, size_t length)
@@ -834,12 +877,32 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
             if (message[i] & 0x80)
                 return -1;
     }
-    for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
-        if (rt->peers.peer[index].used &&
-            rt->peers.peer[index].session.phase ==
-                APPLEMIDI_SESSION_CONNECTED &&
-            send_midi_to(rt, index, message, length) == 0)
-            result = 0;
+    if (message[0] != 0xf0 && length <= 3) {
+        /* gathered, and sent when CAMD has nothing more this turn */
+        struct rtpmidi_timed_message *m;
+
+        if (rt->outgoing_count ==
+            sizeof(rt->outgoing) / sizeof(rt->outgoing[0]))
+            flush_midi(rt);
+        m = &rt->outgoing[rt->outgoing_count++];
+        m->timestamp = (uint32_t)now_ticks();
+        m->length = (uint8_t)length;
+        memcpy(m->bytes, message, length);
+        for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
+            if (rt->peers.peer[index].used &&
+                rt->peers.peer[index].session.phase ==
+                    APPLEMIDI_SESSION_CONNECTED)
+                result = 0;
+    } else {
+        /* a SysEx message has packets of its own, after what came first */
+        flush_midi(rt);
+        for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
+            if (rt->peers.peer[index].used &&
+                rt->peers.peer[index].session.phase ==
+                    APPLEMIDI_SESSION_CONNECTED &&
+                send_midi_to(rt, index, message, length) == 0)
+                result = 0;
+    }
     if (rt->midi2_enabled) {
         midi2_send_midi(rt, message, length);
         result = 0;
@@ -1248,6 +1311,7 @@ int main(int argc, char **argv)
             midi2_receive(&rt);
         periodic(&rt, now_ticks());
         netmidi_camd_poll(&rt.camd, send_midi, &rt);
+        flush_midi(&rt);
         /* asked to invite one peer by its address: with that session
            over, so are we. One wanted by name is waited for instead. */
         if (rt.configured && !rt.wanted[0] && configured_index(&rt) < 0)

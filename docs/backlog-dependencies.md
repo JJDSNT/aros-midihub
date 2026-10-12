@@ -203,7 +203,7 @@ their own backlog, not from this graph.
 
 | Backlog | Items |
 |---|---|
-| RTP-MIDI | R11, R14, R18, R19, R20, R22, R29, R24, R25, R30 |
+| RTP-MIDI | R32, R14, R18, R19, R20, R22, R29, R24, R25, R30 |
 | AppleMIDI | AM11, AM13, AM15, AM17, AM18, AM21 |
 | UMP | UP06, UP07, UP08, UP13, UP15 |
 | Network MIDI 2.0 | NM08, NM12, NM13, NM17, NM18, NM19 |
@@ -251,4 +251,4 @@ PR #1507, is the one step there that is ours.
   PR #1560).
 - AM03 and AM18 want the counters of R18 to be visible, but can be done
   with their own.
-- R11 and R17 are worth doing whichever way D4 goes.
+- R11 and R17 were worth doing whichever way D4 goes, and are done.

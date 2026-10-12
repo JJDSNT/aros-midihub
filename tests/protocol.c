@@ -1832,6 +1832,115 @@ static void rtp_header_variants(void)
 
 /* A command is never held back for its journal, and what the journal
  * cannot hold does not cost the rest its protection. */
+/* Several messages in one packet, each at its time (backlog R11). */
+static void sender_packet_list(void)
+{
+    static struct rtpmidi_sender sender;
+    struct rtpmidi_timed_message chord[3] = {
+        {1000, 3, {0x90, 60, 100}},
+        {1000, 3, {0x90, 64, 100}},
+        {1250, 3, {0x90, 67, 100}}
+    };
+    struct rtpmidi_timed_message many[400];
+    struct rtpmidi_packet packet;
+    struct rtpmidi_reader reader;
+    struct rtpmidi_event event;
+    struct rtpmidi_journal journal;
+    struct rtpmidi_journal_notes notes;
+    static const uint8_t off[] = {0x80, 60, 0};
+    uint8_t wire[1100];
+    size_t length;
+    size_t taken;
+    size_t total;
+    unsigned int i;
+    uint16_t sequence = 10;
+
+    /* A chord leaves as one packet; the receiver reads the sender's
+     * times: the third note 25 ms after the two that came together. */
+    rtpmidi_sender_reset(&sender);
+    assert(rtpmidi_sender_packet_list(&sender, sequence, 1, chord, 3, wire,
+                                      sizeof(wire), &length, &taken) == 0);
+    assert(taken == 3);
+    assert(rtpmidi_decode(wire, length, &packet) == 0);
+    assert(packet.timestamp == 1000 && !packet.z);
+    /* 3 + (1 + 3) + (2 + 3): the delta of 250 takes two bytes */
+    assert(packet.midi_length == 12 && packet.midi[3] == 0 &&
+           packet.midi[7] == 0x81 && packet.midi[8] == 0x7a);
+    rtpmidi_reader_init(&reader, &packet);
+    for (i = 0; i < 3; ++i) {
+        assert(rtpmidi_reader_next(&reader, &event) == 1);
+        assert(event.length == 3 &&
+               memcmp(event.bytes, chord[i].bytes, 3) == 0 &&
+               event.timestamp == chord[i].timestamp);
+    }
+    assert(rtpmidi_reader_next(&reader, &event) == 0);
+    /* All three are in the history under the packet's number: were it
+     * lost, the next packet's journal has the three notes. */
+    assert(sender.count == 3);
+    ++sequence;
+    assert(rtpmidi_sender_packet(&sender, sequence, 2000, 1, off, sizeof(off),
+                                 wire, sizeof(wire), &length) == 0);
+    assert(rtpmidi_decode(wire, length, &packet) == 0 && packet.journal);
+    assert(rtpmidi_journal_decode(packet.journal, packet.journal_length,
+                                  &journal) == 0);
+    assert(journal.channel_count == 1 &&
+           rtpmidi_journal_decode_notes(&journal.channels[0], &notes) == 1 &&
+           notes.log_count == 3);
+
+    /* A time that goes backwards is sent as the time before it. */
+    chord[1].timestamp = 900;
+    rtpmidi_sender_reset(&sender);
+    assert(rtpmidi_sender_packet_list(&sender, sequence, 1, chord, 3, wire,
+                                      sizeof(wire), &length, &taken) == 0);
+    assert(rtpmidi_decode(wire, length, &packet) == 0);
+    rtpmidi_reader_init(&reader, &packet);
+    assert(rtpmidi_reader_next(&reader, &event) == 1 && event.timestamp == 1000);
+    assert(rtpmidi_reader_next(&reader, &event) == 1 && event.timestamp == 1000);
+    assert(rtpmidi_reader_next(&reader, &event) == 1 && event.timestamp == 1250);
+
+    /* More than a packet holds: as many as fit are taken, in order, and
+     * the rest is the caller's to send next. Nothing is lost or doubled. */
+    for (i = 0; i < 400; ++i) {
+        many[i].timestamp = 5000 + i * 300;
+        many[i].length = 3;
+        many[i].bytes[0] = 0xb0;
+        many[i].bytes[1] = (uint8_t)(i & 127);
+        many[i].bytes[2] = (uint8_t)((i >> 2) & 127);
+    }
+    rtpmidi_sender_reset(&sender);
+    total = 0;
+    while (total < 400) {
+        assert(rtpmidi_sender_packet_list(&sender, sequence++, 1,
+                                          many + total, 400 - total, wire,
+                                          sizeof(wire), &length,
+                                          &taken) == 0);
+        assert(taken > 0 && length <= sizeof(wire));
+        assert(rtpmidi_decode(wire, length, &packet) == 0);
+        assert(packet.midi_length <= RTPMIDI_LIST_MAX);
+        rtpmidi_reader_init(&reader, &packet);
+        for (i = 0; i < taken; ++i) {
+            assert(rtpmidi_reader_next(&reader, &event) == 1);
+            assert(memcmp(event.bytes, many[total + i].bytes, 3) == 0 &&
+                   event.timestamp == many[total + i].timestamp);
+        }
+        assert(rtpmidi_reader_next(&reader, &event) == 0);
+        total += taken;
+    }
+    assert(total == 400);
+
+    /* An invalid message ends the packet before it; an invalid first
+     * one is refused. */
+    chord[1].timestamp = 1000;
+    chord[1].bytes[1] = 0x80;
+    rtpmidi_sender_reset(&sender);
+    assert(rtpmidi_sender_packet_list(&sender, sequence, 1, chord, 3, wire,
+                                      sizeof(wire), &length, &taken) == 0 &&
+           taken == 1);
+    assert(rtpmidi_sender_packet_list(&sender, sequence, 1, chord + 1, 2,
+                                      wire, sizeof(wire), &length,
+                                      &taken) == -1);
+}
+
 static void sender_journal_limits(void)
 {
     static struct rtpmidi_sender sender;
@@ -2157,6 +2266,7 @@ int main(void)
     journal_controls();
     outgoing_journal();
     sender_journal_limits();
+    sender_packet_list();
     rtp_command_reader();
     rtp_system_common();
     rtp_sysex();

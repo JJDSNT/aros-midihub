@@ -43,18 +43,24 @@ static size_t short_length(uint8_t status)
     }
 }
 
+int rtpmidi_short_valid(const uint8_t *midi, size_t midi_length)
+{
+    size_t i;
+
+    if (!midi || !midi_length || midi_length != short_length(midi[0]))
+        return 0;
+    for (i = 1; i < midi_length; ++i)
+        if (midi[i] & 0x80)
+            return 0;
+    return 1;
+}
+
 int rtpmidi_encode_short(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
                         const uint8_t *midi, size_t midi_length,
                         uint8_t *data, size_t capacity, size_t *length)
 {
-    size_t i;
-
-    if (!midi || !data || !length || !midi_length ||
-        midi_length != short_length(midi[0]))
+    if (!data || !length || !rtpmidi_short_valid(midi, midi_length))
         return -1;
-    for (i = 1; i < midi_length; ++i)
-        if (midi[i] & 0x80)
-            return -1;
     return rtpmidi_encode_list(sequence, timestamp, ssrc, midi, midi_length,
                               data, capacity, length);
 }

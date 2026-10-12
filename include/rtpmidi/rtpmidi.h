@@ -281,6 +281,8 @@ int rtpmidi_reader_next(struct rtpmidi_reader *reader,
 int rtpmidi_encode_short(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
                         const uint8_t *midi, size_t midi_length,
                         uint8_t *data, size_t capacity, size_t *length);
+/* Whether these bytes are one whole message other than SysEx. */
+int rtpmidi_short_valid(const uint8_t *midi, size_t midi_length);
 int rtpmidi_encode_list(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
                        const uint8_t *midi, size_t midi_length,
                        uint8_t *data, size_t capacity, size_t *length);
