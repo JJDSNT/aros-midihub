@@ -121,8 +121,11 @@ fi
 line=$(grep '^=;aroshost;IPv4;AROS\\032Net\\032MIDI;_midi2._udp;' "$work/browse.log" 2> /dev/null | head -1)
 if echo "$line" | grep -q ';192.168.166.2;5673;' &&
    echo "$line" | grep -q '"UMPEndpointName=AROS Net MIDI"' &&
-   echo "$line" | grep -q '"ProductInstanceId=aros-midihub"'; then
-    echo "ok: Avahi found the Host as _midi2._udp on port 5673, with its endpoint name and product id"
+   echo "$line" | grep -Eq '"ProductInstanceId=AROS-[0-9a-f]{16}"' &&
+   id=$(cat "$sys/Prefs/Env-Archive/NetMIDI.id" 2> /dev/null) &&
+   echo "$line" | grep -qF "\"ProductInstanceId=$id\"" &&
+   grep -qF "role=client peer=\"AROS Net MIDI\" id=\"$id\"" "$work/peer.log"; then
+    echo "ok: Avahi found the Host as _midi2._udp on port 5673, with its endpoint name and a product id of this machine's own ($id), the one kept in ENVARC: and given in the session"
 else
     echo "FAIL: the Host's advertisement: $line"
     status=1

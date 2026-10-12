@@ -57,6 +57,8 @@ sed -i 's/OPENGUI=.*/OPENGUI=NO/' "$db/general.config"
 # the service's configuration, and what it would print to a file
 printf 'midi2_port = 5673\nsession_name = AROS Net MIDI\nmidi2_peer_name = Host Endpoint\n' > "$sys/Prefs/Env-Archive/NetMIDI"
 printf 'SYS:netmidid.log' > "$sys/Prefs/Env-Archive/netmidid.log"
+# a product id made before: it has to be the one used
+printf 'AROS-kept000000000001' > "$sys/Prefs/Env-Archive/NetMIDI.id"
 sudo setcap cap_net_raw,cap_net_admin+ep "$sys/boot/linux/AROSBootstrap"
 cat > "$sys/S/netmidi2-run" <<RUNEOF
 FailAt 21
@@ -98,8 +100,8 @@ status=0
 if grep -q 'MIDI 2.0 host "Host Endpoint" ("0a1b-host") found at 192.168.166.1 port 5683' "$work/hub.log" 2> /dev/null &&
    grep -q 'inviting a MIDI 2.0 host' "$work/hub.log" &&
    grep -q 'MIDI 2.0 session established peer="Peer on 5683" port=0' "$work/hub.log" &&
-   grep -q '^established slot=0 role=host peer="AROS Net MIDI"' "$work/peer.log"; then
-    echo "ok: the service found the Host by its endpoint's name and became its Client"
+   grep -q '^established slot=0 role=host peer="AROS Net MIDI" id="AROS-kept000000000001"' "$work/peer.log"; then
+    echo "ok: the service found the Host by its endpoint's name and became its Client, under the product id it had kept"
 else
     echo "FAIL: finding and inviting the Host"
     status=1

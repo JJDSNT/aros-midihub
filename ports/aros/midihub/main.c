@@ -43,6 +43,8 @@ static void stop_signal(int signal_number)
 
 /* What is kept for one peer's stream, beside its session in the peer
  * table at the same index. */
+#define PRODUCT_ID_MAX 42   /* M2-124-UM section 4.4 */
+
 struct stream {
     int initiating;             /* we sent the invitation */
     struct applemidi_clock clock;
@@ -116,6 +118,7 @@ struct runtime {
     struct netmidi_port_counts midi2_count[NETMIDI2_SESSIONS_MAX];
     uint64_t published;             /* when the counts were last told */
     int chatty;                     /* a line of text to every packet */
+    char product_id[PRODUCT_ID_MAX + 1];
     int browse_apple;               /* which of discovery's searches */
     int browse_midi2;
     unsigned long midi2_timed;
@@ -142,6 +145,7 @@ struct runtime {
 /* What we answer when asked which device this is, in an Invitation Reply
    and in the service's text record: the same string in both. */
 #define MIDI2_PRODUCT_ID "aros-midihub"
+/* The service's is this machine's own: see product_instance_id(). */
 
 static uint64_t now_ticks(void)
 {
@@ -1280,6 +1284,52 @@ static void periodic_peer(struct runtime *rt, int index, uint64_t now)
     }
 }
 
+/* The Product Instance Id tells one device from another and is how a
+   system knows a device again (M2-124-UM section 4.4): it has to differ
+   between machines and stay the same on one. It is made once, of random
+   bits, and kept in a file; the Linux build, which the tests run, has the
+   one name always. */
+static void product_instance_id(char *id, uint64_t now)
+{
+#ifdef NETMIDI_SERVICE
+    static const char *const path[2] = {"ENVARC:NetMIDI.id", "ENV:NetMIDI.id"};
+    int which;
+    size_t i;
+
+    for (which = 0; which < 2; ++which) {
+        FILE *file = fopen(path[which], "r");
+        size_t length = 0;
+
+        if (!file)
+            continue;
+        length = fread(id, 1, PRODUCT_ID_MAX, file);
+        fclose(file);
+        while (length && (id[length - 1] == '\n' || id[length - 1] == '\r'))
+            --length;
+        id[length] = 0;
+        /* ASCII 32 to 126, and not empty */
+        for (i = 0; i < length; ++i)
+            if (id[i] < 32 || id[i] > 126)
+                break;
+        if (length && i == length)
+            return;
+    }
+    snprintf(id, PRODUCT_ID_MAX + 1, "AROS-%08lx%08lx",
+             (unsigned long)random32(now), (unsigned long)random32(now + 1));
+    for (which = 0; which < 2; ++which) {
+        FILE *file = fopen(path[which], "w");
+
+        if (file) {
+            fputs(id, file);
+            fclose(file);
+        }
+    }
+#else
+    (void)now;
+    strcpy(id, MIDI2_PRODUCT_ID);
+#endif
+}
+
 /* Tells whoever asks what has passed on each port: about once a second. */
 static void publish_counts(struct runtime *rt, uint64_t now)
 {
@@ -1626,7 +1676,8 @@ static int run(int argc, char **argv)
             fputs(TAG "cannot bind the Network MIDI 2.0 port\n", stderr);
             goto cleanup;
         }
-        netmidi2_table_init(&rt.midi2, config.session_name, MIDI2_PRODUCT_ID,
+        product_instance_id(rt.product_id, now_ticks());
+        netmidi2_table_init(&rt.midi2, config.session_name, rt.product_id,
                             midi2_sink, &rt);
         /* a peer may send its timestamps: they are used */
         rt.midi2.jr_offered = UMP_JR_RECEIVE;
@@ -1729,7 +1780,7 @@ static int run(int argc, char **argv)
         netmidi_discovery_item(midi2_text, sizeof(midi2_text),
                                "UMPEndpointName", rt.session_name);
         netmidi_discovery_item(midi2_text, sizeof(midi2_text),
-                               "ProductInstanceId", MIDI2_PRODUCT_ID);
+                               "ProductInstanceId", rt.product_id);
         netmidi_discovery_add_text(&rt.discovery, rt.session_name,
                                    "_midi2._udp", midi2_port, midi2_text, 60);
     }
