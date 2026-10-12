@@ -116,6 +116,14 @@ struct runtime {
     int shared_port;
 };
 
+/* What each report begins with: the name of what is running. The service
+   is no program of the package's name. */
+#ifdef NETMIDI_SERVICE
+#define TAG "netmidid: "
+#else
+#define TAG "MIDIHub: "
+#endif
+
 /* What we answer when asked which device this is, in an Invitation Reply
    and in the service's text record: the same string in both. */
 #define MIDI2_PRODUCT_ID "aros-midihub"
@@ -187,7 +195,7 @@ static uint32_t random32(uint64_t now)
     if (netmidi_network_random(&value, sizeof(value)) != 0) {
         static int told;
         if (!told) {
-            puts("MIDIHub: no random source; identifiers are weak");
+            puts(TAG "no random source; identifiers are weak");
             srand((unsigned int)(now ^ (now >> 32)));
             told = 1;
         }
@@ -205,7 +213,7 @@ static void output_message(void *context, const uint8_t *bytes,
     struct runtime *rt = stream->rt;
     if (rt->trace) {
         size_t i;
-        printf("MIDIHub: delivered at=%lu bytes=",
+        printf(TAG "delivered at=%lu bytes=",
                (unsigned long)(now_ticks() & 0xffffffffu));
         for (i = 0; i < length; ++i)
             printf("%02x", (unsigned int)bytes[i]);
@@ -226,7 +234,7 @@ static void output_sysex(void *context, const uint8_t *message, size_t length)
 static void output_report(void *context, const char *text)
 {
     (void)context;
-    fputs("MIDIHub: ", stdout);
+    fputs(TAG "", stdout);
     fputs(text, stdout);
 }
 
@@ -262,12 +270,12 @@ static void stream_forget(struct runtime *rt, int index, uint64_t now)
 {
     struct stream *stream = &rt->stream[index];
     if (stream->timed) {
-        printf("MIDIHub: %lu of %lu timed events came after their time\n",
+        printf(TAG "%lu of %lu timed events came after their time\n",
                stream->late, stream->timed);
         stream->timed = stream->late = 0;
     }
     if (stream->sysex_dropped) {
-        printf("MIDIHub: %lu SysEx messages were dropped, too long or broken\n",
+        printf(TAG "%lu SysEx messages were dropped, too long or broken\n",
                stream->sysex_dropped);
         stream->sysex_dropped = 0;
     }
@@ -371,25 +379,25 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
     if (midi.journal &&
         rtpmidi_journal_decode(midi.journal, midi.journal_length,
                           &journal) != 0) {
-        puts("MIDIHub: malformed recovery journal discarded");
+        puts(TAG "malformed recovery journal discarded");
         return;
     }
     if (midi.journal && journal.system) {
         system_decoded = rtpmidi_journal_decode_system(&journal, &system_state);
         if (system_decoded < 0) {
-            puts("MIDIHub: malformed system recovery journal discarded");
+            puts(TAG "malformed system recovery journal discarded");
             return;
         }
         if (system_state.sysex &&
             rtpmidi_journal_decode_sysex(&system_state, &sysex_state) < 0) {
-            puts("MIDIHub: malformed SysEx recovery journal discarded");
+            puts(TAG "malformed SysEx recovery journal discarded");
             return;
         }
     }
     rtpmidi_reader_init(&reader, &midi);
     while ((action = rtpmidi_reader_next(&reader, &event)) == 1) {}
     if (action < 0) {
-        puts("MIDIHub: unsupported or malformed MIDI command");
+        puts(TAG "unsupported or malformed MIDI command");
         return;
     }
     if (stream->have_received_sequence) {
@@ -397,7 +405,7 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
         sequence_advance = (int16_t)(midi.sequence -
                                      previous_sequence);
         if (sequence_advance > 1) {
-            printf("MIDIHub: %u RTP packet(s) lost; journal %s\n",
+            printf(TAG "%u RTP packet(s) lost; journal %s\n",
                    (unsigned int)(sequence_advance - 1),
                    !midi.journal ? "unavailable" :
                    rtpmidi_journal_covers_gap(
@@ -421,7 +429,7 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
     }
     if (!midi.midi_length)
         return; /* Guard packet: acknowledge its journal without MIDI output. */
-    printf("MIDIHub: RTP-MIDI seq=%u timestamp=%lu length=%lu bytes=",
+    printf(TAG "RTP-MIDI seq=%u timestamp=%lu length=%lu bytes=",
            (unsigned int)midi.sequence, (unsigned long)midi.timestamp,
            (unsigned long)midi.midi_length);
     for (i = 0; i < midi.midi_length && i < 16; ++i)
@@ -437,7 +445,7 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
                                           &sysex_message, &sysex_length);
             if (sysex_result == 1) {
                 uint64_t due;
-                printf("MIDIHub: SysEx complete bytes=%lu\n",
+                printf(TAG "SysEx complete bytes=%lu\n",
                        (unsigned long)sysex_length);
                 now = now_ticks();
                 if (stream->clock.synchronized &&
@@ -448,14 +456,14 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
                         rtpmidi_queue_push_sysex(&stream->queue, due,
                                             sysex_message,
                                             sysex_length) != 0)
-                        puts("MIDIHub: future SysEx event discarded");
+                        puts(TAG "future SysEx event discarded");
                     continue;
                 }
                 rtpmidi_receiver_deliver_sysex(&stream->receiver,
                                                sysex_message, sysex_length);
             } else if (sysex_result < 0) {
                 ++stream->sysex_dropped;
-                puts("MIDIHub: SysEx segment discarded");
+                puts(TAG "SysEx segment discarded");
             }
         } else {
             uint64_t due;
@@ -467,7 +475,7 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
                 if (due - now > RTPMIDI_QUEUE_HORIZON ||
                     rtpmidi_queue_push(&stream->queue, due, event.bytes,
                                   event.length) != 0)
-                    puts("MIDIHub: future MIDI event discarded");
+                    puts(TAG "future MIDI event discarded");
                 continue;
             }
             rtpmidi_receiver_deliver(&stream->receiver, event.bytes,
@@ -475,7 +483,7 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
         }
     }
     if (action < 0)
-        puts("MIDIHub: unsupported or malformed MIDI command");
+        puts(TAG "unsupported or malformed MIDI command");
 }
 
 static void receive_packet(struct runtime *rt, int data_port)
@@ -530,7 +538,7 @@ static void receive_packet(struct runtime *rt, int data_port)
                                     &response))
             send_apple(rt, index, 1, &response);
         if (rt->stream[index].clock.completed != completed)
-            puts("MIDIHub: clock exchange completed");
+            puts(TAG "clock exchange completed");
         return;
     }
     if (packet.command == APPLEMIDI_RS) {
@@ -569,9 +577,9 @@ static void receive_packet(struct runtime *rt, int data_port)
         send_apple_to(rt, response_port, &source, &response);
     }
     if (rt->peers.ssrc_collisions != collisions) {
-        puts("MIDIHub: peer has our SSRC");
+        puts(TAG "peer has our SSRC");
         if (applemidi_peers_renew(&rt->peers, random32(now)) == 0) {
-            puts("MIDIHub: taking another SSRC");
+            puts(TAG "taking another SSRC");
             if (rt->configured)
                 invite_configured(rt, now);
         }
@@ -586,7 +594,7 @@ static void receive_packet(struct runtime *rt, int data_port)
         rt->stream[index].retries = 0;
     }
     if (event == APPLEMIDI_PEER_RESTARTED) {
-        puts("MIDIHub: peer began again");
+        puts(TAG "peer began again");
         stream_forget(rt, index, now);
     } else if (event == APPLEMIDI_PEER_CONNECTED) {
         /* The peer gets a port: the one kept for its name, or the first
@@ -596,18 +604,18 @@ static void receive_packet(struct runtime *rt, int data_port)
             applemidi_ports_take(&rt->ports, packet.name, packet.name_length,
                                  index + 1);
         if (rt->stream[index].port < 0) {
-            puts("MIDIHub: no port for this peer");
+            puts(TAG "no port for this peer");
             drop_peer(rt, index, now);
             return;
         }
-        printf("MIDIHub: session connected port=%d\n",
+        printf(TAG "session connected port=%d\n",
                rt->stream[index].port);
         applemidi_clock_init(&rt->stream[index].clock,
                              rt->stream[index].initiating, now);
         send_sync(rt, index, now);
     } else if (event == APPLEMIDI_PEER_LEFT) {
         puts(packet.command == APPLEMIDI_NO ?
-             "MIDIHub: invitation refused" : "MIDIHub: peer disconnected");
+             TAG "invitation refused" : TAG "peer disconnected");
         stream_forget(rt, index, now);
     }
 }
@@ -650,7 +658,7 @@ static void midi2_deliver(struct runtime *rt, int index, const uint8_t *bytes,
 {
     if (rt->trace) {
         size_t i;
-        printf("MIDIHub: MIDI 2.0 delivered at=%llu bytes=",
+        printf(TAG "MIDI 2.0 delivered at=%llu bytes=",
                (unsigned long long)now_ticks());
         for (i = 0; i < length && i < 16; ++i)
             printf("%02x", (unsigned int)bytes[i]);
@@ -672,7 +680,7 @@ static void midi2_to_camd(void *context, const uint8_t *bytes, size_t length)
     uint64_t due_us;
     size_t i;
 
-    printf("MIDIHub: MIDI 2.0 bytes=");
+    printf(TAG "MIDI 2.0 bytes=");
     for (i = 0; i < length && i < 16; ++i)
         printf("%02x", (unsigned int)bytes[i]);
     puts(i < length ? "..." : "");
@@ -781,9 +789,9 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
         uint64_t peer;
         if (!session) {
             if (rt->midi2_known[index]) {
-                puts("MIDIHub: MIDI 2.0 session closed");
+                puts(TAG "MIDI 2.0 session closed");
                 if (rt->midi2_timed) {
-                    printf("MIDIHub: %lu of %lu timed MIDI 2.0 events came after their time\n",
+                    printf(TAG "%lu of %lu timed MIDI 2.0 events came after their time\n",
                            rt->midi2_late, rt->midi2_timed);
                     rt->midi2_timed = rt->midi2_late = 0;
                 }
@@ -811,7 +819,7 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
                 rt->midi2_port[index] = port < 0 ? -1 :
                                         NETMIDI_CAMD_MIDI2 + port;
             }
-            printf("MIDIHub: MIDI 2.0 session established peer=\"%s\" port=%d\n",
+            printf(TAG "MIDI 2.0 session established peer=\"%s\" port=%d\n",
                    session->peer_name,
                    rt->midi2_port[index] < 0 ? -1 :
                    rt->shared_port ? 0 :
@@ -827,7 +835,7 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
         if (rt->midi2_known[index] &&
             (session->gaps != rt->midi2_gaps[index] ||
              session->resets != rt->midi2_resets[index])) {
-            puts("MIDIHub: MIDI 2.0 data lost or session reset");
+            puts(TAG "MIDI 2.0 data lost or session reset");
             rt->midi2_gaps[index] = session->gaps;
             rt->midi2_resets[index] = session->resets;
             ump_to_midi1_buffer(&rt->midi2_in[index], rt->midi2_sysex[index],
@@ -1163,7 +1171,7 @@ static void periodic_peer(struct runtime *rt, int index, uint64_t now)
         if (elapsed_ticks(now, stream->last_invite) >=
                 APPLEMIDI_INVITE_INTERVAL) {
             if (++stream->retries > APPLEMIDI_INVITE_TRIES) {
-                puts("MIDIHub: invitation timed out");
+                puts(TAG "invitation timed out");
                 drop_peer(rt, index, now);
             } else if (applemidi_peers_retry(&rt->peers, index, &packet,
                                              &data_port) == 0) {
@@ -1174,7 +1182,7 @@ static void periodic_peer(struct runtime *rt, int index, uint64_t now)
     } else if (session->phase == APPLEMIDI_SESSION_CONNECTED) {
         int probing = index == configured_index(rt);
         if (applemidi_clock_expired(&stream->clock, now)) {
-            puts("MIDIHub: peer synchronization timed out");
+            puts(TAG "peer synchronization timed out");
             drop_peer(rt, index, now);
             return;
         }
@@ -1203,7 +1211,7 @@ static void periodic_peer(struct runtime *rt, int index, uint64_t now)
     } else if (session->phase == APPLEMIDI_SESSION_WAITING_DATA &&
                elapsed_ticks(now, stream->last_activity) >=
                    APPLEMIDI_DATA_INVITE_TIMEOUT) {
-        puts("MIDIHub: data invitation timed out");
+        puts(TAG "data invitation timed out");
         drop_peer(rt, index, now);
     }
 }
@@ -1217,7 +1225,7 @@ static void periodic(struct runtime *rt, uint64_t now)
         struct netmidi_discovered seen;
         int registered = netmidi_discovery_poll(&rt->discovery, now);
         if (registered > rt->discovered)
-            puts("MIDIHub: advertised by the system mDNS service");
+            puts(TAG "advertised by the system mDNS service");
         if (registered >= 0)
             rt->discovered = registered;
         while (netmidi_discovery_next(&rt->discovery, &seen)) {
@@ -1226,14 +1234,14 @@ static void periodic(struct runtime *rt, uint64_t now)
             if (ours)
                 continue;           /* our own registration, come back */
             if (seen.present)
-                printf("MIDIHub: session \"%s\" found at %u.%u.%u.%u port %u\n",
+                printf(TAG "session \"%s\" found at %u.%u.%u.%u port %u\n",
                        seen.name, (unsigned int)(seen.address >> 24),
                        (unsigned int)((seen.address >> 16) & 255),
                        (unsigned int)((seen.address >> 8) & 255),
                        (unsigned int)(seen.address & 255),
                        (unsigned int)seen.port);
             else
-                printf("MIDIHub: session \"%s\" is gone\n", seen.name);
+                printf(TAG "session \"%s\" is gone\n", seen.name);
             if (!wanted)
                 continue;
             if (seen.present) {
@@ -1252,7 +1260,7 @@ static void periodic(struct runtime *rt, uint64_t now)
         if (rt->wanted_present && configured_index(rt) < 0 &&
             (!rt->wanted_tried ||
              elapsed_ticks(now, rt->wanted_tried) >= rt->wanted_wait)) {
-            printf("MIDIHub: inviting \"%s\"\n", rt->wanted);
+            printf(TAG "inviting \"%s\"\n", rt->wanted);
             invite_configured(rt, now);
             rt->wanted_tried = now ? now : 1;
             rt->wanted_wait = rt->wanted_wait ? rt->wanted_wait * 2 :
@@ -1311,7 +1319,7 @@ int main(int argc, char **argv)
     netmidi_config_defaults(&config);
     if (argc > 1 && strcmp(argv[1], "--config") == 0) {
         if (argc < 3 || netmidi_config_load(argv[2], &config) != 0) {
-            fputs("MIDIHub: cannot read configuration\n", stderr);
+            fputs(TAG "cannot read configuration\n", stderr);
             return 20;
         }
         argi = 3;
@@ -1327,7 +1335,7 @@ int main(int argc, char **argv)
             config_result = netmidi_config_load("ENVARC:MidiHub/Network", &config);
 #endif
         if (config_result < 0) {
-            fputs("MIDIHub: invalid network preferences\n", stderr);
+            fputs(TAG "invalid network preferences\n", stderr);
             return 20;
         }
 #endif
@@ -1342,7 +1350,7 @@ int main(int argc, char **argv)
     /* Network MIDI 2.0 is off unless a port is given for it. */
     if (argc - argi >= 2 && strcmp(argv[argi], "--midi2") == 0) {
         if (parse_port(argv[argi + 1], &midi2_port) != 0) {
-            fputs("MIDIHub: --midi2 takes a UDP port\n", stderr);
+            fputs(TAG "--midi2 takes a UDP port\n", stderr);
             return 20;
         }
         argi += 2;
@@ -1351,7 +1359,7 @@ int main(int argc, char **argv)
     if (argc - argi >= 2 && strcmp(argv[argi], "--latency") == 0) {
         latency_ms = atoi(argv[argi + 1]);
         if (latency_ms < 0 || latency_ms > 2000) {
-            fputs("MIDIHub: --latency takes 0 to 2000 milliseconds\n", stderr);
+            fputs(TAG "--latency takes 0 to 2000 milliseconds\n", stderr);
             return 20;
         }
         argi += 2;
@@ -1401,7 +1409,7 @@ int main(int argc, char **argv)
                      strcmp(argv[argi + 3], "--probe-sysex") == 0;
 
     if (netmidi_network_platform_open(&rt.network) != 0) {
-        fputs("MIDIHub: bsdsocket.library unavailable\n", stderr);
+        fputs(TAG "bsdsocket.library unavailable\n", stderr);
         return 20;
     }
 #ifndef __AROS__
@@ -1415,19 +1423,19 @@ int main(int argc, char **argv)
 #else
         if (inet_pton(AF_INET, peer_ip, &peer_address_bytes) != 1) {
 #endif
-            fputs("MIDIHub: peer must be an IPv4 address\n", stderr);
+            fputs(TAG "peer must be an IPv4 address\n", stderr);
             goto cleanup;
         }
         rt.configured_address = ntohl(peer_address_bytes.s_addr);
         rt.configured_port = peer_port;
     }
     if (netmidi_network_open_pair(&rt.network, local_port) != 0) {
-        fputs("MIDIHub: cannot bind UDP port pair\n", stderr);
+        fputs(TAG "cannot bind UDP port pair\n", stderr);
         goto cleanup;
     }
     if (midi2_port) {
         if (netmidi_network_open_midi2(&rt.network, midi2_port) != 0) {
-            fputs("MIDIHub: cannot bind the Network MIDI 2.0 port\n", stderr);
+            fputs(TAG "cannot bind the Network MIDI 2.0 port\n", stderr);
             goto cleanup;
         }
         netmidi2_table_init(&rt.midi2, config.session_name, MIDI2_PRODUCT_ID,
@@ -1441,7 +1449,7 @@ int main(int argc, char **argv)
         rt.midi2_enabled = 1;
     }
     if (netmidi_camd_open(&rt.camd) != 0) {
-        fputs("MIDIHub: camd.library unavailable\n", stderr);
+        fputs(TAG "camd.library unavailable\n", stderr);
         goto cleanup;
     }
     rt.shared_port = netmidi_camd_ports(&rt.camd) == 1;
@@ -1453,12 +1461,12 @@ int main(int argc, char **argv)
         if (config.port_name[index][0] &&
             applemidi_ports_keep(&rt.ports, index,
                                  config.port_name[index]) != 0)
-            printf("MIDIHub: applemidi port %d cannot be kept for \"%s\"\n",
+            printf(TAG "applemidi port %d cannot be kept for \"%s\"\n",
                    index, config.port_name[index]);
         if (config.midi2_port_name[index][0] &&
             applemidi_ports_keep(&rt.midi2_ports, index,
                                  config.midi2_port_name[index]) != 0)
-            printf("MIDIHub: networkmidi2 port %d cannot be kept for \"%s\"\n",
+            printf(TAG "networkmidi2 port %d cannot be kept for \"%s\"\n",
                    index, config.midi2_port_name[index]);
     }
     now = now_ticks();
@@ -1489,7 +1497,7 @@ int main(int argc, char **argv)
                     applemidi_peers_allow(&rt.peers, 0, entry);
 #endif
                 if (result != 0) {
-                    fputs("MIDIHub: too many or bad entries in --accept\n",
+                    fputs(TAG "too many or bad entries in --accept\n",
                           stderr);
                     goto cleanup;
                 }
@@ -1517,10 +1525,10 @@ int main(int argc, char **argv)
     if (peer_name)
         snprintf(rt.wanted, sizeof(rt.wanted), "%s", peer_name);
     if (netmidi_discovery_poll(&rt.discovery, now) < 0)
-        puts("MIDIHub: no system mDNS service; peers have to be given by address");
+        puts(TAG "no system mDNS service; peers have to be given by address");
     if (rt.configured && invite_configured(&rt, now) != 0)
         goto cleanup;
-    printf("MIDIHub: listening on UDP %u/%u\n", (unsigned int)local_port,
+    printf(TAG "listening on UDP %u/%u\n", (unsigned int)local_port,
            (unsigned int)local_port + 1);
     fflush(stdout);
 

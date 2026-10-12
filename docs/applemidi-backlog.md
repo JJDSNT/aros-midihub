@@ -143,8 +143,15 @@ The service is called `netmidid` since it carries both protocols, and its
 configuration is `ENV:NetMIDI`. The Linux build of the program remains:
 it is what the host tests run, with every peer on one port.
 
+**No diagnostic's name or arguments on AROS, since 2026-10-12 (AM20).**
+The service has no command line and begins its reports with its own name,
+`netmidid`. The probes (`--probe-note`, `--probe-sysex`) and the name
+`MIDIHub` are left in the Linux build alone, which is the test program the
+item asked for. That the reports are lines of text and not counters is
+RTP-MIDI backlog R18.
+
 **AM08 is done by its own measure**: a CAMD program opens a driver's port
-and plays to a peer. What it leaves is AM25 to AM27 below, AM16 and AM20.
+and plays to a peer. What it leaves is AM25 to AM27 below and AM16.
 The time a message was meant for does not cross the driver (decision D4):
 a received message is played at its time by the service, and one sent
 carries the time the service took it from the port's ring.
@@ -166,7 +173,6 @@ carries the time the service took it from the port's ring.
 
 | # | Limit or defect | What to do |
 |---|---|---|
-| AM20 | The program's name, its `--probe-note` and `--probe-sysex` arguments and its messages are those of a diagnostic. The service, built from the same source, prints its reports under the name `MIDIHub`. | The probes become a test program; the service's reports name no program and go to counters (RTP-MIDI backlog R18). |
 | AM26 | Read and never run: a driver in memory of another layout than the service (`APPLEMIDI_ADAPTERS_VERSION`); the service stopping while CAMD holds a port open with bytes waiting; CAMD expunging the driver under a running service. Never built for m68k. | A test of each on hosted AROS; a build in the m68k tree. |
 | AM21 | `applemidi_peers_receive()` sets the "left" event through two branches that end the same way. | Simplify when the function is next touched. |
 
