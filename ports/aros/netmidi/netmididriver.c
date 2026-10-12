@@ -175,15 +175,35 @@ AROS_UFH1(BOOL, AROS_SLIB_ENTRY(Init, NetMidiCAMD, 0),
     AROS_USERFUNC_EXIT
 }
 
-/* camd.library is going. A service may still be attached, so the adapters
-   are taken from the public list and left where they are: nothing finds
-   them again, and no port of theirs is open. */
+/* camd.library is going, and this code with it. A service may still be
+   attached, so the adapters are taken from the public list, marked as
+   nobody's, and left where they are: nothing finds them again, no port of
+   theirs is open, and their interrupt, which is code of ours, must not be
+   caused again. The service looks at aa_Version, with task switching
+   forbidden, before it does. */
 AROS_UFH0(VOID, AROS_SLIB_ENTRY(Expunge, NetMidiCAMD, 0))
 {
     AROS_USERFUNC_INIT
 
+    ULONG n;
+
     if (Adapters)
+    {
+        Forbid();
         RemSemaphore(&Adapters->aa_Semaphore);
+        Adapters->aa_Version = NETMIDI_ADAPTERS_GONE;
+        for (n = 0; n < NETMIDI_DRIVER_PORTS; n++)
+        {
+            struct NetMidiAdapter *port = &Adapters->aa_Port[n];
+
+            Disable();
+            port->ad_IsOpen = FALSE;
+            port->ad_TXMore = FALSE;
+            port->ad_Task = NULL;
+            Enable();
+        }
+        Permit();
+    }
     Adapters = NULL;
 
     AROS_USERFUNC_EXIT

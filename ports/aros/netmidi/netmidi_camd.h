@@ -36,7 +36,13 @@
    service that finds it. The service attaches only to adapters of the
    layout it was built with. Count this up with any change to the two
    structures below; aa_Semaphore and aa_Version keep their places. */
+#ifndef NETMIDI_ADAPTERS_VERSION
 #define NETMIDI_ADAPTERS_VERSION  1
+#endif
+/* What a driver that camd.library has let go of leaves in aa_Version: its
+   adapters are still there, for a service that may be attached, and are
+   nobody's any more. */
+#define NETMIDI_ADAPTERS_GONE     0
 
 struct NetMidiAdapter
 {

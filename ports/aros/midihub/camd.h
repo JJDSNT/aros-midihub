@@ -24,6 +24,7 @@ struct netmidi_camd_runtime {
     void *adapters[NETMIDI_CAMD_DRIVERS];   /* struct NetMidiAdapters of
                                                each driver, once found */
     int signal_bit;
+    int reported[NETMIDI_CAMD_DRIVERS];     /* told once of another layout */
     /* the bytes CAMD clients sent to each port, gathered into messages */
     struct {
         uint8_t status;

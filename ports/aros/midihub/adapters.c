@@ -12,6 +12,7 @@
 #include <proto/exec.h>
 #include <exec/memory.h>
 
+#include <stdio.h>
 #include <string.h>
 
 #include "../netmidi/netmidi_camd.h"
@@ -48,33 +49,76 @@ static struct NetMidiAdapter *port_of(struct netmidi_camd_runtime *runtime,
     return adapters ? &adapters->aa_Port[number % NETMIDI_CAMD_PORTS] : NULL;
 }
 
-/* Looks for a driver's adapters and takes its ports. */
+/* Has the port's driver send what CAMD holds for it. The interrupt is the
+ * driver's code, which camd.library may have unloaded: a driver that went
+ * says so in aa_Version, and with task switching forbidden it cannot go
+ * between the look and the call. */
+static void wake_driver(struct netmidi_camd_runtime *runtime, int number)
+{
+    struct NetMidiAdapters *adapters =
+        runtime->adapters[number / NETMIDI_CAMD_PORTS];
+    struct NetMidiAdapter *port;
+
+    if (!adapters)
+        return;
+    port = &adapters->aa_Port[number % NETMIDI_CAMD_PORTS];
+    Forbid();
+    if (adapters->aa_Version == NETMIDI_ADAPTERS_VERSION && port->ad_IsOpen)
+        Cause(&port->ad_CAMDTXFunc);
+    Permit();
+}
+
+/* Looks for a driver's adapters and takes its ports; lets go of those of a
+ * driver that camd.library unloaded, which may be followed by another. */
 static void attach(struct netmidi_camd_runtime *runtime, int driver)
 {
     struct NetMidiAdapters *adapters;
     struct NetMidiAdapter *port;
     int number;
+    int other = 0;
+    int went = 0;
 
     Forbid();
     adapters = (struct NetMidiAdapters *)
         FindSemaphore((STRPTR)driver_name[driver]);
     /* a driver of another layout is left alone */
     if (adapters && (adapters->aa_Version != NETMIDI_ADAPTERS_VERSION ||
-                     adapters->aa_Ports < NETMIDI_CAMD_PORTS))
+                     adapters->aa_Ports < NETMIDI_CAMD_PORTS)) {
         adapters = NULL;
+        other = 1;
+    }
+    if (runtime->adapters[driver] && runtime->adapters[driver] != adapters) {
+        /* ours is on the list no more: its driver went */
+        went = 1;
+        runtime->adapters[driver] = NULL;
+        for (number = 0; number < NETMIDI_CAMD_PORTS; ++number)
+            memset(&runtime->stream[driver * NETMIDI_CAMD_PORTS + number], 0,
+                   sizeof(runtime->stream[0]));
+        if (runtime->sysex_port / NETMIDI_CAMD_PORTS == driver)
+            runtime->sysex_port = -1;
+    }
+    if (adapters && !runtime->adapters[driver]) {
+        runtime->adapters[driver] = adapters;
+        for (number = 0; number < NETMIDI_CAMD_PORTS; ++number) {
+            port = &adapters->aa_Port[number];
+            Disable();
+            port->ad_SigMask = 1UL << runtime->signal_bit;
+            port->ad_Task = FindTask(NULL);
+            Enable();
+            /* CAMD may have had the port open all along, with bytes
+               waiting */
+            if (port->ad_IsOpen)
+                Cause(&port->ad_CAMDTXFunc);
+        }
+    }
     Permit();
-    if (!adapters)
-        return;
-    runtime->adapters[driver] = adapters;
-    for (number = 0; number < NETMIDI_CAMD_PORTS; ++number) {
-        port = &adapters->aa_Port[number];
-        Disable();
-        port->ad_SigMask = 1UL << runtime->signal_bit;
-        port->ad_Task = FindTask(NULL);
-        Enable();
-        /* CAMD may have had the port open all along, with bytes waiting */
-        if (port->ad_IsOpen)
-            Cause(&port->ad_CAMDTXFunc);
+    if (went)
+        printf("netmidid: the driver behind %s was unloaded\n",
+               driver_name[driver]);
+    if (other && !runtime->reported[driver]) {
+        runtime->reported[driver] = 1;
+        printf("netmidid: the driver behind %s is of another layout than this service; its ports are not served\n",
+               driver_name[driver]);
     }
 }
 
@@ -83,8 +127,7 @@ static void attach_all(struct netmidi_camd_runtime *runtime)
     int driver;
 
     for (driver = 0; driver < NETMIDI_CAMD_DRIVERS; ++driver)
-        if (!runtime->adapters[driver])
-            attach(runtime, driver);
+        attach(runtime, driver);
 }
 
 void netmidi_camd_close(struct netmidi_camd_runtime *runtime)
@@ -104,8 +147,7 @@ void netmidi_camd_close(struct netmidi_camd_runtime *runtime)
         port->ad_SigMask = 0;
         Enable();
         /* the driver now drops what clients send */
-        if (port->ad_IsOpen)
-            Cause(&port->ad_CAMDTXFunc);
+        wake_driver(runtime, number);
     }
     /* a delivery to CAMD has finished: there is one task of ours */
     memset(runtime->adapters, 0, sizeof(runtime->adapters));
@@ -282,7 +324,7 @@ void netmidi_camd_poll(struct netmidi_camd_runtime *runtime,
         if (port->ad_TXMore) {
             /* the ring was full: there is room now */
             port->ad_TXMore = FALSE;
-            Cause(&port->ad_CAMDTXFunc);
+            wake_driver(runtime, number);
         }
     }
     runtime->port_now = 0;

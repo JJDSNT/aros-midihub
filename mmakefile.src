@@ -182,7 +182,8 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
 #MM      contrib-aros-midihub-bonami \
 #MM      contrib-aros-midihub-netmidid-svccfg \
 #MM      contrib-aros-midihub-applemidi-driver \
-#MM      contrib-aros-midihub-networkmidi2-driver
+#MM      contrib-aros-midihub-networkmidi2-driver \
+#MM      contrib-aros-midihub-applemidi-driver-layout2
 %build_prog mmake=contrib-aros-midihub-netmidid \
     progname=netmidid \
     files="$(MIDIHUB_ROOT)/ports/aros/midihub/main \
@@ -208,6 +209,15 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
     objdir=$(GENDIR)/$(CURDIR)/networkmidi2-driver \
     cppflags="-DNETMIDI_DRIVER_NETWORKMIDI2" \
     targetdir=$(AROS_DEVS)/Midi
+
+# For tools/netmidi-driver-hosted.sh alone: the driver as a later layout
+# would make it, to put in the place of DEVS:Midi/applemidi.
+%build_prog mmake=contrib-aros-midihub-applemidi-driver-layout2 \
+    progname=applemidi-layout2 \
+    files="$(MIDIHUB_ROOT)/ports/aros/netmidi/netmididriver" \
+    objdir=$(GENDIR)/$(CURDIR)/applemidi-driver-layout2 \
+    cppflags="-DNETMIDI_ADAPTERS_VERSION=2" \
+    targetdir=$(MIDIHUB_PACKAGE)/C
 
 %copy_files_q mmake=contrib-aros-midihub-netmidid-svccfg \
     files="netmidi" src=$(MIDIHUB_ROOT)/ports/aros/midihub/services.d \
