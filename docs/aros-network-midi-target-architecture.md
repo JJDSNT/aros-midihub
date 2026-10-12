@@ -296,8 +296,14 @@ The important part is responsibility separation.
 
 The namespace should make the eventual ownership of each layer explicit:
 
-- `mh_*` remains the namespace of portable or legacy code incubated in
-  MIDIHub, including the AppleMIDI, RTP-MIDI, session and UMP components;
+- RTP-MIDI and AppleMIDI are system code, the base a driver is built on,
+  and carry no MIDIHub name: `rtpmidi_*` for the payload, the journal, the
+  sender, the receiver and timing, `applemidi_*` for the session protocol
+  and the peer table, with their headers in `include/rtpmidi/`. Their text
+  output names no program either;
+- `mh_*` is left only on code that has not been given its home yet (BLE
+  MIDI, UMP, Network MIDI 2.0) and on MIDIHub's own programs (router,
+  synth, preferences). Do not add to it;
 - `netmidi_*` is used by new AROS-facing Network MIDI runtime code, including
   the `network.c`, `camd.c` and future `config.c` boundaries;
 - `aros_*` is used by adapters shared by more than one AROS subsystem, such as

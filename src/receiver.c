@@ -1,10 +1,10 @@
-#include "midihub/receiver.h"
+#include "rtpmidi/receiver.h"
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
-static void report(struct mh_receiver *rx, const char *format, ...)
+static void report(struct rtpmidi_receiver *rx, const char *format, ...)
 {
     char text[200];
     va_list arguments;
@@ -17,30 +17,30 @@ static void report(struct mh_receiver *rx, const char *format, ...)
     rx->output->report(rx->context, text);
 }
 
-void mh_receiver_init(struct mh_receiver *rx,
-                      const struct mh_receiver_output *output, void *context,
-                      struct mh_event_queue *queue)
+void rtpmidi_receiver_init(struct rtpmidi_receiver *rx,
+                      const struct rtpmidi_receiver_output *output, void *context,
+                      struct rtpmidi_event_queue *queue)
 {
     memset(rx, 0, sizeof(*rx));
     rx->output = output;
     rx->context = context;
     rx->queue = queue;
-    mh_receiver_reset_channels(rx);
+    rtpmidi_receiver_reset_channels(rx);
 }
 
-void mh_receiver_forget_notes(struct mh_receiver *rx)
+void rtpmidi_receiver_forget_notes(struct rtpmidi_receiver *rx)
 {
     memset(rx->active_notes, 0, sizeof(rx->active_notes));
 }
 
-static struct mh_parameter_counter *parameter_counter(
-    struct mh_receiver *rx, unsigned int channel, int nrpn, uint16_t number,
+static struct rtpmidi_parameter_counter *parameter_counter(
+    struct rtpmidi_receiver *rx, unsigned int channel, int nrpn, uint16_t number,
     int create)
 {
     size_t i;
-    struct mh_parameter_counter *free_entry = NULL;
-    for (i = 0; i < MH_PARAMETER_STATES; ++i) {
-        struct mh_parameter_counter *entry = &rx->parameter_counts[i];
+    struct rtpmidi_parameter_counter *free_entry = NULL;
+    for (i = 0; i < RTPMIDI_PARAMETER_STATES; ++i) {
+        struct rtpmidi_parameter_counter *entry = &rx->parameter_counts[i];
         if (entry->used && entry->channel == channel &&
             entry->nrpn == nrpn && entry->number == number)
             return entry;
@@ -61,7 +61,7 @@ static int count_controller(uint8_t number)
            number == 127;
 }
 
-void mh_receiver_deliver(struct mh_receiver *rx, const uint8_t *bytes,
+void rtpmidi_receiver_deliver(struct rtpmidi_receiver *rx, const uint8_t *bytes,
                           size_t length)
 {
     uint8_t status = bytes[0];
@@ -79,7 +79,7 @@ void mh_receiver_deliver(struct mh_receiver *rx, const uint8_t *bytes,
         rx->mtc_full_known = 0;
         memset(rx->active_notes, 0, sizeof(rx->active_notes));
         memset(rx->note_count, 0, sizeof(rx->note_count));
-        mh_receiver_reset_channels(rx);
+        rtpmidi_receiver_reset_channels(rx);
     } else if (status == 0xf6 && length == 1) {
         rx->tune_request_count =
             (uint8_t)((rx->tune_request_count + 1) & 0x7f);
@@ -161,7 +161,7 @@ void mh_receiver_deliver(struct mh_receiver *rx, const uint8_t *bytes,
         } else if ((controller == 100 || controller == 98) &&
                    rx->parameter_type_known[channel] &&
                    rx->parameter_nrpn[channel] == (controller == 98)) {
-            struct mh_parameter_counter *counter;
+            struct rtpmidi_parameter_counter *counter;
             uint16_t number;
             rx->parameter_lsb[channel] = bytes[2];
             rx->parameter_pending[channel] = 0;
@@ -216,7 +216,7 @@ void mh_receiver_deliver(struct mh_receiver *rx, const uint8_t *bytes,
     rx->output->message(rx->context, bytes, length);
 }
 
-void mh_receiver_deliver_sysex(struct mh_receiver *rx, const uint8_t *message,
+void rtpmidi_receiver_deliver_sysex(struct rtpmidi_receiver *rx, const uint8_t *message,
                           size_t length)
 {
     size_t i;
@@ -235,7 +235,7 @@ void mh_receiver_deliver_sysex(struct mh_receiver *rx, const uint8_t *message,
     rx->output->sysex(rx->context, message, length);
 }
 
-void mh_receiver_reset_channels(struct mh_receiver *rx)
+void rtpmidi_receiver_reset_channels(struct rtpmidi_receiver *rx)
 {
     unsigned int channel;
     memset(rx->program_known, 0, sizeof(rx->program_known));
@@ -257,7 +257,7 @@ void mh_receiver_reset_channels(struct mh_receiver *rx)
         rx->pitch[channel] = 0x2000;
 }
 
-void mh_receiver_reset_system(struct mh_receiver *rx)
+void rtpmidi_receiver_reset_system(struct rtpmidi_receiver *rx)
 {
     rx->reset_count = 0;
     rx->tune_request_count = 0;
@@ -273,7 +273,7 @@ void mh_receiver_reset_system(struct mh_receiver *rx)
     rx->sysex_count = 0;
 }
 
-void mh_receiver_release_notes(struct mh_receiver *rx)
+void rtpmidi_receiver_release_notes(struct rtpmidi_receiver *rx)
 {
     uint8_t message[3];
     unsigned int channel;
@@ -284,17 +284,17 @@ void mh_receiver_release_notes(struct mh_receiver *rx)
         for (note = 0; note < 128; ++note) {
             message[1] = (uint8_t)note;
             while (rx->note_count[channel][note])
-                mh_receiver_deliver(rx, message, sizeof(message));
+                rtpmidi_receiver_deliver(rx, message, sizeof(message));
             rx->active_notes[channel][note] = 0;
         }
     }
 }
 
-static void recover_channel_state(struct mh_receiver *rx,
-                                   const struct mh_journal *journal,
+static void recover_channel_state(struct rtpmidi_receiver *rx,
+                                   const struct rtpmidi_journal *journal,
                                    int single_loss)
 {
-    struct mh_journal_channel_state state;
+    struct rtpmidi_journal_channel_state state;
     uint8_t message[3];
     size_t i;
     unsigned int channel;
@@ -304,10 +304,10 @@ static void recover_channel_state(struct mh_receiver *rx,
     if (single_loss && journal->single_packet_safe)
         return;
     for (i = 0; i < journal->channel_count; ++i) {
-        const struct mh_journal_channel *entry = &journal->channels[i];
+        const struct rtpmidi_journal_channel *entry = &journal->channels[i];
         if (single_loss && entry->single_packet_safe)
             continue;
-        if (mh_journal_decode_channel_state(entry, &state) <= 0)
+        if (rtpmidi_journal_decode_channel_state(entry, &state) <= 0)
             continue;
         channel = entry->number;
         bank_changed = 0;
@@ -319,14 +319,14 @@ static void recover_channel_state(struct mh_receiver *rx,
                     rx->bank_msb[channel] != state.bank_msb) {
                     message[1] = 0;
                     message[2] = state.bank_msb;
-                    mh_receiver_deliver(rx, message, 3);
+                    rtpmidi_receiver_deliver(rx, message, 3);
                     bank_changed = 1;
                 }
                 if (!rx->bank_lsb_known[channel] ||
                     rx->bank_lsb[channel] != state.bank_lsb) {
                     message[1] = 32;
                     message[2] = state.bank_lsb;
-                    mh_receiver_deliver(rx, message, 3);
+                    rtpmidi_receiver_deliver(rx, message, 3);
                     bank_changed = 1;
                 }
             }
@@ -334,8 +334,8 @@ static void recover_channel_state(struct mh_receiver *rx,
                 rx->program[channel] != state.program) {
                 message[0] = (uint8_t)(0xc0 | channel);
                 message[1] = state.program;
-                mh_receiver_deliver(rx, message, 2);
-                report(rx, "MIDIHub: recovered Program Change channel=%u program=%u\n",
+                rtpmidi_receiver_deliver(rx, message, 2);
+                report(rx, "recovered Program Change channel=%u program=%u\n",
                        channel, (unsigned int)state.program);
             }
         }
@@ -346,18 +346,18 @@ static void recover_channel_state(struct mh_receiver *rx,
             message[0] = (uint8_t)(0xe0 | channel);
             message[1] = state.pitch_lsb;
             message[2] = state.pitch_msb;
-            mh_receiver_deliver(rx, message, 3);
-            report(rx, "MIDIHub: recovered Pitch Bend channel=%u value=%u\n",
+            rtpmidi_receiver_deliver(rx, message, 3);
+            report(rx, "recovered Pitch Bend channel=%u value=%u\n",
                    channel, (unsigned int)pitch);
         }
     }
 }
 
-static void recover_controls(struct mh_receiver *rx,
-                              const struct mh_journal *journal,
+static void recover_controls(struct rtpmidi_receiver *rx,
+                              const struct rtpmidi_journal *journal,
                               int single_loss)
 {
-    struct mh_journal_controls controls;
+    struct rtpmidi_journal_controls controls;
     uint8_t message[3];
     size_t i;
     size_t j;
@@ -365,10 +365,10 @@ static void recover_controls(struct mh_receiver *rx,
     if (single_loss && journal->single_packet_safe)
         return;
     for (i = 0; i < journal->channel_count; ++i) {
-        const struct mh_journal_channel *entry = &journal->channels[i];
+        const struct rtpmidi_journal_channel *entry = &journal->channels[i];
         if (single_loss && entry->single_packet_safe)
             continue;
-        if (mh_journal_decode_controls(entry, &controls) <= 0)
+        if (rtpmidi_journal_decode_controls(entry, &controls) <= 0)
             continue;
         channel = entry->number;
         message[0] = (uint8_t)(0xb0 | channel);
@@ -396,14 +396,14 @@ static void recover_controls(struct mh_receiver *rx,
                     continue;
                 }
                 for (command = 0; command <= highest; ++command) {
-                    const struct mh_journal_control_log *value = NULL;
-                    const struct mh_journal_control_log *toggle = NULL;
-                    const struct mh_journal_control_log *count = NULL;
+                    const struct rtpmidi_journal_control_log *value = NULL;
+                    const struct rtpmidi_journal_control_log *toggle = NULL;
+                    const struct rtpmidi_journal_control_log *count = NULL;
                     uint8_t missing;
                     int all_safe = 1;
 
                     for (j = first; j < controls.count; ++j) {
-                        const struct mh_journal_control_log *log =
+                        const struct rtpmidi_journal_control_log *log =
                             &controls.logs[j];
                         if (log->number != number || log->command != command)
                             continue;
@@ -428,37 +428,37 @@ static void recover_controls(struct mh_receiver *rx,
                     message[1] = number;
                     while (missing > 1) {
                         message[2] = 0;
-                        mh_receiver_deliver(rx, message, sizeof(message));
+                        rtpmidi_receiver_deliver(rx, message, sizeof(message));
                         --missing;
                     }
                     if (value) {
                         message[2] = value->value;
-                        mh_receiver_deliver(rx, message, sizeof(message));
+                        rtpmidi_receiver_deliver(rx, message, sizeof(message));
                     } else if (toggle) {
                         int desired = toggle->value & 1;
                         int current = rx->controllers[channel][number] >= 64;
                         if (current == desired) {
                             message[2] = desired ? 0 : 127;
-                            mh_receiver_deliver(rx, message, sizeof(message));
+                            rtpmidi_receiver_deliver(rx, message, sizeof(message));
                         }
                         message[2] = desired ? 127 : 0;
-                        mh_receiver_deliver(rx, message, sizeof(message));
+                        rtpmidi_receiver_deliver(rx, message, sizeof(message));
                     } else {
                         message[2] = 0;
-                        mh_receiver_deliver(rx, message, sizeof(message));
+                        rtpmidi_receiver_deliver(rx, message, sizeof(message));
                     }
                     /* Multiple tools describe one command. Compensate for a
                      * toggle's two-message reconstruction and retain the
                      * count identity from the journal. */
                     rx->controller_count[channel][number] = target;
-                    report(rx, "MIDIHub: recovered enhanced controller channel=%u controller=%u command=%u count=%u\n",
+                    report(rx, "recovered enhanced controller channel=%u controller=%u command=%u count=%u\n",
                            channel, (unsigned int)number,
                            (unsigned int)command, (unsigned int)target);
                 }
             }
         }
         for (j = 0; j < controls.count; ++j) {
-            const struct mh_journal_control_log *log = &controls.logs[j];
+            const struct rtpmidi_journal_control_log *log = &controls.logs[j];
             size_t k;
             int repeated = 0;
 
@@ -481,14 +481,14 @@ static void recover_controls(struct mh_receiver *rx,
                     message[1] = log->number;
                     if (rx->controllers[channel][log->number] >= 64) {
                         message[2] = 0;
-                        mh_receiver_deliver(rx, message, sizeof(message));
+                        rtpmidi_receiver_deliver(rx, message, sizeof(message));
                     }
                     if (log->value & 1) {
                         message[2] = 127;
-                        mh_receiver_deliver(rx, message, sizeof(message));
+                        rtpmidi_receiver_deliver(rx, message, sizeof(message));
                     }
                     rx->switch_toggles[channel][log->number - 64] = log->value;
-                    report(rx, "MIDIHub: recovered controller toggle channel=%u controller=%u count=%u\n",
+                    report(rx, "recovered controller toggle channel=%u controller=%u count=%u\n",
                            channel, (unsigned int)log->number,
                            (unsigned int)log->value);
                 } else if (log->count_tool &&
@@ -501,8 +501,8 @@ static void recover_controls(struct mh_receiver *rx,
                     message[1] = log->number;
                     message[2] = 0;
                     while (missing--)
-                        mh_receiver_deliver(rx, message, sizeof(message));
-                    report(rx, "MIDIHub: recovered controller count channel=%u controller=%u count=%u\n",
+                        rtpmidi_receiver_deliver(rx, message, sizeof(message));
+                    report(rx, "recovered controller count channel=%u controller=%u count=%u\n",
                            channel, (unsigned int)log->number,
                            (unsigned int)log->value);
                 }
@@ -513,19 +513,19 @@ static void recover_controls(struct mh_receiver *rx,
                 continue;
             message[1] = log->number;
             message[2] = log->value;
-            mh_receiver_deliver(rx, message, sizeof(message));
-            report(rx, "MIDIHub: recovered Control Change channel=%u controller=%u value=%u\n",
+            rtpmidi_receiver_deliver(rx, message, sizeof(message));
+            report(rx, "recovered Control Change channel=%u controller=%u value=%u\n",
                    channel, (unsigned int)log->number,
                    (unsigned int)log->value);
         }
     }
 }
 
-static void recover_parameters(struct mh_receiver *rx,
-                               const struct mh_journal *journal,
+static void recover_parameters(struct rtpmidi_receiver *rx,
+                               const struct rtpmidi_journal *journal,
                                int single_loss)
 {
-    struct mh_journal_parameters parameters;
+    struct rtpmidi_journal_parameters parameters;
     uint8_t message[3];
     size_t i;
     size_t j;
@@ -535,15 +535,15 @@ static void recover_parameters(struct mh_receiver *rx,
 
     if (single_loss && journal->single_packet_safe) return;
     for (i = 0; i < journal->channel_count; ++i) {
-        const struct mh_journal_channel *channel = &journal->channels[i];
+        const struct rtpmidi_journal_channel *channel = &journal->channels[i];
         if (single_loss && channel->single_packet_safe) continue;
-        if (mh_journal_decode_parameters(channel, &parameters) <= 0)
+        if (rtpmidi_journal_decode_parameters(channel, &parameters) <= 0)
             continue;
         message[0] = (uint8_t)(0xb0 | channel->number);
         replayed = 0;
         for (j = 0; j < parameters.count; ++j) {
-            const struct mh_journal_parameter_log *log = &parameters.logs[j];
-            struct mh_parameter_counter *counter = parameter_counter(
+            const struct rtpmidi_journal_parameter_log *log = &parameters.logs[j];
+            struct rtpmidi_parameter_counter *counter = parameter_counter(
                 rx, channel->number, log->nrpn, log->number, 0);
             int had_counter = counter != NULL;
             uint8_t previous_count = counter ? counter->count : 0;
@@ -555,26 +555,26 @@ static void recover_parameters(struct mh_receiver *rx,
                 continue;
             message[1] = (uint8_t)(log->nrpn ? 99 : 101);
             message[2] = (uint8_t)(log->number >> 7);
-            mh_receiver_deliver(rx, message, sizeof(message));
+            rtpmidi_receiver_deliver(rx, message, sizeof(message));
             message[1] = (uint8_t)(log->nrpn ? 98 : 100);
             message[2] = (uint8_t)(log->number & 0x7f);
-            mh_receiver_deliver(rx, message, sizeof(message));
+            rtpmidi_receiver_deliver(rx, message, sizeof(message));
             if (log->has_entry_msb) {
                 message[1] = 6;
                 message[2] = log->entry_msb;
-                mh_receiver_deliver(rx, message, sizeof(message));
+                rtpmidi_receiver_deliver(rx, message, sizeof(message));
             }
             if (log->has_entry_lsb) {
                 message[1] = 38;
                 message[2] = log->entry_lsb;
-                mh_receiver_deliver(rx, message, sizeof(message));
+                rtpmidi_receiver_deliver(rx, message, sizeof(message));
             }
             if (log->has_adjust) {
                 unsigned int count = (unsigned int)(
                     log->adjust < 0 ? -log->adjust : log->adjust);
                 message[1] = (uint8_t)(log->adjust < 0 ? 97 : 96);
                 message[2] = 0;
-                while (count--) mh_receiver_deliver(rx, message, sizeof(message));
+                while (count--) rtpmidi_receiver_deliver(rx, message, sizeof(message));
             }
             if (log->has_count) {
                 counter = parameter_counter(
@@ -595,7 +595,7 @@ static void recover_parameters(struct mh_receiver *rx,
                          (unsigned int)log->count);
             else
                 count_text[0] = '\0';
-            report(rx, "MIDIHub: recovered %s parameter=%u entry=%s%u%s adjust=%d%s\n",
+            report(rx, "recovered %s parameter=%u entry=%s%u%s adjust=%d%s\n",
                    log->nrpn ? "NRPN" : "RPN",
                    (unsigned int)log->number,
                    log->has_entry_msb ? "MSB:" : "",
@@ -608,27 +608,27 @@ static void recover_parameters(struct mh_receiver *rx,
             (!single_loss || !parameters.single_packet_safe)) {
             message[1] = (uint8_t)(parameters.pending_nrpn ? 99 : 101);
             message[2] = parameters.pending_msb;
-            mh_receiver_deliver(rx, message, sizeof(message));
-            report(rx, "MIDIHub: recovered pending %s MSB=%u\n",
+            rtpmidi_receiver_deliver(rx, message, sizeof(message));
+            report(rx, "recovered pending %s MSB=%u\n",
                    parameters.pending_nrpn ? "NRPN" : "RPN",
                    (unsigned int)parameters.pending_msb);
         } else if (replayed && !parameters.transaction_open) {
             message[1] = (uint8_t)(last_nrpn ? 99 : 101);
             message[2] = 0x7f;
-            mh_receiver_deliver(rx, message, sizeof(message));
+            rtpmidi_receiver_deliver(rx, message, sizeof(message));
             message[1] = (uint8_t)(last_nrpn ? 98 : 100);
-            mh_receiver_deliver(rx, message, sizeof(message));
+            rtpmidi_receiver_deliver(rx, message, sizeof(message));
         }
     }
 }
 
-static void recover_notes(struct mh_receiver *rx,
-                          const struct mh_journal *journal,
+static void recover_notes(struct rtpmidi_receiver *rx,
+                          const struct rtpmidi_journal *journal,
                           int single_loss, uint32_t timestamp,
-                          const struct mh_receiver_clock *clock)
+                          const struct rtpmidi_receiver_clock *clock)
 {
-    struct mh_journal_notes notes;
-    struct mh_journal_note_extras extras;
+    struct rtpmidi_journal_notes notes;
+    struct rtpmidi_journal_note_extras extras;
     uint8_t message[3];
     uint8_t release_velocity[128];
     uint8_t desired_count[128];
@@ -648,11 +648,11 @@ static void recover_notes(struct mh_receiver *rx,
     if (single_loss && journal->single_packet_safe)
         return;
     for (i = 0; i < journal->channel_count; ++i) {
-        const struct mh_journal_channel *channel = &journal->channels[i];
+        const struct rtpmidi_journal_channel *channel = &journal->channels[i];
         if (single_loss && channel->single_packet_safe)
             continue;
-        decoded = mh_journal_decode_notes(channel, &notes);
-        extras_decoded = mh_journal_decode_note_extras(channel, &extras);
+        decoded = rtpmidi_journal_decode_notes(channel, &notes);
+        extras_decoded = rtpmidi_journal_decode_note_extras(channel, &extras);
         if (decoded < 0 || extras_decoded < 0 ||
             (!decoded && !extras_decoded))
             continue;
@@ -660,7 +660,7 @@ static void recover_notes(struct mh_receiver *rx,
         memset(desired_count, 0, sizeof(desired_count));
         memset(count_known, 0, sizeof(count_known));
         for (log_index = 0; log_index < extras.count; ++log_index) {
-            const struct mh_journal_note_extra *extra =
+            const struct rtpmidi_journal_note_extra *extra =
                 &extras.logs[log_index];
             if (single_loss && extra->single_packet_safe)
                 continue;
@@ -679,11 +679,11 @@ static void recover_notes(struct mh_receiver *rx,
                 note = octave * 8 + bit;
                 if (!(notes.offbits[octave] & (0x80u >> bit)))
                     continue;
-                cancelled = mh_queue_cancel_note_on(rx->queue,
+                cancelled = rtpmidi_queue_cancel_note_on(rx->queue,
                                                     channel->number,
                                                     (uint8_t)note);
                 if (cancelled)
-                    report(rx, "MIDIHub: cancelled %lu future Note On event(s) channel=%u note=%u\n",
+                    report(rx, "cancelled %lu future Note On event(s) channel=%u note=%u\n",
                            (unsigned long)cancelled,
                            (unsigned int)channel->number, note);
                 if (!rx->active_notes[channel->number][note] &&
@@ -691,30 +691,30 @@ static void recover_notes(struct mh_receiver *rx,
                     continue;
                 message[1] = (uint8_t)note;
                 message[2] = release_velocity[note];
-                mh_receiver_deliver(rx, message, sizeof(message));
-                report(rx, "MIDIHub: recovered Note Off channel=%u note=%u\n",
+                rtpmidi_receiver_deliver(rx, message, sizeof(message));
+                report(rx, "recovered Note Off channel=%u note=%u\n",
                        (unsigned int)channel->number, note);
             }
         }
         now = clock ? clock->now : 0;
         timely = clock && clock->synchronized &&
-                 mh_clock_due(timestamp, now, clock->peer_to_local,
+                 rtpmidi_clock_due(timestamp, now, clock->peer_to_local,
                               &due) == 0 &&
                  (due >= now || now - due <= 200);
         for (log_index = 0; log_index < notes.log_count; ++log_index) {
-            const struct mh_journal_note_log *log = &notes.logs[log_index];
+            const struct rtpmidi_journal_note_log *log = &notes.logs[log_index];
             if (single_loss && log->single_packet_safe)
                 continue;
             if (rx->active_notes[channel->number][log->number] ==
                 log->velocity ||
-                mh_queue_has_note_on(rx->queue, channel->number,
+                rtpmidi_queue_has_note_on(rx->queue, channel->number,
                                      log->number))
                 continue;
             if (rx->active_notes[channel->number][log->number]) {
                 message[0] = (uint8_t)(0x80 | channel->number);
                 message[1] = log->number;
                 message[2] = release_velocity[log->number];
-                mh_receiver_deliver(rx, message, sizeof(message));
+                rtpmidi_receiver_deliver(rx, message, sizeof(message));
             }
             if (!log->simultaneous || !timely)
                 continue;
@@ -723,13 +723,13 @@ static void recover_notes(struct mh_receiver *rx,
             message[2] = log->velocity;
             if (due > now) {
                 if (due - now > 100000 ||
-                    mh_queue_push(rx->queue, due, message,
+                    rtpmidi_queue_push(rx->queue, due, message,
                                   sizeof(message)) != 0)
                     continue;
             } else {
-                mh_receiver_deliver(rx, message, sizeof(message));
+                rtpmidi_receiver_deliver(rx, message, sizeof(message));
             }
-            report(rx, "MIDIHub: recovered Note On channel=%u note=%u velocity=%u\n",
+            report(rx, "recovered Note On channel=%u note=%u velocity=%u\n",
                    (unsigned int)channel->number,
                    (unsigned int)log->number,
                    (unsigned int)log->velocity);
@@ -750,8 +750,8 @@ static void recover_notes(struct mh_receiver *rx,
                 message[0] = (uint8_t)(0x90 | channel->number);
                 message[1] = (uint8_t)note;
                 message[2] = velocity;
-                mh_receiver_deliver(rx, message, sizeof(message));
-                report(rx, "MIDIHub: recovered duplicate Note On channel=%u note=%u count=%u\n",
+                rtpmidi_receiver_deliver(rx, message, sizeof(message));
+                report(rx, "recovered duplicate Note On channel=%u note=%u count=%u\n",
                        (unsigned int)channel->number, note,
                        (unsigned int)rx->note_count[channel->number][note]);
             }
@@ -760,8 +760,8 @@ static void recover_notes(struct mh_receiver *rx,
                 message[0] = (uint8_t)(0x80 | channel->number);
                 message[1] = (uint8_t)note;
                 message[2] = release_velocity[note];
-                mh_receiver_deliver(rx, message, sizeof(message));
-                report(rx, "MIDIHub: recovered counted Note Off channel=%u note=%u count=%u velocity=%u\n",
+                rtpmidi_receiver_deliver(rx, message, sizeof(message));
+                report(rx, "recovered counted Note Off channel=%u note=%u count=%u velocity=%u\n",
                        (unsigned int)channel->number, note,
                        (unsigned int)rx->note_count[channel->number][note],
                        (unsigned int)message[2]);
@@ -770,20 +770,20 @@ static void recover_notes(struct mh_receiver *rx,
     }
 }
 
-static void recover_aftertouch(struct mh_receiver *rx,
-                               const struct mh_journal *journal,
+static void recover_aftertouch(struct rtpmidi_receiver *rx,
+                               const struct rtpmidi_journal *journal,
                                int single_loss)
 {
-    struct mh_journal_aftertouch aftertouch;
+    struct rtpmidi_journal_aftertouch aftertouch;
     uint8_t message[3];
     size_t i;
     size_t j;
     unsigned int channel;
     if (single_loss && journal->single_packet_safe) return;
     for (i = 0; i < journal->channel_count; ++i) {
-        const struct mh_journal_channel *entry = &journal->channels[i];
+        const struct rtpmidi_journal_channel *entry = &journal->channels[i];
         if (single_loss && entry->single_packet_safe) continue;
-        if (mh_journal_decode_aftertouch(entry, &aftertouch) <= 0) continue;
+        if (rtpmidi_journal_decode_aftertouch(entry, &aftertouch) <= 0) continue;
         channel = entry->number;
         if (aftertouch.has_channel_pressure &&
             (!single_loss || !aftertouch.channel_single_packet_safe) &&
@@ -791,12 +791,12 @@ static void recover_aftertouch(struct mh_receiver *rx,
              rx->channel_pressure[channel] != aftertouch.channel_pressure)) {
             message[0] = (uint8_t)(0xd0 | channel);
             message[1] = aftertouch.channel_pressure;
-            mh_receiver_deliver(rx, message, 2);
-            report(rx, "MIDIHub: recovered Channel Aftertouch channel=%u pressure=%u\n",
+            rtpmidi_receiver_deliver(rx, message, 2);
+            report(rx, "recovered Channel Aftertouch channel=%u pressure=%u\n",
                    channel, (unsigned int)message[1]);
         }
         for (j = 0; j < aftertouch.poly_count; ++j) {
-            const struct mh_journal_poly_pressure *log = &aftertouch.poly[j];
+            const struct rtpmidi_journal_poly_pressure *log = &aftertouch.poly[j];
             if ((single_loss && log->single_packet_safe) ||
                 log->reset_notes || !rx->active_notes[channel][log->number] ||
                 (rx->poly_pressure_known[channel][log->number] &&
@@ -805,16 +805,16 @@ static void recover_aftertouch(struct mh_receiver *rx,
             message[0] = (uint8_t)(0xa0 | channel);
             message[1] = log->number;
             message[2] = log->pressure;
-            mh_receiver_deliver(rx, message, 3);
-            report(rx, "MIDIHub: recovered Poly Aftertouch channel=%u note=%u pressure=%u\n",
+            rtpmidi_receiver_deliver(rx, message, 3);
+            report(rx, "recovered Poly Aftertouch channel=%u note=%u pressure=%u\n",
                    channel, (unsigned int)log->number,
                    (unsigned int)log->pressure);
         }
     }
 }
 
-static void recover_system(struct mh_receiver *rx,
-                           const struct mh_journal_system_state *state,
+static void recover_system(struct rtpmidi_receiver *rx,
+                           const struct rtpmidi_journal_system_state *state,
                            int single_loss)
 {
     uint8_t message[3];
@@ -826,34 +826,34 @@ static void recover_system(struct mh_receiver *rx,
         (!single_loss || !state->reset_single_packet_safe) &&
         rx->reset_count != state->reset_count) {
         message[0] = 0xff;
-        mh_receiver_deliver(rx, message, 1);
+        rtpmidi_receiver_deliver(rx, message, 1);
         rx->reset_count = state->reset_count;
-        report(rx, "MIDIHub: recovered System Reset\n");
+        report(rx, "recovered System Reset\n");
     }
     if (state->has_tune_request &&
         (!single_loss || !state->tune_single_packet_safe) &&
         rx->tune_request_count != state->tune_count) {
         message[0] = 0xf6;
-        mh_receiver_deliver(rx, message, 1);
+        rtpmidi_receiver_deliver(rx, message, 1);
         rx->tune_request_count = state->tune_count;
-        report(rx, "MIDIHub: recovered Tune Request\n");
+        report(rx, "recovered Tune Request\n");
     }
     if (state->has_song_select &&
         (!single_loss || !state->song_single_packet_safe) &&
         (!rx->song_select_known || rx->song_select != state->song)) {
         message[0] = 0xf3;
         message[1] = state->song;
-        mh_receiver_deliver(rx, message, 2);
-        report(rx, "MIDIHub: recovered Song Select song=%u\n",
+        rtpmidi_receiver_deliver(rx, message, 2);
+        report(rx, "recovered Song Select song=%u\n",
                (unsigned int)state->song);
     }
     if (state->has_active_sense &&
         (!single_loss || !state->active_sense_single_packet_safe) &&
         rx->active_sense_count != state->active_sense_count) {
         message[0] = 0xfe;
-        mh_receiver_deliver(rx, message, 1);
+        rtpmidi_receiver_deliver(rx, message, 1);
         rx->active_sense_count = state->active_sense_count;
-        report(rx, "MIDIHub: recovered Active Sense\n");
+        report(rx, "recovered Active Sense\n");
     }
     if (state->has_mtc && state->mtc_has_complete &&
         !state->mtc_complete_quarter_frame &&
@@ -864,8 +864,8 @@ static void recover_system(struct mh_receiver *rx,
             0xf0, 0x7f, 0x7f, 0x01, 0x01, 0, 0, 0, 0, 0xf7
         };
         memcpy(full_frame + 5, state->mtc_complete, 4);
-        mh_receiver_deliver_sysex(rx, full_frame, sizeof(full_frame));
-        report(rx, "MIDIHub: recovered MTC Full Frame %02x:%02x:%02x:%02x\n",
+        rtpmidi_receiver_deliver_sysex(rx, full_frame, sizeof(full_frame));
+        report(rx, "recovered MTC Full Frame %02x:%02x:%02x:%02x\n",
                (unsigned int)state->mtc_complete[0],
                (unsigned int)state->mtc_complete[1],
                (unsigned int)state->mtc_complete[2],
@@ -887,8 +887,8 @@ static void recover_system(struct mh_receiver *rx,
                                   (state->mtc_complete[1] << 4));
         if (!rx->mtc_full_known ||
             memcmp(rx->mtc_full_frame, full_frame + 5, 4) != 0) {
-            mh_receiver_deliver_sysex(rx, full_frame, sizeof(full_frame));
-            report(rx, "MIDIHub: recovered MTC Quarter Frame position "
+            rtpmidi_receiver_deliver_sysex(rx, full_frame, sizeof(full_frame));
+            report(rx, "recovered MTC Quarter Frame position "
                    "%02x:%02x:%02x:%02x\n",
                    (unsigned int)full_frame[5],
                    (unsigned int)full_frame[6],
@@ -905,27 +905,27 @@ static void recover_system(struct mh_receiver *rx,
             message[0] = 0xf1;
             message[1] = (uint8_t)((type << 4) |
                                     state->mtc_partial[type]);
-            mh_receiver_deliver(rx, message, 2);
+            rtpmidi_receiver_deliver(rx, message, 2);
             if (type == point) break;
             type += step;
         }
-        report(rx, "MIDIHub: recovered MTC Quarter Frame partial direction=%s point=%u\n",
+        report(rx, "recovered MTC Quarter Frame partial direction=%s point=%u\n",
                state->mtc_reverse ? "reverse" : "forward",
                (unsigned int)state->mtc_point);
     }
     if (state->sysex) {
-        struct mh_journal_sysex sysex;
-        if (mh_journal_decode_sysex(state, &sysex) > 0) {
+        struct rtpmidi_journal_sysex sysex;
+        if (rtpmidi_journal_decode_sysex(state, &sysex) > 0) {
             size_t log_index;
             for (log_index = 0; log_index < sysex.count; ++log_index) {
-                const struct mh_journal_sysex_log *log =
+                const struct rtpmidi_journal_sysex_log *log =
                     &sysex.logs[log_index];
-                uint8_t recovered[MH_SYSEX_JOURNAL_MAX + 2];
+                uint8_t recovered[RTPMIDI_SYSEX_JOURNAL_MAX + 2];
                 size_t data_index;
                 if ((single_loss && log->single_packet_safe) ||
                     log->status != 3 || log->has_first || !log->has_count ||
                     rx->sysex_count == log->count ||
-                    log->data_length > MH_SYSEX_JOURNAL_MAX)
+                    log->data_length > RTPMIDI_SYSEX_JOURNAL_MAX)
                     continue;
                 recovered[0] = 0xf0;
                 for (data_index = 0; data_index < log->data_length;
@@ -933,9 +933,9 @@ static void recover_system(struct mh_receiver *rx,
                     recovered[data_index + 1] =
                         (uint8_t)(log->data[data_index] & 0x7f);
                 recovered[log->data_length + 1] = 0xf7;
-                mh_receiver_deliver_sysex(rx, recovered, log->data_length + 2);
+                rtpmidi_receiver_deliver_sysex(rx, recovered, log->data_length + 2);
                 rx->sysex_count = log->count;
-                report(rx, "MIDIHub: recovered SysEx bytes=%lu count=%u\n",
+                report(rx, "recovered SysEx bytes=%lu count=%u\n",
                        (unsigned long)(log->data_length + 2),
                        (unsigned int)log->count);
             }
@@ -958,8 +958,8 @@ static void recover_system(struct mh_receiver *rx,
     /* C=0, N=1, D=0 is the RFC 6295 encoding for Start at zero. */
     if (start_at_zero) {
         message[0] = 0xfa;
-        mh_receiver_deliver(rx, message, 1);
-        report(rx, "MIDIHub: recovered sequencer Start\n");
+        rtpmidi_receiver_deliver(rx, message, 1);
+        report(rx, "recovered sequencer Start\n");
         return;
     }
 
@@ -968,45 +968,45 @@ static void recover_system(struct mh_receiver *rx,
     if (clock > 98303) {
         if (!state->sequencer_running && rx->sequencer_running) {
             message[0] = 0xfc;
-            mh_receiver_deliver(rx, message, 1);
-            report(rx, "MIDIHub: recovered sequencer Stop; "
+            rtpmidi_receiver_deliver(rx, message, 1);
+            report(rx, "recovered sequencer Stop; "
                        "position exceeds MIDI SPP range\n");
         }
         return;
     }
     if (rx->sequencer_running) {
         message[0] = 0xfc;
-        mh_receiver_deliver(rx, message, 1);
+        rtpmidi_receiver_deliver(rx, message, 1);
     }
     message[0] = 0xf2;
     message[1] = (uint8_t)((clock / 6) & 0x7f);
     message[2] = (uint8_t)(((clock / 6) >> 7) & 0x7f);
-    mh_receiver_deliver(rx, message, 3);
+    rtpmidi_receiver_deliver(rx, message, 3);
     remainder = clock % 6;
     if (state->downbeat_played) {
         message[0] = 0xfb;
-        mh_receiver_deliver(rx, message, 1);
+        rtpmidi_receiver_deliver(rx, message, 1);
         message[0] = 0xf8;
         for (i = 0; i <= remainder; ++i)
-            mh_receiver_deliver(rx, message, 1);
+            rtpmidi_receiver_deliver(rx, message, 1);
         if (!state->sequencer_running) {
             message[0] = 0xfc;
-            mh_receiver_deliver(rx, message, 1);
+            rtpmidi_receiver_deliver(rx, message, 1);
         }
     } else if (state->sequencer_running) {
         message[0] = 0xfb;
-        mh_receiver_deliver(rx, message, 1);
+        rtpmidi_receiver_deliver(rx, message, 1);
     }
-    report(rx, "MIDIHub: recovered sequencer state running=%u clock=%lu downbeat=%u\n",
+    report(rx, "recovered sequencer state running=%u clock=%lu downbeat=%u\n",
            (unsigned int)state->sequencer_running,
            (unsigned long)clock, (unsigned int)state->downbeat_played);
 }
 
-void mh_receiver_recover(struct mh_receiver *rx,
-                         const struct mh_journal *journal,
-                         const struct mh_journal_system_state *system,
+void rtpmidi_receiver_recover(struct rtpmidi_receiver *rx,
+                         const struct rtpmidi_journal *journal,
+                         const struct rtpmidi_journal_system_state *system,
                          int single_loss, uint32_t timestamp,
-                         const struct mh_receiver_clock *clock)
+                         const struct rtpmidi_receiver_clock *clock)
 {
     if (system && !(single_loss && journal->single_packet_safe))
         recover_system(rx, system, single_loss);

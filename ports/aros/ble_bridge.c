@@ -1,5 +1,5 @@
 #include <midihub/ble_midi.h>
-#include <midihub/rtpmidi.h>
+#include <rtpmidi/rtpmidi.h>
 #include "camd_bridge.h"
 
 #ifdef __AROS__

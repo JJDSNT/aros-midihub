@@ -1,15 +1,15 @@
-#ifndef MIDIHUB_SENDER_H
-#define MIDIHUB_SENDER_H
+#ifndef RTPMIDI_SENDER_H
+#define RTPMIDI_SENDER_H
 
 #include <stddef.h>
 #include <stdint.h>
 
-#define MH_SENDER_HISTORY 32
-#define MH_SYSEX_JOURNAL_MAX 512
-#define MH_SYSEX_JOURNAL_LOGS 4
-#define MH_PARAMETER_STATES 128
+#define RTPMIDI_SENDER_HISTORY 32
+#define RTPMIDI_SYSEX_JOURNAL_MAX 512
+#define RTPMIDI_SYSEX_JOURNAL_LOGS 4
+#define RTPMIDI_PARAMETER_STATES 128
 
-struct mh_parameter_counter {
+struct rtpmidi_parameter_counter {
     uint16_t number;
     uint8_t channel;
     uint8_t nrpn;
@@ -17,14 +17,14 @@ struct mh_parameter_counter {
     uint8_t used;
 };
 
-struct mh_sent_sysex {
+struct rtpmidi_sent_sysex {
     uint16_t sequence;
     uint8_t count;
     size_t length;
-    uint8_t data[MH_SYSEX_JOURNAL_MAX];
+    uint8_t data[RTPMIDI_SYSEX_JOURNAL_MAX];
 };
 
-struct mh_sent_event {
+struct rtpmidi_sent_event {
     uint16_t sequence;
     uint32_t timestamp;
     uint8_t bytes[3];
@@ -43,8 +43,8 @@ struct mh_sent_event {
     uint8_t parameter_count;
 };
 
-struct mh_sender {
-    struct mh_sent_event events[MH_SENDER_HISTORY];
+struct rtpmidi_sender {
+    struct rtpmidi_sent_event events[RTPMIDI_SENDER_HISTORY];
     size_t count;
     uint8_t bank_msb[16];
     uint8_t bank_lsb[16];
@@ -61,7 +61,7 @@ struct mh_sender {
     uint8_t parameter_type_known[16];
     uint8_t parameter_pending[16];
     uint8_t parameter_valid[16];
-    struct mh_parameter_counter parameter_counts[MH_PARAMETER_STATES];
+    struct rtpmidi_parameter_counter parameter_counts[RTPMIDI_PARAMETER_STATES];
     uint8_t system_reset_count;
     uint8_t tune_request_count;
     uint8_t active_sense_count;
@@ -80,22 +80,22 @@ struct mh_sender {
     uint8_t mtc_partial_mask;
     uint8_t mtc_qf_direction;
     uint8_t mtc_qf_point;
-    struct mh_sent_sysex sysex_logs[MH_SYSEX_JOURNAL_LOGS];
+    struct rtpmidi_sent_sysex sysex_logs[RTPMIDI_SYSEX_JOURNAL_LOGS];
     size_t sysex_log_count;
     uint8_t sysex_count;
 };
 
-void mh_sender_reset(struct mh_sender *sender);
-void mh_sender_clear_history(struct mh_sender *sender);
-int mh_sender_supported(const uint8_t *message, size_t length);
-void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
+void rtpmidi_sender_reset(struct rtpmidi_sender *sender);
+void rtpmidi_sender_clear_history(struct rtpmidi_sender *sender);
+int rtpmidi_sender_supported(const uint8_t *message, size_t length);
+void rtpmidi_sender_record(struct rtpmidi_sender *sender, uint16_t sequence,
                       uint32_t timestamp, const uint8_t *message,
                       size_t length);
-int mh_sender_record_sysex(struct mh_sender *sender, uint16_t sequence,
+int rtpmidi_sender_record_sysex(struct rtpmidi_sender *sender, uint16_t sequence,
                            uint32_t timestamp, const uint8_t *message,
                            size_t length);
-void mh_sender_ack(struct mh_sender *sender, uint32_t extended_sequence);
-int mh_sender_journal(const struct mh_sender *sender, uint16_t sequence,
+void rtpmidi_sender_ack(struct rtpmidi_sender *sender, uint32_t extended_sequence);
+int rtpmidi_sender_journal(const struct rtpmidi_sender *sender, uint16_t sequence,
                       uint32_t timestamp, uint8_t *data, size_t capacity,
                       size_t *length);
 

@@ -1,12 +1,12 @@
-#ifndef MIDIHUB_RTPMIDI_H
-#define MIDIHUB_RTPMIDI_H
+#ifndef RTPMIDI_H
+#define RTPMIDI_H
 
 #include <stddef.h>
 #include <stdint.h>
 
 /* Apple Network MIDI RTP profile. The MIDI list and any recovery journal are
  * exposed as bounded byte spans for separate decoding. */
-struct mh_rtp_packet {
+struct rtpmidi_packet {
     uint16_t sequence;
     uint32_t timestamp;
     uint32_t ssrc;
@@ -18,7 +18,7 @@ struct mh_rtp_packet {
     uint8_t p;
 };
 
-struct mh_journal_channel {
+struct rtpmidi_journal_channel {
     const uint8_t *data;
     size_t length;
     uint8_t number;
@@ -26,23 +26,23 @@ struct mh_journal_channel {
     uint8_t single_packet_safe;
 };
 
-struct mh_journal {
+struct rtpmidi_journal {
     uint16_t checkpoint;
     uint8_t single_packet_safe;
     uint8_t enhanced_controllers;
     const uint8_t *system;
     size_t system_length;
-    struct mh_journal_channel channels[16];
+    struct rtpmidi_journal_channel channels[16];
     size_t channel_count;
 };
 
 /* Decode journal framing. Chapter contents remain opaque. */
-int mh_journal_decode(const uint8_t *data, size_t length,
-                      struct mh_journal *journal);
-int mh_journal_covers_gap(uint16_t previous, uint16_t current,
+int rtpmidi_journal_decode(const uint8_t *data, size_t length,
+                      struct rtpmidi_journal *journal);
+int rtpmidi_journal_covers_gap(uint16_t previous, uint16_t current,
                           uint16_t checkpoint);
 
-struct mh_journal_system_state {
+struct rtpmidi_journal_system_state {
     int has_reset;
     int reset_single_packet_safe;
     uint8_t reset_count;
@@ -77,12 +77,12 @@ struct mh_journal_system_state {
 };
 
 /* Decode standard commands in System Chapters D, V, Q, and F. Chapter X is
- * exposed as a bounded span for mh_journal_decode_sysex(). */
-int mh_journal_decode_system(const struct mh_journal *journal,
-                             struct mh_journal_system_state *state);
+ * exposed as a bounded span for rtpmidi_journal_decode_sysex(). */
+int rtpmidi_journal_decode_system(const struct rtpmidi_journal *journal,
+                             struct rtpmidi_journal_system_state *state);
 
-#define MH_JOURNAL_SYSEX_LOGS 32
-struct mh_journal_sysex_log {
+#define RTPMIDI_JOURNAL_SYSEX_LOGS 32
+struct rtpmidi_journal_sysex_log {
     int single_packet_safe;
     int list_tool;
     uint8_t status;
@@ -96,51 +96,51 @@ struct mh_journal_sysex_log {
     size_t data_length;
 };
 
-struct mh_journal_sysex {
-    struct mh_journal_sysex_log logs[MH_JOURNAL_SYSEX_LOGS];
+struct rtpmidi_journal_sysex {
+    struct rtpmidi_journal_sysex_log logs[RTPMIDI_JOURNAL_SYSEX_LOGS];
     size_t count;
 };
 
 /* Decode Chapter X command logs. */
-int mh_journal_decode_sysex(const struct mh_journal_system_state *state,
-                            struct mh_journal_sysex *sysex);
+int rtpmidi_journal_decode_sysex(const struct rtpmidi_journal_system_state *state,
+                            struct rtpmidi_journal_sysex *sysex);
 
-struct mh_journal_note_log {
+struct rtpmidi_journal_note_log {
     uint8_t number;
     uint8_t velocity;
     uint8_t simultaneous;
     uint8_t single_packet_safe;
 };
 
-struct mh_journal_notes {
+struct rtpmidi_journal_notes {
     uint8_t offbits[16];
     int offbits_single_packet_safe;
-    struct mh_journal_note_log logs[128];
+    struct rtpmidi_journal_note_log logs[128];
     size_t log_count;
 };
 
 /* Decode Chapter N. 0: absent, 1: decoded, -1: malformed. */
-int mh_journal_decode_notes(const struct mh_journal_channel *channel,
-                            struct mh_journal_notes *notes);
+int rtpmidi_journal_decode_notes(const struct rtpmidi_journal_channel *channel,
+                            struct rtpmidi_journal_notes *notes);
 
-struct mh_journal_note_extra {
+struct rtpmidi_journal_note_extra {
     uint8_t number;
     uint8_t value;
     uint8_t velocity;
     uint8_t single_packet_safe;
 };
 
-struct mh_journal_note_extras {
-    struct mh_journal_note_extra logs[128];
+struct rtpmidi_journal_note_extras {
+    struct rtpmidi_journal_note_extra logs[128];
     size_t count;
 };
 
 /* Decode Chapter E note reference counts and release velocities. */
-int mh_journal_decode_note_extras(
-    const struct mh_journal_channel *channel,
-    struct mh_journal_note_extras *extras);
+int rtpmidi_journal_decode_note_extras(
+    const struct rtpmidi_journal_channel *channel,
+    struct rtpmidi_journal_note_extras *extras);
 
-struct mh_journal_channel_state {
+struct rtpmidi_journal_channel_state {
     int has_program;
     int program_single_packet_safe;
     uint8_t program;
@@ -154,11 +154,11 @@ struct mh_journal_channel_state {
 };
 
 /* Decode Chapters P and W. 0: neither present, 1: decoded, -1: malformed. */
-int mh_journal_decode_channel_state(
-    const struct mh_journal_channel *channel,
-    struct mh_journal_channel_state *state);
+int rtpmidi_journal_decode_channel_state(
+    const struct rtpmidi_journal_channel *channel,
+    struct rtpmidi_journal_channel_state *state);
 
-struct mh_journal_control_log {
+struct rtpmidi_journal_control_log {
     uint8_t number;
     uint8_t value;
     uint8_t alternate;
@@ -167,17 +167,17 @@ struct mh_journal_control_log {
     uint8_t command;
 };
 
-struct mh_journal_controls {
-    struct mh_journal_control_log logs[128];
+struct rtpmidi_journal_controls {
+    struct rtpmidi_journal_control_log logs[128];
     size_t count;
     uint8_t enhanced;
 };
 
 /* Decode Chapter C logs; alternate tools are marked for separate handling. */
-int mh_journal_decode_controls(const struct mh_journal_channel *channel,
-                                struct mh_journal_controls *controls);
+int rtpmidi_journal_decode_controls(const struct rtpmidi_journal_channel *channel,
+                                struct rtpmidi_journal_controls *controls);
 
-struct mh_journal_parameter_log {
+struct rtpmidi_journal_parameter_log {
     uint16_t number;
     uint8_t nrpn;
     uint8_t single_packet_safe;
@@ -193,43 +193,43 @@ struct mh_journal_parameter_log {
     uint8_t count;
 };
 
-struct mh_journal_parameters {
+struct rtpmidi_journal_parameters {
     int single_packet_safe;
     int has_pending;
     int pending_nrpn;
     uint8_t pending_msb;
     int transaction_open;
-    struct mh_journal_parameter_log logs[128];
+    struct rtpmidi_journal_parameter_log logs[128];
     size_t count;
 };
 
 /* Decode Chapter M RPN/NRPN state and bounded parameter logs. */
-int mh_journal_decode_parameters(const struct mh_journal_channel *channel,
-                                 struct mh_journal_parameters *parameters);
+int rtpmidi_journal_decode_parameters(const struct rtpmidi_journal_channel *channel,
+                                 struct rtpmidi_journal_parameters *parameters);
 
-struct mh_journal_poly_pressure {
+struct rtpmidi_journal_poly_pressure {
     uint8_t number;
     uint8_t pressure;
     uint8_t reset_notes;
     uint8_t single_packet_safe;
 };
 
-struct mh_journal_aftertouch {
+struct rtpmidi_journal_aftertouch {
     int has_channel_pressure;
     int channel_single_packet_safe;
     uint8_t channel_pressure;
-    struct mh_journal_poly_pressure poly[128];
+    struct rtpmidi_journal_poly_pressure poly[128];
     size_t poly_count;
 };
 
 /* Decode Chapters T and A. 0: absent, 1: decoded, -1: malformed. */
-int mh_journal_decode_aftertouch(const struct mh_journal_channel *channel,
-                                  struct mh_journal_aftertouch *aftertouch);
+int rtpmidi_journal_decode_aftertouch(const struct rtpmidi_journal_channel *channel,
+                                  struct rtpmidi_journal_aftertouch *aftertouch);
 
 /* Iterates MIDI 1.0 short commands in a decoded RTP-MIDI command section.
  * SysEx and unsupported system commands return -2; malformed data returns
  * -1. A result of 1 contains a command, and 0 means end of list. */
-struct mh_midi_event {
+struct rtpmidi_event {
     uint8_t bytes[3];
     uint8_t length;
     uint32_t timestamp;
@@ -237,10 +237,10 @@ struct mh_midi_event {
     size_t sysex_length;
 };
 
-enum { MH_SYSEX_MAX = 4096 };
+enum { RTPMIDI_SYSEX_MAX = 4096 };
 
-struct mh_sysex_assembler {
-    uint8_t bytes[MH_SYSEX_MAX];
+struct rtpmidi_sysex_assembler {
+    uint8_t bytes[RTPMIDI_SYSEX_MAX];
     size_t length;
     uint32_t timestamp;
     uint16_t last_sequence;
@@ -250,32 +250,32 @@ struct mh_sysex_assembler {
 /* Complete and segmented SysEx messages. A result of 1 provides a complete
  * F0..F7 message in *message; 0 means more segments are needed; -1 means a
  * malformed, lost, or oversized message was discarded. */
-void mh_sysex_reset(struct mh_sysex_assembler *assembler);
-int mh_sysex_feed(struct mh_sysex_assembler *assembler,
-                  const struct mh_midi_event *event, uint16_t sequence,
+void rtpmidi_sysex_reset(struct rtpmidi_sysex_assembler *assembler);
+int rtpmidi_sysex_feed(struct rtpmidi_sysex_assembler *assembler,
+                  const struct rtpmidi_event *event, uint16_t sequence,
                   const uint8_t **message, size_t *length);
 
-struct mh_rtp_reader {
-    const struct mh_rtp_packet *packet;
+struct rtpmidi_reader {
+    const struct rtpmidi_packet *packet;
     size_t offset;
     uint32_t timestamp;
     uint8_t running_status;
 };
 
-void mh_rtp_reader_init(struct mh_rtp_reader *reader,
-                        const struct mh_rtp_packet *packet);
-int mh_rtp_reader_next(struct mh_rtp_reader *reader,
-                       struct mh_midi_event *event);
+void rtpmidi_reader_init(struct rtpmidi_reader *reader,
+                        const struct rtpmidi_packet *packet);
+int rtpmidi_reader_next(struct rtpmidi_reader *reader,
+                       struct rtpmidi_event *event);
 
 /* Builds a single, complete MIDI 1.0 command with implicit delta time zero
  * and no recovery journal. Returns 0 for success, -1 for invalid input. */
-int mh_rtp_encode_short(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
+int rtpmidi_encode_short(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
                         const uint8_t *midi, size_t midi_length,
                         uint8_t *data, size_t capacity, size_t *length);
-int mh_rtp_encode_list(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
+int rtpmidi_encode_list(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
                        const uint8_t *midi, size_t midi_length,
                        uint8_t *data, size_t capacity, size_t *length);
-int mh_rtp_decode(const uint8_t *data, size_t length,
-                  struct mh_rtp_packet *packet);
+int rtpmidi_decode(const uint8_t *data, size_t length,
+                  struct rtpmidi_packet *packet);
 
 #endif

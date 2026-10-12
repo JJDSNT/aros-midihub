@@ -45,7 +45,7 @@ struct MHPrefsData {
     struct MHPrefsEndpoint endpoints[MH_PREFS_ENDPOINT_MAX];
     ULONG endpoint_count;
     struct mh_route_table routes;
-    struct mh_network_config network;
+    struct netmidi_network_config network;
     UBYTE route_states[MH_ROUTE_MAX];
     char profiles[MH_PREFS_PROFILE_MAX][MH_PREFS_PROFILE_NAME_MAX + 1];
     ULONG profile_count;

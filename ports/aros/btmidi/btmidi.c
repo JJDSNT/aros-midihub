@@ -2,7 +2,7 @@
 
 #include "btmidi.h"
 #include <midihub/ble_midi.h>
-#include <midihub/rtpmidi.h>
+#include <rtpmidi/rtpmidi.h>
 #include "camd_bridge.h"
 #include <exec/memory.h>
 #include <proto/bluetooth.h>

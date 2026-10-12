@@ -1,10 +1,10 @@
-#include "midihub/timing.h"
+#include "rtpmidi/timing.h"
 
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
-int mh_clock_offset(const uint64_t timestamps[3], int is_initiator,
+int rtpmidi_clock_offset(const uint64_t timestamps[3], int is_initiator,
                     int64_t *peer_to_local)
 {
     uint64_t midpoint;
@@ -25,7 +25,7 @@ int mh_clock_offset(const uint64_t timestamps[3], int is_initiator,
     return 0;
 }
 
-int mh_clock_due(uint32_t timestamp, uint64_t local_now,
+int rtpmidi_clock_due(uint32_t timestamp, uint64_t local_now,
                  int64_t peer_to_local, uint64_t *local_due)
 {
     uint64_t peer_now;
@@ -57,7 +57,7 @@ int mh_clock_due(uint32_t timestamp, uint64_t local_now,
     return 0;
 }
 
-void mh_queue_reset(struct mh_event_queue *queue)
+void rtpmidi_queue_reset(struct rtpmidi_event_queue *queue)
 {
     size_t i;
     if (!queue) return;
@@ -68,7 +68,7 @@ void mh_queue_reset(struct mh_event_queue *queue)
     queue->sysex_bytes = 0;
 }
 
-static size_t mh_queue_position(struct mh_event_queue *queue, uint64_t due)
+static size_t rtpmidi_queue_position(struct rtpmidi_event_queue *queue, uint64_t due)
 {
     size_t position = queue->count;
     while (position && queue->events[position - 1].due > due) {
@@ -78,14 +78,14 @@ static size_t mh_queue_position(struct mh_event_queue *queue, uint64_t due)
     return position;
 }
 
-int mh_queue_push(struct mh_event_queue *queue, uint64_t due,
+int rtpmidi_queue_push(struct rtpmidi_event_queue *queue, uint64_t due,
                   const uint8_t *bytes, size_t length)
 {
     size_t position;
     if (!queue || !bytes || length == 0 || length > 3 ||
-        queue->count == MH_EVENT_QUEUE_CAP)
+        queue->count == RTPMIDI_EVENT_QUEUE_CAP)
         return -1;
-    position = mh_queue_position(queue, due);
+    position = rtpmidi_queue_position(queue, due);
     memset(&queue->events[position], 0, sizeof(queue->events[position]));
     queue->events[position].due = due;
     queue->events[position].length = (uint8_t)length;
@@ -94,19 +94,19 @@ int mh_queue_push(struct mh_event_queue *queue, uint64_t due,
     return 0;
 }
 
-int mh_queue_push_sysex(struct mh_event_queue *queue, uint64_t due,
+int rtpmidi_queue_push_sysex(struct rtpmidi_event_queue *queue, uint64_t due,
                         const uint8_t *bytes, size_t length)
 {
     uint8_t *copy;
     size_t position;
     if (!queue || !bytes || length < 2 || bytes[0] != 0xf0 ||
-        bytes[length - 1] != 0xf7 || queue->count == MH_EVENT_QUEUE_CAP ||
-        length > MH_EVENT_QUEUE_SYSEX_BYTES - queue->sysex_bytes)
+        bytes[length - 1] != 0xf7 || queue->count == RTPMIDI_EVENT_QUEUE_CAP ||
+        length > RTPMIDI_EVENT_QUEUE_SYSEX_BYTES - queue->sysex_bytes)
         return -1;
     copy = malloc(length);
     if (!copy) return -1;
     memcpy(copy, bytes, length);
-    position = mh_queue_position(queue, due);
+    position = rtpmidi_queue_position(queue, due);
     memset(&queue->events[position], 0, sizeof(queue->events[position]));
     queue->events[position].due = due;
     queue->events[position].sysex = copy;
@@ -116,8 +116,8 @@ int mh_queue_push_sysex(struct mh_event_queue *queue, uint64_t due,
     return 0;
 }
 
-int mh_queue_pop_due(struct mh_event_queue *queue, uint64_t now,
-                      struct mh_queued_event *event)
+int rtpmidi_queue_pop_due(struct rtpmidi_event_queue *queue, uint64_t now,
+                      struct rtpmidi_queued_event *event)
 {
     if (!queue || !event || !queue->count || queue->events[0].due > now)
         return 0;
@@ -133,7 +133,7 @@ int mh_queue_pop_due(struct mh_event_queue *queue, uint64_t now,
     return 1;
 }
 
-void mh_queue_event_release(struct mh_queued_event *event)
+void rtpmidi_queue_event_release(struct rtpmidi_queued_event *event)
 {
     if (!event) return;
     free(event->sysex);
@@ -142,7 +142,7 @@ void mh_queue_event_release(struct mh_queued_event *event)
     event->length = 0;
 }
 
-int mh_queue_next_due(const struct mh_event_queue *queue, uint64_t *due)
+int rtpmidi_queue_next_due(const struct rtpmidi_event_queue *queue, uint64_t *due)
 {
     if (!queue || !due || !queue->count)
         return 0;
@@ -150,7 +150,7 @@ int mh_queue_next_due(const struct mh_event_queue *queue, uint64_t *due)
     return 1;
 }
 
-size_t mh_queue_cancel_note_on(struct mh_event_queue *queue,
+size_t rtpmidi_queue_cancel_note_on(struct rtpmidi_event_queue *queue,
                                 uint8_t channel, uint8_t note)
 {
     size_t read_index;
@@ -158,7 +158,7 @@ size_t mh_queue_cancel_note_on(struct mh_event_queue *queue,
     if (!queue || channel >= 16 || note >= 128)
         return 0;
     for (read_index = 0; read_index < queue->count; ++read_index) {
-        const struct mh_queued_event *event = &queue->events[read_index];
+        const struct rtpmidi_queued_event *event = &queue->events[read_index];
         if (event->length == 3 && event->bytes[0] == (uint8_t)(0x90 | channel) &&
             event->bytes[1] == note && event->bytes[2] != 0)
             continue;
@@ -171,14 +171,14 @@ size_t mh_queue_cancel_note_on(struct mh_event_queue *queue,
     return read_index;
 }
 
-int mh_queue_has_note_on(const struct mh_event_queue *queue,
+int rtpmidi_queue_has_note_on(const struct rtpmidi_event_queue *queue,
                           uint8_t channel, uint8_t note)
 {
     size_t i;
     if (!queue || channel >= 16 || note >= 128)
         return 0;
     for (i = 0; i < queue->count; ++i) {
-        const struct mh_queued_event *event = &queue->events[i];
+        const struct rtpmidi_queued_event *event = &queue->events[i];
         if (event->length == 3 &&
             event->bytes[0] == (uint8_t)(0x90 | channel) &&
             event->bytes[1] == note && event->bytes[2])

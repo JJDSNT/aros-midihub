@@ -1,10 +1,10 @@
-#include "midihub/sender.h"
+#include "rtpmidi/sender.h"
 
 #include <string.h>
 
-enum { MH_TOOL_VALUE, MH_TOOL_TOGGLE, MH_TOOL_COUNT };
-enum { MH_MTC_UNKNOWN, MH_MTC_FORWARD, MH_MTC_REVERSE };
-enum { MH_SYSTEM_NONE, MH_SYSTEM_MTC, MH_SYSTEM_SYSEX };
+enum { RTPMIDI_TOOL_VALUE, RTPMIDI_TOOL_TOGGLE, RTPMIDI_TOOL_COUNT };
+enum { RTPMIDI_MTC_UNKNOWN, RTPMIDI_MTC_FORWARD, RTPMIDI_MTC_REVERSE };
+enum { RTPMIDI_SYSTEM_NONE, RTPMIDI_SYSTEM_MTC, RTPMIDI_SYSTEM_SYSEX };
 
 static int mtc_valid(const uint8_t nibbles[8])
 {
@@ -51,18 +51,18 @@ static int mtc_offset_forward(uint8_t nibbles[8])
     return 0;
 }
 
-static void mtc_record_quarter_frame(struct mh_sender *sender, uint8_t data)
+static void mtc_record_quarter_frame(struct rtpmidi_sender *sender, uint8_t data)
 {
     unsigned int type = data >> 4;
     unsigned int previous = sender->mtc_qf_point;
     sender->mtc_qf_nibbles[type] = data & 15;
     sender->mtc_qf_seen |= (uint8_t)(1u << type);
 
-    if (sender->mtc_qf_direction == MH_MTC_FORWARD &&
+    if (sender->mtc_qf_direction == RTPMIDI_MTC_FORWARD &&
         type == ((previous + 1) & 7)) {
         if (type == 0) sender->mtc_partial_mask = 1;
         else sender->mtc_partial_mask |= (uint8_t)(1u << type);
-    } else if (sender->mtc_qf_direction == MH_MTC_REVERSE &&
+    } else if (sender->mtc_qf_direction == RTPMIDI_MTC_REVERSE &&
                type == ((previous + 7) & 7)) {
         if (type == 7) sender->mtc_partial_mask = 0x80;
         else if (type >= 2)
@@ -70,23 +70,23 @@ static void mtc_record_quarter_frame(struct mh_sender *sender, uint8_t data)
         else
             sender->mtc_partial_mask = 0;
     } else if (type == 0) {
-        sender->mtc_qf_direction = MH_MTC_FORWARD;
+        sender->mtc_qf_direction = RTPMIDI_MTC_FORWARD;
         sender->mtc_partial_mask = 1;
         sender->mtc_qf_seen = 1;
     } else if (type == 7) {
-        sender->mtc_qf_direction = MH_MTC_REVERSE;
+        sender->mtc_qf_direction = RTPMIDI_MTC_REVERSE;
         sender->mtc_partial_mask = 0x80;
         sender->mtc_qf_seen =
             (uint8_t)(previous == 0 && (sender->mtc_qf_seen & 1) ?
                       0x81 : 0x80);
     } else {
-        sender->mtc_qf_direction = MH_MTC_UNKNOWN;
+        sender->mtc_qf_direction = RTPMIDI_MTC_UNKNOWN;
         sender->mtc_partial_mask = 0;
         sender->mtc_qf_seen = (uint8_t)(1u << type);
     }
     sender->mtc_qf_point = (uint8_t)type;
 
-    if (sender->mtc_qf_direction == MH_MTC_FORWARD && type == 7 &&
+    if (sender->mtc_qf_direction == RTPMIDI_MTC_FORWARD && type == 7 &&
         sender->mtc_partial_mask == 0xff) {
         memcpy(sender->mtc_complete, sender->mtc_qf_nibbles, 8);
         if (mtc_offset_forward(sender->mtc_complete) == 0) {
@@ -94,7 +94,7 @@ static void mtc_record_quarter_frame(struct mh_sender *sender, uint8_t data)
             sender->mtc_complete_quarter_frame = 1;
         }
         sender->mtc_partial_mask = 0;
-    } else if (sender->mtc_qf_direction == MH_MTC_REVERSE && type == 1 &&
+    } else if (sender->mtc_qf_direction == RTPMIDI_MTC_REVERSE && type == 1 &&
                (sender->mtc_qf_seen & 0xff) == 0xff) {
         memcpy(sender->mtc_complete, sender->mtc_qf_nibbles, 8);
         if (mtc_valid(sender->mtc_complete)) {
@@ -105,12 +105,12 @@ static void mtc_record_quarter_frame(struct mh_sender *sender, uint8_t data)
     }
 }
 
-void mh_sender_reset(struct mh_sender *sender)
+void rtpmidi_sender_reset(struct rtpmidi_sender *sender)
 {
     if (sender) memset(sender, 0, sizeof(*sender));
 }
 
-void mh_sender_clear_history(struct mh_sender *sender)
+void rtpmidi_sender_clear_history(struct rtpmidi_sender *sender)
 {
     if (sender) {
         sender->count = 0;
@@ -118,13 +118,13 @@ void mh_sender_clear_history(struct mh_sender *sender)
     }
 }
 
-static struct mh_parameter_counter *parameter_counter(
-    struct mh_parameter_counter *counters, unsigned int channel, int nrpn,
+static struct rtpmidi_parameter_counter *parameter_counter(
+    struct rtpmidi_parameter_counter *counters, unsigned int channel, int nrpn,
     uint16_t number, int create)
 {
     size_t i;
-    struct mh_parameter_counter *free_entry = NULL;
-    for (i = 0; i < MH_PARAMETER_STATES; ++i) {
+    struct rtpmidi_parameter_counter *free_entry = NULL;
+    for (i = 0; i < RTPMIDI_PARAMETER_STATES; ++i) {
         if (counters[i].used && counters[i].channel == channel &&
             counters[i].nrpn == nrpn && counters[i].number == number)
             return &counters[i];
@@ -147,7 +147,7 @@ static int count_controller_index(uint8_t number)
     return -1;
 }
 
-int mh_sender_supported(const uint8_t *message, size_t length)
+int rtpmidi_sender_supported(const uint8_t *message, size_t length)
 {
     uint8_t type;
     if (!message || !length || message[0] < 0x80)
@@ -172,18 +172,18 @@ int mh_sender_supported(const uint8_t *message, size_t length)
             type == 0xb0 || type == 0xe0);
 }
 
-void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
+void rtpmidi_sender_record(struct rtpmidi_sender *sender, uint16_t sequence,
                       uint32_t timestamp, const uint8_t *message,
                       size_t length)
 {
-    struct mh_sent_event *event;
+    struct rtpmidi_sent_event *event;
     uint8_t type;
     unsigned int channel;
-    if (!sender || !mh_sender_supported(message, length))
+    if (!sender || !rtpmidi_sender_supported(message, length))
         return;
-    if (sender->count == MH_SENDER_HISTORY) {
+    if (sender->count == RTPMIDI_SENDER_HISTORY) {
         memmove(sender->events, sender->events + 1,
-                (MH_SENDER_HISTORY - 1) * sizeof(sender->events[0]));
+                (RTPMIDI_SENDER_HISTORY - 1) * sizeof(sender->events[0]));
         --sender->count;
     }
     event = &sender->events[sender->count++];
@@ -231,7 +231,7 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
             sender->mtc_complete_quarter_frame = 0;
             sender->mtc_qf_seen = 0;
             sender->mtc_partial_mask = 0;
-            sender->mtc_qf_direction = MH_MTC_UNKNOWN;
+            sender->mtc_qf_direction = RTPMIDI_MTC_UNKNOWN;
             sender->mtc_qf_point = 0;
             sender->sysex_log_count = 0;
         } else if (message[0] == 0xf6) {
@@ -307,7 +307,7 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
             sender->parameter_valid[channel] =
                 sender->parameter_msb[channel] != 0x7f || message[2] != 0x7f;
             if (sender->parameter_valid[channel]) {
-                struct mh_parameter_counter *counter;
+                struct rtpmidi_parameter_counter *counter;
                 event->parameter = (uint16_t)(
                     ((uint16_t)sender->parameter_msb[channel] << 7) |
                     message[2]);
@@ -333,7 +333,7 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
             event->parameter_valid = 1;
             event->parameter_nrpn = sender->parameter_nrpn[channel];
             {
-                struct mh_parameter_counter *counter = parameter_counter(
+                struct rtpmidi_parameter_counter *counter = parameter_counter(
                     sender->parameter_counts, channel,
                     event->parameter_nrpn, event->parameter, 0);
                 if (counter) {
@@ -356,7 +356,7 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
                     (uint8_t)((sender->switch_toggle[channel][switch_index] +
                                1) & 0x3f);
             sender->switch_on[channel][switch_index] = on;
-            event->tool = MH_TOOL_TOGGLE;
+            event->tool = RTPMIDI_TOOL_TOGGLE;
             event->recovery_value =
                 sender->switch_toggle[channel][switch_index];
         } else if (count_controller_index(message[1]) >= 0) {
@@ -364,7 +364,7 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
                 count_controller_index(message[1]);
             sender->mode_count[channel][index] = (uint8_t)(
                 (sender->mode_count[channel][index] + 1) & 0x3f);
-            event->tool = MH_TOOL_COUNT;
+            event->tool = RTPMIDI_TOOL_COUNT;
             event->recovery_value = sender->mode_count[channel][index];
         } else if (message[1] == 121) {
             unsigned int switch_index;
@@ -393,18 +393,18 @@ void mh_sender_record(struct mh_sender *sender, uint16_t sequence,
     }
 }
 
-int mh_sender_record_sysex(struct mh_sender *sender, uint16_t sequence,
+int rtpmidi_sender_record_sysex(struct rtpmidi_sender *sender, uint16_t sequence,
                            uint32_t timestamp, const uint8_t *message,
                            size_t length)
 {
-    struct mh_sent_event *event;
-    struct mh_sent_sysex *log;
+    struct rtpmidi_sent_event *event;
+    struct rtpmidi_sent_sysex *log;
     size_t pending = 0;
     size_t i;
     int is_mtc;
     if (!sender || !message || length < 2 || message[0] != 0xf0 ||
         message[length - 1] != 0xf7 ||
-        length - 2 > MH_SYSEX_JOURNAL_MAX)
+        length - 2 > RTPMIDI_SYSEX_JOURNAL_MAX)
         return 0;
     for (i = 1; i + 1 < length; ++i)
         if (message[i] & 0x80)
@@ -414,13 +414,13 @@ int mh_sender_record_sysex(struct mh_sender *sender, uint16_t sequence,
     if (!is_mtc) {
         for (i = 0; i < sender->sysex_log_count; ++i)
             pending += sender->sysex_logs[i].length;
-        if (sender->sysex_log_count == MH_SYSEX_JOURNAL_LOGS ||
-            pending + length - 2 > MH_SYSEX_JOURNAL_MAX)
-            mh_sender_clear_history(sender);
+        if (sender->sysex_log_count == RTPMIDI_SYSEX_JOURNAL_LOGS ||
+            pending + length - 2 > RTPMIDI_SYSEX_JOURNAL_MAX)
+            rtpmidi_sender_clear_history(sender);
     }
-    if (sender->count == MH_SENDER_HISTORY) {
+    if (sender->count == RTPMIDI_SENDER_HISTORY) {
         memmove(sender->events, sender->events + 1,
-                (MH_SENDER_HISTORY - 1) * sizeof(sender->events[0]));
+                (RTPMIDI_SENDER_HISTORY - 1) * sizeof(sender->events[0]));
         --sender->count;
     }
     event = &sender->events[sender->count++];
@@ -430,16 +430,16 @@ int mh_sender_record_sysex(struct mh_sender *sender, uint16_t sequence,
     event->bytes[0] = 0xf0;
     event->length = 1;
     if (is_mtc) {
-        event->system_kind = MH_SYSTEM_MTC;
+        event->system_kind = RTPMIDI_SYSTEM_MTC;
         memset(sender->mtc_complete, 0, sizeof(sender->mtc_complete));
         memcpy(sender->mtc_complete, message + 5, 4);
         sender->mtc_complete_known = 1;
         sender->mtc_complete_quarter_frame = 0;
         sender->mtc_qf_seen = 0;
         sender->mtc_partial_mask = 0;
-        sender->mtc_qf_direction = MH_MTC_UNKNOWN;
+        sender->mtc_qf_direction = RTPMIDI_MTC_UNKNOWN;
     } else {
-        event->system_kind = MH_SYSTEM_SYSEX;
+        event->system_kind = RTPMIDI_SYSTEM_SYSEX;
         ++sender->sysex_count;
         log = &sender->sysex_logs[sender->sysex_log_count++];
         log->sequence = sequence;
@@ -450,7 +450,7 @@ int mh_sender_record_sysex(struct mh_sender *sender, uint16_t sequence,
     return 1;
 }
 
-void mh_sender_ack(struct mh_sender *sender, uint32_t extended_sequence)
+void rtpmidi_sender_ack(struct rtpmidi_sender *sender, uint32_t extended_sequence)
 {
     uint16_t sequence = (uint16_t)extended_sequence;
     size_t remove_count = 0;
@@ -489,7 +489,7 @@ static int parameter_controller(uint8_t number)
            (number >= 98 && number <= 101);
 }
 
-static int parameter_event(const struct mh_sent_event *event)
+static int parameter_event(const struct rtpmidi_sent_event *event)
 {
     uint8_t number = event->bytes[1];
 
@@ -513,12 +513,12 @@ struct parameter_build_log {
     uint8_t count;
 };
 
-static int build_parameters(const struct mh_sender *sender,
+static int build_parameters(const struct rtpmidi_sender *sender,
                             unsigned int channel, uint16_t sequence,
                             uint8_t *data, size_t capacity, size_t *length,
                             int *recent)
 {
-    struct parameter_build_log logs[MH_SENDER_HISTORY];
+    struct parameter_build_log logs[RTPMIDI_SENDER_HISTORY];
     size_t log_count = 0;
     size_t i;
     size_t j;
@@ -527,7 +527,7 @@ static int build_parameters(const struct mh_sender *sender,
     int chapter_recent = 0;
 
     for (i = 0; i < sender->count; ++i) {
-        const struct mh_sent_event *event = &sender->events[i];
+        const struct rtpmidi_sent_event *event = &sender->events[i];
         uint8_t controller;
         if ((event->bytes[0] & 0xf0) != 0xb0 ||
             (event->bytes[0] & 0x0f) != channel)
@@ -577,7 +577,7 @@ static int build_parameters(const struct mh_sender *sender,
     }
     for (i = 0; i < log_count; ++i) {
         const struct parameter_build_log *log = &logs[i];
-        const struct mh_sent_event *last = &sender->events[log->last_event];
+        const struct rtpmidi_sent_event *last = &sender->events[log->last_event];
         int is_recent = last->sequence == (uint16_t)(sequence - 1);
         int has_lsb = log->entry_lsb >= 0 &&
                       (log->entry_msb < 0 || log->entry_lsb > log->entry_msb);
@@ -627,7 +627,7 @@ static int build_parameters(const struct mh_sender *sender,
     return 1;
 }
 
-static int build_channel(const struct mh_sender *sender, unsigned int channel,
+static int build_channel(const struct rtpmidi_sender *sender, unsigned int channel,
                          uint16_t sequence, uint32_t timestamp,
                          uint8_t *data, size_t capacity, size_t *length,
                          int *recent)
@@ -659,7 +659,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
     for (i = 0; i < 128; ++i)
         latest_control[i] = latest_note[i] = latest_poly[i] = -1;
     for (i = 0; i < sender->count; ++i) {
-        const struct mh_sent_event *event = &sender->events[i];
+        const struct rtpmidi_sent_event *event = &sender->events[i];
         if ((event->bytes[0] & 0x0f) != channel)
             continue;
         type = event->bytes[0] & 0xf0;
@@ -690,7 +690,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
         if (latest_control[i] >= 0) ++control_count;
         if (latest_poly[i] > reset_controllers) ++poly_count;
         if (latest_note[i] >= 0) {
-            const struct mh_sent_event *event =
+            const struct rtpmidi_sent_event *event =
                 &sender->events[latest_note[i]];
             int note_on = (event->bytes[0] & 0xf0) == 0x90 &&
                           event->bytes[2];
@@ -720,7 +720,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
     *length += 3;
     *recent = 0;
     if (program >= 0) {
-        const struct mh_sent_event *event = &sender->events[program];
+        const struct rtpmidi_sent_event *event = &sender->events[program];
         int is_recent = event->sequence == (uint16_t)(sequence - 1);
         toc |= 0x80;
         *recent |= is_recent;
@@ -738,7 +738,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
         toc |= 0x40;
         if (put(data, capacity, length, 0) < 0) return -1;
         for (i = 0; i < sender->count; ++i) {
-            const struct mh_sent_event *event = &sender->events[i];
+            const struct rtpmidi_sent_event *event = &sender->events[i];
             if ((event->bytes[0] & 0xf0) != 0xb0 ||
                 (event->bytes[0] & 0x0f) != channel)
                 continue;
@@ -752,8 +752,8 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
                                (uint16_t)(sequence - 1) ? 0 : 0x80) |
                               number)) < 0 ||
                 put(data, capacity, length,
-                    (uint8_t)((event->tool == MH_TOOL_VALUE ? 0 :
-                               event->tool == MH_TOOL_COUNT ? 0xc0 : 0x80) |
+                    (uint8_t)((event->tool == RTPMIDI_TOOL_VALUE ? 0 :
+                               event->tool == RTPMIDI_TOOL_COUNT ? 0xc0 : 0x80) |
                               event->recovery_value)) < 0)
                 return -1;
         }
@@ -773,7 +773,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
         }
     }
     if (pitch >= 0) {
-        const struct mh_sent_event *event = &sender->events[pitch];
+        const struct rtpmidi_sent_event *event = &sender->events[pitch];
         int is_recent = event->sequence == (uint16_t)(sequence - 1);
         toc |= 0x10;
         *recent |= is_recent;
@@ -791,7 +791,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
                 (uint8_t)(low == 16 ? 0xf1 : (low << 4) | high)) < 0)
             return -1;
         for (i = 0; i < sender->count; ++i) {
-            const struct mh_sent_event *event = &sender->events[i];
+            const struct rtpmidi_sent_event *event = &sender->events[i];
             uint32_t elapsed;
             if ((event->bytes[0] & 0xf0) != 0x90 ||
                 (event->bytes[0] & 0x0f) != channel || !event->bytes[2] ||
@@ -822,7 +822,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
         toc |= 0x04;
         if (put(data, capacity, length, 0) < 0) return -1;
         for (i = 0; i < sender->count; ++i) {
-            const struct mh_sent_event *event = &sender->events[i];
+            const struct rtpmidi_sent_event *event = &sender->events[i];
             int note_on;
             int is_recent;
             if (((event->bytes[0] & 0xf0) != 0x80 &&
@@ -862,7 +862,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
         *recent |= extras_recent;
     }
     if (aftertouch >= 0) {
-        const struct mh_sent_event *event = &sender->events[aftertouch];
+        const struct rtpmidi_sent_event *event = &sender->events[aftertouch];
         int is_recent = event->sequence == (uint16_t)(sequence - 1);
         toc |= 0x02;
         *recent |= is_recent;
@@ -876,7 +876,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
         toc |= 0x01;
         if (put(data, capacity, length, 0) < 0) return -1;
         for (i = 0; i < sender->count; ++i) {
-            const struct mh_sent_event *event = &sender->events[i];
+            const struct rtpmidi_sent_event *event = &sender->events[i];
             size_t later;
             int reset_notes = 0;
             if ((event->bytes[0] & 0xf0) != 0xa0 ||
@@ -885,7 +885,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
                 (int)i <= reset_controllers)
                 continue;
             for (later = i + 1; later < sender->count; ++later) {
-                const struct mh_sent_event *next = &sender->events[later];
+                const struct rtpmidi_sent_event *next = &sender->events[later];
                 if ((next->bytes[0] & 0xf0) == 0xb0 &&
                     (next->bytes[0] & 0x0f) == channel &&
                     (next->bytes[1] == 120 || next->bytes[1] >= 123)) {
@@ -916,7 +916,7 @@ static int build_channel(const struct mh_sender *sender, unsigned int channel,
     return 1;
 }
 
-static int build_system(const struct mh_sender *sender, uint16_t sequence,
+static int build_system(const struct rtpmidi_sender *sender, uint16_t sequence,
                         uint8_t *data, size_t capacity, size_t *length,
                         int *recent)
 {
@@ -947,7 +947,7 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
         case 0xfb:
         case 0xfc: sequencer = (int)i; break;
         case 0xf0:
-            if (sender->events[i].system_kind == MH_SYSTEM_MTC)
+            if (sender->events[i].system_kind == RTPMIDI_SYSTEM_MTC)
                 mtc = (int)i;
             break;
         case 0xf1: mtc = (int)i; break;
@@ -1042,10 +1042,10 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
                            (sender->mtc_partial_mask ? 0x20 : 0) |
                            (sender->mtc_complete_known &&
                             sender->mtc_complete_quarter_frame ? 0x10 : 0) |
-                           (sender->mtc_qf_direction == MH_MTC_REVERSE ?
+                           (sender->mtc_qf_direction == RTPMIDI_MTC_REVERSE ?
                             0x08 : 0) |
                            (sender->mtc_partial_mask ? sender->mtc_qf_point :
-                            sender->mtc_qf_direction == MH_MTC_REVERSE ?
+                            sender->mtc_qf_direction == RTPMIDI_MTC_REVERSE ?
                             0 : 7));
         if (put(data, capacity, length, f_header) < 0)
             return -1;
@@ -1079,7 +1079,7 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
     }
     if (sender->sysex_log_count) {
         for (i = 0; i < sender->sysex_log_count; ++i) {
-            const struct mh_sent_sysex *log = &sender->sysex_logs[i];
+            const struct rtpmidi_sent_sysex *log = &sender->sysex_logs[i];
             size_t data_index;
             int is_recent = log->sequence == (uint16_t)(sequence - 1);
             uint8_t x_header = (uint8_t)((is_recent ? 0 : 0x80) | 0x27 |
@@ -1105,7 +1105,7 @@ static int build_system(const struct mh_sender *sender, uint16_t sequence,
     return 1;
 }
 
-int mh_sender_journal(const struct mh_sender *sender, uint16_t sequence,
+int rtpmidi_sender_journal(const struct rtpmidi_sender *sender, uint16_t sequence,
                       uint32_t timestamp, uint8_t *data, size_t capacity,
                       size_t *length)
 {

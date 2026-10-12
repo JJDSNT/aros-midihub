@@ -1,4 +1,4 @@
-#include "midihub/rtpmidi.h"
+#include "rtpmidi/rtpmidi.h"
 
 #include <string.h>
 
@@ -40,7 +40,7 @@ static size_t short_length(uint8_t status)
     }
 }
 
-int mh_rtp_encode_short(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
+int rtpmidi_encode_short(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
                         const uint8_t *midi, size_t midi_length,
                         uint8_t *data, size_t capacity, size_t *length)
 {
@@ -52,11 +52,11 @@ int mh_rtp_encode_short(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
     for (i = 1; i < midi_length; ++i)
         if (midi[i] & 0x80)
             return -1;
-    return mh_rtp_encode_list(sequence, timestamp, ssrc, midi, midi_length,
+    return rtpmidi_encode_list(sequence, timestamp, ssrc, midi, midi_length,
                               data, capacity, length);
 }
 
-int mh_rtp_encode_list(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
+int rtpmidi_encode_list(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
                        const uint8_t *midi, size_t midi_length,
                        uint8_t *data, size_t capacity, size_t *length)
 {
@@ -81,8 +81,8 @@ int mh_rtp_encode_list(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
     return 0;
 }
 
-int mh_rtp_decode(const uint8_t *data, size_t length,
-                  struct mh_rtp_packet *packet)
+int rtpmidi_decode(const uint8_t *data, size_t length,
+                  struct rtpmidi_packet *packet)
 {
     size_t header_length;
     size_t midi_length;
@@ -116,8 +116,8 @@ int mh_rtp_decode(const uint8_t *data, size_t length,
     return 0;
 }
 
-int mh_journal_decode(const uint8_t *data, size_t length,
-                      struct mh_journal *journal)
+int rtpmidi_journal_decode(const uint8_t *data, size_t length,
+                      struct rtpmidi_journal *journal)
 {
     size_t offset = 3;
     size_t section_length;
@@ -144,7 +144,7 @@ int mh_journal_decode(const uint8_t *data, size_t length,
     }
     count = (data[0] & 0x20) ? (size_t)(data[0] & 0x0f) + 1 : 0;
     for (i = 0; i < count; ++i) {
-        struct mh_journal_channel *channel = &journal->channels[i];
+        struct rtpmidi_journal_channel *channel = &journal->channels[i];
         if (length - offset < 3)
             return -1;
         section_length = ((size_t)(data[offset] & 3) << 8) |
@@ -169,7 +169,7 @@ int mh_journal_decode(const uint8_t *data, size_t length,
     return 0;
 }
 
-int mh_journal_covers_gap(uint16_t previous, uint16_t current,
+int rtpmidi_journal_covers_gap(uint16_t previous, uint16_t current,
                           uint16_t checkpoint)
 {
     uint16_t advance = (uint16_t)(current - previous);
@@ -212,8 +212,8 @@ static int valid_mtc_nibbles(const uint8_t nibbles[8])
            minute < 60 && hour < 24;
 }
 
-int mh_journal_decode_system(const struct mh_journal *journal,
-                             struct mh_journal_system_state *state)
+int rtpmidi_journal_decode_system(const struct rtpmidi_journal *journal,
+                             struct rtpmidi_journal_system_state *state)
 {
     const uint8_t *data;
     size_t length;
@@ -350,19 +350,19 @@ int mh_journal_decode_system(const struct mh_journal *journal,
     return decoded;
 }
 
-int mh_journal_decode_sysex(const struct mh_journal_system_state *state,
-                            struct mh_journal_sysex *sysex)
+int rtpmidi_journal_decode_sysex(const struct rtpmidi_journal_system_state *state,
+                            struct rtpmidi_journal_sysex *sysex)
 {
     size_t offset = 0;
     if (!state || !sysex) return -1;
     memset(sysex, 0, sizeof(*sysex));
     if (!state->sysex) return 0;
     while (offset < state->sysex_length) {
-        struct mh_journal_sysex_log *log;
+        struct rtpmidi_journal_sysex_log *log;
         uint8_t flags;
         unsigned int bytes = 0;
         uint32_t first = 0;
-        if (sysex->count == MH_JOURNAL_SYSEX_LOGS) return -1;
+        if (sysex->count == RTPMIDI_JOURNAL_SYSEX_LOGS) return -1;
         log = &sysex->logs[sysex->count++];
         flags = state->sysex[offset++];
         log->single_packet_safe = !!(flags & 0x80);
@@ -403,8 +403,8 @@ int mh_journal_decode_sysex(const struct mh_journal_system_state *state,
     return sysex->count ? 1 : 0;
 }
 
-int mh_journal_decode_aftertouch(const struct mh_journal_channel *channel,
-                                  struct mh_journal_aftertouch *aftertouch)
+int rtpmidi_journal_decode_aftertouch(const struct rtpmidi_journal_channel *channel,
+                                  struct rtpmidi_journal_aftertouch *aftertouch)
 {
     const uint8_t *data;
     size_t length;
@@ -480,7 +480,7 @@ int mh_journal_decode_aftertouch(const struct mh_journal_channel *channel,
         ++offset;
         aftertouch->poly_count = logs;
         for (i = 0; i < logs; ++i) {
-            struct mh_journal_poly_pressure *log = &aftertouch->poly[i];
+            struct rtpmidi_journal_poly_pressure *log = &aftertouch->poly[i];
             number = data[offset] & 0x7f;
             if (seen[number / 8] & (0x80u >> (number % 8))) return -1;
             seen[number / 8] |= (uint8_t)(0x80u >> (number % 8));
@@ -494,8 +494,8 @@ int mh_journal_decode_aftertouch(const struct mh_journal_channel *channel,
     return offset == length ? 1 : -1;
 }
 
-int mh_journal_decode_notes(const struct mh_journal_channel *channel,
-                            struct mh_journal_notes *notes)
+int rtpmidi_journal_decode_notes(const struct rtpmidi_journal_channel *channel,
+                            struct rtpmidi_journal_notes *notes)
 {
     const uint8_t *data;
     size_t length;
@@ -556,7 +556,7 @@ int mh_journal_decode_notes(const struct mh_journal_channel *channel,
     notes->log_count = logs;
     for (i = 0; i < logs; ++i) {
         const uint8_t *log = data + offset + 2 + i * 2;
-        struct mh_journal_note_log *entry = &notes->logs[i];
+        struct rtpmidi_journal_note_log *entry = &notes->logs[i];
         number = log[0] & 0x7f;
         if (!((log[1] & 0x7f)) ||
             (seen[number / 8] & (0x80u >> (number % 8))))
@@ -576,9 +576,9 @@ int mh_journal_decode_notes(const struct mh_journal_channel *channel,
     return 1;
 }
 
-int mh_journal_decode_note_extras(
-    const struct mh_journal_channel *channel,
-    struct mh_journal_note_extras *extras)
+int rtpmidi_journal_decode_note_extras(
+    const struct rtpmidi_journal_channel *channel,
+    struct rtpmidi_journal_note_extras *extras)
 {
     const uint8_t *data;
     size_t length;
@@ -642,7 +642,7 @@ int mh_journal_decode_note_extras(
     extras->count = logs;
     for (i = 0; i < logs; ++i) {
         const uint8_t *raw = data + offset + 1 + i * 2;
-        struct mh_journal_note_extra *entry = &extras->logs[i];
+        struct rtpmidi_journal_note_extra *entry = &extras->logs[i];
         uint8_t number = raw[0] & 0x7f;
         uint8_t mask = (uint8_t)(0x80u >> (number % 8));
         uint8_t *seen = raw[1] & 0x80 ? seen_velocity : seen_count;
@@ -656,9 +656,9 @@ int mh_journal_decode_note_extras(
     return 1;
 }
 
-int mh_journal_decode_channel_state(
-    const struct mh_journal_channel *channel,
-    struct mh_journal_channel_state *state)
+int rtpmidi_journal_decode_channel_state(
+    const struct rtpmidi_journal_channel *channel,
+    struct rtpmidi_journal_channel_state *state)
 {
     const uint8_t *data;
     size_t length;
@@ -704,8 +704,8 @@ int mh_journal_decode_channel_state(
     return 1;
 }
 
-int mh_journal_decode_controls(const struct mh_journal_channel *channel,
-                                struct mh_journal_controls *controls)
+int rtpmidi_journal_decode_controls(const struct rtpmidi_journal_channel *channel,
+                                struct rtpmidi_journal_controls *controls)
 {
     const uint8_t *data;
     size_t length;
@@ -738,7 +738,7 @@ int mh_journal_decode_controls(const struct mh_journal_channel *channel,
     controls->count = count;
     for (i = 0; i < count; ++i) {
         const uint8_t *log = data + offset + 1 + i * 2;
-        struct mh_journal_control_log *entry = &controls->logs[i];
+        struct rtpmidi_journal_control_log *entry = &controls->logs[i];
         number = log[0] & 0x7f;
         entry->number = number;
         entry->alternate = !!(log[1] & 0x80);
@@ -779,8 +779,8 @@ int mh_journal_decode_controls(const struct mh_journal_channel *channel,
     return 1;
 }
 
-int mh_journal_decode_parameters(const struct mh_journal_channel *channel,
-                                 struct mh_journal_parameters *parameters)
+int rtpmidi_journal_decode_parameters(const struct rtpmidi_journal_channel *channel,
+                                 struct rtpmidi_journal_parameters *parameters)
 {
     const uint8_t *data;
     const uint8_t *chapter;
@@ -829,7 +829,7 @@ int mh_journal_decode_parameters(const struct mh_journal_channel *channel,
     }
     compressed = !!(header & 0x04) && !!(header & 0x18);
     while (position < chapter_length) {
-        struct mh_journal_parameter_log *log;
+        struct rtpmidi_journal_parameter_log *log;
         uint8_t toc;
         uint8_t lsb;
         uint8_t msb;
@@ -896,8 +896,8 @@ int mh_journal_decode_parameters(const struct mh_journal_channel *channel,
     return position == chapter_length ? 1 : -1;
 }
 
-void mh_rtp_reader_init(struct mh_rtp_reader *reader,
-                        const struct mh_rtp_packet *packet)
+void rtpmidi_reader_init(struct rtpmidi_reader *reader,
+                        const struct rtpmidi_packet *packet)
 {
     reader->packet = packet;
     reader->offset = 0;
@@ -905,10 +905,10 @@ void mh_rtp_reader_init(struct mh_rtp_reader *reader,
     reader->running_status = 0;
 }
 
-int mh_rtp_reader_next(struct mh_rtp_reader *reader,
-                       struct mh_midi_event *event)
+int rtpmidi_reader_next(struct rtpmidi_reader *reader,
+                       struct rtpmidi_event *event)
 {
-    const struct mh_rtp_packet *packet;
+    const struct rtpmidi_packet *packet;
     const uint8_t *midi;
     size_t offset;
     uint32_t delta = 0;
@@ -1001,13 +1001,13 @@ int mh_rtp_reader_next(struct mh_rtp_reader *reader,
     return 1;
 }
 
-void mh_sysex_reset(struct mh_sysex_assembler *assembler)
+void rtpmidi_sysex_reset(struct rtpmidi_sysex_assembler *assembler)
 {
     memset(assembler, 0, sizeof(*assembler));
 }
 
-int mh_sysex_feed(struct mh_sysex_assembler *assembler,
-                  const struct mh_midi_event *event, uint16_t sequence,
+int rtpmidi_sysex_feed(struct rtpmidi_sysex_assembler *assembler,
+                  const struct rtpmidi_event *event, uint16_t sequence,
                   const uint8_t **message, size_t *length)
 {
     const uint8_t *segment;
@@ -1022,12 +1022,12 @@ int mh_sysex_feed(struct mh_sysex_assembler *assembler,
     head = segment[0];
     tail = segment[size - 1];
     if (head == 0xf7 && tail == 0xf4) {
-        mh_sysex_reset(assembler);
+        rtpmidi_sysex_reset(assembler);
         return 0;
     }
     if (head == 0xf0) {
-        if (size > MH_SYSEX_MAX) {
-            mh_sysex_reset(assembler);
+        if (size > RTPMIDI_SYSEX_MAX) {
+            rtpmidi_sysex_reset(assembler);
             return -1;
         }
         memcpy(assembler->bytes, segment, size - (tail == 0xf0));
@@ -1037,8 +1037,8 @@ int mh_sysex_feed(struct mh_sysex_assembler *assembler,
     } else if (head == 0xf7 && assembler->active &&
                (sequence == assembler->last_sequence ||
                 sequence == (uint16_t)(assembler->last_sequence + 1))) {
-        if (assembler->length + size - 1 - (tail == 0xf0) > MH_SYSEX_MAX) {
-            mh_sysex_reset(assembler);
+        if (assembler->length + size - 1 - (tail == 0xf0) > RTPMIDI_SYSEX_MAX) {
+            rtpmidi_sysex_reset(assembler);
             return -1;
         }
         memcpy(assembler->bytes + assembler->length, segment + 1,
@@ -1046,7 +1046,7 @@ int mh_sysex_feed(struct mh_sysex_assembler *assembler,
         assembler->length += size - 1 - (tail == 0xf0);
         assembler->active = tail == 0xf0;
     } else {
-        mh_sysex_reset(assembler);
+        rtpmidi_sysex_reset(assembler);
         return -1;
     }
     assembler->last_sequence = sequence;

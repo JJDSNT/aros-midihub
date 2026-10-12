@@ -1169,9 +1169,9 @@ static void load_profile(struct MHPrefsData *data)
     if (load_routes_path(data, path)) {
         set_status(data, "The profile route configuration is invalid."); return;
     }
-    mh_config_defaults(&data->network);
+    netmidi_config_defaults(&data->network);
     profile_path(path, sizeof(path), name, "Network");
-    if (mh_config_load(path, &data->network)) {
+    if (netmidi_config_load(path, &data->network)) {
         set_status(data, "The profile network configuration is invalid."); return;
     }
     set(data->network_session, MUIA_String_Contents, data->network.session_name);
@@ -1761,9 +1761,9 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
             }
             set(data->ble_button, MUIA_Disabled, BluetoothBase == NULL);
             if (load_routes(data)) set_status(data, "The route configuration is invalid.");
-            mh_config_defaults(&data->network);
-            if (mh_config_load("ENV:MidiHub/Network", &data->network) != 0)
-                (void)mh_config_load("ENVARC:MidiHub/Network", &data->network);
+            netmidi_config_defaults(&data->network);
+            if (netmidi_config_load("ENV:MidiHub/Network", &data->network) != 0)
+                (void)netmidi_config_load("ENVARC:MidiHub/Network", &data->network);
             set(data->network_session, MUIA_String_Contents, data->network.session_name);
             set(data->network_local_port, MUIA_String_Integer, data->network.local_port);
             set(data->network_peer_ip, MUIA_String_Contents, data->network.peer_ip);

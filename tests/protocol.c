@@ -1,11 +1,11 @@
-#include "midihub/applemidi.h"
-#include "midihub/receiver.h"
-#include "midihub/rtpmidi.h"
-#include "midihub/session.h"
-#include "midihub/sender.h"
+#include "rtpmidi/applemidi.h"
+#include "rtpmidi/receiver.h"
+#include "rtpmidi/rtpmidi.h"
+#include "rtpmidi/session.h"
+#include "rtpmidi/sender.h"
 #include "midihub/mdns.h"
-#include "midihub/peers.h"
-#include "midihub/timing.h"
+#include "rtpmidi/peers.h"
+#include "rtpmidi/timing.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -18,32 +18,32 @@ static void apple_exchange(void)
         0x12, 0x34, 0x56, 0x78, 0x89, 0xab, 0xcd, 0xef,
         'A', 'R', 'O', 'S', 0
     };
-    struct mh_apple_packet packet;
+    struct applemidi_packet packet;
     uint8_t encoded[64];
     size_t length;
     size_t i;
 
-    assert(mh_apple_decode(invitation, sizeof(invitation), &packet) == 0);
-    assert(packet.command == MH_APPLE_IN);
+    assert(applemidi_decode(invitation, sizeof(invitation), &packet) == 0);
+    assert(packet.command == APPLEMIDI_IN);
     assert(packet.token == 0x12345678 && packet.ssrc == 0x89abcdef);
     assert(packet.name_length == 4 && !memcmp(packet.name, "AROS", 4));
-    assert(mh_apple_encode(&packet, encoded, sizeof(encoded), &length) == 0);
+    assert(applemidi_encode(&packet, encoded, sizeof(encoded), &length) == 0);
     assert(length == sizeof(invitation));
     assert(!memcmp(encoded, invitation, length));
     for (i = 0; i < 16; ++i)
-        assert(mh_apple_decode(invitation, i, &packet) == -1);
-    assert(mh_apple_decode(invitation, 16, &packet) == 0);
+        assert(applemidi_decode(invitation, i, &packet) == -1);
+    assert(applemidi_decode(invitation, 16, &packet) == 0);
     for (i = 17; i < sizeof(invitation); ++i)
-        assert(mh_apple_decode(invitation, i, &packet) == -1);
+        assert(applemidi_decode(invitation, i, &packet) == -1);
     memcpy(encoded, invitation, sizeof(invitation));
     encoded[7] = 3;
-    assert(mh_apple_decode(encoded, sizeof(invitation), &packet) == -1);
+    assert(applemidi_decode(encoded, sizeof(invitation), &packet) == -1);
     memcpy(encoded, invitation, sizeof(invitation));
     encoded[sizeof(invitation) - 1] = 'X';
-    assert(mh_apple_decode(encoded, sizeof(invitation), &packet) == -1);
+    assert(applemidi_decode(encoded, sizeof(invitation), &packet) == -1);
     memcpy(encoded, invitation, sizeof(invitation));
     encoded[18] = 0;
-    assert(mh_apple_decode(encoded, sizeof(invitation), &packet) == -1);
+    assert(applemidi_decode(encoded, sizeof(invitation), &packet) == -1);
 }
 
 static void apple_sync(void)
@@ -55,19 +55,19 @@ static void apple_sync(void)
         0, 0, 0, 3, 0, 0, 0, 4,
         0, 0, 0, 5, 0, 0, 0, 6
     };
-    struct mh_apple_packet packet;
+    struct applemidi_packet packet;
     uint8_t encoded[36];
     size_t length;
 
-    assert(mh_apple_decode(sync, sizeof(sync), &packet) == 0);
-    assert(packet.command == MH_APPLE_CK && packet.sync_count == 2);
+    assert(applemidi_decode(sync, sizeof(sync), &packet) == 0);
+    assert(packet.command == APPLEMIDI_CK && packet.sync_count == 2);
     assert(packet.timestamps[0] == UINT64_C(0x0000000100000002));
     assert(packet.timestamps[2] == UINT64_C(0x0000000500000006));
-    assert(mh_apple_encode(&packet, encoded, sizeof(encoded), &length) == 0);
+    assert(applemidi_encode(&packet, encoded, sizeof(encoded), &length) == 0);
     assert(length == sizeof(sync) && !memcmp(encoded, sync, length));
-    assert(mh_apple_decode(sync, sizeof(sync) - 1, &packet) == -1);
+    assert(applemidi_decode(sync, sizeof(sync) - 1, &packet) == -1);
     encoded[8] = 3;
-    assert(mh_apple_decode(encoded, sizeof(encoded), &packet) == -1);
+    assert(applemidi_decode(encoded, sizeof(encoded), &packet) == -1);
 }
 
 static void apple_feedback(void)
@@ -76,93 +76,93 @@ static void apple_feedback(void)
         0xff, 0xff, 'R', 'S', 0x89, 0xab, 0xcd, 0xef,
         0x00, 0x01, 0x00, 0x02
     };
-    struct mh_apple_packet packet;
+    struct applemidi_packet packet;
     uint8_t encoded[12];
     size_t length;
 
-    assert(mh_apple_decode(feedback, sizeof(feedback), &packet) == 0);
-    assert(packet.command == MH_APPLE_RS && packet.ssrc == 0x89abcdef);
+    assert(applemidi_decode(feedback, sizeof(feedback), &packet) == 0);
+    assert(packet.command == APPLEMIDI_RS && packet.ssrc == 0x89abcdef);
     assert(packet.feedback_sequence == 0x00010002);
-    assert(mh_apple_encode(&packet, encoded, sizeof(encoded), &length) == 0);
+    assert(applemidi_encode(&packet, encoded, sizeof(encoded), &length) == 0);
     assert(length == sizeof(feedback) && !memcmp(encoded, feedback, length));
-    assert(mh_apple_decode(feedback, sizeof(feedback) - 1, &packet) == -1);
-    assert(mh_apple_encode(&packet, encoded, sizeof(encoded) - 1,
+    assert(applemidi_decode(feedback, sizeof(feedback) - 1, &packet) == -1);
+    assert(applemidi_encode(&packet, encoded, sizeof(encoded) - 1,
                            &length) == -1);
 }
 
 static void applemidi_peers(void)
 {
-    struct mh_peers peers;
-    struct mh_apple_packet packet;
-    struct mh_apple_packet reply;
+    struct applemidi_peers peers;
+    struct applemidi_packet packet;
+    struct applemidi_packet reply;
     int data_port;
     int index;
-    enum mh_peer_event event;
+    enum applemidi_peer_event event;
     int first;
     int second;
 
-    assert(mh_peers_init(&peers, 0x10203040,
+    assert(applemidi_peers_init(&peers, 0x10203040,
                          (const uint8_t *)"AROS MIDIHub", 12) == 0);
     assert(peers.accept);
 
-    first = mh_peers_invite(&peers, 0xc0a86401, 5004, 0x11111111,
+    first = applemidi_peers_invite(&peers, 0xc0a86401, 5004, 0x11111111,
                             100, &packet);
-    second = mh_peers_invite(&peers, 0xc0a86402, 5004, 0x22222222,
+    second = applemidi_peers_invite(&peers, 0xc0a86402, 5004, 0x22222222,
                              100, &reply);
     assert(first >= 0 && second >= 0 && first != second);
-    assert(packet.command == MH_APPLE_IN && packet.token == 0x11111111);
-    assert(mh_peers_retry(&peers, first, &reply, &data_port) == 0 &&
-           reply.command == MH_APPLE_IN && !data_port);
-    assert(mh_peers_invite(&peers, 0xc0a86401, 5004, 3, 100,
+    assert(packet.command == APPLEMIDI_IN && packet.token == 0x11111111);
+    assert(applemidi_peers_retry(&peers, first, &reply, &data_port) == 0 &&
+           reply.command == APPLEMIDI_IN && !data_port);
+    assert(applemidi_peers_invite(&peers, 0xc0a86401, 5004, 3, 100,
                            &packet) == -1);
 
     memset(&packet, 0, sizeof(packet));
-    packet.command = MH_APPLE_OK;
+    packet.command = APPLEMIDI_OK;
     packet.token = 0x11111111;
     packet.ssrc = 0xaaaa0001;
     packet.name = (const uint8_t *)"iPhone";
     packet.name_length = 6;
-    assert(mh_peers_receive(&peers, 0xc0a86401, 5004, 0, &packet, 110,
+    assert(applemidi_peers_receive(&peers, 0xc0a86401, 5004, 0, &packet, 110,
                             &reply, &data_port, &index, &event) == 1);
-    assert(index == first && data_port && event == MH_PEER_NONE);
-    assert(reply.command == MH_APPLE_IN);
-    assert(mh_peers_retry(&peers, first, &reply, &data_port) == 0 &&
-           reply.command == MH_APPLE_IN && data_port);
+    assert(index == first && data_port && event == APPLEMIDI_PEER_NONE);
+    assert(reply.command == APPLEMIDI_IN);
+    assert(applemidi_peers_retry(&peers, first, &reply, &data_port) == 0 &&
+           reply.command == APPLEMIDI_IN && data_port);
     assert(!strcmp(peers.peer[first].name, "iPhone"));
-    assert(mh_peers_receive(&peers, 0xc0a86401, 5005, 1, &packet, 120,
+    assert(applemidi_peers_receive(&peers, 0xc0a86401, 5005, 1, &packet, 120,
                             &reply, &data_port, &index, &event) == 0);
-    assert(index == first && event == MH_PEER_CONNECTED);
-    assert(mh_peers_find_data(&peers, 0xc0a86401, 5005) == first);
-    assert(mh_peers_find_ssrc(&peers, 0xaaaa0001) == first);
+    assert(index == first && event == APPLEMIDI_PEER_CONNECTED);
+    assert(applemidi_peers_find_data(&peers, 0xc0a86401, 5005) == first);
+    assert(applemidi_peers_find_ssrc(&peers, 0xaaaa0001) == first);
 
     memset(&packet, 0, sizeof(packet));
-    packet.command = MH_APPLE_IN;
+    packet.command = APPLEMIDI_IN;
     packet.token = 0x33333333;
     packet.ssrc = 0xaaaa0003;
     packet.name = (const uint8_t *)"Mac";
     packet.name_length = 3;
-    assert(mh_peers_receive(&peers, 0xc0a86403, 6000, 0, &packet, 130,
+    assert(applemidi_peers_receive(&peers, 0xc0a86403, 6000, 0, &packet, 130,
                             &reply, &data_port, &index, &event) == 1);
-    assert(index >= 0 && reply.command == MH_APPLE_OK && !data_port);
-    assert(mh_peers_receive(&peers, 0xc0a86403, 6001, 1, &packet, 140,
+    assert(index >= 0 && reply.command == APPLEMIDI_OK && !data_port);
+    assert(applemidi_peers_receive(&peers, 0xc0a86403, 6001, 1, &packet, 140,
                             &reply, &data_port, &index, &event) == 1);
-    assert(reply.command == MH_APPLE_OK && data_port &&
-           event == MH_PEER_CONNECTED);
+    assert(reply.command == APPLEMIDI_OK && data_port &&
+           event == APPLEMIDI_PEER_CONNECTED);
 
-    mh_peers_seen(&peers, first, 200);
-    assert(mh_peers_expired(&peers, 249, 50) != first);
-    assert(mh_peers_expired(&peers, 250, 50) == first);
-    assert(mh_peers_end(&peers, first, &reply) == 0);
-    assert(reply.command == MH_APPLE_BY &&
-           mh_peers_find_data(&peers, 0xc0a86401, 5005) == -1);
+    applemidi_peers_seen(&peers, first, 200);
+    assert(applemidi_peers_expired(&peers, 249, 50) != first);
+    assert(applemidi_peers_expired(&peers, 250, 50) == first);
+    assert(applemidi_peers_end(&peers, first, &reply) == 0);
+    assert(reply.command == APPLEMIDI_BY &&
+           applemidi_peers_find_data(&peers, 0xc0a86401, 5005) == -1);
 
     peers.accept = 0;
-    packet.command = MH_APPLE_IN;
+    packet.command = APPLEMIDI_IN;
     packet.token = 0x44444444;
     packet.ssrc = 0xaaaa0004;
-    assert(mh_peers_receive(&peers, 0xc0a86404, 7000, 0, &packet, 300,
+    assert(applemidi_peers_receive(&peers, 0xc0a86404, 7000, 0, &packet, 300,
                             &reply, &data_port, &index, &event) == 1);
-    assert(index == -1 && reply.command == MH_APPLE_NO);
+    assert(index == -1 && reply.command == APPLEMIDI_NO);
 }
 
 static void rtp_short(void)
@@ -175,33 +175,33 @@ static void rtp_short(void)
         0x80, 0xe1, 0x12, 0x34, 0x01, 0x02, 0x03, 0x04,
         0x89, 0xab, 0xcd, 0xef, 3, 0x90, 60, 100
     };
-    struct mh_rtp_packet packet;
+    struct rtpmidi_packet packet;
     uint8_t encoded[32];
     size_t length;
     size_t i;
 
-    assert(mh_rtp_encode_short(0x1234, 0x01020304, 0x89abcdef,
+    assert(rtpmidi_encode_short(0x1234, 0x01020304, 0x89abcdef,
                                note, sizeof(note), encoded,
                                sizeof(encoded), &length) == 0);
     assert(length == sizeof(expected) && !memcmp(encoded, expected, length));
-    assert(mh_rtp_decode(expected, sizeof(expected), &packet) == 0);
+    assert(rtpmidi_decode(expected, sizeof(expected), &packet) == 0);
     assert(packet.sequence == 0x1234 && packet.timestamp == 0x01020304);
     assert(packet.ssrc == 0x89abcdef && packet.midi_length == 3);
     assert(!memcmp(packet.midi, note, sizeof(note)));
     for (i = 0; i < sizeof(expected); ++i)
-        assert(mh_rtp_decode(expected, i, &packet) == -1);
-    assert(mh_rtp_encode_short(0, 0, 0, note, 0, encoded,
+        assert(rtpmidi_decode(expected, i, &packet) == -1);
+    assert(rtpmidi_encode_short(0, 0, 0, note, 0, encoded,
                                sizeof(encoded), &length) == -1);
-    assert(mh_rtp_encode_short(0, 0, 0, program, sizeof(program), encoded,
+    assert(rtpmidi_encode_short(0, 0, 0, program, sizeof(program), encoded,
                                sizeof(encoded), &length) == 0 && length == 15);
-    assert(mh_rtp_encode_short(0, 0, 0, clock, sizeof(clock), encoded,
+    assert(rtpmidi_encode_short(0, 0, 0, clock, sizeof(clock), encoded,
                                sizeof(encoded), &length) == 0 && length == 14);
-    assert(mh_rtp_encode_short(0, 0, 0, invalid_data,
+    assert(rtpmidi_encode_short(0, 0, 0, invalid_data,
                                sizeof(invalid_data), encoded,
                                sizeof(encoded), &length) == -1);
     memcpy(encoded, expected, sizeof(expected));
     encoded[0] = 0x81;
-    assert(mh_rtp_decode(encoded, sizeof(expected), &packet) == -1);
+    assert(rtpmidi_decode(encoded, sizeof(expected), &packet) == -1);
 }
 
 static void rtp_journal_and_lengths(void)
@@ -210,18 +210,18 @@ static void rtp_journal_and_lengths(void)
         0x80, 0xe1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 2,
         0xc0, 3, 0x90, 60, 100, 0, 0
     };
-    struct mh_rtp_packet packet;
+    struct rtpmidi_packet packet;
     uint8_t broken[sizeof(with_journal)];
 
-    assert(mh_rtp_decode(with_journal, sizeof(with_journal), &packet) == 0);
+    assert(rtpmidi_decode(with_journal, sizeof(with_journal), &packet) == 0);
     assert(packet.midi_length == 3 && packet.journal_length == 2);
     assert(packet.journal == with_journal + 17);
     memcpy(broken, with_journal, sizeof(broken));
     broken[12] = 0xc0;
     broken[13] = 20;
-    assert(mh_rtp_decode(broken, sizeof(broken), &packet) == -1);
+    assert(rtpmidi_decode(broken, sizeof(broken), &packet) == -1);
     broken[12] = 0x00;
-    assert(mh_rtp_decode(broken, sizeof(broken), &packet) == -1);
+    assert(rtpmidi_decode(broken, sizeof(broken), &packet) == -1);
 }
 
 static void journal_framing(void)
@@ -234,13 +234,13 @@ static void journal_framing(void)
         0xa8, 0x03, 0x20
     };
     uint8_t broken[sizeof(sections)];
-    struct mh_journal journal;
+    struct rtpmidi_journal journal;
 
-    assert(mh_journal_decode(empty, sizeof(empty), &journal) == 0);
+    assert(rtpmidi_journal_decode(empty, sizeof(empty), &journal) == 0);
     assert(journal.checkpoint == 0x1234 &&
            journal.single_packet_safe && !journal.channel_count &&
            !journal.system);
-    assert(mh_journal_decode(sections, sizeof(sections), &journal) == 0);
+    assert(rtpmidi_journal_decode(sections, sizeof(sections), &journal) == 0);
     assert(journal.system == sections + 3 && journal.system_length == 2);
     assert(journal.channel_count == 2);
     assert(journal.channels[0].number == 0 &&
@@ -248,26 +248,26 @@ static void journal_framing(void)
            journal.channels[0].length == 3);
     assert(journal.channels[1].number == 5 &&
            journal.channels[1].chapters == 0x20);
-    assert(mh_journal_decode(empty, 2, &journal) == -1);
-    assert(mh_journal_decode(sections, sizeof(sections) - 1,
+    assert(rtpmidi_journal_decode(empty, 2, &journal) == -1);
+    assert(rtpmidi_journal_decode(sections, sizeof(sections) - 1,
                              &journal) == -1);
     memcpy(broken, sections, sizeof(broken));
     broken[4] = 12;
-    assert(mh_journal_decode(broken, sizeof(broken), &journal) == -1);
+    assert(rtpmidi_journal_decode(broken, sizeof(broken), &journal) == -1);
     memcpy(broken, sections, sizeof(broken));
     broken[6] = 2;
-    assert(mh_journal_decode(broken, sizeof(broken), &journal) == -1);
+    assert(rtpmidi_journal_decode(broken, sizeof(broken), &journal) == -1);
     memcpy(broken, sections, sizeof(broken));
     broken[8] = 0x80; /* Duplicate channel number. */
-    assert(mh_journal_decode(broken, sizeof(broken), &journal) == -1);
-    assert(mh_journal_decode(empty, sizeof(empty) - 1, &journal) == -1);
-    assert(mh_journal_covers_gap(10, 13, 11));
-    assert(mh_journal_covers_gap(10, 13, 9));
-    assert(!mh_journal_covers_gap(10, 13, 12));
-    assert(!mh_journal_covers_gap(10, 13, 13));
-    assert(mh_journal_covers_gap(0xfffe, 1, 0xffff));
-    assert(!mh_journal_covers_gap(0xfffe, 1, 0));
-    assert(!mh_journal_covers_gap(10, 11, 10));
+    assert(rtpmidi_journal_decode(broken, sizeof(broken), &journal) == -1);
+    assert(rtpmidi_journal_decode(empty, sizeof(empty) - 1, &journal) == -1);
+    assert(rtpmidi_journal_covers_gap(10, 13, 11));
+    assert(rtpmidi_journal_covers_gap(10, 13, 9));
+    assert(!rtpmidi_journal_covers_gap(10, 13, 12));
+    assert(!rtpmidi_journal_covers_gap(10, 13, 13));
+    assert(rtpmidi_journal_covers_gap(0xfffe, 1, 0xffff));
+    assert(!rtpmidi_journal_covers_gap(0xfffe, 1, 0));
+    assert(!rtpmidi_journal_covers_gap(10, 11, 10));
 }
 
 static void journal_system(void)
@@ -290,11 +290,11 @@ static void journal_system(void)
     };
     uint8_t broken[sizeof(bytes)];
     uint8_t mtc_broken[sizeof(mtc_bytes)];
-    struct mh_journal journal;
-    struct mh_journal_system_state state;
+    struct rtpmidi_journal journal;
+    struct rtpmidi_journal_system_state state;
 
-    assert(mh_journal_decode(bytes, sizeof(bytes), &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &state) == 1);
+    assert(rtpmidi_journal_decode(bytes, sizeof(bytes), &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &state) == 1);
     assert(state.has_reset && state.reset_single_packet_safe &&
            state.reset_count == 5);
     assert(state.has_tune_request && !state.tune_single_packet_safe &&
@@ -309,15 +309,15 @@ static void journal_system(void)
 
     memcpy(broken, bytes, sizeof(broken));
     broken[4] = 12;
-    assert(mh_journal_decode(broken, sizeof(broken), &journal) == -1);
+    assert(rtpmidi_journal_decode(broken, sizeof(broken), &journal) == -1);
     memcpy(broken, bytes, sizeof(broken));
     broken[10] |= 0x10;
     broken[4] = 10;
-    assert(mh_journal_decode(broken, 13, &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &state) == -1);
+    assert(rtpmidi_journal_decode(broken, 13, &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &state) == -1);
 
-    assert(mh_journal_decode(mtc_bytes, sizeof(mtc_bytes), &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &state) == 1);
+    assert(rtpmidi_journal_decode(mtc_bytes, sizeof(mtc_bytes), &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &state) == 1);
     assert(state.has_mtc && state.mtc_single_packet_safe &&
            state.mtc_has_complete && state.mtc_complete_quarter_frame &&
            state.mtc_has_partial && !state.mtc_reverse &&
@@ -326,20 +326,20 @@ static void journal_system(void)
            state.mtc_partial[0] == 8 && state.mtc_partial[7] == 15);
     memcpy(mtc_broken, mtc_bytes, sizeof(mtc_broken));
     mtc_broken[5] = 0x13; /* Q without COMPLETE is invalid. */
-    assert(mh_journal_decode(mtc_broken, sizeof(mtc_broken), &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &state) == -1);
-    assert(mh_journal_decode(mtc_full_frame, sizeof(mtc_full_frame),
+    assert(rtpmidi_journal_decode(mtc_broken, sizeof(mtc_broken), &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &state) == -1);
+    assert(rtpmidi_journal_decode(mtc_full_frame, sizeof(mtc_full_frame),
                              &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &state) == 1);
+    assert(rtpmidi_journal_decode_system(&journal, &state) == 1);
     assert(state.has_mtc && state.mtc_has_complete &&
            !state.mtc_complete_quarter_frame && !state.mtc_has_partial &&
            state.mtc_point == 7 && state.mtc_complete[0] == 0x61 &&
            state.mtc_complete[3] == 0x04);
     memcpy(mtc_broken, mtc_full_frame, sizeof(mtc_full_frame));
     mtc_broken[6] = 0xe1;
-    assert(mh_journal_decode(mtc_broken, sizeof(mtc_full_frame),
+    assert(rtpmidi_journal_decode(mtc_broken, sizeof(mtc_full_frame),
                              &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &state) == -1);
+    assert(rtpmidi_journal_decode_system(&journal, &state) == -1);
 }
 
 static void journal_note_offs(void)
@@ -362,27 +362,27 @@ static void journal_note_offs(void)
         0x20, 0, 4, 0x00, 0x09, 0x08, 0x02, 0xf1,
         0x3c, 0xe4, 0x3c, 0x64
     };
-    struct mh_journal journal;
-    struct mh_journal_notes notes;
+    struct rtpmidi_journal journal;
+    struct rtpmidi_journal_notes notes;
 
-    assert(mh_journal_decode(note_only, sizeof(note_only), &journal) == 0);
-    assert(mh_journal_decode_notes(&journal.channels[0], &notes) == 1);
+    assert(rtpmidi_journal_decode(note_only, sizeof(note_only), &journal) == 0);
+    assert(rtpmidi_journal_decode_notes(&journal.channels[0], &notes) == 1);
     assert(!notes.offbits_single_packet_safe &&
            notes.offbits[7] == 0x08 && notes.offbits[6] == 0);
-    assert(mh_journal_decode(preceded, sizeof(preceded), &journal) == 0);
-    assert(mh_journal_decode_notes(&journal.channels[0], &notes) == 1);
+    assert(rtpmidi_journal_decode(preceded, sizeof(preceded), &journal) == 0);
+    assert(rtpmidi_journal_decode_notes(&journal.channels[0], &notes) == 1);
     assert(notes.offbits_single_packet_safe && notes.offbits[7] == 0x08);
     journal.channels[0].length--;
-    assert(mh_journal_decode_notes(&journal.channels[0], &notes) == -1);
-    assert(mh_journal_decode(note_on, sizeof(note_on), &journal) == 0);
-    assert(mh_journal_decode_notes(&journal.channels[0], &notes) == 1);
+    assert(rtpmidi_journal_decode_notes(&journal.channels[0], &notes) == -1);
+    assert(rtpmidi_journal_decode(note_on, sizeof(note_on), &journal) == 0);
+    assert(rtpmidi_journal_decode_notes(&journal.channels[0], &notes) == 1);
     assert(notes.log_count == 1 && notes.logs[0].number == 60 &&
            notes.logs[0].velocity == 100 && notes.logs[0].simultaneous &&
            !notes.logs[0].single_packet_safe);
     assert(notes.offbits[7] == 0);
-    assert(mh_journal_decode(duplicate_notes, sizeof(duplicate_notes),
+    assert(rtpmidi_journal_decode(duplicate_notes, sizeof(duplicate_notes),
                              &journal) == 0);
-    assert(mh_journal_decode_notes(&journal.channels[0], &notes) == -1);
+    assert(rtpmidi_journal_decode_notes(&journal.channels[0], &notes) == -1);
 }
 
 static void journal_note_extras(void)
@@ -392,11 +392,11 @@ static void journal_note_extras(void)
         0x01, 0xbc, 0x02, 0x3c, 0xad
     };
     uint8_t broken[sizeof(bytes)];
-    struct mh_journal journal;
-    struct mh_journal_note_extras extras;
+    struct rtpmidi_journal journal;
+    struct rtpmidi_journal_note_extras extras;
 
-    assert(mh_journal_decode(bytes, sizeof(bytes), &journal) == 0);
-    assert(mh_journal_decode_note_extras(&journal.channels[0], &extras) == 1);
+    assert(rtpmidi_journal_decode(bytes, sizeof(bytes), &journal) == 0);
+    assert(rtpmidi_journal_decode_note_extras(&journal.channels[0], &extras) == 1);
     assert(extras.count == 2 && extras.logs[0].number == 60 &&
            !extras.logs[0].velocity && extras.logs[0].value == 2 &&
            extras.logs[0].single_packet_safe &&
@@ -405,8 +405,8 @@ static void journal_note_extras(void)
            !extras.logs[1].single_packet_safe);
     memcpy(broken, bytes, sizeof(broken));
     broken[10] = 0x02; /* Duplicate count log for note 60. */
-    assert(mh_journal_decode(broken, sizeof(broken), &journal) == 0);
-    assert(mh_journal_decode_note_extras(&journal.channels[0], &extras) == -1);
+    assert(rtpmidi_journal_decode(broken, sizeof(broken), &journal) == 0);
+    assert(rtpmidi_journal_decode_note_extras(&journal.channels[0], &extras) == -1);
 }
 
 static void journal_parameters(void)
@@ -419,11 +419,11 @@ static void journal_parameters(void)
         0x20, 0, 4, 0x00, 0x06, 0x20, 0x40, 0x03, 0x81
     };
     uint8_t broken[sizeof(value)];
-    struct mh_journal journal;
-    struct mh_journal_parameters parameters;
+    struct rtpmidi_journal journal;
+    struct rtpmidi_journal_parameters parameters;
 
-    assert(mh_journal_decode(value, sizeof(value), &journal) == 0);
-    assert(mh_journal_decode_parameters(&journal.channels[0],
+    assert(rtpmidi_journal_decode(value, sizeof(value), &journal) == 0);
+    assert(rtpmidi_journal_decode_parameters(&journal.channels[0],
                                         &parameters) == 1);
     assert(parameters.single_packet_safe && parameters.transaction_open &&
            !parameters.has_pending && parameters.count == 1 &&
@@ -438,16 +438,16 @@ static void journal_parameters(void)
            parameters.logs[0].count_tool &&
            parameters.logs[0].has_count &&
            parameters.logs[0].count == 5);
-    assert(mh_journal_decode(pending, sizeof(pending), &journal) == 0);
-    assert(mh_journal_decode_parameters(&journal.channels[0],
+    assert(rtpmidi_journal_decode(pending, sizeof(pending), &journal) == 0);
+    assert(rtpmidi_journal_decode_parameters(&journal.channels[0],
                                         &parameters) == 1);
     assert(parameters.has_pending && parameters.pending_nrpn &&
            parameters.pending_msb == 1 && !parameters.transaction_open &&
            parameters.count == 0);
     memcpy(broken, value, sizeof(broken));
     broken[10] = 0xc0; /* Value fields without the value tool. */
-    assert(mh_journal_decode(broken, sizeof(broken), &journal) == 0);
-    assert(mh_journal_decode_parameters(&journal.channels[0],
+    assert(rtpmidi_journal_decode(broken, sizeof(broken), &journal) == 0);
+    assert(rtpmidi_journal_decode_parameters(&journal.channels[0],
                                         &parameters) == -1);
 }
 
@@ -457,12 +457,12 @@ static void journal_channel_state(void)
         0x20, 0, 4, 0x00, 0x08, 0x90,
         0x05, 0x82, 0x03, 0x01, 0x20
     };
-    struct mh_journal journal;
-    struct mh_journal_channel_state state;
+    struct rtpmidi_journal journal;
+    struct rtpmidi_journal_channel_state state;
 
-    assert(mh_journal_decode(state_bytes, sizeof(state_bytes),
+    assert(rtpmidi_journal_decode(state_bytes, sizeof(state_bytes),
                              &journal) == 0);
-    assert(mh_journal_decode_channel_state(&journal.channels[0],
+    assert(rtpmidi_journal_decode_channel_state(&journal.channels[0],
                                             &state) == 1);
     assert(state.has_program && state.program == 5 && state.has_bank &&
            state.bank_msb == 2 && state.bank_lsb == 3 &&
@@ -470,7 +470,7 @@ static void journal_channel_state(void)
     assert(state.has_pitch && state.pitch_lsb == 1 &&
            state.pitch_msb == 32 && !state.pitch_single_packet_safe);
     journal.channels[0].length--;
-    assert(mh_journal_decode_channel_state(&journal.channels[0],
+    assert(rtpmidi_journal_decode_channel_state(&journal.channels[0],
                                             &state) == -1);
 }
 
@@ -496,12 +496,12 @@ static void journal_controls(void)
         0x30, 0, 4, 0x04, 0x08, 0x40,
         0x01, 0x10, 0x41, 0x10, 0x42
     };
-    struct mh_journal journal;
-    struct mh_journal_controls controls;
+    struct rtpmidi_journal journal;
+    struct rtpmidi_journal_controls controls;
 
-    assert(mh_journal_decode(controls_bytes, sizeof(controls_bytes),
+    assert(rtpmidi_journal_decode(controls_bytes, sizeof(controls_bytes),
                              &journal) == 0);
-    assert(mh_journal_decode_controls(&journal.channels[0],
+    assert(rtpmidi_journal_decode_controls(&journal.channels[0],
                                        &controls) == 1);
     assert(controls.count == 2 && controls.logs[0].number == 7 &&
            controls.logs[0].value == 100 && !controls.logs[0].alternate);
@@ -509,20 +509,20 @@ static void journal_controls(void)
            !controls.logs[1].count_tool && controls.logs[1].value == 1 &&
            controls.logs[1].single_packet_safe);
     journal.channels[0].length--;
-    assert(mh_journal_decode_controls(&journal.channels[0],
+    assert(rtpmidi_journal_decode_controls(&journal.channels[0],
                                        &controls) == -1);
-    assert(mh_journal_decode(multiple_tools, sizeof(multiple_tools),
+    assert(rtpmidi_journal_decode(multiple_tools, sizeof(multiple_tools),
                              &journal) == 0);
-    assert(mh_journal_decode_controls(&journal.channels[0],
+    assert(rtpmidi_journal_decode_controls(&journal.channels[0],
                                        &controls) == 1);
     assert(controls.logs[0].count_tool && controls.logs[0].value == 1 &&
            controls.logs[1].alternate && !controls.logs[1].count_tool);
-    assert(mh_journal_decode(repeated_tool, sizeof(repeated_tool),
+    assert(rtpmidi_journal_decode(repeated_tool, sizeof(repeated_tool),
                              &journal) == 0);
-    assert(mh_journal_decode_controls(&journal.channels[0],
+    assert(rtpmidi_journal_decode_controls(&journal.channels[0],
                                        &controls) == -1);
-    assert(mh_journal_decode(enhanced, sizeof(enhanced), &journal) == 0);
-    assert(mh_journal_decode_controls(&journal.channels[0],
+    assert(rtpmidi_journal_decode(enhanced, sizeof(enhanced), &journal) == 0);
+    assert(rtpmidi_journal_decode_controls(&journal.channels[0],
                                       &controls) == 1);
     assert(controls.enhanced && controls.count == 3 &&
            controls.logs[0].number == 16 && controls.logs[0].count_tool &&
@@ -531,15 +531,15 @@ static void journal_controls(void)
            controls.logs[1].value == 65 &&
            controls.logs[2].command == 1 &&
            controls.logs[2].value == 66);
-    assert(mh_journal_decode(enhanced_without_count,
+    assert(rtpmidi_journal_decode(enhanced_without_count,
                              sizeof(enhanced_without_count), &journal) == 0);
-    assert(mh_journal_decode_controls(&journal.channels[0],
+    assert(rtpmidi_journal_decode_controls(&journal.channels[0],
                                       &controls) == -1);
     {
         uint8_t inconsistent[sizeof(enhanced)];
         memcpy(inconsistent, enhanced, sizeof(inconsistent));
         inconsistent[0] &= (uint8_t)~0x10;
-        assert(mh_journal_decode(inconsistent, sizeof(inconsistent),
+        assert(rtpmidi_journal_decode(inconsistent, sizeof(inconsistent),
                                  &journal) == -1);
     }
 }
@@ -593,124 +593,124 @@ static void outgoing_journal(void)
         {0xf1, 0x04}, {0xf1, 0x76}, {0xf1, 0x61}, {0xf1, 0x50},
         {0xf1, 0x42}, {0xf1, 0x30}, {0xf1, 0x23}, {0xf1, 0x10}
     };
-    struct mh_sender sender;
-    struct mh_journal journal;
-    struct mh_journal_notes notes;
-    struct mh_journal_note_extras note_extras;
-    struct mh_journal_channel_state channel_state;
-    struct mh_journal_controls controls;
-    struct mh_journal_parameters parameters;
-    struct mh_journal_aftertouch aftertouch;
-    struct mh_journal_system_state system_state;
+    struct rtpmidi_sender sender;
+    struct rtpmidi_journal journal;
+    struct rtpmidi_journal_notes notes;
+    struct rtpmidi_journal_note_extras note_extras;
+    struct rtpmidi_journal_channel_state channel_state;
+    struct rtpmidi_journal_controls controls;
+    struct rtpmidi_journal_parameters parameters;
+    struct rtpmidi_journal_aftertouch aftertouch;
+    struct rtpmidi_journal_system_state system_state;
     uint8_t bytes[256];
     size_t length;
     size_t mtc_index;
 
-    mh_sender_reset(&sender);
-    assert(mh_sender_journal(&sender, 100, 1000,
+    rtpmidi_sender_reset(&sender);
+    assert(rtpmidi_sender_journal(&sender, 100, 1000,
                               bytes, sizeof(bytes), &length) == 0);
     assert(length == 3 && bytes[0] == 0x80 && bytes[2] == 100);
-    assert(mh_rtp_encode_list(100, 1000, 7, NULL, 0,
+    assert(rtpmidi_encode_list(100, 1000, 7, NULL, 0,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(length == 13 && mh_rtp_decode(bytes, length, &(struct mh_rtp_packet){0}) == 0);
-    mh_sender_record(&sender, 100, 1000, on, sizeof(on));
-    assert(mh_sender_journal(&sender, 101, 1050,
+    assert(length == 13 && rtpmidi_decode(bytes, length, &(struct rtpmidi_packet){0}) == 0);
+    rtpmidi_sender_record(&sender, 100, 1000, on, sizeof(on));
+    assert(rtpmidi_sender_journal(&sender, 101, 1050,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
     assert(journal.checkpoint == 100 && !journal.single_packet_safe &&
            journal.channel_count == 1);
-    assert(mh_journal_decode_notes(&journal.channels[0], &notes) == 1);
+    assert(rtpmidi_journal_decode_notes(&journal.channels[0], &notes) == 1);
     assert(notes.log_count == 1 && notes.logs[0].number == 60 &&
            notes.logs[0].velocity == 100 && notes.logs[0].simultaneous &&
            !notes.logs[0].single_packet_safe);
-    mh_sender_record(&sender, 101, 1050, off, sizeof(off));
-    assert(mh_sender_journal(&sender, 102, 1100,
+    rtpmidi_sender_record(&sender, 101, 1050, off, sizeof(off));
+    assert(rtpmidi_sender_journal(&sender, 102, 1100,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_notes(&journal.channels[0], &notes) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_notes(&journal.channels[0], &notes) == 1);
     assert(notes.offbits[7] == 0x08 && notes.log_count == 0 &&
            !notes.offbits_single_packet_safe);
-    mh_sender_ack(&sender, 100);
+    rtpmidi_sender_ack(&sender, 100);
     assert(sender.count == 1 && sender.events[0].sequence == 101);
-    mh_sender_ack(&sender, 101);
+    rtpmidi_sender_ack(&sender, 101);
     assert(sender.count == 0);
-    assert(mh_sender_journal(&sender, 102, 1100,
+    assert(rtpmidi_sender_journal(&sender, 102, 1100,
                               bytes, sizeof(bytes), &length) == 0);
     assert(length == 3 && bytes[2] == 102);
 
-    mh_sender_reset(&sender);
-    mh_sender_record(&sender, 102, 1100, on, sizeof(on));
-    mh_sender_record(&sender, 103, 1150, on, sizeof(on));
-    assert(mh_sender_journal(&sender, 104, 1200,
+    rtpmidi_sender_reset(&sender);
+    rtpmidi_sender_record(&sender, 102, 1100, on, sizeof(on));
+    rtpmidi_sender_record(&sender, 103, 1150, on, sizeof(on));
+    assert(rtpmidi_sender_journal(&sender, 104, 1200,
                              bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_note_extras(&journal.channels[0],
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_note_extras(&journal.channels[0],
                                          &note_extras) == 1);
     assert(note_extras.count == 1 && !note_extras.logs[0].velocity &&
            note_extras.logs[0].number == 60 &&
            note_extras.logs[0].value == 2);
     {
         const uint8_t release[] = {0x80, 60, 45};
-        mh_sender_record(&sender, 104, 1200, release, sizeof(release));
+        rtpmidi_sender_record(&sender, 104, 1200, release, sizeof(release));
     }
-    assert(mh_sender_journal(&sender, 105, 1250,
+    assert(rtpmidi_sender_journal(&sender, 105, 1250,
                              bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_note_extras(&journal.channels[0],
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_note_extras(&journal.channels[0],
                                          &note_extras) == 1);
     assert(note_extras.count == 2 && !note_extras.logs[0].velocity &&
            note_extras.logs[0].value == 1 &&
            note_extras.logs[1].velocity &&
            note_extras.logs[1].value == 45);
-    mh_sender_reset(&sender);
+    rtpmidi_sender_reset(&sender);
 
     /* CHAN occupies bits 6..3; bit 2 is the enhanced Chapter C H flag. */
-    mh_sender_record(&sender, 99, 950, channel_five_volume,
+    rtpmidi_sender_record(&sender, 99, 950, channel_five_volume,
                      sizeof(channel_five_volume));
-    assert(mh_sender_journal(&sender, 100, 1000,
+    assert(rtpmidi_sender_journal(&sender, 100, 1000,
                              bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
     assert(journal.channel_count == 1 &&
            journal.channels[0].number == 5 &&
            !(journal.channels[0].data[0] & 0x04));
-    mh_sender_reset(&sender);
+    rtpmidi_sender_reset(&sender);
 
     /* Controllers 6/38/96/97 are ordinary Chapter C controllers when no
      * non-null RPN or NRPN is selected (RFC 6295 A.3.4). */
-    mh_sender_record(&sender, 105, 1250, general_data_msb,
+    rtpmidi_sender_record(&sender, 105, 1250, general_data_msb,
                      sizeof(general_data_msb));
-    assert(mh_sender_journal(&sender, 106, 1300,
+    assert(rtpmidi_sender_journal(&sender, 106, 1300,
                              bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_controls(&journal.channels[0], &controls) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_controls(&journal.channels[0], &controls) == 1);
     assert(controls.count == 1 && controls.logs[0].number == 6 &&
            controls.logs[0].value == 55 && !controls.logs[0].alternate);
-    assert(mh_journal_decode_parameters(&journal.channels[0],
+    assert(rtpmidi_journal_decode_parameters(&journal.channels[0],
                                         &parameters) == 0);
-    mh_sender_reset(&sender);
-    mh_sender_record(&sender, 106, 1300, rpn_null_msb,
+    rtpmidi_sender_reset(&sender);
+    rtpmidi_sender_record(&sender, 106, 1300, rpn_null_msb,
                      sizeof(rpn_null_msb));
-    mh_sender_record(&sender, 107, 1350, rpn_null_lsb,
+    rtpmidi_sender_record(&sender, 107, 1350, rpn_null_lsb,
                      sizeof(rpn_null_lsb));
-    mh_sender_record(&sender, 108, 1400, general_data_msb,
+    rtpmidi_sender_record(&sender, 108, 1400, general_data_msb,
                      sizeof(general_data_msb));
-    assert(mh_sender_journal(&sender, 109, 1450,
+    assert(rtpmidi_sender_journal(&sender, 109, 1450,
                              bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_controls(&journal.channels[0], &controls) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_controls(&journal.channels[0], &controls) == 1);
     assert(controls.count == 1 && controls.logs[0].number == 6 &&
            controls.logs[0].value == 55);
-    mh_sender_reset(&sender);
+    rtpmidi_sender_reset(&sender);
 
-    mh_sender_record(&sender, 105, 1250, rpn_msb, sizeof(rpn_msb));
-    mh_sender_record(&sender, 106, 1300, rpn_lsb, sizeof(rpn_lsb));
-    mh_sender_record(&sender, 107, 1350, data_msb, sizeof(data_msb));
-    mh_sender_record(&sender, 108, 1400, data_lsb, sizeof(data_lsb));
-    assert(mh_sender_journal(&sender, 109, 1450,
+    rtpmidi_sender_record(&sender, 105, 1250, rpn_msb, sizeof(rpn_msb));
+    rtpmidi_sender_record(&sender, 106, 1300, rpn_lsb, sizeof(rpn_lsb));
+    rtpmidi_sender_record(&sender, 107, 1350, data_msb, sizeof(data_msb));
+    rtpmidi_sender_record(&sender, 108, 1400, data_lsb, sizeof(data_lsb));
+    assert(rtpmidi_sender_journal(&sender, 109, 1450,
                              bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_controls(&journal.channels[0], &controls) == 0);
-    assert(mh_journal_decode_parameters(&journal.channels[0],
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_controls(&journal.channels[0], &controls) == 0);
+    assert(rtpmidi_journal_decode_parameters(&journal.channels[0],
                                         &parameters) == 1);
     assert(parameters.transaction_open && parameters.count == 1 &&
            parameters.logs[0].number == 0 && !parameters.logs[0].nrpn &&
@@ -720,186 +720,186 @@ static void outgoing_journal(void)
            parameters.logs[0].entry_lsb == 25 &&
            parameters.logs[0].has_count &&
            parameters.logs[0].count == 1);
-    mh_sender_ack(&sender, 106);
-    assert(mh_sender_journal(&sender, 109, 1450,
+    rtpmidi_sender_ack(&sender, 106);
+    assert(rtpmidi_sender_journal(&sender, 109, 1450,
                              bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_parameters(&journal.channels[0],
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_parameters(&journal.channels[0],
                                         &parameters) == 1);
     assert(parameters.logs[0].count_tool &&
            !parameters.logs[0].has_count);
-    mh_sender_record(&sender, 109, 1450, data_increment,
+    rtpmidi_sender_record(&sender, 109, 1450, data_increment,
                      sizeof(data_increment));
-    mh_sender_record(&sender, 110, 1500, data_increment,
+    rtpmidi_sender_record(&sender, 110, 1500, data_increment,
                      sizeof(data_increment));
-    assert(mh_sender_journal(&sender, 111, 1550,
+    assert(rtpmidi_sender_journal(&sender, 111, 1550,
                              bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_parameters(&journal.channels[0],
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_parameters(&journal.channels[0],
                                         &parameters) == 1);
     assert(parameters.logs[0].has_adjust &&
            parameters.logs[0].adjust == 2);
-    mh_sender_reset(&sender);
+    rtpmidi_sender_reset(&sender);
 
-    mh_sender_record(&sender, 112, 1600, soft_on, sizeof(soft_on));
-    mh_sender_record(&sender, 113, 1650, soft_off, sizeof(soft_off));
-    mh_sender_record(&sender, 114, 1700, soft_on, sizeof(soft_on));
-    assert(mh_sender_journal(&sender, 115, 1750,
+    rtpmidi_sender_record(&sender, 112, 1600, soft_on, sizeof(soft_on));
+    rtpmidi_sender_record(&sender, 113, 1650, soft_off, sizeof(soft_off));
+    rtpmidi_sender_record(&sender, 114, 1700, soft_on, sizeof(soft_on));
+    assert(rtpmidi_sender_journal(&sender, 115, 1750,
                              bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_controls(&journal.channels[0], &controls) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_controls(&journal.channels[0], &controls) == 1);
     assert(controls.count == 1 && controls.logs[0].number == 67 &&
            controls.logs[0].alternate && !controls.logs[0].count_tool &&
            controls.logs[0].value == 3);
-    mh_sender_reset(&sender);
+    rtpmidi_sender_reset(&sender);
 
-    mh_sender_record(&sender, 116, 1800, omni_on, sizeof(omni_on));
-    mh_sender_record(&sender, 117, 1850, omni_on, sizeof(omni_on));
-    assert(mh_sender_journal(&sender, 118, 1900,
+    rtpmidi_sender_record(&sender, 116, 1800, omni_on, sizeof(omni_on));
+    rtpmidi_sender_record(&sender, 117, 1850, omni_on, sizeof(omni_on));
+    assert(rtpmidi_sender_journal(&sender, 118, 1900,
                              bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_controls(&journal.channels[0], &controls) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_controls(&journal.channels[0], &controls) == 1);
     assert(controls.count == 1 && controls.logs[0].number == 125 &&
            controls.logs[0].alternate && controls.logs[0].count_tool &&
            controls.logs[0].value == 2);
-    mh_sender_reset(&sender);
+    rtpmidi_sender_reset(&sender);
 
-    mh_sender_record(&sender, 102, 1100, bank, sizeof(bank));
-    mh_sender_record(&sender, 103, 1200, program, sizeof(program));
-    mh_sender_record(&sender, 104, 1300, pitch, sizeof(pitch));
-    mh_sender_record(&sender, 105, 1400, volume, sizeof(volume));
-    assert(mh_sender_journal(&sender, 106, 1500,
+    rtpmidi_sender_record(&sender, 102, 1100, bank, sizeof(bank));
+    rtpmidi_sender_record(&sender, 103, 1200, program, sizeof(program));
+    rtpmidi_sender_record(&sender, 104, 1300, pitch, sizeof(pitch));
+    rtpmidi_sender_record(&sender, 105, 1400, volume, sizeof(volume));
+    assert(rtpmidi_sender_journal(&sender, 106, 1500,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
     assert(journal.checkpoint == 102 && journal.channel_count == 1);
-    assert(mh_journal_decode_channel_state(&journal.channels[0],
+    assert(rtpmidi_journal_decode_channel_state(&journal.channels[0],
                                             &channel_state) == 1);
     assert(channel_state.has_program && channel_state.program == 5 &&
            channel_state.has_bank && channel_state.bank_msb == 2 &&
            channel_state.has_pitch && channel_state.pitch_lsb == 1);
-    assert(mh_journal_decode_controls(&journal.channels[0],
+    assert(rtpmidi_journal_decode_controls(&journal.channels[0],
                                        &controls) == 1);
     assert(controls.count == 2);
-    mh_sender_ack(&sender, 104);
+    rtpmidi_sender_ack(&sender, 104);
     assert(sender.count == 1 && sender.events[0].sequence == 105);
-    mh_sender_clear_history(&sender);
+    rtpmidi_sender_clear_history(&sender);
     assert(sender.count == 0);
-    mh_sender_reset(&sender);
-    mh_sender_record(&sender, 200, 2000, on, sizeof(on));
-    mh_sender_record(&sender, 201, 2010, channel_pressure,
+    rtpmidi_sender_reset(&sender);
+    rtpmidi_sender_record(&sender, 200, 2000, on, sizeof(on));
+    rtpmidi_sender_record(&sender, 201, 2010, channel_pressure,
                       sizeof(channel_pressure));
-    mh_sender_record(&sender, 202, 2020, poly_pressure,
+    rtpmidi_sender_record(&sender, 202, 2020, poly_pressure,
                       sizeof(poly_pressure));
-    assert(mh_sender_journal(&sender, 203, 2030,
+    assert(rtpmidi_sender_journal(&sender, 203, 2030,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
     assert(journal.channels[0].chapters == 0x0b);
-    assert(mh_journal_decode_aftertouch(&journal.channels[0],
+    assert(rtpmidi_journal_decode_aftertouch(&journal.channels[0],
                                         &aftertouch) == 1);
     assert(aftertouch.has_channel_pressure &&
            aftertouch.channel_pressure == 40 &&
            aftertouch.poly_count == 1 &&
            aftertouch.poly[0].number == 60 &&
            aftertouch.poly[0].pressure == 50);
-    mh_sender_record(&sender, 203, 2030, reset_controllers,
+    rtpmidi_sender_record(&sender, 203, 2030, reset_controllers,
                       sizeof(reset_controllers));
-    assert(mh_sender_journal(&sender, 204, 2040,
+    assert(rtpmidi_sender_journal(&sender, 204, 2040,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_aftertouch(&journal.channels[0],
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_aftertouch(&journal.channels[0],
                                         &aftertouch) == 0);
 
-    assert(mh_sender_supported(system_reset, sizeof(system_reset)) &&
-           mh_sender_supported(tune_request, sizeof(tune_request)) &&
-           mh_sender_supported(song_select, sizeof(song_select)) &&
-           mh_sender_supported(active_sense, sizeof(active_sense)) &&
-           mh_sender_supported(start, sizeof(start)) &&
-           mh_sender_supported(continue_playback,
+    assert(rtpmidi_sender_supported(system_reset, sizeof(system_reset)) &&
+           rtpmidi_sender_supported(tune_request, sizeof(tune_request)) &&
+           rtpmidi_sender_supported(song_select, sizeof(song_select)) &&
+           rtpmidi_sender_supported(active_sense, sizeof(active_sense)) &&
+           rtpmidi_sender_supported(start, sizeof(start)) &&
+           rtpmidi_sender_supported(continue_playback,
                                sizeof(continue_playback)) &&
-           mh_sender_supported(clock, sizeof(clock)) &&
-           mh_sender_supported(stop, sizeof(stop)) &&
-           mh_sender_supported(song_position, sizeof(song_position)));
-    assert(mh_sender_supported(mtc_forward[0], sizeof(mtc_forward[0])));
-    mh_sender_record(&sender, 300, 3000, system_reset,
+           rtpmidi_sender_supported(clock, sizeof(clock)) &&
+           rtpmidi_sender_supported(stop, sizeof(stop)) &&
+           rtpmidi_sender_supported(song_position, sizeof(song_position)));
+    assert(rtpmidi_sender_supported(mtc_forward[0], sizeof(mtc_forward[0])));
+    rtpmidi_sender_record(&sender, 300, 3000, system_reset,
                      sizeof(system_reset));
     assert(sender.count == 1);
-    mh_sender_record(&sender, 301, 3010, tune_request,
+    rtpmidi_sender_record(&sender, 301, 3010, tune_request,
                      sizeof(tune_request));
-    mh_sender_record(&sender, 302, 3020, song_select,
+    rtpmidi_sender_record(&sender, 302, 3020, song_select,
                      sizeof(song_select));
-    mh_sender_record(&sender, 303, 3030, active_sense,
+    rtpmidi_sender_record(&sender, 303, 3030, active_sense,
                      sizeof(active_sense));
-    assert(mh_sender_journal(&sender, 304, 3040,
+    assert(rtpmidi_sender_journal(&sender, 304, 3040,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0 &&
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0 &&
            journal.system && journal.channel_count == 0);
-    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
     assert(system_state.has_reset && system_state.reset_count == 1 &&
            system_state.has_tune_request && system_state.tune_count == 1 &&
            system_state.has_song_select && system_state.song == 9 &&
            system_state.has_active_sense &&
            system_state.active_sense_count == 1);
-    mh_sender_ack(&sender, 303);
+    rtpmidi_sender_ack(&sender, 303);
     assert(sender.count == 0);
-    assert(mh_sender_journal(&sender, 304, 3040,
+    assert(rtpmidi_sender_journal(&sender, 304, 3040,
                               bytes, sizeof(bytes), &length) == 0 &&
            length == 3);
 
-    mh_sender_record(&sender, 400, 4000, start, sizeof(start));
-    assert(mh_sender_journal(&sender, 401, 4010,
+    rtpmidi_sender_record(&sender, 400, 4000, start, sizeof(start));
+    assert(rtpmidi_sender_journal(&sender, 401, 4010,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
     assert(system_state.has_sequencer && system_state.sequencer_running &&
            !system_state.downbeat_played && !system_state.has_clock &&
            !system_state.sequencer_single_packet_safe);
 
-    mh_sender_record(&sender, 401, 4010, clock, sizeof(clock));
-    assert(mh_sender_journal(&sender, 402, 4020,
+    rtpmidi_sender_record(&sender, 401, 4010, clock, sizeof(clock));
+    assert(rtpmidi_sender_journal(&sender, 402, 4020,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
     assert(system_state.sequencer_running && system_state.downbeat_played &&
            system_state.has_clock && system_state.clock == 0);
 
-    mh_sender_record(&sender, 402, 4020, clock, sizeof(clock));
-    mh_sender_record(&sender, 403, 4030, stop, sizeof(stop));
-    assert(mh_sender_journal(&sender, 404, 4040,
+    rtpmidi_sender_record(&sender, 402, 4020, clock, sizeof(clock));
+    rtpmidi_sender_record(&sender, 403, 4030, stop, sizeof(stop));
+    assert(rtpmidi_sender_journal(&sender, 404, 4040,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
     assert(!system_state.sequencer_running &&
            system_state.downbeat_played && system_state.has_clock &&
            system_state.clock == 1);
 
-    mh_sender_record(&sender, 404, 4040, song_position,
+    rtpmidi_sender_record(&sender, 404, 4040, song_position,
                      sizeof(song_position));
-    assert(mh_sender_journal(&sender, 405, 4050,
+    assert(rtpmidi_sender_journal(&sender, 405, 4050,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
     assert(!system_state.sequencer_running &&
            !system_state.downbeat_played && system_state.has_clock &&
            system_state.clock == 6);
 
-    mh_sender_reset(&sender);
-    mh_sender_record(&sender, 500, 5000, continue_playback,
+    rtpmidi_sender_reset(&sender);
+    rtpmidi_sender_record(&sender, 500, 5000, continue_playback,
                      sizeof(continue_playback));
-    assert(mh_sender_journal(&sender, 501, 5010,
+    assert(rtpmidi_sender_journal(&sender, 501, 5010,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
     assert(system_state.sequencer_running &&
            !system_state.downbeat_played && system_state.has_clock &&
            system_state.clock == 0);
 
-    mh_sender_reset(&sender);
-    assert(mh_sender_record_sysex(&sender, 600, 6000, mtc_full_frame,
+    rtpmidi_sender_reset(&sender);
+    assert(rtpmidi_sender_record_sysex(&sender, 600, 6000, mtc_full_frame,
                                   sizeof(mtc_full_frame)) == 1);
-    assert(mh_sender_journal(&sender, 601, 6010,
+    assert(rtpmidi_sender_journal(&sender, 601, 6010,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
     assert(system_state.has_mtc && system_state.mtc_has_complete &&
            !system_state.mtc_complete_quarter_frame &&
            !system_state.mtc_has_partial &&
@@ -907,28 +907,28 @@ static void outgoing_journal(void)
            system_state.mtc_complete[0] == 0x61 &&
            system_state.mtc_complete[3] == 0x04);
 
-    mh_sender_reset(&sender);
+    rtpmidi_sender_reset(&sender);
     for (mtc_index = 0; mtc_index < 4; ++mtc_index)
-        mh_sender_record(&sender, (uint16_t)(700 + mtc_index),
+        rtpmidi_sender_record(&sender, (uint16_t)(700 + mtc_index),
                          (uint32_t)(7000 + mtc_index),
                          mtc_forward[mtc_index], sizeof(mtc_forward[0]));
-    assert(mh_sender_journal(&sender, 704, 7010,
+    assert(rtpmidi_sender_journal(&sender, 704, 7010,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
     assert(system_state.has_mtc && !system_state.mtc_has_complete &&
            system_state.mtc_has_partial && !system_state.mtc_reverse &&
            system_state.mtc_point == 3 &&
            system_state.mtc_partial[0] == 4 &&
            system_state.mtc_partial[2] == 3);
     for (; mtc_index < 8; ++mtc_index)
-        mh_sender_record(&sender, (uint16_t)(700 + mtc_index),
+        rtpmidi_sender_record(&sender, (uint16_t)(700 + mtc_index),
                          (uint32_t)(7000 + mtc_index),
                          mtc_forward[mtc_index], sizeof(mtc_forward[0]));
-    assert(mh_sender_journal(&sender, 708, 7020,
+    assert(rtpmidi_sender_journal(&sender, 708, 7020,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
     assert(system_state.mtc_has_complete &&
            system_state.mtc_complete_quarter_frame &&
            !system_state.mtc_has_partial && !system_state.mtc_reverse &&
@@ -937,55 +937,55 @@ static void outgoing_journal(void)
            system_state.mtc_complete[4] == 2 &&
            system_state.mtc_complete[6] == 1);
 
-    mh_sender_reset(&sender);
+    rtpmidi_sender_reset(&sender);
     for (mtc_index = 0; mtc_index < 8; ++mtc_index)
-        mh_sender_record(&sender, (uint16_t)(800 + mtc_index),
+        rtpmidi_sender_record(&sender, (uint16_t)(800 + mtc_index),
                          (uint32_t)(8000 + mtc_index),
                          mtc_drop[mtc_index], sizeof(mtc_drop[0]));
-    assert(mh_sender_journal(&sender, 808, 8020,
+    assert(rtpmidi_sender_journal(&sender, 808, 8020,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
     assert(system_state.mtc_complete[0] == 3 &&
            system_state.mtc_complete[2] == 0 &&
            system_state.mtc_complete[4] == 1 &&
            system_state.mtc_complete[7] == 4);
 
-    mh_sender_reset(&sender);
+    rtpmidi_sender_reset(&sender);
     for (mtc_index = 0; mtc_index < 4; ++mtc_index)
-        mh_sender_record(&sender, (uint16_t)(900 + mtc_index),
+        rtpmidi_sender_record(&sender, (uint16_t)(900 + mtc_index),
                          (uint32_t)(9000 + mtc_index),
                          mtc_reverse[mtc_index], sizeof(mtc_reverse[0]));
-    assert(mh_sender_journal(&sender, 904, 9010,
+    assert(rtpmidi_sender_journal(&sender, 904, 9010,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
     assert(system_state.mtc_has_partial && system_state.mtc_reverse &&
            system_state.mtc_point == 5);
     for (; mtc_index < 8; ++mtc_index)
-        mh_sender_record(&sender, (uint16_t)(900 + mtc_index),
+        rtpmidi_sender_record(&sender, (uint16_t)(900 + mtc_index),
                          (uint32_t)(9000 + mtc_index),
                          mtc_reverse[mtc_index], sizeof(mtc_reverse[0]));
-    assert(mh_sender_journal(&sender, 908, 9020,
+    assert(rtpmidi_sender_journal(&sender, 908, 9020,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
     assert(system_state.mtc_has_complete &&
            system_state.mtc_complete_quarter_frame &&
            !system_state.mtc_has_partial && system_state.mtc_reverse &&
            system_state.mtc_complete[0] == 4 &&
            system_state.mtc_complete[6] == 1);
 
-    mh_sender_reset(&sender);
-    assert(mh_sender_record_sysex(&sender, 1000, 10000, short_sysex,
+    rtpmidi_sender_reset(&sender);
+    assert(rtpmidi_sender_record_sysex(&sender, 1000, 10000, short_sysex,
                                   sizeof(short_sysex)) == 1);
-    assert(mh_sender_journal(&sender, 1001, 10010,
+    assert(rtpmidi_sender_journal(&sender, 1001, 10010,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
     {
-        struct mh_journal_sysex sysex;
-        assert(mh_journal_decode_sysex(&system_state, &sysex) == 1);
+        struct rtpmidi_journal_sysex sysex;
+        assert(rtpmidi_journal_decode_sysex(&system_state, &sysex) == 1);
         assert(sysex.count == 1 && sysex.logs[0].list_tool &&
                sysex.logs[0].status == 3 && sysex.logs[0].has_count &&
                sysex.logs[0].count == 1 && !sysex.logs[0].has_first &&
@@ -993,29 +993,29 @@ static void outgoing_journal(void)
                sysex.logs[0].data[0] == 0x7d &&
                sysex.logs[0].data[2] == 0x82);
         bytes[length - 1] &= 0x7f;
-        assert(mh_journal_decode(bytes, length, &journal) == 0);
-        assert(mh_journal_decode_system(&journal, &system_state) == 1);
-        assert(mh_journal_decode_sysex(&system_state, &sysex) == -1);
+        assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+        assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
+        assert(rtpmidi_journal_decode_sysex(&system_state, &sysex) == -1);
     }
-    assert(mh_sender_record_sysex(&sender, 1001, 10010, second_sysex,
+    assert(rtpmidi_sender_record_sysex(&sender, 1001, 10010, second_sysex,
                                   sizeof(second_sysex)) == 1);
     assert(sender.sysex_log_count == 2);
-    assert(mh_sender_journal(&sender, 1002, 10020,
+    assert(rtpmidi_sender_journal(&sender, 1002, 10020,
                               bytes, sizeof(bytes), &length) == 0);
-    assert(mh_journal_decode(bytes, length, &journal) == 0);
-    assert(mh_journal_decode_system(&journal, &system_state) == 1);
+    assert(rtpmidi_journal_decode(bytes, length, &journal) == 0);
+    assert(rtpmidi_journal_decode_system(&journal, &system_state) == 1);
     {
-        struct mh_journal_sysex sysex;
-        assert(mh_journal_decode_sysex(&system_state, &sysex) == 1);
+        struct rtpmidi_journal_sysex sysex;
+        assert(rtpmidi_journal_decode_sysex(&system_state, &sysex) == 1);
         assert(sysex.count == 2 && sysex.logs[0].count == 1 &&
                sysex.logs[0].data_length == 3 &&
                sysex.logs[1].count == 2 &&
                sysex.logs[1].data_length == 2);
     }
-    mh_sender_ack(&sender, 1000);
+    rtpmidi_sender_ack(&sender, 1000);
     assert(sender.sysex_log_count == 1 &&
            sender.sysex_logs[0].count == 2);
-    mh_sender_ack(&sender, 1001);
+    rtpmidi_sender_ack(&sender, 1001);
     assert(sender.sysex_log_count == 0);
 }
 
@@ -1032,25 +1032,25 @@ static void mdns_discovery(void)
     uint8_t broken[sizeof(query)];
     size_t length;
     int unicast;
-    assert(mh_mdns_query(query, sizeof(query), "AROS MIDIHub",
+    assert(netmidi_mdns_query(query, sizeof(query), "AROS MIDIHub",
                          "midihub-5004", &unicast) == 1);
     assert(!unicast);
     memcpy(broken, query, sizeof(query));
     broken[sizeof(broken) - 2] = 0x80;
-    assert(mh_mdns_query(broken, sizeof(broken), "AROS MIDIHub",
+    assert(netmidi_mdns_query(broken, sizeof(broken), "AROS MIDIHub",
                          "midihub-5004", &unicast) == 1);
     assert(unicast);
     broken[12] = 0xc0;
     broken[13] = 12;
-    assert(mh_mdns_query(broken, sizeof(broken), "AROS MIDIHub",
+    assert(netmidi_mdns_query(broken, sizeof(broken), "AROS MIDIHub",
                          "midihub-5004", &unicast) == -1);
-    assert(mh_mdns_build("AROS MIDIHub", "midihub-5004", ip,
+    assert(netmidi_mdns_build("AROS MIDIHub", "midihub-5004", ip,
                          5004, 120, 0, output, sizeof(output), &length) == 0);
     assert(length > 100 && output[2] == 0x84 && output[3] == 0 &&
            output[6] == 0 && output[7] == 4);
     assert(output[length - 4] == 192 && output[length - 3] == 168 &&
            output[length - 2] == 100 && output[length - 1] == 20);
-    assert(mh_mdns_build("AROS MIDIHub", "midihub-5004", ip,
+    assert(netmidi_mdns_build("AROS MIDIHub", "midihub-5004", ip,
                          5004, 120, 0, output, 20, &length) == -1);
 }
 
@@ -1059,43 +1059,43 @@ static void rtp_command_reader(void)
     static const uint8_t midi[] = {
         0x90, 60, 100, 0x00, 61, 101, 0x81, 0x00, 0x80, 60, 64
     };
-    struct mh_rtp_packet packet = {0};
-    struct mh_rtp_reader reader;
-    struct mh_midi_event event;
+    struct rtpmidi_packet packet = {0};
+    struct rtpmidi_reader reader;
+    struct rtpmidi_event event;
 
     packet.timestamp = 100;
     packet.midi = midi;
     packet.midi_length = sizeof(midi);
-    mh_rtp_reader_init(&reader, &packet);
-    assert(mh_rtp_reader_next(&reader, &event) == 1);
+    rtpmidi_reader_init(&reader, &packet);
+    assert(rtpmidi_reader_next(&reader, &event) == 1);
     assert(event.timestamp == 100 && event.length == 3);
     assert(event.bytes[0] == 0x90 && event.bytes[1] == 60 &&
            event.bytes[2] == 100);
-    assert(mh_rtp_reader_next(&reader, &event) == 1);
+    assert(rtpmidi_reader_next(&reader, &event) == 1);
     assert(event.timestamp == 100 && event.bytes[0] == 0x90 &&
            event.bytes[1] == 61 && event.bytes[2] == 101);
-    assert(mh_rtp_reader_next(&reader, &event) == 1);
+    assert(rtpmidi_reader_next(&reader, &event) == 1);
     assert(event.timestamp == 228 && event.bytes[0] == 0x80 &&
            event.bytes[1] == 60 && event.bytes[2] == 64);
-    assert(mh_rtp_reader_next(&reader, &event) == 0);
+    assert(rtpmidi_reader_next(&reader, &event) == 0);
 
     packet.z = 1;
     packet.midi = (const uint8_t *)"\x01\xc0\x22";
     packet.midi_length = 3;
-    mh_rtp_reader_init(&reader, &packet);
-    assert(mh_rtp_reader_next(&reader, &event) == 1);
+    rtpmidi_reader_init(&reader, &packet);
+    assert(rtpmidi_reader_next(&reader, &event) == 1);
     assert(event.timestamp == 101 && event.length == 2 &&
            event.bytes[0] == 0xc0 && event.bytes[1] == 0x22);
 
     packet.z = 0;
     packet.midi = (const uint8_t *)"\x40\x22";
     packet.midi_length = 2;
-    mh_rtp_reader_init(&reader, &packet);
-    assert(mh_rtp_reader_next(&reader, &event) == -1);
+    rtpmidi_reader_init(&reader, &packet);
+    assert(rtpmidi_reader_next(&reader, &event) == -1);
     packet.midi = (const uint8_t *)"\xf0";
     packet.midi_length = 1;
-    mh_rtp_reader_init(&reader, &packet);
-    assert(mh_rtp_reader_next(&reader, &event) == -1);
+    rtpmidi_reader_init(&reader, &packet);
+    assert(rtpmidi_reader_next(&reader, &event) == -1);
 }
 
 static void rtp_system_common(void)
@@ -1106,29 +1106,29 @@ static void rtp_system_common(void)
     static const uint8_t broken_running_status[] = {
         0x90, 60, 100, 0, 0xf1, 1, 0, 61, 101
     };
-    struct mh_rtp_packet packet = {0};
-    struct mh_rtp_reader reader;
-    struct mh_midi_event event;
+    struct rtpmidi_packet packet = {0};
+    struct rtpmidi_reader reader;
+    struct rtpmidi_event event;
 
     packet.midi = midi;
     packet.midi_length = sizeof(midi);
-    mh_rtp_reader_init(&reader, &packet);
-    assert(mh_rtp_reader_next(&reader, &event) == 1 &&
+    rtpmidi_reader_init(&reader, &packet);
+    assert(rtpmidi_reader_next(&reader, &event) == 1 &&
            event.length == 2 && event.bytes[0] == 0xf1);
-    assert(mh_rtp_reader_next(&reader, &event) == 1 &&
+    assert(rtpmidi_reader_next(&reader, &event) == 1 &&
            event.length == 3 && event.bytes[0] == 0xf2);
-    assert(mh_rtp_reader_next(&reader, &event) == 1 &&
+    assert(rtpmidi_reader_next(&reader, &event) == 1 &&
            event.length == 2 && event.bytes[0] == 0xf3);
-    assert(mh_rtp_reader_next(&reader, &event) == 1 &&
+    assert(rtpmidi_reader_next(&reader, &event) == 1 &&
            event.length == 1 && event.bytes[0] == 0xf6);
-    assert(mh_rtp_reader_next(&reader, &event) == 0);
+    assert(rtpmidi_reader_next(&reader, &event) == 0);
 
     packet.midi = broken_running_status;
     packet.midi_length = sizeof(broken_running_status);
-    mh_rtp_reader_init(&reader, &packet);
-    assert(mh_rtp_reader_next(&reader, &event) == 1);
-    assert(mh_rtp_reader_next(&reader, &event) == 1);
-    assert(mh_rtp_reader_next(&reader, &event) == -1);
+    rtpmidi_reader_init(&reader, &packet);
+    assert(rtpmidi_reader_next(&reader, &event) == 1);
+    assert(rtpmidi_reader_next(&reader, &event) == 1);
+    assert(rtpmidi_reader_next(&reader, &event) == -1);
 }
 
 static void rtp_sysex(void)
@@ -1137,69 +1137,69 @@ static void rtp_sysex(void)
 static const uint8_t first[] = {0xf0, 0x7d, 1, 0xf0};
     static const uint8_t middle[] = {0xf7, 2, 0xf0};
     static const uint8_t last[] = {0xf7, 2, 0xf7};
-    struct mh_rtp_packet packet;
-    struct mh_rtp_reader reader;
-    struct mh_midi_event event;
-    struct mh_sysex_assembler assembler;
+    struct rtpmidi_packet packet;
+    struct rtpmidi_reader reader;
+    struct rtpmidi_event event;
+    struct rtpmidi_sysex_assembler assembler;
     const uint8_t *message;
     size_t message_length;
     uint8_t wire[32];
     size_t wire_length;
 
-    mh_sysex_reset(&assembler);
-    assert(mh_rtp_encode_list(1, 100, 7, complete, sizeof(complete),
+    rtpmidi_sysex_reset(&assembler);
+    assert(rtpmidi_encode_list(1, 100, 7, complete, sizeof(complete),
                               wire, sizeof(wire), &wire_length) == 0);
-    assert(mh_rtp_decode(wire, wire_length, &packet) == 0);
-    mh_rtp_reader_init(&reader, &packet);
-    assert(mh_rtp_reader_next(&reader, &event) == 1 &&
+    assert(rtpmidi_decode(wire, wire_length, &packet) == 0);
+    rtpmidi_reader_init(&reader, &packet);
+    assert(rtpmidi_reader_next(&reader, &event) == 1 &&
            event.sysex_length == sizeof(complete));
-    assert(mh_sysex_feed(&assembler, &event, 1, &message,
+    assert(rtpmidi_sysex_feed(&assembler, &event, 1, &message,
                           &message_length) == 1);
     assert(message_length == sizeof(complete) &&
            !memcmp(message, complete, message_length) &&
            assembler.timestamp == 100);
 
-    assert(mh_rtp_encode_list(2, 101, 7, first, sizeof(first),
+    assert(rtpmidi_encode_list(2, 101, 7, first, sizeof(first),
                               wire, sizeof(wire), &wire_length) == 0);
-    assert(mh_rtp_decode(wire, wire_length, &packet) == 0);
-    mh_rtp_reader_init(&reader, &packet);
-    assert(mh_rtp_reader_next(&reader, &event) == 1);
-    assert(mh_sysex_feed(&assembler, &event, 2, &message,
+    assert(rtpmidi_decode(wire, wire_length, &packet) == 0);
+    rtpmidi_reader_init(&reader, &packet);
+    assert(rtpmidi_reader_next(&reader, &event) == 1);
+    assert(rtpmidi_sysex_feed(&assembler, &event, 2, &message,
                           &message_length) == 0);
-    assert(mh_rtp_encode_list(3, 102, 7, last, sizeof(last),
+    assert(rtpmidi_encode_list(3, 102, 7, last, sizeof(last),
                               wire, sizeof(wire), &wire_length) == 0);
-    assert(mh_rtp_decode(wire, wire_length, &packet) == 0);
-    mh_rtp_reader_init(&reader, &packet);
-    assert(mh_rtp_reader_next(&reader, &event) == 1);
-    assert(mh_sysex_feed(&assembler, &event, 3, &message,
+    assert(rtpmidi_decode(wire, wire_length, &packet) == 0);
+    rtpmidi_reader_init(&reader, &packet);
+    assert(rtpmidi_reader_next(&reader, &event) == 1);
+    assert(rtpmidi_sysex_feed(&assembler, &event, 3, &message,
                           &message_length) == 1);
     assert(message_length == sizeof(complete) &&
            !memcmp(message, complete, message_length) &&
            assembler.timestamp == 101);
 
-    mh_sysex_reset(&assembler);
+    rtpmidi_sysex_reset(&assembler);
     event.sysex = first;
     event.sysex_length = sizeof(first);
     event.timestamp = 200;
-    assert(mh_sysex_feed(&assembler, &event, 7, &message,
+    assert(rtpmidi_sysex_feed(&assembler, &event, 7, &message,
                           &message_length) == 0);
     event.sysex = last;
     event.sysex_length = sizeof(last);
-    assert(mh_sysex_feed(&assembler, &event, 9, &message,
+    assert(rtpmidi_sysex_feed(&assembler, &event, 9, &message,
                           &message_length) == -1);
 
-    mh_sysex_reset(&assembler);
+    rtpmidi_sysex_reset(&assembler);
     event.sysex = first;
     event.sysex_length = sizeof(first);
-    assert(mh_sysex_feed(&assembler, &event, 10, &message,
+    assert(rtpmidi_sysex_feed(&assembler, &event, 10, &message,
                           &message_length) == 0);
     event.sysex = middle;
     event.sysex_length = sizeof(middle);
-    assert(mh_sysex_feed(&assembler, &event, 11, &message,
+    assert(rtpmidi_sysex_feed(&assembler, &event, 11, &message,
                           &message_length) == 0);
     event.sysex = last;
     event.sysex_length = sizeof(last);
-    assert(mh_sysex_feed(&assembler, &event, 12, &message,
+    assert(rtpmidi_sysex_feed(&assembler, &event, 12, &message,
                           &message_length) == 1);
     assert(message_length == 6 && message[0] == 0xf0 &&
            message[5] == 0xf7);
@@ -1207,78 +1207,78 @@ static const uint8_t first[] = {0xf0, 0x7d, 1, 0xf0};
 
 static void session_handshake(void)
 {
-    struct mh_session initiator;
-    struct mh_session responder;
-    struct mh_apple_packet packet;
-    struct mh_apple_packet response;
-    struct mh_apple_packet ignored;
+    struct applemidi_session initiator;
+    struct applemidi_session responder;
+    struct applemidi_packet packet;
+    struct applemidi_packet response;
+    struct applemidi_packet ignored;
     int data_port;
 
-    assert(mh_session_init(&initiator, 0x11111111,
+    assert(applemidi_session_init(&initiator, 0x11111111,
                            (const uint8_t *)"AROS", 4) == 0);
-    assert(mh_session_init(&responder, 0x22222222,
+    assert(applemidi_session_init(&responder, 0x22222222,
                            (const uint8_t *)"Peer", 4) == 0);
-    assert(mh_session_invite(&initiator, 0x33333333, &packet) == 0);
-    assert(packet.command == MH_APPLE_IN);
-    assert(mh_session_retry(&initiator, &ignored, &data_port) == 0);
-    assert(ignored.command == MH_APPLE_IN && !data_port);
-    assert(mh_session_receive(&responder, 1, &packet, &ignored,
+    assert(applemidi_session_invite(&initiator, 0x33333333, &packet) == 0);
+    assert(packet.command == APPLEMIDI_IN);
+    assert(applemidi_session_retry(&initiator, &ignored, &data_port) == 0);
+    assert(ignored.command == APPLEMIDI_IN && !data_port);
+    assert(applemidi_session_receive(&responder, 1, &packet, &ignored,
                               &data_port) == 0);
-    assert(responder.phase == MH_SESSION_IDLE);
-    assert(mh_session_receive(&responder, 0, &packet, &response,
+    assert(responder.phase == APPLEMIDI_SESSION_IDLE);
+    assert(applemidi_session_receive(&responder, 0, &packet, &response,
                               &data_port) == 1);
-    assert(response.command == MH_APPLE_OK && !data_port);
-    assert(responder.phase == MH_SESSION_WAITING_DATA);
-    assert(mh_session_receive(&responder, 0, &packet, &ignored,
+    assert(response.command == APPLEMIDI_OK && !data_port);
+    assert(responder.phase == APPLEMIDI_SESSION_WAITING_DATA);
+    assert(applemidi_session_receive(&responder, 0, &packet, &ignored,
                               &data_port) == 1);
-    assert(ignored.command == MH_APPLE_OK && !data_port);
+    assert(ignored.command == APPLEMIDI_OK && !data_port);
     packet = response;
-    assert(mh_session_receive(&initiator, 0, &packet, &response,
+    assert(applemidi_session_receive(&initiator, 0, &packet, &response,
                               &data_port) == 1);
-    assert(response.command == MH_APPLE_IN && data_port);
-    assert(initiator.phase == MH_SESSION_INVITING_DATA);
-    assert(mh_session_retry(&initiator, &ignored, &data_port) == 0);
-    assert(ignored.command == MH_APPLE_IN && data_port);
+    assert(response.command == APPLEMIDI_IN && data_port);
+    assert(initiator.phase == APPLEMIDI_SESSION_INVITING_DATA);
+    assert(applemidi_session_retry(&initiator, &ignored, &data_port) == 0);
+    assert(ignored.command == APPLEMIDI_IN && data_port);
     packet = response;
     packet.token++;
-    assert(mh_session_receive(&responder, 1, &packet, &ignored,
+    assert(applemidi_session_receive(&responder, 1, &packet, &ignored,
                               &data_port) == 0);
-    assert(responder.phase == MH_SESSION_WAITING_DATA);
+    assert(responder.phase == APPLEMIDI_SESSION_WAITING_DATA);
     packet.token--;
-    assert(mh_session_receive(&responder, 1, &packet, &response,
+    assert(applemidi_session_receive(&responder, 1, &packet, &response,
                               &data_port) == 1);
-    assert(response.command == MH_APPLE_OK && data_port);
-    assert(responder.phase == MH_SESSION_CONNECTED);
+    assert(response.command == APPLEMIDI_OK && data_port);
+    assert(responder.phase == APPLEMIDI_SESSION_CONNECTED);
     packet = response;
-    assert(mh_session_receive(&initiator, 1, &packet, &ignored,
+    assert(applemidi_session_receive(&initiator, 1, &packet, &ignored,
                               &data_port) == 0);
-    assert(initiator.phase == MH_SESSION_CONNECTED);
-    assert(mh_session_end(&initiator, &packet) == 0);
-    assert(packet.command == MH_APPLE_BY);
-    assert(mh_session_receive(&responder, 0, &packet, &ignored,
+    assert(initiator.phase == APPLEMIDI_SESSION_CONNECTED);
+    assert(applemidi_session_end(&initiator, &packet) == 0);
+    assert(packet.command == APPLEMIDI_BY);
+    assert(applemidi_session_receive(&responder, 0, &packet, &ignored,
                               &data_port) == 0);
-    assert(responder.phase == MH_SESSION_IDLE);
+    assert(responder.phase == APPLEMIDI_SESSION_IDLE);
 }
 
 static void session_rejection(void)
 {
-    struct mh_session initiator;
-    struct mh_apple_packet packet;
-    struct mh_apple_packet reply;
+    struct applemidi_session initiator;
+    struct applemidi_packet packet;
+    struct applemidi_packet reply;
     int data_port;
 
-    assert(mh_session_init(&initiator, 1, 0, 0) == 0);
-    assert(mh_session_invite(&initiator, 2, &packet) == 0);
+    assert(applemidi_session_init(&initiator, 1, 0, 0) == 0);
+    assert(applemidi_session_invite(&initiator, 2, &packet) == 0);
     reply = packet;
-    reply.command = MH_APPLE_NO;
+    reply.command = APPLEMIDI_NO;
     reply.token = 3;
-    assert(mh_session_receive(&initiator, 0, &reply, &packet,
+    assert(applemidi_session_receive(&initiator, 0, &reply, &packet,
                               &data_port) == 0);
-    assert(initiator.phase == MH_SESSION_INVITING_CONTROL);
+    assert(initiator.phase == APPLEMIDI_SESSION_INVITING_CONTROL);
     reply.token = 2;
-    assert(mh_session_receive(&initiator, 0, &reply, &packet,
+    assert(applemidi_session_receive(&initiator, 0, &reply, &packet,
                               &data_port) == 0);
-    assert(initiator.phase == MH_SESSION_IDLE);
+    assert(initiator.phase == APPLEMIDI_SESSION_IDLE);
 }
 
 static void clock_and_queue(void)
@@ -1289,65 +1289,65 @@ static void clock_and_queue(void)
     uint64_t stamps[3] = {1000, 800, 1020};
     uint64_t due;
     int64_t offset;
-    struct mh_event_queue queue = {0};
-    struct mh_queued_event event;
+    struct rtpmidi_event_queue queue = {0};
+    struct rtpmidi_queued_event event;
 
-    assert(mh_clock_offset(stamps, 1, &offset) == 0 && offset == 210);
-    assert(mh_clock_due(800, 1010, offset, &due) == 0 && due == 1010);
-    assert(mh_clock_due(900, 1010, offset, &due) == 0 && due == 1110);
-    assert(mh_clock_offset(stamps, 0, &offset) == 0 && offset == -210);
-    assert(mh_clock_due(1010, 800, offset, &due) == 0 && due == 800);
-    assert(mh_clock_due(1110, 800, offset, &due) == 0 && due == 900);
+    assert(rtpmidi_clock_offset(stamps, 1, &offset) == 0 && offset == 210);
+    assert(rtpmidi_clock_due(800, 1010, offset, &due) == 0 && due == 1010);
+    assert(rtpmidi_clock_due(900, 1010, offset, &due) == 0 && due == 1110);
+    assert(rtpmidi_clock_offset(stamps, 0, &offset) == 0 && offset == -210);
+    assert(rtpmidi_clock_due(1010, 800, offset, &due) == 0 && due == 800);
+    assert(rtpmidi_clock_due(1110, 800, offset, &due) == 0 && due == 900);
     stamps[2] = 999;
-    assert(mh_clock_offset(stamps, 1, &offset) == -1);
+    assert(rtpmidi_clock_offset(stamps, 1, &offset) == -1);
 
-    assert(mh_clock_due(0x64, UINT64_C(0x100000000), 0, &due) == 0 &&
+    assert(rtpmidi_clock_due(0x64, UINT64_C(0x100000000), 0, &due) == 0 &&
            due == UINT64_C(0x100000064));
-    assert(mh_clock_due(0xffffff9c, UINT64_C(0x100000000), 0,
+    assert(rtpmidi_clock_due(0xffffff9c, UINT64_C(0x100000000), 0,
                         &due) == 0 && due == UINT64_C(0xffffff9c));
-    assert(mh_queue_push(&queue, 300, first, sizeof(first)) == 0);
-    assert(mh_queue_push(&queue, 200, second, sizeof(second)) == 0);
-    assert(mh_queue_push(&queue, 300, second, sizeof(second)) == 0);
-    assert(mh_queue_next_due(&queue, &due) == 1 && due == 200);
-    assert(mh_queue_pop_due(&queue, 199, &event) == 0);
-    assert(mh_queue_pop_due(&queue, 200, &event) == 1 &&
+    assert(rtpmidi_queue_push(&queue, 300, first, sizeof(first)) == 0);
+    assert(rtpmidi_queue_push(&queue, 200, second, sizeof(second)) == 0);
+    assert(rtpmidi_queue_push(&queue, 300, second, sizeof(second)) == 0);
+    assert(rtpmidi_queue_next_due(&queue, &due) == 1 && due == 200);
+    assert(rtpmidi_queue_pop_due(&queue, 199, &event) == 0);
+    assert(rtpmidi_queue_pop_due(&queue, 200, &event) == 1 &&
            !memcmp(event.bytes, second, sizeof(second)));
-    assert(mh_queue_pop_due(&queue, 300, &event) == 1 &&
+    assert(rtpmidi_queue_pop_due(&queue, 300, &event) == 1 &&
            !memcmp(event.bytes, first, sizeof(first)));
-    assert(mh_queue_pop_due(&queue, 300, &event) == 1 &&
+    assert(rtpmidi_queue_pop_due(&queue, 300, &event) == 1 &&
            !memcmp(event.bytes, second, sizeof(second)));
-    assert(mh_queue_next_due(&queue, &due) == 0);
-    assert(mh_queue_push(&queue, 300, first, sizeof(first)) == 0);
-    assert(mh_queue_push(&queue, 200, second, sizeof(second)) == 0);
-    assert(mh_queue_push_sysex(&queue, 250, sysex, sizeof(sysex)) == 0);
+    assert(rtpmidi_queue_next_due(&queue, &due) == 0);
+    assert(rtpmidi_queue_push(&queue, 300, first, sizeof(first)) == 0);
+    assert(rtpmidi_queue_push(&queue, 200, second, sizeof(second)) == 0);
+    assert(rtpmidi_queue_push_sysex(&queue, 250, sysex, sizeof(sysex)) == 0);
     assert(queue.sysex_bytes == sizeof(sysex));
-    assert(mh_queue_cancel_note_on(&queue, 0, 60) == 1);
-    assert(!mh_queue_has_note_on(&queue, 0, 60));
-    assert(mh_queue_next_due(&queue, &due) == 1 && due == 200);
-    assert(mh_queue_cancel_note_on(&queue, 0, 60) == 0);
-    assert(mh_queue_pop_due(&queue, 200, &event) == 1 && !event.sysex);
-    mh_queue_event_release(&event);
-    assert(mh_queue_pop_due(&queue, 250, &event) == 1 &&
+    assert(rtpmidi_queue_cancel_note_on(&queue, 0, 60) == 1);
+    assert(!rtpmidi_queue_has_note_on(&queue, 0, 60));
+    assert(rtpmidi_queue_next_due(&queue, &due) == 1 && due == 200);
+    assert(rtpmidi_queue_cancel_note_on(&queue, 0, 60) == 0);
+    assert(rtpmidi_queue_pop_due(&queue, 200, &event) == 1 && !event.sysex);
+    rtpmidi_queue_event_release(&event);
+    assert(rtpmidi_queue_pop_due(&queue, 250, &event) == 1 &&
            event.sysex_length == sizeof(sysex) &&
            !memcmp(event.sysex, sysex, sizeof(sysex)) &&
            queue.sysex_bytes == 0);
-    mh_queue_event_release(&event);
-    assert(mh_queue_push(&queue, 400, first, sizeof(first)) == 0);
-    assert(mh_queue_push_sysex(&queue, 350, sysex, sizeof(sysex)) == 0);
-    assert(mh_queue_has_note_on(&queue, 0, 60));
-    mh_queue_reset(&queue);
+    rtpmidi_queue_event_release(&event);
+    assert(rtpmidi_queue_push(&queue, 400, first, sizeof(first)) == 0);
+    assert(rtpmidi_queue_push_sysex(&queue, 350, sysex, sizeof(sysex)) == 0);
+    assert(rtpmidi_queue_has_note_on(&queue, 0, 60));
+    rtpmidi_queue_reset(&queue);
     assert(queue.sysex_bytes == 0);
-    assert(mh_queue_pop_due(&queue, 400, &event) == 0);
+    assert(rtpmidi_queue_pop_due(&queue, 400, &event) == 0);
 }
 
 /* A sender, and two receivers of its stream: one is given every packet, the
  * other loses some and has only the journal of the next packet it gets. */
 struct lossy_link {
-    struct mh_sender sender;
-    struct mh_receiver whole;
-    struct mh_receiver lossy;
-    struct mh_event_queue whole_queue;
-    struct mh_event_queue lossy_queue;
+    struct rtpmidi_sender sender;
+    struct rtpmidi_receiver whole;
+    struct rtpmidi_receiver lossy;
+    struct rtpmidi_event_queue whole_queue;
+    struct rtpmidi_event_queue lossy_queue;
     uint16_t sequence;
     uint32_t timestamp;
     unsigned int lost;
@@ -1378,7 +1378,7 @@ static void link_sysex(void *context, const uint8_t *message, size_t length)
 static void link_report(void *context, const char *text)
 {
     struct lossy_link *link = context;
-    assert(strncmp(text, "MIDIHub: ", 9) == 0);
+    assert(text[0] >= 'a' && text[0] <= 'z');
     assert(text[strlen(text) - 1] == '\n');
     ++link->reports;
 }
@@ -1393,21 +1393,21 @@ static void quiet_sysex(void *context, const uint8_t *message, size_t length)
     (void)context; (void)message; (void)length;
 }
 
-static const struct mh_receiver_output link_output = {
+static const struct rtpmidi_receiver_output link_output = {
     link_message, link_sysex, link_report
 };
-static const struct mh_receiver_output quiet_output = {
+static const struct rtpmidi_receiver_output quiet_output = {
     quiet_message, quiet_sysex, NULL
 };
 
 static void link_init(struct lossy_link *link)
 {
     memset(link, 0, sizeof(*link));
-    mh_sender_reset(&link->sender);
-    mh_queue_reset(&link->whole_queue);
-    mh_queue_reset(&link->lossy_queue);
-    mh_receiver_init(&link->whole, &quiet_output, link, &link->whole_queue);
-    mh_receiver_init(&link->lossy, &link_output, link, &link->lossy_queue);
+    rtpmidi_sender_reset(&link->sender);
+    rtpmidi_queue_reset(&link->whole_queue);
+    rtpmidi_queue_reset(&link->lossy_queue);
+    rtpmidi_receiver_init(&link->whole, &quiet_output, link, &link->whole_queue);
+    rtpmidi_receiver_init(&link->lossy, &link_output, link, &link->lossy_queue);
     link->sequence = 500;
     link->timestamp = 100000;
 }
@@ -1418,27 +1418,27 @@ static void link_repair(struct lossy_link *link)
 {
     uint8_t wire[1100];
     size_t length;
-    struct mh_journal journal;
-    struct mh_journal_system_state system;
-    struct mh_receiver_clock clock;
+    struct rtpmidi_journal journal;
+    struct rtpmidi_journal_system_state system;
+    struct rtpmidi_receiver_clock clock;
     int has_system = 0;
 
     if (!link->lost) return;
-    assert(mh_sender_journal(&link->sender, link->sequence, link->timestamp,
+    assert(rtpmidi_sender_journal(&link->sender, link->sequence, link->timestamp,
                              wire, sizeof(wire), &length) == 0);
-    assert(mh_journal_decode(wire, length, &journal) == 0);
-    assert(mh_journal_covers_gap(
+    assert(rtpmidi_journal_decode(wire, length, &journal) == 0);
+    assert(rtpmidi_journal_covers_gap(
         (uint16_t)(link->sequence - link->lost - 1), link->sequence,
         journal.checkpoint));
     if (journal.system) {
-        assert(mh_journal_decode_system(&journal, &system) > 0);
+        assert(rtpmidi_journal_decode_system(&journal, &system) > 0);
         has_system = 1;
     }
     clock.synchronized = link->synchronized;
     clock.peer_to_local = 0;
     clock.now = link->timestamp;
     link->recovering = 1;
-    mh_receiver_recover(&link->lossy, &journal, has_system ? &system : NULL,
+    rtpmidi_receiver_recover(&link->lossy, &journal, has_system ? &system : NULL,
                         link->lost == 1, link->timestamp,
                         link->synchronized ? &clock : NULL);
     link->recovering = 0;
@@ -1450,15 +1450,15 @@ static void link_send(struct lossy_link *link, const uint8_t *message,
 {
     if (!lose) link_repair(link);
     if (message[0] == 0xf0) {
-        mh_receiver_deliver_sysex(&link->whole, message, length);
-        if (!lose) mh_receiver_deliver_sysex(&link->lossy, message, length);
-        assert(mh_sender_record_sysex(&link->sender, link->sequence,
+        rtpmidi_receiver_deliver_sysex(&link->whole, message, length);
+        if (!lose) rtpmidi_receiver_deliver_sysex(&link->lossy, message, length);
+        assert(rtpmidi_sender_record_sysex(&link->sender, link->sequence,
                                       link->timestamp, message, length));
     } else {
-        assert(mh_sender_supported(message, length));
-        mh_receiver_deliver(&link->whole, message, length);
-        if (!lose) mh_receiver_deliver(&link->lossy, message, length);
-        mh_sender_record(&link->sender, link->sequence, link->timestamp,
+        assert(rtpmidi_sender_supported(message, length));
+        rtpmidi_receiver_deliver(&link->whole, message, length);
+        if (!lose) rtpmidi_receiver_deliver(&link->lossy, message, length);
+        rtpmidi_sender_record(&link->sender, link->sequence, link->timestamp,
                          message, length);
     }
     if (lose) ++link->lost;
@@ -1571,7 +1571,7 @@ static void receiver_recovery(void)
     link_send(&link, on, sizeof(on), 0);
     link_send(&link, other_on, sizeof(other_on), 0);
     link.recovering = 1;
-    mh_receiver_release_notes(&link.lossy);
+    rtpmidi_receiver_release_notes(&link.lossy);
     link.recovering = 0;
     assert(link.recovered_messages == 3);
     assert(link.lossy.note_count[0][60] == 0 &&

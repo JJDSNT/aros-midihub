@@ -1,5 +1,5 @@
 #include "camd_bridge.h"
-#include <midihub/rtpmidi.h>
+#include <rtpmidi/rtpmidi.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -23,7 +23,7 @@ int aros_camd_bridge_open_named(struct aros_camd_bridge *bridge,
     struct TagItem node_tags[] = {
         {MIDI_Name, (IPTR)node_name},
         {MIDI_MsgQueue, 256},
-        {MIDI_SysExSize, MH_SYSEX_MAX},
+        {MIDI_SysExSize, RTPMIDI_SYSEX_MAX},
         {MIDI_RecvSignal, 0},
         {TAG_DONE, 0}
     };
@@ -43,7 +43,7 @@ int aros_camd_bridge_open_named(struct aros_camd_bridge *bridge,
     bridge->camd_base = OpenLibrary((CONST_STRPTR)"camd.library", 0);
     if (!bridge->camd_base)
         return -1;
-    bridge->sysex_buffer = AllocVec(MH_SYSEX_MAX, MEMF_ANY);
+    bridge->sysex_buffer = AllocVec(RTPMIDI_SYSEX_MAX, MEMF_ANY);
     if (!bridge->sysex_buffer)
         goto fail;
     bridge->signal_bit = AllocSignal(-1);
@@ -116,7 +116,7 @@ void aros_camd_bridge_deliver_sysex(struct aros_camd_bridge *bridge,
                                     const uint8_t *message, size_t length)
 {
     if (!bridge->to_clients || !message || length < 2 ||
-        length > MH_SYSEX_MAX || message[0] != 0xf0 ||
+        length > RTPMIDI_SYSEX_MAX || message[0] != 0xf0 ||
         message[length - 1] != 0xf7)
         return;
     PutSysEx(bridge->to_clients, (UBYTE *)message);
@@ -134,7 +134,7 @@ void aros_camd_bridge_poll(struct aros_camd_bridge *bridge,
     while (GetMidi(bridge->node, &message)) {
         if (message.mm_Status == 0xf0) {
             sysex_length = QuerySysEx(bridge->node);
-            if (sysex_length > MH_SYSEX_MAX) {
+            if (sysex_length > RTPMIDI_SYSEX_MAX) {
                 SkipSysEx(bridge->node);
             } else if (sysex_length >= 2 &&
                        GetSysEx(bridge->node, bridge->sysex_buffer,

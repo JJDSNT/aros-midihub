@@ -32,16 +32,16 @@ static int port_value(const char *text, uint16_t *port)
     return 0;
 }
 
-void mh_config_defaults(struct mh_network_config *config)
+void netmidi_config_defaults(struct netmidi_network_config *config)
 {
     memset(config, 0, sizeof(*config));
     config->local_port = 5004;
     strcpy(config->session_name, "AROS MIDIHub");
 }
 
-int mh_config_load(const char *path, struct mh_network_config *config)
+int netmidi_config_load(const char *path, struct netmidi_network_config *config)
 {
-    struct mh_network_config next;
+    struct netmidi_network_config next;
     FILE *file;
     char line[256];
     char *key;

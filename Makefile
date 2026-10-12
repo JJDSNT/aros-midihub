@@ -10,9 +10,9 @@ SOURCES = src/applemidi.c src/rtpmidi.c src/session.c src/peers.c src/config.c s
 PROGRAM_SOURCES = ports/aros/midihub/main.c ports/aros/midihub/camd.c \
                   ports/aros/midihub/network.c \
                   ports/aros/camd_bridge.c
-HEADERS = include/midihub/applemidi.h include/midihub/rtpmidi.h \
-          include/midihub/session.h include/midihub/peers.h include/midihub/config.h include/midihub/timing.h include/midihub/receiver.h \
-          include/midihub/sender.h include/midihub/mdns.h include/midihub/routes.h \
+HEADERS = include/rtpmidi/applemidi.h include/rtpmidi/rtpmidi.h \
+          include/rtpmidi/session.h include/rtpmidi/peers.h include/midihub/config.h include/rtpmidi/timing.h include/rtpmidi/receiver.h \
+          include/rtpmidi/sender.h include/midihub/mdns.h include/midihub/routes.h \
           ports/aros/midihub/camd.h ports/aros/midihub/network.h \
           ports/aros/camd_bridge.h
 

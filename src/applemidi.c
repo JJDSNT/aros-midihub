@@ -1,4 +1,4 @@
-#include "midihub/applemidi.h"
+#include "rtpmidi/applemidi.h"
 
 #include <string.h>
 
@@ -40,12 +40,12 @@ static void write64(uint8_t *p, uint64_t value)
 
 static int exchange_command(uint16_t command)
 {
-    return command == MH_APPLE_IN || command == MH_APPLE_OK ||
-           command == MH_APPLE_NO || command == MH_APPLE_BY;
+    return command == APPLEMIDI_IN || command == APPLEMIDI_OK ||
+           command == APPLEMIDI_NO || command == APPLEMIDI_BY;
 }
 
-int mh_apple_decode(const uint8_t *data, size_t length,
-                    struct mh_apple_packet *packet)
+int applemidi_decode(const uint8_t *data, size_t length,
+                    struct applemidi_packet *packet)
 {
     uint16_t command;
     size_t i;
@@ -54,7 +54,7 @@ int mh_apple_decode(const uint8_t *data, size_t length,
         return -1;
     command = read16(data + 2);
     memset(packet, 0, sizeof(*packet));
-    packet->command = (enum mh_apple_command)command;
+    packet->command = (enum applemidi_command)command;
 
     if (exchange_command(command)) {
         if (length < 16 || read32(data + 4) != 2)
@@ -70,7 +70,7 @@ int mh_apple_decode(const uint8_t *data, size_t length,
         packet->name_length = i - 16;
         return 0;
     }
-    if (command == MH_APPLE_CK) {
+    if (command == APPLEMIDI_CK) {
         if (length != 36 || data[9] || data[10] || data[11] || data[8] > 2)
             return -1;
         packet->ssrc = read32(data + 4);
@@ -79,7 +79,7 @@ int mh_apple_decode(const uint8_t *data, size_t length,
             packet->timestamps[i] = read64(data + 12 + i * 8);
         return 0;
     }
-    if (command == MH_APPLE_RS) {
+    if (command == APPLEMIDI_RS) {
         if (length != 12)
             return -1;
         packet->ssrc = read32(data + 4);
@@ -89,7 +89,7 @@ int mh_apple_decode(const uint8_t *data, size_t length,
     return -1;
 }
 
-int mh_apple_encode(const struct mh_apple_packet *packet, uint8_t *data,
+int applemidi_encode(const struct applemidi_packet *packet, uint8_t *data,
                     size_t capacity, size_t *length)
 {
     size_t total;
@@ -117,23 +117,23 @@ int mh_apple_encode(const struct mh_apple_packet *packet, uint8_t *data,
             memcpy(data + 16, packet->name, packet->name_length);
             data[16 + packet->name_length] = 0;
         }
-    } else if (packet->command == MH_APPLE_CK) {
+    } else if (packet->command == APPLEMIDI_CK) {
         if (capacity < 36 || packet->sync_count > 2)
             return -1;
         total = 36;
         write16(data, 0xffff);
-        write16(data + 2, MH_APPLE_CK);
+        write16(data + 2, APPLEMIDI_CK);
         write32(data + 4, packet->ssrc);
         data[8] = packet->sync_count;
         memset(data + 9, 0, 3);
         for (i = 0; i < 3; ++i)
             write64(data + 12 + i * 8, packet->timestamps[i]);
-    } else if (packet->command == MH_APPLE_RS) {
+    } else if (packet->command == APPLEMIDI_RS) {
         if (capacity < 12)
             return -1;
         total = 12;
         write16(data, 0xffff);
-        write16(data + 2, MH_APPLE_RS);
+        write16(data + 2, APPLEMIDI_RS);
         write32(data + 4, packet->ssrc);
         write32(data + 8, packet->feedback_sequence);
     } else {
