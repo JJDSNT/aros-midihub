@@ -123,6 +123,24 @@ struct netmidi2_sent_ump {
     uint32_t data[NETMIDI2_MAX_UMP_WORDS];
 };
 
+/* What was sent lately, for a peer that asks for it again (7.2.3): the
+ * last NETMIDI2_KEPT UMP Data commands of up to NETMIDI2_KEPT_WORDS words.
+ * A longer command is remembered as sent and not kept: asked for, it is
+ * answered with a Retransmit Error. */
+#define NETMIDI2_KEPT 32
+#define NETMIDI2_KEPT_WORDS 8
+#define NETMIDI2_KEPT_TOO_LONG 0xff
+struct netmidi2_kept_ump {
+    uint16_t sequence;
+    uint8_t words;
+    uint32_t data[NETMIDI2_KEPT_WORDS];
+};
+
+enum netmidi2_retransmit_error {
+    NETMIDI2_RETRANSMIT_UNKNOWN = 0x00,
+    NETMIDI2_RETRANSMIT_NOT_KEPT = 0x01     /* table 32 */
+};
+
 typedef void (*netmidi2_ump_sink)(void *context, const uint32_t *words, size_t count);
 
 struct netmidi2_session {
@@ -140,6 +158,11 @@ struct netmidi2_session {
     uint16_t tx_sequence;
     struct netmidi2_sent_ump sent[NETMIDI2_FEC_REPEATS];
     unsigned sent_count;
+    struct netmidi2_kept_ump kept[NETMIDI2_KEPT];
+    unsigned kept_count;
+    unsigned kept_next;
+    unsigned long retransmitted;    /* commands sent again when asked */
+    unsigned long not_retransmitted;    /* requests we could not serve */
 
     int rx_started;
     uint16_t rx_expected;

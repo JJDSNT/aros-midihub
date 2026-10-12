@@ -190,6 +190,7 @@ static void restart_streams(struct netmidi2_session *session)
 {
     session->tx_sequence = 0;
     session->sent_count = 0;
+    session->kept_count = session->kept_next = 0;
     session->rx_started = 1;
     session->rx_expected = 0;
     session->last_send_ms = session->now_ms;
@@ -252,8 +253,78 @@ static int append_ump_command(struct netmidi2_session *session, const uint32_t *
     slot->words = (uint8_t)count;
     if (count)
         memcpy(slot->data, words, count * sizeof(*words));
+    /* and for whoever asks for it again later (7.2.3) */
+    {
+        struct netmidi2_kept_ump *kept = &session->kept[session->kept_next];
+
+        kept->sequence = session->tx_sequence;
+        if (count <= NETMIDI2_KEPT_WORDS) {
+            kept->words = (uint8_t)count;
+            if (count)
+                memcpy(kept->data, words, count * sizeof(*words));
+        } else {
+            kept->words = NETMIDI2_KEPT_TOO_LONG;
+        }
+        session->kept_next = (session->kept_next + 1) % NETMIDI2_KEPT;
+        if (session->kept_count < NETMIDI2_KEPT)
+            ++session->kept_count;
+    }
     ++session->tx_sequence;
     return 0;
+}
+
+static void retransmit_error(struct netmidi2_writer *out, uint16_t sequence)
+{
+    uint8_t payload[4];
+
+    payload[0] = (uint8_t)(sequence >> 8);
+    payload[1] = (uint8_t)sequence;
+    payload[2] = payload[3] = 0;
+    (void)netmidi2_add(out, NETMIDI2_RETRANSMIT_ERROR,
+                       NETMIDI2_RETRANSMIT_NOT_KEPT, 0, payload, 4);
+}
+
+/* A Retransmit Request (7.2.3): the commands from the one asked for to
+ * the newest, as they were sent, as far as the packet holds; the count in
+ * the request may be ignored, and is. One no longer kept is answered with
+ * a Retransmit Error naming it, and what follows it is still sent. */
+static void retransmit(struct netmidi2_session *session, uint16_t from,
+                       struct netmidi2_writer *out)
+{
+    unsigned oldest = (session->kept_next + NETMIDI2_KEPT -
+                       session->kept_count) % NETMIDI2_KEPT;
+    unsigned i, first = session->kept_count;
+    int told = 0;
+
+    for (i = 0; i < session->kept_count; ++i)
+        if (session->kept[(oldest + i) % NETMIDI2_KEPT].sequence == from) {
+            first = i;
+            break;
+        }
+    if (first == session->kept_count) {
+        /* not there: the first we could still send again is told */
+        ++session->not_retransmitted;
+        retransmit_error(out, session->kept_count ?
+                         session->kept[oldest].sequence :
+                         session->tx_sequence);
+        return;
+    }
+    for (i = first; i < session->kept_count; ++i) {
+        const struct netmidi2_kept_ump *kept =
+            &session->kept[(oldest + i) % NETMIDI2_KEPT];
+
+        if (kept->words == NETMIDI2_KEPT_TOO_LONG) {
+            if (!told) {
+                ++session->not_retransmitted;
+                retransmit_error(out, kept->sequence);
+                told = 1;
+            }
+            continue;
+        }
+        if (netmidi2_add_ump(out, kept->sequence, kept->data, kept->words))
+            break;              /* the packet is full: it will ask again */
+        ++session->retransmitted;
+    }
 }
 
 int netmidi2_send_ump(struct netmidi2_session *session, const uint32_t *words,
@@ -566,8 +637,8 @@ int netmidi2_receive_from(struct netmidi2_session *session, uint64_t peer,
             if (!active)
                 bye(out, NETMIDI2_BYE_NOT_ESTABLISHED);
             else
-                /* not implemented: the peer is to stop asking */
-                (void)netmidi2_add_nak(out, NETMIDI2_NAK_NOT_SUPPORTED, c);
+                retransmit(session, (uint16_t)((c->csd1 << 8) | c->csd2),
+                           out);
             break;
         case NETMIDI2_RETRANSMIT_ERROR:                     /* 7.2.4 */
             if (!active)

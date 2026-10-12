@@ -371,11 +371,12 @@ static void test_against_specification(void)
     /* and a stranger's packets do not keep the session alive */
     CHECK(host.last_receive_ms == now - 100);
 
-    /* Section 7.2.3: no retransmission here, and the peer is told so. */
-    send_command(&host, first, NETMIDI2_RETRANSMIT_REQUEST, 0, 0, retransmit, 4);
-    CHECK(replied(NETMIDI2_NAK, NETMIDI2_NAK_NOT_SUPPORTED) &&
-          reply_command.payload[0] == NETMIDI2_RETRANSMIT_REQUEST);
-    CHECK(host.state == NETMIDI2_ESTABLISHED);
+    /* Section 7.2.3: a request for what was never sent is answered with a
+       Retransmit Error, "not in the buffer", and the session goes on. */
+    send_command(&host, first, NETMIDI2_RETRANSMIT_REQUEST, 0x12, 0x34,
+                 retransmit, 4);
+    CHECK(replied(NETMIDI2_RETRANSMIT_ERROR, NETMIDI2_RETRANSMIT_NOT_KEPT));
+    CHECK(host.state == NETMIDI2_ESTABLISHED && host.not_retransmitted == 1);
 
     /* Section 6.6: an Invitation Reply to a Host. */
     send_command(&host, first, NETMIDI2_INVITATION_PENDING, 1, 0, identity, 8);
@@ -636,6 +637,68 @@ static void test_appendix_fec(void)
         }
         CHECK(fec_count == 5);          /* nothing new was delivered */
         CHECK(netmidi2_table_session(&host, 0)->gaps == 0);
+    }
+
+    /* Section 7.2.3: asked for the second command again, the Client sends
+       it and all it has sent since, as they were, the count in the request
+       notwithstanding. What it gets back as repeats disturbs nothing. */
+    {
+        static const uint8_t count[4] = {0, 1, 0, 0};
+        uint8_t big[NETMIDI2_MAX_PACKET];
+        uint32_t long_one[NETMIDI2_KEPT_WORDS + 1];
+
+        netmidi2_writer_init(&packet, in, sizeof(in));
+        CHECK(netmidi2_add(&packet, NETMIDI2_RETRANSMIT_REQUEST, 0, 1, count,
+                           4) == 0);
+        netmidi2_writer_init(&reply, big, sizeof(big));
+        CHECK(netmidi2_table_receive(&client, 1, in, packet.length, now,
+                                     &reply, &index) == 0);
+        CHECK(!strcmp(fec_shape(big, reply.length), "1,2,3,4,5z,6z,7z"));
+        CHECK(session->retransmitted == 7);
+        netmidi2_writer_init(&packet, in, sizeof(in));
+        CHECK(netmidi2_table_receive(&host, 2, big, reply.length, now,
+                                     &packet, &index) == 0);
+        CHECK(fec_count == 5 && netmidi2_table_session(&host, 0)->gaps == 0);
+
+        /* a command too long to keep is named in a Retransmit Error, and
+           what came after it is still sent again */
+        for (i = 0; i < NETMIDI2_KEPT_WORDS + 1; ++i)
+            long_one[i] = 0x20900000u | i;
+        netmidi2_writer_init(&packet, in, sizeof(in));
+        CHECK(netmidi2_send_ump(session, long_one, NETMIDI2_KEPT_WORDS + 1,
+                                now, &packet) == 0);       /* number 8 */
+        netmidi2_writer_init(&packet, in, sizeof(in));
+        CHECK(netmidi2_send_ump(session, long_one, 1, now, &packet) == 0);
+        netmidi2_writer_init(&packet, in, sizeof(in));
+        CHECK(netmidi2_add(&packet, NETMIDI2_RETRANSMIT_REQUEST, 0, 8, count,
+                           4) == 0);
+        netmidi2_writer_init(&reply, big, sizeof(big));
+        CHECK(netmidi2_table_receive(&client, 1, in, packet.length, now,
+                                     &reply, &index) == 0);
+        {
+            struct netmidi2_command_packet commands[4];
+
+            CHECK(netmidi2_parse(big, reply.length, commands, 4) == 2);
+            CHECK(commands[0].code == NETMIDI2_RETRANSMIT_ERROR &&
+                  commands[0].csd1 == NETMIDI2_RETRANSMIT_NOT_KEPT &&
+                  commands[0].payload[0] == 0 && commands[0].payload[1] == 8);
+            CHECK(commands[1].code == NETMIDI2_UMP_DATA &&
+                  commands[1].csd2 == 9);
+        }
+
+        /* and one that has fallen out of what is kept, after many more */
+        for (i = 0; i < NETMIDI2_KEPT + 2; ++i) {
+            netmidi2_writer_init(&packet, in, sizeof(in));
+            CHECK(netmidi2_send_ump(session, long_one, 1, now, &packet) == 0);
+        }
+        netmidi2_writer_init(&packet, in, sizeof(in));
+        CHECK(netmidi2_add(&packet, NETMIDI2_RETRANSMIT_REQUEST, 0, 3, count,
+                           4) == 0);
+        netmidi2_writer_init(&reply, big, sizeof(big));
+        CHECK(netmidi2_table_receive(&client, 1, in, packet.length, now,
+                                     &reply, &index) == 0);
+        CHECK(table_reply_is(&reply, NETMIDI2_RETRANSMIT_ERROR,
+                             NETMIDI2_RETRANSMIT_NOT_KEPT));
     }
 }
 
