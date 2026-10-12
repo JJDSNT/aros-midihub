@@ -38,7 +38,6 @@ flowchart LR
     end
 
     subgraph RTP[RTP-MIDI]
-        R17["R17 latency<br/>against jitter"]:::ready
         R21["R21 fuzzing<br/>and captures"]
         R23["R23 enhanced<br/>chapter C"]
     end
@@ -106,7 +105,6 @@ flowchart LR
     AM06 --> R23
     AM06 --> AM19
 
-    R17 --> AM16
     AM08 --> AM20
     D1 --> AM08
     D2 --> AM08
@@ -118,7 +116,6 @@ flowchart LR
     UP12 --> UP16
 
     UP09 --> NM09
-    R17 --> NM09
     AM08 --> NM11
     ND1 --> NM11
     UP11 --> NM14
@@ -161,7 +158,7 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 97 open items, 60 have nothing in front of them, 31 sit behind something
+Of 96 open items, 59 have nothing in front of them, 31 sit behind something
 outside our hands or behind a decision, and 6 wait only for other work of
 ours.
 

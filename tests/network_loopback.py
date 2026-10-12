@@ -790,6 +790,86 @@ def run_two_peers_case(binary):
     assert "malformed" not in output, output
 
 
+def run_latency_case(binary, latency_ms):
+    """Notes stamped 50 ms apart reach MIDIHub up to 20 ms late, unevenly.
+    Returns the intervals, in milliseconds, at which it delivered them."""
+    import random
+    port = free_port_pair()
+    log = tempfile.TemporaryFile(mode="w+b")
+    process = subprocess.Popen(
+        [binary, "--latency", str(latency_ms), "--trace", str(port)],
+        stdout=log, stderr=subprocess.STDOUT
+    )
+    peer = ScriptedPeer(port, 2, 0x44444444, 0xDDDD0004, b"Timed")
+    ahead = 5000000        # the peer's clock leads ours by 500 seconds
+    rng = random.Random(7)
+
+    def peer_clock():
+        return int(time.time() * 10000) + ahead
+
+    try:
+        peer.connect()
+        # the inviter starts the clock exchange; three, as a real one would
+        for _ in range(3):
+            t1 = peer_clock()
+            peer.data.sendto(struct.pack(">4sIB3xQQQ", b"\xff\xffCK",
+                                         peer.ssrc, 0, t1, 0, 0),
+                             ("127.0.0.1", port + 1))
+            ck1, _ = peer.data.recvfrom(128)
+            assert ck1[:4] == b"\xff\xffCK" and ck1[8] == 1
+            t2 = struct.unpack(">Q", ck1[20:28])[0]
+            peer.data.sendto(struct.pack(">4sIB3xQQQ", b"\xff\xffCK",
+                                         peer.ssrc, 2, t1, t2, peer_clock()),
+                             ("127.0.0.1", port + 1))
+            time.sleep(0.05)
+        start = time.time() + 0.1
+        for i in range(12):
+            ideal = start + i * 0.05
+            stamp = (int(ideal * 10000) + ahead) & 0xffffffff
+            # the network holds each packet for a different while
+            delay = ideal + rng.uniform(0.0, 0.020) - time.time()
+            if delay > 0:
+                time.sleep(delay)
+            packet = struct.pack(">BBHII", 0x80, 0x61, 200 + i, stamp,
+                                 peer.ssrc)
+            peer.data.sendto(packet + b"\x03\x90" + bytes([40 + i]) + b"\x64",
+                             ("127.0.0.1", port + 1))
+        time.sleep(0.4)
+        peer.goodbye()
+        time.sleep(0.2)
+    finally:
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        peer.close()
+        log.seek(0)
+        output = log.read().decode("utf-8", "replace")
+        log.close()
+    times = []
+    for line in output.splitlines():
+        if line.startswith("MIDIHub: delivered at=") and "bytes=90" in line:
+            times.append(int(line.split("at=")[1].split()[0]))
+    assert len(times) == 12, output
+    intervals = [(b - a) / 10.0 for a, b in zip(times, times[1:])]
+    return intervals, output
+
+
+def run_latency_cases(binary):
+    # With no latency every note is already late when it comes, and is
+    # played as it arrives: the spacing is the network's.
+    intervals, output = run_latency_case(binary, 0)
+    assert max(abs(i - 50) for i in intervals) > 5, intervals
+    assert "12 of 12 timed events came after their time" in output, output
+    # With more latency than the network's unevenness, each is held until
+    # its time: the spacing is the sender's.
+    intervals, output = run_latency_case(binary, 40)
+    assert max(abs(i - 50) for i in intervals) <= 3, intervals
+    assert "0 of 12 timed events came after their time" in output, output
+
+
 def main():
     binary = sys.argv[1]
     run_case(binary, "--probe-note", ("bytes=903c64", "bytes=903c00"))
@@ -799,6 +879,7 @@ def main():
     run_feedback_case(binary)
     run_outgoing_journal_case(binary)
     run_two_peers_case(binary)
+    run_latency_cases(binary)
     with tempfile.TemporaryDirectory() as directory:
         bad_config = Path(directory) / "invalid.conf"
         bad_config.write_text("local_port=65535\n")

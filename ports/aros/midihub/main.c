@@ -55,6 +55,8 @@ struct stream {
     struct rtpmidi_event_queue queue;
     struct rtpmidi_sender sender;
     struct rtpmidi_receiver receiver;
+    unsigned long timed;        /* events that came with a time to keep */
+    unsigned long late;         /* of those, the ones already past it */
 };
 
 struct runtime {
@@ -64,6 +66,10 @@ struct runtime {
     int configured;             /* a peer was named to invite */
     uint32_t configured_address;
     uint16_t configured_port;
+    /* Added to the time every received event is due, in ten-thousandths of
+       a second: room for the network's unevenness, paid for in delay. */
+    uint32_t latency;
+    int trace;                  /* print each message as it is delivered */
     /* a peer to invite wherever it is advertised, by its session's name */
     char wanted[64];
     int wanted_present;
@@ -167,6 +173,14 @@ static void output_message(void *context, const uint8_t *bytes,
                            size_t length)
 {
     struct runtime *rt = context;
+    if (rt->trace) {
+        size_t i;
+        printf("MIDIHub: delivered at=%lu bytes=",
+               (unsigned long)(now_ticks() & 0xffffffffu));
+        for (i = 0; i < length; ++i)
+            printf("%02x", (unsigned int)bytes[i]);
+        putchar('\n');
+    }
     netmidi_camd_deliver(&rt->camd, bytes, length);
 }
 
@@ -212,6 +226,11 @@ static void stream_begin(struct runtime *rt, int index, int initiating,
 static void stream_forget(struct runtime *rt, int index, uint64_t now)
 {
     struct stream *stream = &rt->stream[index];
+    if (stream->timed) {
+        printf("MIDIHub: %lu of %lu timed events came after their time\n",
+               stream->late, stream->timed);
+        stream->timed = stream->late = 0;
+    }
     applemidi_clock_init(&stream->clock, stream->initiating, now);
     stream->have_received_sequence = 0;
     rtpmidi_sysex_reset(&stream->sysex);
@@ -267,6 +286,20 @@ static int send_feedback(struct runtime *rt, int index, uint16_t sequence)
         applemidi_feedback_field((uint16_t)stream->received_sequence);
     send_apple(rt, index, 0, &feedback);
     return fresh;
+}
+
+/* An event's time in our clock is known: adds the latency and says
+ * whether that moment is still ahead. One that is not is played at once,
+ * and counted, since it means the latency is too short for this path. */
+static int stream_due(struct runtime *rt, struct stream *stream, uint64_t now,
+                      uint64_t *due)
+{
+    *due += rt->latency;
+    ++stream->timed;
+    if (*due > now)
+        return 1;
+    ++stream->late;
+    return 0;
 }
 
 static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
@@ -367,7 +400,7 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
                 if (stream->clock.synchronized &&
                     rtpmidi_clock_due(stream->sysex.timestamp, now,
                                  stream->clock.peer_to_local, &due) == 0 &&
-                    due > now) {
+                    stream_due(rt, stream, now, &due)) {
                     if (due - now > 100000 ||
                         rtpmidi_queue_push_sysex(&stream->queue, due,
                                             sysex_message,
@@ -385,7 +418,7 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
             if (stream->clock.synchronized &&
                 rtpmidi_clock_due(event.timestamp, now,
                              stream->clock.peer_to_local, &due) == 0 &&
-                due > now) {
+                stream_due(rt, stream, now, &due)) {
                 if (due - now > 100000 ||
                     rtpmidi_queue_push(&stream->queue, due, event.bytes,
                                   event.length) != 0)
@@ -1002,6 +1035,8 @@ int main(int argc, char **argv)
     uint16_t midi2_port = 0;
     const char *peer_name = NULL;
     const char *accept_rule = NULL;
+    int latency_ms = 0;
+    int trace = 0;
     struct netmidi_network_config config;
     const char *peer_ip;
     uint64_t now;
@@ -1045,6 +1080,19 @@ int main(int argc, char **argv)
         }
         argi += 2;
     }
+    /* Milliseconds added to the time each received event is due. */
+    if (argc - argi >= 2 && strcmp(argv[argi], "--latency") == 0) {
+        latency_ms = atoi(argv[argi + 1]);
+        if (latency_ms < 0 || latency_ms > 2000) {
+            fputs("MIDIHub: --latency takes 0 to 2000 milliseconds\n", stderr);
+            return 20;
+        }
+        argi += 2;
+    }
+    if (argc - argi >= 1 && strcmp(argv[argi], "--trace") == 0) {
+        trace = 1;
+        argi += 1;
+    }
     /* Who may connect: anyone (the default), nobody, or those listed, each
        an IPv4 address or a session name, with commas between. */
     if (argc - argi >= 2 && strcmp(argv[argi], "--accept") == 0) {
@@ -1067,13 +1115,15 @@ int main(int argc, char **argv)
          parse_port(argv[argi + 2], &peer_port) != 0) ||
         (remaining == 4 && strcmp(argv[argi + 3], "--probe-note") != 0 &&
          strcmp(argv[argi + 3], "--probe-sysex") != 0)) {
-        fputs("Usage: MIDIHub [--config file] [--midi2 port] [--accept anyone|nobody|list] [--peer-name session] [local-control-port [peer-ip peer-control-port [--probe-note|--probe-sysex]]]\n", stderr);
+        fputs("Usage: MIDIHub [--config file] [--midi2 port] [--latency ms] [--trace] [--accept anyone|nobody|list] [--peer-name session] [local-control-port [peer-ip peer-control-port [--probe-note|--probe-sysex]]]\n", stderr);
         return 20;
     }
     if (remaining >= 3)
         peer_ip = argv[argi + 1];
     memset(&rt, 0, sizeof(rt));
     netmidi_network_init(&rt.network);
+    rt.latency = (uint32_t)latency_ms * 10;
+    rt.trace = trace;
     netmidi_discovery_init(&rt.discovery);
     snprintf(rt.session_name, sizeof(rt.session_name), "%s",
              config.session_name);
