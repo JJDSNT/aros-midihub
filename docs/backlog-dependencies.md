@@ -246,7 +246,7 @@ the three further cuts of mDNS. Within our own hands the longest is
 AM02 → AM05 → NM07 → NM10 → NM17, from AppleMIDI into Network MIDI 2.0,
 which is why AppleMIDI goes first.
 
-**Five things outside our hands hold 50 items between them:**
+**Five things outside our hands hold most of the 50:**
 
 - *The specification texts* hold the most and cost the least to get: they
   are documents to obtain and read, not answers to wait for.
