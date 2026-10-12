@@ -180,10 +180,9 @@ somewhat smaller.
    where such tests may live).
 3. The Codacy gate: no new finding. Measured on 2026-10-12 with cppcheck
    2.13, the checker behind it (`--enable=style,warning,portability`):
-   the RTP-MIDI and AppleMIDI code (N2, N3) has no `strcpy`, `strncpy`,
-   `strlen` or `sprintf` left, and 29 findings, 23 of them a variable
-   declared further out than it is used and one a buffer copied from
-   before it is written (of length zero, and harmless). The service's
+   the RTP-MIDI and AppleMIDI code (N2, N3) had 29 findings, 23 of them a
+   variable declared further out than it is used, and has none since the
+   same day, nor any `strcpy`, `strncpy`, `strlen` or `sprintf`. The service's
    `main.c` has 12, `netmidi2.c` 3, the adapters 2, `network.c` and the
    configuration reader 1 each, the UMP translator none. The checker
    cannot read the driver, whose entry points are AROS's register-argument
