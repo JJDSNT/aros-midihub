@@ -23,7 +23,8 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-mdnsd \
 #MM      contrib-aros-midihub-mdnstools \
 #MM      contrib-aros-midihub-mdnscx \
-#MM      contrib-aros-midihub-mdnsprobe
+#MM      contrib-aros-midihub-mdnsprobe \
+#MM      contrib-aros-midihub-applemidid
 #MM contrib-aros-midihub-program : linklibs-arosmidihub \
 #MM      contrib-aros-midihub-bonami
 #MM contrib-aros-midihub-selftest : linklibs-arosmidihub
@@ -184,6 +185,27 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
            $(MIDIHUB_ROOT)/ports/aros/camd_bridge" \
     uselibs=arosmidihub \
     targetdir=$(MIDIHUB_PACKAGE)/C
+
+# The same runtime as a service of the AROSTCP service manager: started
+# with the stack, without a console or arguments.
+#MM contrib-aros-midihub-applemidid : linklibs-arosmidihub \
+#MM      contrib-aros-midihub-bonami \
+#MM      contrib-aros-midihub-applemidid-svccfg
+%build_prog mmake=contrib-aros-midihub-applemidid \
+    progname=applemidid \
+    files="$(MIDIHUB_ROOT)/ports/aros/midihub/main \
+           $(MIDIHUB_ROOT)/ports/aros/midihub/camd \
+           $(MIDIHUB_ROOT)/ports/aros/midihub/network \
+           $(MIDIHUB_ROOT)/ports/aros/midihub/discovery \
+           $(MIDIHUB_ROOT)/ports/aros/camd_bridge" \
+    objdir=$(GENDIR)/$(CURDIR)/applemidid \
+    cppflags="-DNETMIDI_SERVICE" \
+    uselibs=arosmidihub \
+    targetdir=$(AROS_SYSTEM)/Network/Services
+
+%copy_files_q mmake=contrib-aros-midihub-applemidid-svccfg \
+    files="applemidi" src=$(MIDIHUB_ROOT)/ports/aros/midihub/services.d \
+    dst=$(AROS_SYSTEM)/Network/AROSTCP/db/services.d
 
 %build_prog mmake=contrib-aros-midihub-selftest \
     progname=aros-midihub-selftest \

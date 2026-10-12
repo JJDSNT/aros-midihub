@@ -1205,6 +1205,18 @@ int main(int argc, char **argv)
     long wait_us;
     int result = 20;
 
+#ifdef NETMIDI_SERVICE
+    /* Started by the stack's service manager: no console, no arguments.
+       What it would print goes nowhere, or to the file ENV:applemidid.log
+       names, for whoever wants to see it. */
+    {
+        const char *log = getenv("applemidid.log");
+
+        if (!log || !*log || !freopen(log, "w", stdout))
+            freopen("NIL:", "w", stdout);
+        freopen("NIL:", "w", stderr);
+    }
+#endif
     setvbuf(stdout, NULL, _IONBF, 0);
 
     netmidi_config_defaults(&config);

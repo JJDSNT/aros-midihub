@@ -89,6 +89,27 @@ Nothing open.
 | AM06 | Run against other implementations. One has been met: see "Peers met" below. | rtpmidid, which needs a Linux with the ALSA sequencer (this machine's WSL kernel has none, and Ubuntu 24.04 has no package). Then macOS, iOS and rtpMIDI for Windows when the machines are at hand ([the iPhone procedure](iphone-smoke-test.md) is written for Linux and needs redoing for AROS). With a peer that has the recovery journal: packets dropped with `tc netem`, to see a loss repaired in each direction. | Every row of "Peers met" is filled. |
 | AM08 | A CAMD client, not a driver. | A `DEVS:Midi` driver with a fixed number of ports, each bound to a peer while the session lasts, as `btmidi` does. Needs D1 and D2 below. | A CAMD program opens `applemidi.out.0` and a peer hears it; `MIDIHub In`/`Out` are gone. |
 
+**AM08 is being done in three cuts** (decisions D1, D2 and D4 below).
+
+1. *The service.* Done on 2026-10-12: `applemidid`, the same runtime as
+   the program `MIDIHub`, built to be started by the AROSTCP service
+   manager from `db/services.d/applemidi`: no console, no arguments, its
+   configuration from where the program reads it, stopped with the
+   signal the manager sends, and stopped and started again across a
+   reconfiguration of the stack (`Policy=restart`).
+   `tools/applemidi-service-hosted.sh`: the stack starts it, node-rtpmidi
+   invites it, a CAMD program gets the four messages, Avahi sees its
+   session, and it stops when told. The file says `Enabled=no`: the
+   package's programs and tests still start the runtime by hand on the
+   same ports. It still reaches CAMD as a client, prints under the name
+   `MIDIHub`, and reads `ENV:MidiHub/Network`: all three go with the next
+   cuts and with AM16.
+2. *The stub and its link.* A `DEVS:Midi` driver with a fixed pool of
+   ports and no network code, and the adapters through which the service
+   takes and gives bytes, as `btmidi`'s driver and class do.
+3. *Peers to ports.* The rule of D2, and the tests moved from the
+   clusters `MIDIHub In` and `MIDIHub Out` to the driver's ports.
+
 ## P2 — complete before an upstream proposal
 
 | # | Limit or defect | What to do | Done when |
