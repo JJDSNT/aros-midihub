@@ -1,5 +1,8 @@
 # Upstream pull requests
 
+What could be sent next, and in which order, is in
+[the graph of pull requests](upstream-pr-graph.md).
+
 Branches of `JJDSNT/AROS` opened against `aros-development-team/AROS`
 `master`. State on 2026-10-11:
 

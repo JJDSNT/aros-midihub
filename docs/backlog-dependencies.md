@@ -9,6 +9,9 @@ One graph over the seven lists of work owed:
 from those files; when an item is added, closed or renumbered there, change
 it here in the same commit.
 
+What of this could be sent upstream, and in which order so that upstream
+keeps building, is a graph of its own: [pull requests](upstream-pr-graph.md).
+
 An arrow means "has to be done first". Only hard dependencies are drawn: an
 item that is merely better done after another is not. Items with no arrow
 in or out are not in the picture; they are listed under "Free" below.
