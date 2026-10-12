@@ -83,6 +83,23 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
             if (!*value || strlen(value) >= sizeof(next.session_name))
                 goto done;
             strcpy(next.session_name, value);
+        } else if (strcmp(key, "peer_name") == 0) {
+            if (!*value || strlen(value) >= sizeof(next.peer_name))
+                goto done;
+            strcpy(next.peer_name, value);
+        } else if (strcmp(key, "latency_ms") == 0) {
+            char *end;
+            unsigned long ms;
+
+            errno = 0;
+            ms = strtoul(value, &end, 10);
+            if (errno || end == value || *end || ms > 2000)
+                goto done;
+            next.latency_ms = (int)ms;
+        } else if (strcmp(key, "accept") == 0) {
+            if (!*value || strlen(value) >= sizeof(next.accept))
+                goto done;
+            strcpy(next.accept, value);
         } else if (strncmp(key, "port.", 5) == 0) {
             char *end;
             unsigned long port;

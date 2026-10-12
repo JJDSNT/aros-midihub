@@ -11,12 +11,11 @@
 #   StopSig - signal bit sent to stop it (12 = CTRL-C)
 #   Policy  - restart: across a reconfiguration of the stack it is stopped
 #             and started again, and its sessions with it
-#   Enabled - yes or no. No for now: the programs of this package still
-#             start the same runtime by hand, on the same ports.
+#   Enabled - yes or no
 #
 Name=AppleMIDI
 Path=SYS:System/Network/Services/applemidid
 Order=10
 StopSig=12
 Policy=restart
-Enabled=no
+Enabled=yes

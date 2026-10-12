@@ -11,7 +11,8 @@
 # eth1 is AROS's (192.168.166.2), aroshost the host's (192.168.166.1). It
 # needs passwordless sudo, ethtool and xvfb-run.
 #
-# AROS starts "MIDIHub --midi2 5673 5004" and a CAMD program listening on
+# AROS starts "MIDIHub --midi2 5673 5014" (5004 is the AppleMIDI service's,
+# which the stack starts) and a CAMD program listening on
 # the cluster "MIDIHub In". The host invites AROS and sends a Note On, a
 # Note Off, a Control Change and a SysEx message, as UMPs: the CAMD program
 # has to print the four as MIDI 1.0, and All Notes Off on the sixteen
@@ -66,7 +67,7 @@ Path C S ADD QUIET
 Run >NIL: QUIET AROSTCP
 WaitForPort AROSTCP
 Wait 8
-Run >SYS:hub.log $c/MIDIHub --midi2 5673 5004
+Run >SYS:hub.log $c/MIDIHub --midi2 5673 5014
 Wait 2
 Run >SYS:camd-in.log $c/MIDIHubCAMDProbe --monitor "MIDIHub In" 40
 Wait 16

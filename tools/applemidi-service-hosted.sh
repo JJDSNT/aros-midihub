@@ -2,8 +2,7 @@
 # Checks on Linux-hosted AROS that the AppleMIDI runtime runs as a service
 # of the AROSTCP service manager: nobody starts it, the stack does, from
 # db/services.d/applemidi, with no console and no arguments. node-rtpmidi
-# on the host then invites it, as tools/applemidi-node-hosted.sh does with
-# a MIDIHub started by hand.
+# on the host is its peer.
 #
 #   tools/applemidi-service-hosted.sh [AROS_DIR [WORK_DIR]]
 #
@@ -21,7 +20,9 @@
 # The service is no client of camd.library: the adapters of the driver
 # DEVS:Midi/applemidi are its only way to CAMD. The host's Avahi has to
 # see the session advertised. The service is then told to stop, and has
-# to be gone.
+# to be gone. In a second boot the configuration names the host as a peer
+# to invite: the service has to invite it, and a scale sent to
+# applemidi.out.0 has to arrive there.
 # Exit status: 0 when all of it passed.
 set -eu
 
@@ -66,9 +67,7 @@ prepare() {
     printf 'HOST 192.168.166.2 arosbox.arosnet arosbox\nDOMAIN arosnet 192.168.166.\n' \
         > "$db/netdb-myhost"
     sed -i 's/OPENGUI=.*/OPENGUI=NO/' "$db/general.config"
-    # the service is there and switched off: switch it on, and have it
-    # write what it would print to a file
-    sed -i 's/^Enabled=.*/Enabled=yes/' "$db/services.d/applemidi"
+    # have the service write what it would print to a file
     printf 'SYS:applemidid.log' > "$sys/Prefs/Env-Archive/applemidid.log"
     sudo setcap cap_net_raw,cap_net_admin+ep "$sys/boot/linux/AROSBootstrap"
     cat > "$sys/S/applemidi-run" <<RUNEOF
@@ -155,6 +154,27 @@ if grep -aq 'command: applemidi$' "$work/status-before.log" 2> /dev/null &&
     echo "ok: told to stop, it stopped"
 else
     echo "FAIL: stopping the service"
+    status=1
+fi
+
+# The other way round: the configuration names a peer to invite, by
+# address. The host listens before AROS is up.
+prepare "Wait 14
+$c/MIDIHubCAMDProbe >SYS:camd-send-invite.log --send applemidi.out.0
+Wait 10"
+printf 'peer_ip = 192.168.166.1\npeer_port = 5104\n' > "$sys/Prefs/Env-Archive/AppleMIDI"
+timeout 80 node "$peer" 5104 > "$work/invite-peer.log" 2>&1 &
+boot 85 invite
+kill %1 2> /dev/null || true
+wait || true
+cp "$sys/applemidid.log" "$work/applemidid-invite.log" 2> /dev/null || true
+if grep -q 'session connected port=0' "$work/applemidid-invite.log" 2> /dev/null &&
+   grep -q 'clock exchange completed' "$work/applemidid-invite.log" &&
+   grep -q '^message 903c64$' "$work/invite-peer.log" &&
+   grep -q '^message 804800$' "$work/invite-peer.log"; then
+    echo "ok: the service invited the peer its configuration names, exchanged clocks, and a scale sent to applemidi.out.0 arrived there"
+else
+    echo "FAIL: the service inviting a configured peer"
     status=1
 fi
 echo "logs: $work"

@@ -1284,6 +1284,17 @@ int main(int argc, char **argv)
         }
 #endif
     }
+#ifdef NETMIDI_SERVICE
+    /* a service is no program of that name */
+    if (strcmp(config.session_name, "AROS MIDIHub") == 0)
+        strcpy(config.session_name, "AROS");
+#endif
+    /* what the configuration says holds unless an argument says otherwise */
+    latency_ms = config.latency_ms;
+    if (config.accept[0])
+        accept_rule = config.accept;
+    if (config.peer_name[0])
+        peer_name = config.peer_name;
     /* Network MIDI 2.0 is off unless a port is given for it. */
     if (argc - argi >= 2 && strcmp(argv[argi], "--midi2") == 0) {
         if (parse_port(argv[argi + 1], &midi2_port) != 0) {

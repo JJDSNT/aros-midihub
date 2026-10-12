@@ -13,6 +13,13 @@ struct netmidi_network_config {
     /* "port.<n> = <name>": the driver's port n is kept for the peer whose
      * session has that name */
     char port_name[16][64];
+    /* "peer_name": a peer to invite wherever it is advertised under that
+     * session name. "latency_ms": added to the time each received event
+     * is due, 0 to 2000. "accept": anyone, nobody, or a list of addresses
+     * and session names with commas between. */
+    char peer_name[64];
+    int latency_ms;
+    char accept[256];
 };
 
 void netmidi_config_defaults(struct netmidi_network_config *config);

@@ -1,7 +1,8 @@
 #!/bin/sh
-# Checks on Linux-hosted AROS that MIDIHub's AppleMIDI session is advertised
-# by the system's mDNS service, mdnsd through bonami.library, and by nothing
-# of MIDIHub's own: the program holds no socket on port 5353.
+# Checks on Linux-hosted AROS that the AppleMIDI service's session is
+# advertised by the system's mDNS service, mdnsd through bonami.library,
+# and by nothing of its own: it holds no socket on port 5353. The service
+# is applemidid, started by the stack from db/services.d/applemidi.
 #
 #   tools/applemidi-discovery-hosted.sh [AROS_DIR [WORK_DIR]]
 #
@@ -9,13 +10,13 @@
 # the host's Avahi browsing on it. It needs passwordless sudo, a running
 # avahi-daemon, avahi-utils, ethtool and xvfb-run.
 #
-#   advertised  AROS starts "MIDIHub 5004" and, twenty seconds later, sends
-#               it Ctrl-C. Avahi has to resolve "AROS MIDIHub" of type
+#   advertised  The service starts with the stack and, twenty seconds later,
+#               is sent Ctrl-C. Avahi has to resolve "AROS" of type
 #               _apple-midi._udp to AROS's address and port 5004, and then
 #               be told that it is gone.
 #   found       The host advertises a session "Host Session" through Avahi
-#               and runs node-rtpmidi behind it. AROS starts
-#               "MIDIHub --peer-name "Host Session" 5004": it has to find
+#               and runs node-rtpmidi behind it. The service's
+#               configuration says "peer_name = Host Session": it has to find
 #               the session by its name and invite it. The host then takes
 #               the session and its advertisement away and brings both
 #               back: AROS has to see it go, see it return, and invite
@@ -33,7 +34,7 @@ sys="$work/AROS"
 c=SYS:Extras/aros-midihub/C
 
 test -x "$aros/boot/linux/AROSBootstrap"
-test -f "$aros/Extras/aros-midihub/C/MIDIHub"
+test -f "$aros/System/Network/Services/applemidid"
 test -f "$aros/System/Network/Services/mdnsd"
 
 if ! ip link show aroshost > /dev/null 2>&1; then
@@ -56,6 +57,8 @@ prepare() {
     printf 'HOST 192.168.166.2 arosbox.arosnet arosbox\nDOMAIN arosnet 192.168.166.\n' \
         > "$db/netdb-myhost"
     sed -i 's/OPENGUI=.*/OPENGUI=NO/' "$db/general.config"
+    # what the service would print, to a file
+    printf 'SYS:applemidid.log' > "$sys/Prefs/Env-Archive/applemidid.log"
     sudo setcap cap_net_raw,cap_net_admin+ep "$sys/boot/linux/AROSBootstrap"
 }
 
@@ -67,9 +70,8 @@ Path C S ADD QUIET
 Run >NIL: QUIET AROSTCP
 WaitForPort AROSTCP
 Wait 8
-Run >SYS:hub.log $c/MIDIHub 5004
 Wait 20
-Break \`Status COMMAND=$c/MIDIHub\` C
+Break \`Status COMMAND=applemidi\` C
 Wait 6
 Shutdown
 RUNEOF
@@ -83,19 +85,18 @@ printf 'Run >NIL: Execute S:discovery-run\n' > "$sys/S/User-Startup"
 (cd "$sys" && timeout 90 xvfb-run -a boot/linux/AROSBootstrap \
     > "$work/serial.log" 2>&1) || true
 wait || true
-cp "$sys/hub.log" "$work/" 2> /dev/null || true
+cp "$sys/applemidid.log" "$work/hub.log" 2> /dev/null || true
 
 status=0
-# avahi-browse -p writes the space of "AROS MIDIHub" as \032.
 if grep -q 'advertised by the system mDNS service' "$work/hub.log" 2> /dev/null &&
-   grep -q '^=;aroshost;IPv4;AROS\\032MIDIHub;_apple-midi._udp;local;[^;]*;192\.168\.166\.2;5004;' "$work/browse.log"; then
-    echo "ok: Avahi resolved \"AROS MIDIHub\" (_apple-midi._udp) to 192.168.166.2 port 5004, advertised by mdnsd"
+   grep -q '^=;aroshost;IPv4;AROS;_apple-midi._udp;local;[^;]*;192\.168\.166\.2;5004;' "$work/browse.log"; then
+    echo "ok: Avahi resolved \"AROS\" (_apple-midi._udp) to 192.168.166.2 port 5004, advertised by mdnsd"
 else
     echo "FAIL: the session was not advertised (keep $work/mdns-capture.txt and $work/browse.log)"
     status=1
 fi
-if grep -q '^-;aroshost;IPv4;AROS\\032MIDIHub;_apple-midi._udp;local' "$work/browse.log"; then
-    echo "ok: when MIDIHub ended, Avahi was told the session is gone"
+if grep -q '^-;aroshost;IPv4;AROS;_apple-midi._udp;local' "$work/browse.log"; then
+    echo "ok: when the service ended, Avahi was told the session is gone"
 else
     echo "FAIL: no goodbye for the session"
     status=1
@@ -119,13 +120,13 @@ Path C S ADD QUIET
 Run >NIL: QUIET AROSTCP
 WaitForPort AROSTCP
 Wait 8
-Run >SYS:hub-found.log $c/MIDIHub --peer-name "Host Session" 5004
 Wait 50
-Break \`Status COMMAND=$c/MIDIHub\` C
+Break \`Status COMMAND=applemidi\` C
 Wait 4
 Shutdown
 RUNEOF
 printf 'Run >NIL: Execute S:discovery-run\n' > "$sys/S/User-Startup"
+printf 'peer_name = Host Session\n' > "$sys/Prefs/Env-Archive/AppleMIDI"
 
 (
     # there from the start: the session and what advertises it
@@ -147,7 +148,7 @@ printf 'Run >NIL: Execute S:discovery-run\n' > "$sys/S/User-Startup"
 (cd "$sys" && timeout 120 xvfb-run -a boot/linux/AROSBootstrap \
     > "$work/serial-found.log" 2>&1) || true
 wait || true
-cp "$sys/hub-found.log" "$work/" 2> /dev/null || true
+cp "$sys/applemidid.log" "$work/hub-found.log" 2> /dev/null || true
 
 if grep -q 'session "Host Session" found at 192\.168\.166\.1 port 5104' "$work/hub-found.log" 2> /dev/null &&
    grep -q 'inviting "Host Session"' "$work/hub-found.log" &&
