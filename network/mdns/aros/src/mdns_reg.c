@@ -85,19 +85,27 @@ mdnsRegAppendSrv(UBYTE *rdata, const UBYTE *targetWire, LONG targetLen,
 
 /* Sends a service's records. As a goodbye their time to live is zero, which
  * withdraws them from every cache on the link (RFC 6762 section 10.1). */
-static void
-mdnsRegSendServiceOn(struct MDNSEngineToken *tok,
-    struct MDNSRegisteredService *rs, BOOL goodbye, LONG ifindex)
+/* a response stays within one Ethernet frame */
+#define MDNS_RESPONSE_MAX 1400L
+
+/*
+ * Appends a service's records to a response that is being built: PTR, SRV,
+ * TXT and, with withAddr, the address record of its host. Returns FALSE and
+ * leaves the packet as it was when they do not all fit.
+ */
+static BOOL
+service_append(struct MDNSEngineToken *tok,
+    struct MDNSRegisteredService *rs, BOOL goodbye, LONG ifindex,
+    UBYTE *pkt, LONG *posp, UWORD *ancountp, BOOL withAddr)
 {
     /* The address record names the interface it leaves on, unless the
      * service stands for another host. */
     ULONG addr = rs->rs_Proxy ? rs->rs_HostAddr : tok->et_Ifs[ifindex].mi_Addr;
     ULONG ttl = goodbye ? 0 : MDNS_TTL_OTHER;
     ULONG hostttl = goodbye ? 0 : MDNS_TTL_HOST;
-    UBYTE *pkt;
-    struct MDNSHeader *hdr;
-    LONG pos;
-    UWORD ancount;
+    LONG pos = *posp;
+    UWORD ancount = *ancountp;
+    BOOL fits = TRUE;
     char instfqdn[256];
     char typefqdn[256];
     char hostfqdn[256];
@@ -112,13 +120,8 @@ mdnsRegSendServiceOn(struct MDNSEngineToken *tok,
     LONG txtsl;
     UBYTE addrdata[4];
 
-    if (tok == NULL || rs == NULL) {
-        return;
-    }
-
-    pkt = tok->et_TxBuf;
-    if (pkt == NULL) {
-        return;
+    if (tok == NULL || rs == NULL || pkt == NULL) {
+        return FALSE;
     }
 
     mdnsRegBuildFqdn(instfqdn, (LONG)sizeof(instfqdn), rs->rs_Instance,
@@ -130,27 +133,22 @@ mdnsRegSendServiceOn(struct MDNSEngineToken *tok,
 
     if (mdnsNameToWire(hostfqdn, hostwire, (LONG)sizeof(hostwire),
             &hostwirelen) != 0) {
-        return;
+        return FALSE;
     }
 
-    hdr = (struct MDNSHeader *)pkt;
-    mdnsInitHeader(hdr, DNS_FLAG_QR | DNS_FLAG_AA, 0);
-    pos = (LONG)sizeof(struct MDNSHeader);
-    ancount = 0;
-
     if (mdnsNameToWire(instfqdn, ptrtarget, (LONG)sizeof(ptrtarget), &ptrlen) != 0) {
-        return;
+        return FALSE;
     }
     /* A PTR record is shared by every instance of the type, so it must not
      * carry the cache-flush bit (RFC 6762 section 10.2). */
-    mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, typefqdn,
+    fits = mdnsAppendRecord(pkt, MDNS_RESPONSE_MAX, &pos, &ancount, typefqdn,
         DNS_TYPE_PTR, DNS_CLASS_IN, ttl, ptrtarget,
-        (UWORD)ptrlen);
+        (UWORD)ptrlen) == 0;
 
     srvlen = mdnsRegAppendSrv(srvdata, hostwire, hostwirelen, rs->rs_Port);
-    mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, instfqdn,
-        DNS_TYPE_SRV, DNS_CLASS_IN | 0x8000, hostttl, srvdata,
-        (UWORD)srvlen);
+    fits = fits && mdnsAppendRecord(pkt, MDNS_RESPONSE_MAX, &pos, &ancount,
+        instfqdn, DNS_TYPE_SRV, DNS_CLASS_IN | 0x8000, hostttl, srvdata,
+        (UWORD)srvlen) == 0;
 
     /*
      * The client's text is "key=value" pairs separated by spaces; DNS-SD
@@ -182,8 +180,9 @@ mdnsRegSendServiceOn(struct MDNSEngineToken *tok,
     if (txtlen == 0) {
         txtdata[txtlen++] = 0;
     }
-    mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, instfqdn,
-        DNS_TYPE_TXT, DNS_CLASS_IN | 0x8000, ttl, txtdata, (UWORD)txtlen);
+    fits = fits && mdnsAppendRecord(pkt, MDNS_RESPONSE_MAX, &pos, &ancount,
+        instfqdn, DNS_TYPE_TXT, DNS_CLASS_IN | 0x8000, ttl, txtdata,
+        (UWORD)txtlen) == 0;
 
     /*
      * Advertise an A record mapping the host FQDN (the SRV target) to our IP,
@@ -193,19 +192,143 @@ mdnsRegSendServiceOn(struct MDNSEngineToken *tok,
      * order (and our own A-record decoder in mdns_browse.c).  Skip when the
      * address is unknown (0).
      */
-    if (addr != 0) {
+    if (addr != 0 && withAddr) {
         addrdata[0] = (UBYTE)((addr >> 24) & 0xFF);
         addrdata[1] = (UBYTE)((addr >> 16) & 0xFF);
         addrdata[2] = (UBYTE)((addr >> 8) & 0xFF);
         addrdata[3] = (UBYTE)(addr & 0xFF);
-        mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, hostfqdn,
-            DNS_TYPE_A, DNS_CLASS_IN | 0x8000, hostttl, addrdata,
-            (UWORD)4);
+        fits = fits && mdnsAppendRecord(pkt, MDNS_RESPONSE_MAX, &pos,
+            &ancount, hostfqdn, DNS_TYPE_A, DNS_CLASS_IN | 0x8000, hostttl,
+            addrdata, (UWORD)4) == 0;
     }
 
-    hdr->flags = htons((unsigned short)(DNS_FLAG_QR | DNS_FLAG_AA));
-    hdr->ancount = htons(ancount);
-    mdnsNetSendOn(tok, ifindex, pkt, pos);
+    if (!fits) {
+        return FALSE;
+    }
+    *posp = pos;
+    *ancountp = ancount;
+    return TRUE;
+}
+
+/* One service's records as a response of their own. */
+static void
+mdnsRegSendServiceOn(struct MDNSEngineToken *tok,
+    struct MDNSRegisteredService *rs, BOOL goodbye, LONG ifindex)
+{
+    UBYTE *pkt;
+    struct MDNSHeader *hdr;
+    LONG pos = (LONG)sizeof(struct MDNSHeader);
+    UWORD ancount = 0;
+
+    if (tok == NULL || rs == NULL || (pkt = tok->et_TxBuf) == NULL) {
+        return;
+    }
+    hdr = (struct MDNSHeader *)pkt;
+    mdnsInitHeader(hdr, DNS_FLAG_QR | DNS_FLAG_AA, 0);
+    if (service_append(tok, rs, goodbye, ifindex, pkt, &pos, &ancount, TRUE)) {
+        hdr->ancount = htons(ancount);
+        mdnsNetSendOn(tok, ifindex, pkt, pos);
+    }
+}
+
+/*
+ * Answers to browse questions are not sent at once. A PTR record is shared:
+ * every host with an instance of the type answers the same question, and if
+ * all did so at once their answers would collide. Each answer waits between
+ * 20 and 120 ms, picked at random (RFC 6762 section 6), and when the first
+ * one of an interface is due every answer waiting for that interface goes
+ * with it in one response, with the host's address record once.
+ */
+static ULONG
+answer_delay(struct MDNSEngineToken *tok)
+{
+    static ULONG seed;
+
+    if (seed == 0) {
+        seed = mdnsEngineTicks() ^ tok->et_HostAddr ^ 0x5bd1e995UL;
+    }
+    seed = seed * 1103515245UL + 12345UL;
+    /* in fiftieths of a second, counted from the tick the question came
+     * in: two to six of them is more than 20 ms and at most 120 */
+    return 2 + ((seed >> 16) % 5);
+}
+
+static void
+answers_flush(struct MDNSEngineToken *tok, ULONG now)
+{
+    UBYTE *pkt = tok->et_TxBuf;
+    struct MDNSHeader *hdr = (struct MDNSHeader *)pkt;
+    struct MDNSRegisteredService *rs;
+    struct Node *n;
+    BOOL due = FALSE, addrDone;
+    LONG i, pos;
+    UWORD ancount;
+
+    tok->et_AnswerPending = FALSE;
+    for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
+        n = n->ln_Succ) {
+        rs = (struct MDNSRegisteredService *)n;
+        if (rs->rs_AnswerTick == 0) {
+            continue;
+        }
+        if (rs->rs_State != MDNS_RS_ANNOUNCED) {
+            rs->rs_AnswerTick = 0;
+        } else if ((LONG)(now - rs->rs_AnswerTick) >= 0) {
+            due = TRUE;
+        } else {
+            tok->et_AnswerPending = TRUE;
+        }
+    }
+    if (!due || pkt == NULL) {
+        return;
+    }
+    for (i = 0; i < tok->et_IfCount; i++) {
+        mdnsInitHeader(hdr, DNS_FLAG_QR | DNS_FLAG_AA, 0);
+        pos = (LONG)sizeof(struct MDNSHeader);
+        ancount = 0;
+        addrDone = FALSE;
+        for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
+            n = n->ln_Succ) {
+            BOOL withAddr;
+
+            rs = (struct MDNSRegisteredService *)n;
+            if (rs->rs_AnswerTick == 0 ||
+                (rs->rs_AnswerIf >= 0 && rs->rs_AnswerIf != i)) {
+                continue;
+            }
+            /* the host's address once; a stand-in's host has its own */
+            withAddr = rs->rs_Proxy || !addrDone;
+            if (!service_append(tok, rs, FALSE, i, pkt, &pos, &ancount,
+                    withAddr)) {
+                /* full: send what there is and start another */
+                if (ancount != 0) {
+                    hdr->ancount = htons(ancount);
+                    mdnsNetSendOn(tok, i, pkt, pos);
+                }
+                mdnsInitHeader(hdr, DNS_FLAG_QR | DNS_FLAG_AA, 0);
+                pos = (LONG)sizeof(struct MDNSHeader);
+                ancount = 0;
+                addrDone = FALSE;
+                withAddr = TRUE;
+                if (!service_append(tok, rs, FALSE, i, pkt, &pos, &ancount,
+                        withAddr)) {
+                    continue;
+                }
+            }
+            if (!rs->rs_Proxy) {
+                addrDone = TRUE;
+            }
+        }
+        if (ancount != 0) {
+            hdr->ancount = htons(ancount);
+            mdnsNetSendOn(tok, i, pkt, pos);
+        }
+    }
+    for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
+        n = n->ln_Succ) {
+        ((struct MDNSRegisteredService *)n)->rs_AnswerTick = 0;
+    }
+    tok->et_AnswerPending = FALSE;
 }
 
 /* To the interface a question came in on, or else to every one. */
@@ -732,6 +855,10 @@ mdnsRegTick(struct MDNSEngineToken *tok)
     }
     hostReady = tok->et_HostState == MDNS_RS_ANNOUNCED;
 
+    if (tok->et_AnswerPending) {
+        answers_flush(tok, now);
+    }
+
     for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
         n = n->ln_Succ) {
         rs = (struct MDNSRegisteredService *)n;
@@ -823,7 +950,7 @@ mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
     char fqdn[256];
     struct MDNSRegisteredService *rs;
     struct Node *n;
-    BOOL any, answer;
+    BOOL any, answer, shared;
     LONG k;
 
     if (tok == NULL || q == NULL) {
@@ -860,6 +987,7 @@ mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
             continue;
         }
         answer = FALSE;
+        shared = FALSE;
 
         mdnsRegBuildFqdn(fqdn, (LONG)sizeof(fqdn), rs->rs_Instance,
             rs->rs_Type, rs->rs_Domain);
@@ -878,6 +1006,7 @@ mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
                 rs->rs_Type, rs->rs_Domain);
             if (Stricmp(q->qname, typefqdn) == 0) {
                 answer = TRUE;
+                shared = TRUE;
                 for (k = 0; k < knownCount; k++) {
                     if (Stricmp(known[k], fqdn) == 0) {
                         answer = FALSE;
@@ -886,7 +1015,21 @@ mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
                 }
             }
         }
-        if (answer) {
+        if (answer && shared) {
+            /* a browse question: answered a little later, with the others */
+            rs->rs_Answered = tok->et_PacketSerial;
+            if (rs->rs_AnswerTick == 0) {
+                rs->rs_AnswerTick = mdnsEngineTicks() + answer_delay(tok);
+                if (rs->rs_AnswerTick == 0) {
+                    rs->rs_AnswerTick = 1;
+                }
+                rs->rs_AnswerIf = tok->et_SendIf;
+            } else if (rs->rs_AnswerIf != tok->et_SendIf) {
+                rs->rs_AnswerIf = -1;
+            }
+            tok->et_AnswerPending = TRUE;
+        } else if (answer) {
+            /* a question for this one name: nobody else answers it */
             rs->rs_Answered = tok->et_PacketSerial;
             mdnsRegSendService(tok, rs, FALSE);
         }

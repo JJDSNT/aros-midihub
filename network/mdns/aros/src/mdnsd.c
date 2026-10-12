@@ -267,8 +267,9 @@ wait_and_receive(struct MDNSEngineToken *tok, ULONG sigmask, BOOL probing)
     }
 
     FD_ZERO(&readfds);
-    tv.tv_sec = probing ? 0 : 1;
-    tv.tv_usec = probing ? 250000 : 0;
+    /* a delayed answer is due within a few fiftieths of a second */
+    tv.tv_sec = (probing || tok->et_AnswerPending) ? 0 : 1;
+    tv.tv_usec = tok->et_AnswerPending ? 20000 : probing ? 250000 : 0;
     for (i = 0; i < tok->et_IfCount; i++) {
         sock = tok->et_Ifs[i].mi_Socket;
         FD_SET(sock, &readfds);

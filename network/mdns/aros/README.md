@@ -241,7 +241,13 @@ Protocol:
   than half its life to go (`tools/mdns-known-answers-hosted.sh`). What
   does not fit into one 1400-byte packet is left out rather than sent in a
   second packet with the truncation bit, and only browse questions do it.
-- mdnsd's answers are sent at once rather than delayed and gathered.
+- Answers to a browse question wait 20 to 120 ms, picked at random, and go
+  out together in one response with the host's address once
+  (`tools/mdns-answer-delay-hosted.sh`); a question for one name is
+  answered at once. Not done: answering by unicast when the question asks
+  for it, the answer to "which service types are there" is still sent at
+  once, and a record that was multicast less than a second ago is sent
+  again all the same.
 - IPv4 only.
 - At most eight interfaces. An address that changes is noticed within three
   seconds, not at once.

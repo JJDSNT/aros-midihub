@@ -55,6 +55,9 @@ struct MDNSRegisteredService
     BOOL            rs_Proxy;       /* host and address given by the client */
     BOOL            rs_NIPC;        /* the host's Envoy publication */
     ULONG           rs_HostAddr;
+    ULONG           rs_AnswerTick;  /* when an answer to a browse question is
+                                     * due, or 0 for none */
+    LONG            rs_AnswerIf;    /* to which interface, or -1 for all */
 };
 
 /* A name is asked for three times, 250 ms apart, before it is announced
@@ -215,6 +218,7 @@ struct MDNSEngineToken
     char                    et_HostBase[MDNS_MAX_HOST + 1];
                                             /* what the system calls itself */
     ULONG                   et_HostSuffix;  /* 0, or the number after it */
+    BOOL                    et_AnswerPending; /* an rs_AnswerTick is set */
     UWORD                   et_HostState;   /* MDNS_RS_*, as for a service */
     UWORD                   et_HostStep;
     ULONG                   et_HostNextTick;
