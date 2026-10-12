@@ -4,8 +4,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Apple Network MIDI RTP profile. The MIDI list and any recovery journal are
- * exposed as bounded byte spans for separate decoding. */
+/* The payload type AppleMIDI sessions use. It is a dynamic type that such a
+ * session has no way to negotiate, so every implementation uses this one. */
+#define RTPMIDI_PAYLOAD_TYPE 97
+
+/* An RTP-MIDI packet (RFC 6295). The MIDI list and any recovery journal are
+ * exposed as bounded byte spans for separate decoding. A header with
+ * contributing sources, an extension or padding is accepted and those parts
+ * skipped; the marker bit is not required to be either way. */
 struct rtpmidi_packet {
     uint16_t sequence;
     uint32_t timestamp;
@@ -269,6 +275,8 @@ int rtpmidi_reader_next(struct rtpmidi_reader *reader,
 
 /* Builds a single, complete MIDI 1.0 command with implicit delta time zero
  * and no recovery journal. Returns 0 for success, -1 for invalid input. */
+/* The marker bit is set when the list has commands and clear when it is
+ * empty, as RFC 6295 section 2.1 requires. */
 int rtpmidi_encode_short(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
                         const uint8_t *midi, size_t midi_length,
                         uint8_t *data, size_t capacity, size_t *length);

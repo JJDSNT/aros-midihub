@@ -633,7 +633,7 @@ def run_outgoing_journal_case(binary):
         guard = early
         if guard is None:
             guard, _ = data.recvfrom(128)
-        assert guard[:2] == b"\x80\xe1" and guard[12] == 0x40
+        assert guard[:2] == b"\x80\x61" and guard[12] == 0x40
         assert struct.unpack(">H", guard[2:4])[0] == (first_sequence + 2) & 0xffff
         assert guard[13] & 0x20 and guard[14:16] == first[2:4]
         feedback = b"\xff\xffRS" + struct.pack(">II", peer_ssrc,

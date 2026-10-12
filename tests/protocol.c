@@ -1578,6 +1578,205 @@ static void receiver_recovery(void)
            link.lossy.active_notes[1][72] == 0);
 }
 
+/* RFC 3550 section 5.1 and RFC 6295 section 2.1: what a header may hold
+ * besides the twelve bytes every packet has. */
+static void rtp_header_variants(void)
+{
+    struct rtpmidi_packet packet;
+    uint8_t wire[64];
+    size_t length;
+    static const uint8_t note[] = {0x90, 60, 100};
+    /* the same Note On in every form; the command section is 03 90 3c 64 */
+    static const uint8_t plain[] = {
+        0x80, 0xe1, 0, 7, 0, 0, 0, 9, 0, 0, 0, 5, 0x03, 0x90, 60, 100
+    };
+    static const uint8_t marker_clear[] = {
+        0x80, 0x61, 0, 7, 0, 0, 0, 9, 0, 0, 0, 5, 0x03, 0x90, 60, 100
+    };
+    static const uint8_t one_source[] = {
+        0x81, 0xe1, 0, 7, 0, 0, 0, 9, 0, 0, 0, 5, 1, 2, 3, 4,
+        0x03, 0x90, 60, 100
+    };
+    static const uint8_t extension[] = {
+        0x90, 0xe1, 0, 7, 0, 0, 0, 9, 0, 0, 0, 5,
+        0xbe, 0xde, 0, 1, 9, 9, 9, 9, 0x03, 0x90, 60, 100
+    };
+    static const uint8_t padded[] = {
+        0xa0, 0xe1, 0, 7, 0, 0, 0, 9, 0, 0, 0, 5, 0x03, 0x90, 60, 100,
+        0, 0, 3
+    };
+    static const uint8_t all[] = {
+        0xb1, 0x61, 0, 7, 0, 0, 0, 9, 0, 0, 0, 5, 1, 2, 3, 4,
+        0xbe, 0xde, 0, 0, 0x03, 0x90, 60, 100, 0, 2
+    };
+    static const uint8_t *const good[] = {
+        plain, marker_clear, one_source, extension, padded, all
+    };
+    static const size_t good_length[] = {
+        sizeof(plain), sizeof(marker_clear), sizeof(one_source),
+        sizeof(extension), sizeof(padded), sizeof(all)
+    };
+    /* a journal-only packet as another implementation sends it */
+    static const uint8_t guard[] = {
+        0x80, 0x61, 0, 8, 0, 0, 0, 9, 0, 0, 0, 5, 0x40, 0x80, 0, 7
+    };
+    uint8_t bad[32];
+    size_t i;
+
+    for (i = 0; i < sizeof(good) / sizeof(good[0]); ++i) {
+        memset(&packet, 0, sizeof(packet));
+        assert(rtpmidi_decode(good[i], good_length[i], &packet) == 0);
+        assert(packet.sequence == 7 && packet.timestamp == 9 &&
+               packet.ssrc == 5);
+        assert(packet.midi_length == 3 &&
+               memcmp(packet.midi, note, 3) == 0);
+        assert(!packet.journal && packet.journal_length == 0);
+    }
+    assert(rtpmidi_decode(guard, sizeof(guard), &packet) == 0);
+    assert(packet.midi_length == 0 && packet.journal_length == 3);
+
+    memcpy(bad, plain, sizeof(plain));
+    bad[0] = 0x40;                              /* version 1 */
+    assert(rtpmidi_decode(bad, sizeof(plain), &packet) == -1);
+    bad[0] = 0xc0;                              /* version 3: AppleMIDI */
+    assert(rtpmidi_decode(bad, sizeof(plain), &packet) == -1);
+    memcpy(bad, plain, sizeof(plain));
+    bad[1] = 0xe0;                              /* another payload type */
+    assert(rtpmidi_decode(bad, sizeof(plain), &packet) == -1);
+    memcpy(bad, plain, sizeof(plain));
+    bad[0] = 0x8f;                              /* sources that are not there */
+    assert(rtpmidi_decode(bad, sizeof(plain), &packet) == -1);
+    memcpy(bad, extension, sizeof(extension));
+    bad[15] = 9;                                /* extension past the end */
+    assert(rtpmidi_decode(bad, sizeof(extension), &packet) == -1);
+    assert(rtpmidi_decode(extension, 14, &packet) == -1);
+    memcpy(bad, padded, sizeof(padded));
+    bad[sizeof(padded) - 1] = 0;                /* padding of nothing */
+    assert(rtpmidi_decode(bad, sizeof(padded), &packet) == -1);
+    bad[sizeof(padded) - 1] = 8;                /* padding into the header */
+    assert(rtpmidi_decode(bad, sizeof(padded), &packet) == -1);
+    bad[sizeof(padded) - 1] = 7;                /* all payload is padding */
+    assert(rtpmidi_decode(bad, sizeof(padded), &packet) == -1);
+    assert(rtpmidi_decode(plain, 12, &packet) == -1);
+
+    /* what we send: the marker follows the command section */
+    assert(rtpmidi_encode_short(7, 9, 5, note, sizeof(note), wire,
+                                sizeof(wire), &length) == 0);
+    assert(length == sizeof(plain) && memcmp(wire, plain, length) == 0);
+    assert(rtpmidi_encode_list(8, 9, 5, NULL, 0, wire, sizeof(wire),
+                               &length) == 0);
+    assert(length == 13 && wire[0] == 0x80 && wire[1] == 0x61 &&
+           wire[12] == 0);
+}
+
+/* A command is never held back for its journal, and what the journal
+ * cannot hold does not cost the rest its protection. */
+static void sender_journal_limits(void)
+{
+    static struct rtpmidi_sender sender;
+    struct rtpmidi_packet packet;
+    struct rtpmidi_journal journal;
+    uint8_t wire[1100];
+    uint8_t sysex[700];
+    uint8_t message[3];
+    size_t length;
+    size_t journal_length;
+    unsigned int i;
+    uint16_t sequence = 100;
+    static const uint8_t on[] = {0x90, 60, 100};
+    static const uint8_t volume[] = {0xb1, 7, 90};
+
+    /* No feedback ever: the history fills and slides, every command goes. */
+    rtpmidi_sender_reset(&sender);
+    for (i = 0; i < 400; ++i) {
+        message[0] = (uint8_t)((i & 1 ? 0x90 : 0xb0) | (i & 15));
+        message[1] = (uint8_t)(i & 127);
+        message[2] = (uint8_t)((i * 7) & 127);
+        assert(rtpmidi_sender_packet(&sender, sequence, i, 1, message, 3,
+                                     wire, sizeof(wire), &length) == 0);
+        assert(rtpmidi_decode(wire, length, &packet) == 0);
+        assert(packet.sequence == sequence && packet.midi_length == 3 &&
+               memcmp(packet.midi, message, 3) == 0);
+        assert(packet.journal && rtpmidi_journal_decode(
+                   packet.journal, packet.journal_length, &journal) == 0);
+        ++sequence;
+    }
+    assert(sender.journals_omitted == 0 && sender.unjournalled == 0);
+    assert(sender.count == RTPMIDI_SENDER_HISTORY);
+
+    /* Room for the command and not for the journal: the command goes
+     * alone, is still recorded, and the next packet's journal has it. */
+    rtpmidi_sender_reset(&sender);
+    rtpmidi_sender_record(&sender, sequence++, 1, on, sizeof(on));
+    assert(rtpmidi_sender_journal(&sender, sequence, 2, wire, sizeof(wire),
+                                  &journal_length) == 0);
+    assert(rtpmidi_sender_packet(&sender, sequence, 2, 1, volume,
+                                 sizeof(volume), wire,
+                                 16 + journal_length - 1, &length) == 0);
+    assert(length == 16 && !(wire[12] & 0x40));
+    assert(rtpmidi_decode(wire, length, &packet) == 0 && !packet.journal);
+    assert(sender.journals_omitted == 1 && sender.count == 2);
+    ++sequence;
+    assert(rtpmidi_sender_packet(&sender, sequence, 3, 1, volume,
+                                 sizeof(volume), wire, sizeof(wire),
+                                 &length) == 0);
+    assert(rtpmidi_decode(wire, length, &packet) == 0 && packet.journal);
+    assert(rtpmidi_journal_decode(packet.journal, packet.journal_length,
+                                  &journal) == 0);
+    assert(journal.channel_count == 2);
+    /* no room even for the command */
+    assert(rtpmidi_sender_packet(&sender, sequence, 3, 1, volume,
+                                 sizeof(volume), wire, 15, &length) == -1);
+
+    /* A SysEx too long for chapter X leaves the note's protection alone. */
+    rtpmidi_sender_reset(&sender);
+    rtpmidi_sender_record(&sender, 10, 1, on, sizeof(on));
+    memset(sysex, 0x11, sizeof(sysex));
+    sysex[0] = 0xf0;
+    sysex[sizeof(sysex) - 1] = 0xf7;
+    assert(rtpmidi_sender_record_sysex(&sender, 11, 2, sysex,
+                                       sizeof(sysex)) == 0);
+    assert(sender.count == 1 && sender.unjournalled == 1 &&
+           sender.sysex_count == 1 && sender.sysex_log_count == 0);
+    assert(rtpmidi_sender_journal(&sender, 12, 3, wire, sizeof(wire),
+                                  &journal_length) == 0);
+    assert(rtpmidi_journal_decode(wire, journal_length, &journal) == 0);
+    assert(journal.checkpoint == 10 && journal.channel_count == 1 &&
+           journal.channels[0].number == 0 &&
+           (journal.channels[0].chapters & 0x08));
+
+    /* More small ones than chapter X has logs: the oldest log goes, the
+     * note stays, and the count keeps step. */
+    rtpmidi_sender_reset(&sender);
+    rtpmidi_sender_record(&sender, 10, 1, on, sizeof(on));
+    sysex[5] = 0xf7;
+    for (i = 0; i < RTPMIDI_SYSEX_JOURNAL_LOGS + 2; ++i) {
+        sysex[1] = (uint8_t)i;
+        assert(rtpmidi_sender_record_sysex(&sender, (uint16_t)(11 + i), 2,
+                                           sysex, 6) == 1);
+    }
+    assert(sender.sysex_log_count == RTPMIDI_SYSEX_JOURNAL_LOGS);
+    assert(sender.sysex_logs[0].data[0] == 2);
+    assert(sender.sysex_count == RTPMIDI_SYSEX_JOURNAL_LOGS + 2 &&
+           sender.unjournalled == 2);
+    assert(sender.events[0].bytes[0] == 0x90);
+    assert(rtpmidi_sender_journal(&sender, 30, 3, wire, sizeof(wire),
+                                  &journal_length) == 0);
+    assert(rtpmidi_journal_decode(wire, journal_length, &journal) == 0);
+    assert(journal.checkpoint == 10 && journal.system &&
+           journal.channel_count == 1);
+
+    /* Two that together pass the limit of bytes: the first gives way. */
+    rtpmidi_sender_reset(&sender);
+    rtpmidi_sender_record(&sender, 10, 1, on, sizeof(on));
+    sysex[1] = sysex[5] = 0x11;
+    sysex[301] = 0xf7;
+    assert(rtpmidi_sender_record_sysex(&sender, 11, 2, sysex, 302) == 1);
+    assert(rtpmidi_sender_record_sysex(&sender, 12, 2, sysex, 302) == 1);
+    assert(sender.sysex_log_count == 1 && sender.sysex_logs[0].sequence == 12);
+    assert(sender.events[0].bytes[0] == 0x90 && sender.unjournalled == 1);
+}
+
 int main(void)
 {
     apple_exchange();
@@ -1586,6 +1785,7 @@ int main(void)
     applemidi_peers();
     rtp_short();
     rtp_journal_and_lengths();
+    rtp_header_variants();
     journal_framing();
     journal_system();
     journal_note_offs();
@@ -1594,6 +1794,7 @@ int main(void)
     journal_channel_state();
     journal_controls();
     outgoing_journal();
+    sender_journal_limits();
     mdns_discovery();
     rtp_command_reader();
     rtp_system_common();

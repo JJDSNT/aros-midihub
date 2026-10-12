@@ -67,7 +67,8 @@ int rtpmidi_encode_list(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
     if (capacity < header_length + midi_length)
         return -1;
     data[0] = 0x80;
-    data[1] = 0xe1; /* Apple profile: marker=1, PT=0x61. */
+    /* The marker says whether there are commands (RFC 6295 section 2.1). */
+    data[1] = (uint8_t)((midi_length ? 0x80 : 0) | RTPMIDI_PAYLOAD_TYPE);
     write16(data + 2, sequence);
     write32(data + 4, timestamp);
     write32(data + 8, ssrc);
@@ -81,34 +82,61 @@ int rtpmidi_encode_list(uint16_t sequence, uint32_t timestamp, uint32_t ssrc,
     return 0;
 }
 
+/* RFC 3550 section 5.1 for the fixed header, RFC 6295 section 2.1 and 2.2
+ * for what follows it. */
 int rtpmidi_decode(const uint8_t *data, size_t length,
                   struct rtpmidi_packet *packet)
 {
+    size_t offset;
     size_t header_length;
     size_t midi_length;
+    size_t payload_length;
     uint8_t flags;
 
-    if (!data || !packet || length < 13 || data[0] != 0x80 ||
-        data[1] != 0xe1)
+    if (!data || !packet || length < 12 || (data[0] >> 6) != 2 ||
+        (data[1] & 0x7f) != RTPMIDI_PAYLOAD_TYPE)
         return -1;
-    flags = data[12];
-    header_length = (flags & 0x80) ? 14 : 13;
-    if (length < header_length)
+    /* contributing sources, four bytes each */
+    offset = 12 + 4 * (size_t)(data[0] & 0x0f);
+    if (length < offset)
+        return -1;
+    if (data[0] & 0x10) {
+        /* a header extension: two bytes of profile, its length in words */
+        if (length - offset < 4)
+            return -1;
+        offset += 4 + 4 * (size_t)read16(data + offset + 2);
+        if (length < offset)
+            return -1;
+    }
+    if (data[0] & 0x20) {
+        /* padding: the last byte counts it, itself included */
+        size_t padding = data[length - 1];
+        if (!padding || padding > length - offset)
+            return -1;
+        length -= padding;
+    }
+    if (length == offset)
+        return -1;
+    flags = data[offset];
+    header_length = (flags & 0x80) ? 2 : 1;
+    payload_length = length - offset;
+    if (payload_length < header_length)
         return -1;
     midi_length = flags & 0x0f;
     if (flags & 0x80)
-        midi_length = (midi_length << 8) | data[13];
-    if (midi_length > length - header_length)
+        midi_length = (midi_length << 8) | data[offset + 1];
+    if (midi_length > payload_length - header_length)
         return -1;
-    if (!(flags & 0x40) && length != header_length + midi_length)
+    if (!(flags & 0x40) && payload_length != header_length + midi_length)
         return -1;
     packet->sequence = read16(data + 2);
     packet->timestamp = read32(data + 4);
     packet->ssrc = read32(data + 8);
-    packet->midi = data + header_length;
+    packet->midi = data + offset + header_length;
     packet->midi_length = midi_length;
-    packet->journal = (flags & 0x40) ? data + header_length + midi_length : 0;
-    packet->journal_length = length - header_length - midi_length;
+    packet->journal = (flags & 0x40) ?
+                      data + offset + header_length + midi_length : 0;
+    packet->journal_length = payload_length - header_length - midi_length;
     packet->z = !!(flags & 0x20);
     packet->p = !!(flags & 0x10);
     if ((flags & 0x40) && !packet->journal_length)

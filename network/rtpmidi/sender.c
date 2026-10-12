@@ -1,5 +1,7 @@
 #include "rtpmidi/sender.h"
 
+#include "rtpmidi/rtpmidi.h"
+
 #include <string.h>
 
 enum { RTPMIDI_TOOL_VALUE, RTPMIDI_TOOL_TOGGLE, RTPMIDI_TOOL_COUNT };
@@ -403,20 +405,38 @@ int rtpmidi_sender_record_sysex(struct rtpmidi_sender *sender, uint16_t sequence
     size_t i;
     int is_mtc;
     if (!sender || !message || length < 2 || message[0] != 0xf0 ||
-        message[length - 1] != 0xf7 ||
-        length - 2 > RTPMIDI_SYSEX_JOURNAL_MAX)
+        message[length - 1] != 0xf7)
         return 0;
     for (i = 1; i + 1 < length; ++i)
         if (message[i] & 0x80)
             return 0;
     is_mtc = length == 10 && message[1] == 0x7f &&
              message[3] == 0x01 && message[4] == 0x01;
+    if (!is_mtc && length - 2 > RTPMIDI_SYSEX_JOURNAL_MAX) {
+        /* Too long for chapter X. It was sent all the same, and the
+         * receiver counts it. */
+        ++sender->sysex_count;
+        ++sender->unjournalled;
+        return 0;
+    }
     if (!is_mtc) {
+        size_t drop = 0;
         for (i = 0; i < sender->sysex_log_count; ++i)
             pending += sender->sysex_logs[i].length;
-        if (sender->sysex_log_count == RTPMIDI_SYSEX_JOURNAL_LOGS ||
-            pending + length - 2 > RTPMIDI_SYSEX_JOURNAL_MAX)
-            rtpmidi_sender_clear_history(sender);
+        /* The oldest logs give way; the notes and controllers sent before
+         * keep their place in the journal. */
+        while (drop < sender->sysex_log_count &&
+               (sender->sysex_log_count - drop == RTPMIDI_SYSEX_JOURNAL_LOGS ||
+                pending + length - 2 > RTPMIDI_SYSEX_JOURNAL_MAX)) {
+            pending -= sender->sysex_logs[drop].length;
+            ++drop;
+        }
+        if (drop) {
+            sender->unjournalled += (uint32_t)drop;
+            sender->sysex_log_count -= drop;
+            memmove(sender->sysex_logs, sender->sysex_logs + drop,
+                    sender->sysex_log_count * sizeof(sender->sysex_logs[0]));
+        }
     }
     if (sender->count == RTPMIDI_SENDER_HISTORY) {
         memmove(sender->events, sender->events + 1,
@@ -1141,5 +1161,33 @@ int rtpmidi_sender_journal(const struct rtpmidi_sender *sender, uint16_t sequenc
     data[1] = (uint8_t)(checkpoint >> 8);
     data[2] = (uint8_t)checkpoint;
     *length = used;
+    return 0;
+}
+
+int rtpmidi_sender_packet(struct rtpmidi_sender *sender, uint16_t sequence,
+                          uint32_t timestamp, uint32_t ssrc,
+                          const uint8_t *message, size_t length,
+                          uint8_t *data, size_t capacity,
+                          size_t *packet_length)
+{
+    size_t used;
+    size_t journal_length;
+
+    if (!sender || !packet_length ||
+        rtpmidi_encode_short(sequence, timestamp, ssrc, message, length,
+                             data, capacity, &used) != 0)
+        return -1;
+    if (rtpmidi_sender_journal(sender, sequence, timestamp, data + used,
+                               capacity - used, &journal_length) == 0) {
+        data[12] |= 0x40;
+        used += journal_length;
+    } else {
+        ++sender->journals_omitted;
+    }
+    if (rtpmidi_sender_supported(message, length))
+        rtpmidi_sender_record(sender, sequence, timestamp, message, length);
+    else
+        ++sender->unjournalled;
+    *packet_length = used;
     return 0;
 }

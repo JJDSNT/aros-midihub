@@ -83,6 +83,10 @@ struct rtpmidi_sender {
     struct rtpmidi_sent_sysex sysex_logs[RTPMIDI_SYSEX_JOURNAL_LOGS];
     size_t sysex_log_count;
     uint8_t sysex_count;
+    /* Packets sent without a journal because it did not fit, and messages
+     * sent that no journal covers. Not cleared by an acknowledgement. */
+    uint32_t journals_omitted;
+    uint32_t unjournalled;
 };
 
 void rtpmidi_sender_reset(struct rtpmidi_sender *sender);
@@ -91,9 +95,24 @@ int rtpmidi_sender_supported(const uint8_t *message, size_t length);
 void rtpmidi_sender_record(struct rtpmidi_sender *sender, uint16_t sequence,
                       uint32_t timestamp, const uint8_t *message,
                       size_t length);
+/* Returns 1 when the message went into the journal's history and 0 when it
+ * is too long for it; it is counted either way, so the receiver's count of
+ * SysEx messages stays in step. The history of what was sent before is
+ * kept: when there is no room, the oldest SysEx logs give way. */
 int rtpmidi_sender_record_sysex(struct rtpmidi_sender *sender, uint16_t sequence,
                            uint32_t timestamp, const uint8_t *message,
                            size_t length);
+/* Builds the RTP packet for one message other than SysEx: the command, the
+ * journal of what was sent before it, and the message's entry in the
+ * history. When the journal does not fit, the packet goes without one and
+ * journals_omitted counts it: the command is never held back for its
+ * journal. Returns -1 only when the command itself is invalid or does not
+ * fit. */
+int rtpmidi_sender_packet(struct rtpmidi_sender *sender, uint16_t sequence,
+                          uint32_t timestamp, uint32_t ssrc,
+                          const uint8_t *message, size_t length,
+                          uint8_t *data, size_t capacity,
+                          size_t *packet_length);
 void rtpmidi_sender_ack(struct rtpmidi_sender *sender, uint32_t extended_sequence);
 int rtpmidi_sender_journal(const struct rtpmidi_sender *sender, uint16_t sequence,
                       uint32_t timestamp, uint8_t *data, size_t capacity,

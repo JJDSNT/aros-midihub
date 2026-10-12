@@ -527,7 +527,6 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
     uint8_t wire[1100];
     uint8_t segment[1002];
     size_t wire_length;
-    size_t journal_length;
     size_t data_length;
     size_t offset;
     size_t chunk;
@@ -542,28 +541,12 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
         return -1;
     if (message[0] != 0xf0) {
         timestamp = (uint32_t)now_ticks();
-        if (rtpmidi_encode_short(rt->sequence, timestamp,
-                                rt->session.local_ssrc, message, length,
-                                wire, sizeof(wire), &wire_length) != 0)
-            return -1;
-        if (rtpmidi_sender_supported(message, length)) {
-            if (rtpmidi_sender_journal(&rt->sender, rt->sequence, timestamp,
-                                  wire + wire_length,
-                                  sizeof(wire) - wire_length,
-                                  &journal_length) != 0)
-                return -1;
-            wire[12] |= 0x40;
-            wire_length += journal_length;
-        }
-        if (netmidi_network_send(&rt->network, 1, wire, wire_length,
+        if (rtpmidi_sender_packet(&rt->sender, rt->sequence, timestamp,
+                                  rt->session.local_ssrc, message, length,
+                                  wire, sizeof(wire), &wire_length) != 0 ||
+            netmidi_network_send(&rt->network, 1, wire, wire_length,
                                  &rt->peer_data) != 0)
             return -1;
-        if (rtpmidi_sender_supported(message, length))
-            rtpmidi_sender_record(&rt->sender, rt->sequence, timestamp,
-                              message, length);
-        else
-            rtpmidi_sender_clear_history(&rt->sender);
-        rt->last_rtp_send = now_ticks();
         ++rt->sequence;
         rt->last_rtp_send = now_ticks();
         return 0;
@@ -584,9 +567,8 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
             return -1;
         ++rt->sequence;
         rt->last_rtp_send = now_ticks();
-        if (!rtpmidi_sender_record_sysex(&rt->sender, first_sequence, timestamp,
-                                    message, length))
-            rtpmidi_sender_clear_history(&rt->sender);
+        rtpmidi_sender_record_sysex(&rt->sender, first_sequence, timestamp,
+                                    message, length);
         return 0;
     }
     data_length = length - 2;
@@ -612,9 +594,8 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
         rt->last_rtp_send = now_ticks();
         offset += chunk;
     }
-    if (!rtpmidi_sender_record_sysex(&rt->sender, first_sequence, timestamp,
-                                message, length))
-        rtpmidi_sender_clear_history(&rt->sender);
+    rtpmidi_sender_record_sysex(&rt->sender, first_sequence, timestamp,
+                                message, length);
     return 0;
 }
 
