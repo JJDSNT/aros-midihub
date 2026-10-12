@@ -12,7 +12,46 @@ int applemidi_peers_init(struct applemidi_peers *peers, uint32_t local_ssrc,
     if (name_length)
         memcpy(peers->name, name, name_length);
     peers->name_length = name_length;
-    peers->accept = 1;
+    peers->accept = APPLEMIDI_ACCEPT_ANYONE;
+    return 0;
+}
+
+int applemidi_peers_allow(struct applemidi_peers *peers, uint32_t address,
+                          const char *name)
+{
+    struct applemidi_allowed *entry;
+    size_t length = name ? strlen(name) : 0;
+
+    if (!peers || peers->allowed_count == APPLEMIDI_ALLOWED_MAX ||
+        (!address && !length) || length > APPLEMIDI_PEER_NAME_MAX)
+        return -1;
+    entry = &peers->allowed[peers->allowed_count++];
+    memset(entry, 0, sizeof(*entry));
+    entry->address = address;
+    if (length)
+        memcpy(entry->name, name, length);
+    return 0;
+}
+
+/* Whether the rule lets this invitation in. */
+static int may_connect(const struct applemidi_peers *peers, uint32_t address,
+                       const struct applemidi_packet *in)
+{
+    int i;
+
+    if (peers->accept == APPLEMIDI_ACCEPT_ANYONE)
+        return 1;
+    if (peers->accept != APPLEMIDI_ACCEPT_LISTED)
+        return 0;
+    for (i = 0; i < peers->allowed_count; ++i) {
+        const struct applemidi_allowed *entry = &peers->allowed[i];
+        size_t length = strlen(entry->name);
+        if (entry->address && entry->address == address)
+            return 1;
+        if (length && in->name && in->name_length == length &&
+            memcmp(in->name, entry->name, length) == 0)
+            return 1;
+    }
     return 0;
 }
 
@@ -86,7 +125,9 @@ int applemidi_peers_receive(struct applemidi_peers *peers, uint32_t address, uin
         /* Only an invitation on the control port starts a peer. */
         if (in->command != APPLEMIDI_IN || on_data_port)
             return 0;
-        if (!peers->accept || (i = allocate(peers, address, control_port, now_ms)) < 0) {
+        if (!may_connect(peers, address, in) ||
+            (i = allocate(peers, address, control_port, now_ms)) < 0) {
+            ++peers->refused;
             memset(out, 0, sizeof(*out));
             out->command = APPLEMIDI_NO;
             out->token = in->token;

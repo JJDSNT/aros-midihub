@@ -242,7 +242,7 @@ static void applemidi_peers(void)
 
     assert(applemidi_peers_init(&peers, 0x10203040,
                          (const uint8_t *)"AROS MIDIHub", 12) == 0);
-    assert(peers.accept);
+    assert(peers.accept == APPLEMIDI_ACCEPT_ANYONE);
 
     first = applemidi_peers_invite(&peers, 0xc0a86401, 5004, 0x11111111,
                             100, &packet);
@@ -2060,6 +2060,83 @@ static void session_restart_and_collision(void)
     assert(!peers.peer[1].used && peers.peer[0].used);
 }
 
+/* Who may connect: anyone, nobody, or those of a list. */
+static void applemidi_accept_rule(void)
+{
+    struct applemidi_peers peers;
+    struct applemidi_packet in;
+    struct applemidi_packet out;
+    enum applemidi_peer_event event;
+    int data_port;
+    int index;
+    static const uint8_t ipad[] = "Jaime's iPad";
+    static const uint8_t other[] = "Somebody";
+
+    memset(&in, 0, sizeof(in));
+    in.command = APPLEMIDI_IN;
+    in.token = 1;
+    in.ssrc = 2;
+    in.name = other;
+    in.name_length = sizeof(other) - 1;
+
+    /* nobody: every invitation is answered NO and takes no place */
+    assert(applemidi_peers_init(&peers, 9, (const uint8_t *)"AROS", 4) == 0);
+    peers.accept = APPLEMIDI_ACCEPT_NOBODY;
+    assert(applemidi_peers_receive(&peers, 0xc0a80005, 5004, 0, &in, 1, &out,
+                                   &data_port, &index, &event) == 1);
+    assert(out.command == APPLEMIDI_NO && out.token == 1 && index == -1 &&
+           peers.refused == 1 && !peers.peer[0].used);
+    /* which does not stop us inviting */
+    assert(applemidi_peers_invite(&peers, 0xc0a80005, 5004, 7, 2, &out) == 0);
+
+    /* a list: by address, */
+    assert(applemidi_peers_init(&peers, 9, (const uint8_t *)"AROS", 4) == 0);
+    peers.accept = APPLEMIDI_ACCEPT_LISTED;
+    assert(applemidi_peers_allow(&peers, 0xc0a80007, NULL) == 0);
+    assert(applemidi_peers_allow(&peers, 0, (const char *)ipad) == 0);
+    assert(applemidi_peers_allow(&peers, 0, NULL) == -1);
+    assert(applemidi_peers_allow(&peers, 0, "") == -1);
+    assert(applemidi_peers_receive(&peers, 0xc0a80005, 5004, 0, &in, 1, &out,
+                                   &data_port, &index, &event) == 1);
+    assert(out.command == APPLEMIDI_NO && index == -1 && peers.refused == 1);
+    assert(applemidi_peers_receive(&peers, 0xc0a80007, 5004, 0, &in, 1, &out,
+                                   &data_port, &index, &event) == 1);
+    assert(out.command == APPLEMIDI_OK && index == 0);
+    /* by name, from wherever, */
+    in.name = ipad;
+    in.name_length = sizeof(ipad) - 1;
+    in.token = 3;
+    in.ssrc = 4;
+    assert(applemidi_peers_receive(&peers, 0xc0a80063, 5004, 0, &in, 1, &out,
+                                   &data_port, &index, &event) == 1);
+    assert(out.command == APPLEMIDI_OK && index == 1);
+    /* and not by a name that only begins the same, or by none */
+    in.name_length = sizeof(ipad) - 2;
+    assert(applemidi_peers_receive(&peers, 0xc0a80064, 5004, 0, &in, 1, &out,
+                                   &data_port, &index, &event) == 1);
+    assert(out.command == APPLEMIDI_NO && index == -1);
+    in.name = NULL;
+    in.name_length = 0;
+    assert(applemidi_peers_receive(&peers, 0xc0a80065, 5004, 0, &in, 1, &out,
+                                   &data_port, &index, &event) == 1);
+    assert(out.command == APPLEMIDI_NO && peers.refused == 3);
+    /* a session already let in is not asked again */
+    in.command = APPLEMIDI_BY;
+    in.token = 3;
+    in.ssrc = 4;
+    assert(applemidi_peers_receive(&peers, 0xc0a80063, 5004, 0, &in, 2, &out,
+                                   &data_port, &index, &event) == 0);
+    assert(!peers.peer[1].used && peers.peer[0].used);
+    /* the list has an end */
+    {
+        int i;
+        for (i = 2; i < APPLEMIDI_ALLOWED_MAX; ++i)
+            assert(applemidi_peers_allow(&peers, 0x0a000000 + (uint32_t)i,
+                                         NULL) == 0);
+        assert(applemidi_peers_allow(&peers, 0x0a0000ff, NULL) == -1);
+    }
+}
+
 int main(void)
 {
     apple_exchange();
@@ -2067,6 +2144,7 @@ int main(void)
     apple_clock();
     apple_feedback();
     applemidi_peers();
+    applemidi_accept_rule();
     rtp_short();
     rtp_journal_and_lengths();
     rtp_header_variants();

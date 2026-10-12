@@ -14,6 +14,23 @@
 
 #define APPLEMIDI_PEERS_MAX 8
 #define APPLEMIDI_PEER_NAME_MAX 63
+#define APPLEMIDI_ALLOWED_MAX 8
+
+/* Whose invitations are taken: what Apple's own setup calls "who may
+ * connect to me". It says nothing of whom we invite. */
+enum applemidi_accept {
+    APPLEMIDI_ACCEPT_NOBODY,
+    APPLEMIDI_ACCEPT_ANYONE,
+    APPLEMIDI_ACCEPT_LISTED     /* those of the list below */
+};
+
+/* One who may connect: by address, or by the name its invitation carries.
+ * A name is whatever the peer says it is, so it keeps out mistakes, not
+ * anyone who means to come in. */
+struct applemidi_allowed {
+    uint32_t address;           /* IPv4, host order; 0 for none */
+    char name[APPLEMIDI_PEER_NAME_MAX + 1];     /* empty for none */
+};
 
 struct applemidi_peer {
     int used;
@@ -39,12 +56,22 @@ struct applemidi_peers {
     uint32_t local_ssrc;
     uint8_t name[64];
     size_t name_length;
-    int accept;                 /* answer invitations from new peers */
+    int accept;                 /* enum applemidi_accept; anyone at first */
+    struct applemidi_allowed allowed[APPLEMIDI_ALLOWED_MAX];
+    int allowed_count;
+    unsigned int refused;       /* invitations answered with NO by the rule
+                                   or for want of room */
     unsigned int ssrc_collisions;   /* peers refused for having our SSRC */
 };
 
 int applemidi_peers_init(struct applemidi_peers *peers, uint32_t local_ssrc,
                   const uint8_t *name, size_t name_length);
+
+/* Adds one who may connect under APPLEMIDI_ACCEPT_LISTED, by address
+ * (name NULL) or by name (address 0). Returns -1 when the list is full or
+ * neither is given. */
+int applemidi_peers_allow(struct applemidi_peers *peers, uint32_t address,
+                          const char *name);
 
 /* Handles an AppleMIDI control packet from address:port, which is the
  * peer's control port or, with on_data_port, its data port. When a reply

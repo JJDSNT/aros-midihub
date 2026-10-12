@@ -1001,6 +1001,7 @@ int main(int argc, char **argv)
     uint16_t peer_port;
     uint16_t midi2_port = 0;
     const char *peer_name = NULL;
+    const char *accept_rule = NULL;
     struct netmidi_network_config config;
     const char *peer_ip;
     uint64_t now;
@@ -1044,6 +1045,12 @@ int main(int argc, char **argv)
         }
         argi += 2;
     }
+    /* Who may connect: anyone (the default), nobody, or those listed, each
+       an IPv4 address or a session name, with commas between. */
+    if (argc - argi >= 2 && strcmp(argv[argi], "--accept") == 0) {
+        accept_rule = argv[argi + 1];
+        argi += 2;
+    }
     /* A peer to invite by the name its session is advertised under. */
     if (argc - argi >= 2 && strcmp(argv[argi], "--peer-name") == 0) {
         peer_name = argv[argi + 1];
@@ -1060,7 +1067,7 @@ int main(int argc, char **argv)
          parse_port(argv[argi + 2], &peer_port) != 0) ||
         (remaining == 4 && strcmp(argv[argi + 3], "--probe-note") != 0 &&
          strcmp(argv[argi + 3], "--probe-sysex") != 0)) {
-        fputs("Usage: MIDIHub [--config file] [--midi2 port] [--peer-name session] [local-control-port [peer-ip peer-control-port [--probe-note|--probe-sysex]]]\n", stderr);
+        fputs("Usage: MIDIHub [--config file] [--midi2 port] [--accept anyone|nobody|list] [--peer-name session] [local-control-port [peer-ip peer-control-port [--probe-note|--probe-sysex]]]\n", stderr);
         return 20;
     }
     if (remaining >= 3)
@@ -1119,6 +1126,36 @@ int main(int argc, char **argv)
                         (const uint8_t *)config.session_name,
                         strlen(config.session_name)) != 0)
         goto cleanup;
+    if (accept_rule && strcmp(accept_rule, "anyone") != 0) {
+        static char list[512];
+        char *entry;
+        rt.peers.accept = APPLEMIDI_ACCEPT_NOBODY;
+        if (strcmp(accept_rule, "nobody") != 0) {
+            rt.peers.accept = APPLEMIDI_ACCEPT_LISTED;
+            snprintf(list, sizeof(list), "%s", accept_rule);
+            for (entry = strtok(list, ","); entry; entry = strtok(NULL, ",")) {
+                struct in_addr address;
+                int result;
+#ifdef __AROS__
+                address.s_addr = inet_addr(entry);
+                result = address.s_addr != INADDR_NONE ?
+                    applemidi_peers_allow(&rt.peers, ntohl(address.s_addr),
+                                          NULL) :
+                    applemidi_peers_allow(&rt.peers, 0, entry);
+#else
+                result = inet_pton(AF_INET, entry, &address) == 1 ?
+                    applemidi_peers_allow(&rt.peers, ntohl(address.s_addr),
+                                          NULL) :
+                    applemidi_peers_allow(&rt.peers, 0, entry);
+#endif
+                if (result != 0) {
+                    fputs("MIDIHub: too many or bad entries in --accept\n",
+                          stderr);
+                    goto cleanup;
+                }
+            }
+        }
+    }
     /* An AppleMIDI session is found under its control port. */
     netmidi_discovery_add(&rt.discovery, rt.session_name, "_apple-midi._udp",
                           local_port);

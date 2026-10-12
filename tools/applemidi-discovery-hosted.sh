@@ -75,8 +75,8 @@ Shutdown
 RUNEOF
 printf 'Run >NIL: Execute S:discovery-run\n' > "$sys/S/User-Startup"
 
-# Every mDNS packet on the link is kept: this case has failed about once in
-# fifteen runs, Avahi seeing the service and not resolving it (mDNS backlog,
+# Every mDNS packet on the link is kept: this case has failed once in
+# twenty-five runs, Avahi seeing the service and not resolving it (mDNS backlog,
 # MD20), and the capture of the run that fails is what will say why.
 (sudo timeout 80 tcpdump -i aroshost -n -l -v udp port 5353 > "$work/mdns-capture.txt" 2> /dev/null || true) &
 (sleep 4; timeout 70 avahi-browse -rp _apple-midi._udp > "$work/browse.log" 2>&1 || true) &

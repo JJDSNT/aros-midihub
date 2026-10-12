@@ -45,7 +45,6 @@ flowchart LR
 
     subgraph AM[AppleMIDI]
         AM06["AM06 run against<br/>rtpmidid"]:::ready
-        AM07["AM07 who may<br/>connect"]:::ready
         AM08["AM08 DEVS:Midi<br/>driver"]
         AM14["AM14 IPv6"]
         AM16["AM16 configuration"]
@@ -107,7 +106,6 @@ flowchart LR
     AM06 --> R23
     AM06 --> AM19
 
-    AM07 --> AM16
     R17 --> AM16
     AM08 --> AM20
     D1 --> AM08
@@ -163,7 +161,7 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 98 open items, 61 have nothing in front of them, 31 sit behind something
+Of 97 open items, 60 have nothing in front of them, 31 sit behind something
 outside our hands or behind a decision, and 6 wait only for other work of
 ours.
 
@@ -233,7 +231,7 @@ stood free have been closed.
 4. **AM08**, the driver, which needs the decisions D1, D2 and D4 first.
    Done meanwhile on 2026-10-12: registering through the system mDNS
    service (AM09), browsing for peers (AM10) and inviting again a peer
-   that comes back (AM12). **AM07**, who may connect, needs nothing.
+   that comes back (AM12), and the rule of who may connect (AM07).
 5. Done on 2026-10-12: UP01 and NM01, UMP and Network MIDI 2.0 read
    against their texts, with the corrections they called for.
 6. Done on 2026-10-12: Network MIDI 2.0's table of sessions and runtime
