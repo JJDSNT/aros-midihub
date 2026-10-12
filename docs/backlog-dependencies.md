@@ -137,7 +137,7 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 81 open items, 50 have nothing in front of them, 27 sit behind something
+Of 80 open items, 49 have nothing in front of them, 27 sit behind something
 outside our hands or behind a decision, and 4 wait only for other work of
 ours.
 
@@ -193,7 +193,7 @@ their own backlog, not from this graph.
 | Network MIDI 2.0 | NM12, NM13, NM18, NM19 |
 | CAMD | B16, B22 |
 | BLE MIDI | L01, L06, T04, T06, L05, W03, W05, W06, L15, L09, L04, L07, L14, L16, L17 |
-| mDNS | MD20, MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
+| mDNS | MD20, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
 
 None of these is a P0 in its own list: the defects in code as it is that
 stood free have been closed.

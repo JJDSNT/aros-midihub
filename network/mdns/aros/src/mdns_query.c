@@ -136,6 +136,10 @@ mdnsLookupAbort(struct MDNSEngineToken *tok)
 /*------------------------------------------------------------------------*/
 /* Queries */
 
+/* While a new query is given this host's own records: the one query they
+ * are for. NULL when records come from the link, for whoever asked. */
+static struct MDNSQuerySession *only_query;
+
 LONG
 MDNSEngineQuery(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
 {
@@ -158,6 +162,12 @@ MDNSEngineQuery(struct MDNSEngineToken *tok, struct MDNSIPCMsg *msg)
     qs->qs_Interval = 1;
     AddTail(&tok->et_Queries, &qs->qs_Node);
 
+    /* what this host itself has to say comes first, and not from the
+     * link, where it would never come from; to this query alone, the
+     * others having had it when they began */
+    only_query = qs;
+    mdnsRegAnswerLocally(tok);
+    only_query = NULL;
     mdnsSendQuestion(tok, qs->qs_Name, qs->qs_Type, TRUE);
     msg->bim_Handle = qs->qs_Ref;
     return MDNS_OK;
@@ -236,7 +246,8 @@ mdnsQueryHandleRecord(struct MDNSEngineToken *tok, struct MDNSRecord *r,
     for (n = tok->et_Queries.lh_Head; n != NULL && n->ln_Succ != NULL;
         n = n->ln_Succ) {
         qs = (struct MDNSQuerySession *)n;
-        if ((qs->qs_Type != DNS_TYPE_ANY && qs->qs_Type != r->type) ||
+        if ((only_query != NULL && qs != only_query) ||
+            (qs->qs_Type != DNS_TYPE_ANY && qs->qs_Type != r->type) ||
             Stricmp(qs->qs_Name, r->name) != 0) {
             continue;
         }

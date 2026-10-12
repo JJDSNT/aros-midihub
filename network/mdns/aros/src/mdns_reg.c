@@ -1347,3 +1347,78 @@ MDNSEngineUnpublishNIPC(struct MDNSEngineToken *tok, struct Task *task)
         }
     }
 }
+
+/*
+ * A client asked for a record through the library. The daemon does not
+ * hear itself, so what the host itself has registered would never reach
+ * that client from the link: every announced service's records, and the
+ * host's address, are written as they would go out and read back as if
+ * they had come in. Each goes to the queries its name and type match.
+ */
+static void
+answer_locally(struct MDNSEngineToken *tok, const UBYTE *pkt, LONG length)
+{
+    static struct MDNSRecord record;    /* mdnsd has one task */
+    const struct MDNSHeader *hdr = (const struct MDNSHeader *)pkt;
+    LONG offset = (LONG)sizeof(struct MDNSHeader);
+    LONG consumed;
+    UWORD i;
+
+    for (i = 0; i < ntohs(hdr->ancount); i++) {
+        if (mdnsParseRecord(pkt, length, offset, &record, &consumed) != 0) {
+            return;
+        }
+        mdnsQueryHandleRecord(tok, &record, pkt, length);
+        offset += consumed;
+    }
+}
+
+void
+mdnsRegAnswerLocally(struct MDNSEngineToken *tok)
+{
+    UBYTE *pkt;
+    struct MDNSHeader *hdr;
+    struct MDNSRegisteredService *rs;
+    struct Node *n;
+    char fqdn[256];
+    UBYTE addrdata[4];
+    ULONG replyAddr;
+    LONG pos;
+    UWORD ancount;
+
+    if (tok == NULL || (pkt = tok->et_TxBuf) == NULL || tok->et_IfCount <= 0) {
+        return;
+    }
+    hdr = (struct MDNSHeader *)pkt;
+    /* as for the group: full times to live, no question in front */
+    replyAddr = tok->et_ReplyAddr;
+    tok->et_ReplyAddr = 0;
+
+    for (n = tok->et_Services.lh_Head; n != NULL && n->ln_Succ != NULL;
+        n = n->ln_Succ) {
+        rs = (struct MDNSRegisteredService *)n;
+        if (rs->rs_State != MDNS_RS_ANNOUNCED) {
+            continue;
+        }
+        pos = response_begin(tok, pkt);
+        ancount = 0;
+        /* without the host's address, which comes once, below */
+        if (service_append(tok, rs, FALSE, 0, pkt, &pos, &ancount, FALSE)) {
+            hdr->ancount = htons(ancount);
+            answer_locally(tok, pkt, pos);
+        }
+    }
+    if (tok->et_HostState == MDNS_RS_ANNOUNCED) {
+        host_fqdn(tok, fqdn, (LONG)sizeof(fqdn));
+        pos = response_begin(tok, pkt);
+        ancount = 0;
+        host_addr_data(tok->et_Ifs[0].mi_Addr, addrdata);
+        if (mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, fqdn,
+                DNS_TYPE_A, DNS_CLASS_IN | 0x8000, MDNS_TTL_HOST, addrdata,
+                4) == 0) {
+            hdr->ancount = htons(ancount);
+            answer_locally(tok, pkt, pos);
+        }
+    }
+    tok->et_ReplyAddr = replyAddr;
+}

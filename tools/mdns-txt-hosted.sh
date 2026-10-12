@@ -57,7 +57,14 @@ WaitForPort AROSTCP
 Wait 8
 Run >SYS:txt-register.log $c/dnssd -R "Txt Test" $type . 5000 "UMPEndpointName=AROS MIDI Hub" "ProductInstanceId=abc-1" "note=two  spaces" "path=C:\\Dir"
 Run >SYS:txt-browse.log $c/dnssd -Z $type
-Wait 22
+Wait 8
+Run >SYS:txt-query.log $c/dnssd -q "Txt Test.$type.local" SRV
+Run >SYS:txt-query-host.log $c/dnssd -q arosbox.local A
+Wait 14
+Break \`Status COMMAND=$c/dnssd\` C
+Wait 1
+Break \`Status COMMAND=$c/dnssd\` C
+Wait 1
 Break \`Status COMMAND=$c/dnssd\` C
 Wait 1
 Break \`Status COMMAND=$c/dnssd\` C
@@ -72,7 +79,8 @@ printf 'Run >NIL: Execute S:txt-run\n' > "$sys/S/User-Startup"
 (cd "$sys" && timeout 80 xvfb-run -a boot/linux/AROSBootstrap \
     > "$work/serial.log" 2>&1) || true
 wait || true
-cp "$sys/txt-register.log" "$sys/txt-browse.log" "$work/" 2> /dev/null || true
+cp "$sys/txt-register.log" "$sys/txt-browse.log" "$sys/txt-query.log" \
+    "$sys/txt-query-host.log" "$work/" 2> /dev/null || true
 
 status=0
 # avahi-browse -p ends a resolved line with the record's strings, each in
@@ -98,6 +106,15 @@ if grep -qF 'Host\032Txt' "$work/txt-browse.log" 2> /dev/null ||
     fi
 else
     echo "FAIL: AROS did not see the host's service"
+    status=1
+fi
+# A question about what this host itself registered, asked on this host:
+# the daemon does not hear itself, and has to answer from what it holds.
+if grep -q 'type 33 .*5000' "$work/txt-query.log" 2> /dev/null &&
+   grep -q 'type 1 .*192\.168\.166\.2' "$work/txt-query-host.log"; then
+    echo "ok: a client on AROS that asks for a service's SRV record and the host's address, both this host's own, is given them"
+else
+    echo "FAIL: this host's own records, asked for on it: $(head -2 "$work/txt-query.log" 2> /dev/null)"
     status=1
 fi
 echo "logs: $work"

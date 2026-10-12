@@ -297,6 +297,9 @@ void mdnsHostHandleRecord(struct MDNSEngineToken *tok,
     const struct MDNSRecord *r);
 void mdnsNetNameHost(struct MDNSEngineToken *tok);
 void mdnsRegGoodbyeAll(struct MDNSEngineToken *tok);
+/* What this host has registered, handed to the clients' queries it
+ * answers, since the daemon does not hear itself. */
+void mdnsRegAnswerLocally(struct MDNSEngineToken *tok);
 void mdnsRegHandleQuery(struct MDNSEngineToken *tok, struct MDNSQuestion *q,
     char (*known)[256], LONG knownCount);
 void mdnsRegHandleAnswerName(struct MDNSEngineToken *tok, const char *name,
