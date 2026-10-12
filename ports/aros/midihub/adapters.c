@@ -1,9 +1,11 @@
-/* The service's side of the CAMD driver DEVS:Midi/applemidi: the same
- * calls as camd.c, which is a client of camd.library, answered through
- * the driver's adapters instead. The driver may be loaded after the
- * service starts, or not at all: until its adapters are found, what
- * arrives from the network for CAMD is dropped. Each port is one peer's:
- * which, the caller decides. */
+/* The service's side of the CAMD drivers DEVS:Midi/applemidi and
+ * DEVS:Midi/networkmidi2: the same calls as camd.c, which is a client of
+ * camd.library, answered through the drivers' adapters instead. A driver
+ * may be loaded after the service starts, or not at all: until its
+ * adapters are found, what arrives from the network for its ports is
+ * dropped. Each port is one peer's: which, the caller decides. The ports
+ * are numbered through: the first driver's from 0, the second's from
+ * NETMIDI_CAMD_MIDI2. */
 
 #include "camd.h"
 
@@ -12,7 +14,7 @@
 
 #include <string.h>
 
-#include "../applemidi/applemidi_camd.h"
+#include "../netmidi/netmidi_camd.h"
 #include "rtpmidi/rtpmidi.h"
 
 int netmidi_camd_open(struct netmidi_camd_runtime *runtime)
@@ -31,34 +33,41 @@ int netmidi_camd_open(struct netmidi_camd_runtime *runtime)
     return 0;
 }
 
-static struct AppleMidiAdapter *port_of(struct netmidi_camd_runtime *runtime,
-                                        int number)
+static const char *const driver_name[NETMIDI_CAMD_DRIVERS] = {
+    APPLEMIDI_ADAPTERS_NAME, NETWORKMIDI2_ADAPTERS_NAME
+};
+
+static struct NetMidiAdapter *port_of(struct netmidi_camd_runtime *runtime,
+                                      int number)
 {
-    struct AppleMidiAdapters *adapters = runtime->adapters;
-    return adapters && number >= 0 && number < NETMIDI_CAMD_PORTS ?
-           &adapters->aa_Port[number] : NULL;
+    struct NetMidiAdapters *adapters;
+
+    if (number < 0 || number >= NETMIDI_CAMD_PORTS * NETMIDI_CAMD_DRIVERS)
+        return NULL;
+    adapters = runtime->adapters[number / NETMIDI_CAMD_PORTS];
+    return adapters ? &adapters->aa_Port[number % NETMIDI_CAMD_PORTS] : NULL;
 }
 
-/* Looks for the driver's adapters and takes its ports. */
-static void attach(struct netmidi_camd_runtime *runtime)
+/* Looks for a driver's adapters and takes its ports. */
+static void attach(struct netmidi_camd_runtime *runtime, int driver)
 {
-    struct AppleMidiAdapters *adapters;
-    struct AppleMidiAdapter *port;
+    struct NetMidiAdapters *adapters;
+    struct NetMidiAdapter *port;
     int number;
 
     Forbid();
-    adapters = (struct AppleMidiAdapters *)
-        FindSemaphore((STRPTR)APPLEMIDI_ADAPTERS_NAME);
+    adapters = (struct NetMidiAdapters *)
+        FindSemaphore((STRPTR)driver_name[driver]);
     /* a driver of another layout is left alone */
-    if (adapters && (adapters->aa_Version != APPLEMIDI_ADAPTERS_VERSION ||
+    if (adapters && (adapters->aa_Version != NETMIDI_ADAPTERS_VERSION ||
                      adapters->aa_Ports < NETMIDI_CAMD_PORTS))
         adapters = NULL;
     Permit();
     if (!adapters)
         return;
-    runtime->adapters = adapters;
+    runtime->adapters[driver] = adapters;
     for (number = 0; number < NETMIDI_CAMD_PORTS; ++number) {
-        port = port_of(runtime, number);
+        port = &adapters->aa_Port[number];
         Disable();
         port->ad_SigMask = 1UL << runtime->signal_bit;
         port->ad_Task = FindTask(NULL);
@@ -69,17 +78,27 @@ static void attach(struct netmidi_camd_runtime *runtime)
     }
 }
 
+static void attach_all(struct netmidi_camd_runtime *runtime)
+{
+    int driver;
+
+    for (driver = 0; driver < NETMIDI_CAMD_DRIVERS; ++driver)
+        if (!runtime->adapters[driver])
+            attach(runtime, driver);
+}
+
 void netmidi_camd_close(struct netmidi_camd_runtime *runtime)
 {
-    struct AppleMidiAdapter *port;
+    struct NetMidiAdapter *port;
     int number;
 
     if (!runtime)
         return;
-    for (number = 0; number < NETMIDI_CAMD_PORTS; ++number) {
+    for (number = 0; number < NETMIDI_CAMD_PORTS * NETMIDI_CAMD_DRIVERS;
+         ++number) {
         port = port_of(runtime, number);
         if (!port)
-            break;
+            continue;
         Disable();
         port->ad_Task = NULL;
         port->ad_SigMask = 0;
@@ -89,7 +108,7 @@ void netmidi_camd_close(struct netmidi_camd_runtime *runtime)
             Cause(&port->ad_CAMDTXFunc);
     }
     /* a delivery to CAMD has finished: there is one task of ours */
-    runtime->adapters = NULL;
+    memset(runtime->adapters, 0, sizeof(runtime->adapters));
     if (runtime->signal_bit >= 0)
         FreeSignal(runtime->signal_bit);
     runtime->signal_bit = -1;
@@ -116,13 +135,12 @@ void netmidi_camd_deliver_port(struct netmidi_camd_runtime *runtime,
                                int number, const uint8_t *message,
                                size_t length)
 {
-    struct AppleMidiAdapter *port;
+    struct NetMidiAdapter *port;
     size_t i;
 
     if (!runtime || !runtime->opened)
         return;
-    if (!runtime->adapters)
-        attach(runtime);
+    attach_all(runtime);
     port = port_of(runtime, number);
     if (!port)
         return;
@@ -241,18 +259,18 @@ static void take_byte(struct netmidi_camd_runtime *all, int number,
 void netmidi_camd_poll(struct netmidi_camd_runtime *runtime,
                        aros_camd_output output, void *context)
 {
-    struct AppleMidiAdapter *port;
+    struct NetMidiAdapter *port;
     ULONG pos;
     int number;
 
     if (!runtime || !runtime->opened)
         return;
-    if (!runtime->adapters)
-        attach(runtime);
-    for (number = 0; number < NETMIDI_CAMD_PORTS; ++number) {
+    attach_all(runtime);
+    for (number = 0; number < NETMIDI_CAMD_PORTS * NETMIDI_CAMD_DRIVERS;
+         ++number) {
         port = port_of(runtime, number);
         if (!port)
-            return;
+            continue;
         runtime->port_now = number;
         pos = port->ad_TXReadPos;
         while (pos != port->ad_TXWritePos) {

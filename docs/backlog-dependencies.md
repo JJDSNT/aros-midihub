@@ -29,7 +29,6 @@ flowchart LR
     end
 
     subgraph DEC[Decisions to take]
-        ND1{{"NM D1 one driver<br/>or two"}}:::decision
         MDD1{{"mDNS D1 byte<br/>order style"}}:::decision
         MDD2{{"mDNS D2 tell the<br/>original Bonami"}}:::decision
     end
@@ -42,7 +41,6 @@ flowchart LR
     subgraph AM[AppleMIDI]
         AM06["AM06 run against<br/>rtpmidid"]:::ready
         AM14["AM14 IPv6"]
-        AM24["AM24 remove the<br/>program on AROS"]
         AM19["AM19 fuzzing<br/>and captures"]
     end
 
@@ -53,7 +51,6 @@ flowchart LR
     end
 
     subgraph NM[Network MIDI 2.0]
-        NM11["NM11 reach CAMD<br/>through a driver"]
         NM14["NM14 MIDI 2.0<br/>protocol"]
         NM15["NM15 IPv6"]
     end
@@ -101,8 +98,6 @@ flowchart LR
 
     UP12 --> UP16
 
-    ND1 --> NM11
-    NM11 --> AM24
     UP11 --> NM14
     B32 --> NM14
 
@@ -142,7 +137,7 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 99 open items, 66 have nothing in front of them, 29 sit behind something
+Of 98 open items, 67 have nothing in front of them, 27 sit behind something
 outside our hands or behind a decision, and 4 wait only for other work of
 ours.
 
@@ -178,11 +173,12 @@ the work that others waited on has been done.
 MIDI 2.0 needed of the service to advertise itself (NM08), spaces in a
 text record and a time to live from the client, was done on 2026-10-12.
 
-**The decisions** about the driver (D1, D2, D4 of the AppleMIDI backlog)
-were taken by the project owner on 2026-10-12 and the driver built the
-same day. Open still: whether Network MIDI 2.0 has a driver of its own
-(NM D1), which is all that NM11 waits for now, and the two in mDNS, each
-holding a single item.
+**The decisions** about the drivers were taken by the project owner on
+2026-10-12 and the drivers built the same day: a service owns the sockets,
+ports go by configuration and then first free, no time crosses a driver
+(AppleMIDI backlog D1, D2, D4), and Network MIDI 2.0 has a driver of its
+own beside AppleMIDI's (Network MIDI 2.0 backlog D1). Open still: the two
+in mDNS, each holding a single item.
 
 ## Free: nothing before, nothing after
 
@@ -192,7 +188,7 @@ their own backlog, not from this graph.
 | Backlog | Items |
 |---|---|
 | RTP-MIDI | R32, R14, R18, R19, R20, R22, R29, R24, R25, R30 |
-| AppleMIDI | AM16, AM25, AM15, AM20, AM26, AM17, AM18, AM21 |
+| AppleMIDI | AM16, AM27, AM25, AM15, AM20, AM26, AM17, AM18, AM21 |
 | UMP | UP06, UP07, UP08, UP13, UP15 |
 | Network MIDI 2.0 | NM21, NM22, NM12, NM13, NM17, NM18, NM19 |
 | CAMD | B16, B22 |
@@ -210,9 +206,10 @@ stood free have been closed.
    node-rtpmidi, was done on 2026-10-12 and found the RS layout defect; rtpmidid
    and Apple's need a machine this one is not.
 3. Done on 2026-10-12: AM05, several peers at once.
-4. Done on 2026-10-12: AM08, the driver, in three cuts: the runtime as a
-   service of the stack, a `DEVS:Midi` driver it attaches to, and a port
-   to each peer. Also that day: AM09, AM10, AM12 and AM07.
+4. Done on 2026-10-12: AM08 and NM11, the drivers: the runtime as a
+   service of the stack, two `DEVS:Midi` drivers it attaches to, and a
+   port to each peer; and AM24, the program gone from AROS. Also that
+   day: AM09, AM10, AM12 and AM07.
 5. Done on 2026-10-12: UP01 and NM01, UMP and Network MIDI 2.0 read
    against their texts, with the corrections they called for.
 6. Done on 2026-10-12: Network MIDI 2.0's table of sessions and runtime

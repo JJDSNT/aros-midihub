@@ -10,9 +10,15 @@ struct netmidi_network_config {
     uint16_t peer_port;
     char peer_ip[64];
     char session_name[64];
-    /* "port.<n> = <name>": the driver's port n is kept for the peer whose
-     * session has that name */
+    /* "applemidi.port.<n> = <name>": port n of the driver applemidi is
+     * kept for the peer whose session has that name.
+     * "networkmidi2.port.<n> = <name>": the same of the driver
+     * networkmidi2, by the peer's endpoint name. */
     char port_name[16][64];
+    char midi2_port_name[16][64];
+    /* "midi2_port": the UDP port Network MIDI 2.0 is answered on; without
+     * it there is none */
+    uint16_t midi2_port;
     /* "peer_name": a peer to invite wherever it is advertised under that
      * session name. "latency_ms": added to the time each received event
      * is due, 0 to 2000. "accept": anyone, nobody, or a list of addresses

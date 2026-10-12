@@ -2,7 +2,7 @@
 # Checks on Linux-hosted AROS that the AppleMIDI service's session is
 # advertised by the system's mDNS service, mdnsd through bonami.library,
 # and by nothing of its own: it holds no socket on port 5353. The service
-# is applemidid, started by the stack from db/services.d/applemidi.
+# is netmidid, started by the stack from db/services.d/netmidi.
 #
 #   tools/applemidi-discovery-hosted.sh [AROS_DIR [WORK_DIR]]
 #
@@ -34,7 +34,7 @@ sys="$work/AROS"
 c=SYS:Extras/aros-midihub/C
 
 test -x "$aros/boot/linux/AROSBootstrap"
-test -f "$aros/System/Network/Services/applemidid"
+test -f "$aros/System/Network/Services/netmidid"
 test -f "$aros/System/Network/Services/mdnsd"
 
 if ! ip link show aroshost > /dev/null 2>&1; then
@@ -58,7 +58,7 @@ prepare() {
         > "$db/netdb-myhost"
     sed -i 's/OPENGUI=.*/OPENGUI=NO/' "$db/general.config"
     # what the service would print, to a file
-    printf 'SYS:applemidid.log' > "$sys/Prefs/Env-Archive/applemidid.log"
+    printf 'SYS:netmidid.log' > "$sys/Prefs/Env-Archive/netmidid.log"
     sudo setcap cap_net_raw,cap_net_admin+ep "$sys/boot/linux/AROSBootstrap"
 }
 
@@ -71,7 +71,7 @@ Run >NIL: QUIET AROSTCP
 WaitForPort AROSTCP
 Wait 8
 Wait 20
-Break \`Status COMMAND=applemidi\` C
+Break \`Status COMMAND=netmidi\` C
 Wait 6
 Shutdown
 RUNEOF
@@ -85,7 +85,7 @@ printf 'Run >NIL: Execute S:discovery-run\n' > "$sys/S/User-Startup"
 (cd "$sys" && timeout 90 xvfb-run -a boot/linux/AROSBootstrap \
     > "$work/serial.log" 2>&1) || true
 wait || true
-cp "$sys/applemidid.log" "$work/hub.log" 2> /dev/null || true
+cp "$sys/netmidid.log" "$work/hub.log" 2> /dev/null || true
 
 status=0
 if grep -q 'advertised by the system mDNS service' "$work/hub.log" 2> /dev/null &&
@@ -121,12 +121,12 @@ Run >NIL: QUIET AROSTCP
 WaitForPort AROSTCP
 Wait 8
 Wait 50
-Break \`Status COMMAND=applemidi\` C
+Break \`Status COMMAND=netmidi\` C
 Wait 4
 Shutdown
 RUNEOF
 printf 'Run >NIL: Execute S:discovery-run\n' > "$sys/S/User-Startup"
-printf 'peer_name = Host Session\n' > "$sys/Prefs/Env-Archive/AppleMIDI"
+printf 'peer_name = Host Session\n' > "$sys/Prefs/Env-Archive/NetMIDI"
 
 (
     # there from the start: the session and what advertises it
@@ -148,7 +148,7 @@ printf 'peer_name = Host Session\n' > "$sys/Prefs/Env-Archive/AppleMIDI"
 (cd "$sys" && timeout 120 xvfb-run -a boot/linux/AROSBootstrap \
     > "$work/serial-found.log" 2>&1) || true
 wait || true
-cp "$sys/applemidid.log" "$work/hub-found.log" 2> /dev/null || true
+cp "$sys/netmidid.log" "$work/hub-found.log" 2> /dev/null || true
 
 if grep -q 'session "Host Session" found at 192\.168\.166\.1 port 5104' "$work/hub-found.log" 2> /dev/null &&
    grep -q 'inviting "Host Session"' "$work/hub-found.log" &&

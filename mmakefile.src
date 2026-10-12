@@ -7,7 +7,6 @@ include $(SRCDIR)/config/aros.cfg
 #MM- contrib-aros-midihub : \
 #MM      linklibs-arosmidihub \
 #MM      contrib-aros-midihub-package \
-#MM      contrib-aros-midihub-program \
 #MM      contrib-aros-midihub-selftest \
 #MM      contrib-aros-midihub-camdprobe \
 #MM      contrib-aros-midihub-camdcompat \
@@ -24,9 +23,7 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-mdnstools \
 #MM      contrib-aros-midihub-mdnscx \
 #MM      contrib-aros-midihub-mdnsprobe \
-#MM      contrib-aros-midihub-applemidid
-#MM contrib-aros-midihub-program : linklibs-arosmidihub \
-#MM      contrib-aros-midihub-bonami
+#MM      contrib-aros-midihub-netmidid
 #MM contrib-aros-midihub-selftest : linklibs-arosmidihub
 #MM contrib-aros-midihub-ble : linklibs-arosmidihub kernel-bluetooth-library-includes
 #MM- contrib-aros-midihub-prefs : contrib-aros-midihub-prefs-icon
@@ -177,43 +174,43 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
 %copy_files_q mmake=contrib-aros-midihub-package-license \
     src="$(MIDIHUB_ROOT)" files="LICENSE" dst="$(MIDIHUB_PACKAGE)"
 
-%build_prog mmake=contrib-aros-midihub-program \
-    progname=MIDIHub \
-    files="$(MIDIHUB_ROOT)/ports/aros/midihub/main \
-           $(MIDIHUB_ROOT)/ports/aros/midihub/camd \
-           $(MIDIHUB_ROOT)/ports/aros/midihub/network \
-           $(MIDIHUB_ROOT)/ports/aros/midihub/discovery \
-           $(MIDIHUB_ROOT)/ports/aros/camd_bridge" \
-    uselibs=arosmidihub \
-    targetdir=$(MIDIHUB_PACKAGE)/C
-
-# The same runtime as a service of the AROSTCP service manager: started
-# with the stack, without a console or arguments.
-# It reaches CAMD through the driver below, not as a client of camd.library.
-#MM contrib-aros-midihub-applemidid : linklibs-arosmidihub \
+# Network MIDI as a service of the AROSTCP service manager: started with
+# the stack, without a console or arguments. It runs the AppleMIDI and the
+# Network MIDI 2.0 sessions and reaches CAMD through the two drivers below,
+# not as a client of camd.library.
+#MM contrib-aros-midihub-netmidid : linklibs-arosmidihub \
 #MM      contrib-aros-midihub-bonami \
-#MM      contrib-aros-midihub-applemidid-svccfg \
-#MM      contrib-aros-midihub-applemidi-driver
-%build_prog mmake=contrib-aros-midihub-applemidid \
-    progname=applemidid \
+#MM      contrib-aros-midihub-netmidid-svccfg \
+#MM      contrib-aros-midihub-applemidi-driver \
+#MM      contrib-aros-midihub-networkmidi2-driver
+%build_prog mmake=contrib-aros-midihub-netmidid \
+    progname=netmidid \
     files="$(MIDIHUB_ROOT)/ports/aros/midihub/main \
            $(MIDIHUB_ROOT)/ports/aros/midihub/adapters \
            $(MIDIHUB_ROOT)/ports/aros/midihub/network \
            $(MIDIHUB_ROOT)/ports/aros/midihub/discovery" \
-    objdir=$(GENDIR)/$(CURDIR)/applemidid \
+    objdir=$(GENDIR)/$(CURDIR)/netmidid \
     cppflags="-DNETMIDI_SERVICE" \
     uselibs=arosmidihub \
     targetdir=$(AROS_SYSTEM)/Network/Services
 
-# The CAMD driver the service attaches to: ports and no network code.
+# The CAMD drivers the service attaches to, one to a transport, from one
+# source: ports and no network code.
 %build_prog mmake=contrib-aros-midihub-applemidi-driver \
     progname=applemidi \
-    files="$(MIDIHUB_ROOT)/ports/aros/applemidi/applemididriver" \
+    files="$(MIDIHUB_ROOT)/ports/aros/netmidi/netmididriver" \
     objdir=$(GENDIR)/$(CURDIR)/applemidi-driver \
     targetdir=$(AROS_DEVS)/Midi
 
-%copy_files_q mmake=contrib-aros-midihub-applemidid-svccfg \
-    files="applemidi" src=$(MIDIHUB_ROOT)/ports/aros/midihub/services.d \
+%build_prog mmake=contrib-aros-midihub-networkmidi2-driver \
+    progname=networkmidi2 \
+    files="$(MIDIHUB_ROOT)/ports/aros/netmidi/netmididriver" \
+    objdir=$(GENDIR)/$(CURDIR)/networkmidi2-driver \
+    cppflags="-DNETMIDI_DRIVER_NETWORKMIDI2" \
+    targetdir=$(AROS_DEVS)/Midi
+
+%copy_files_q mmake=contrib-aros-midihub-netmidid-svccfg \
+    files="netmidi" src=$(MIDIHUB_ROOT)/ports/aros/midihub/services.d \
     dst=$(AROS_SYSTEM)/Network/AROSTCP/db/services.d
 
 %build_prog mmake=contrib-aros-midihub-selftest \

@@ -2,38 +2,43 @@
     Copyright (C) 2026, The AROS Development Team. All rights reserved.
 */
 
-/* What the CAMD driver DEVS:Midi/applemidi and the service that runs the
-   sessions share: one adapter per CAMD port.
+/* What the CAMD drivers DEVS:Midi/applemidi and DEVS:Midi/networkmidi2
+   and the service that runs the sessions share: one adapter per CAMD port.
 
    The driver holds no network code and the service never opens
    camd.library. camd.library loads the driver once and never unloads it,
-   so the driver is the one that lasts: it owns the adapters and makes them
+   so a driver is the one that lasts: it owns the adapters and makes them
    public under a name. The service comes and goes with the network; while
    it runs it attaches to the adapters, takes what CAMD clients send from a
    port's ring, and hands CAMD what arrived for the port. */
 
-#ifndef APPLEMIDI_CAMD_H
-#define APPLEMIDI_CAMD_H
+#ifndef NETMIDI_CAMD_H
+#define NETMIDI_CAMD_H
 
 #include <exec/interrupts.h>
 #include <exec/semaphores.h>
 #include <exec/tasks.h>
 #include <exec/types.h>
 
-#define APPLEMIDI_DRIVER_NAME   "applemidi"
-/* The public semaphore the adapters are found by. */
-#define APPLEMIDI_ADAPTERS_NAME "applemidi.driver"
+/* Two drivers are built from one source, one to a transport, so that a
+   port's name says what kind of peer is behind it: AppleMIDI (RTP-MIDI)
+   sessions, and Network MIDI 2.0 sessions. Each makes its adapters public
+   as a semaphore of the name given here. */
+#define APPLEMIDI_DRIVER_NAME       "applemidi"
+#define APPLEMIDI_ADAPTERS_NAME     "applemidi.driver"
+#define NETWORKMIDI2_DRIVER_NAME    "networkmidi2"
+#define NETWORKMIDI2_ADAPTERS_NAME  "networkmidi2.driver"
 
-#define APPLEMIDI_PORTS         16
-#define APPLEMIDI_TXBUF_SIZE    4096    /* a power of two */
+#define NETMIDI_DRIVER_PORTS         16
+#define NETMIDI_TXBUF_SIZE    4096    /* a power of two */
 
 /* The driver camd.library has in memory may be older or newer than the
    service that finds it. The service attaches only to adapters of the
    layout it was built with. Count this up with any change to the two
    structures below; aa_Semaphore and aa_Version keep their places. */
-#define APPLEMIDI_ADAPTERS_VERSION  1
+#define NETMIDI_ADAPTERS_VERSION  1
 
-struct AppleMidiAdapter
+struct NetMidiAdapter
 {
     APTR                    ad_ActivateFunc;  /* struct MidiPortData */
     BOOL                    ad_IsOpen;        /* TRUE while CAMD has the port open */
@@ -52,12 +57,12 @@ struct AppleMidiAdapter
     struct SignalSemaphore  ad_Lock;          /* Closing, and delivery to CAMD */
 };
 
-struct AppleMidiAdapters
+struct NetMidiAdapters
 {
     struct SignalSemaphore  aa_Semaphore;     /* public, named APPLEMIDI_ADAPTERS_NAME */
-    ULONG                   aa_Version;       /* APPLEMIDI_ADAPTERS_VERSION of the driver */
+    ULONG                   aa_Version;       /* NETMIDI_ADAPTERS_VERSION of the driver */
     ULONG                   aa_Ports;
-    struct AppleMidiAdapter aa_Port[APPLEMIDI_PORTS];
+    struct NetMidiAdapter aa_Port[NETMIDI_DRIVER_PORTS];
 };
 
 #endif

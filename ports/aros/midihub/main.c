@@ -96,8 +96,12 @@ struct runtime {
     /* Each peer's clock against ours, from its JR Clock messages, and what
        its timestamps have us hold until its time (M2-104-UM 7.2.2) */
     struct ump_jr_clock midi2_clock[NETMIDI2_SESSIONS_MAX];
-    struct rtpmidi_event_queue midi2_queue;
+    struct rtpmidi_event_queue midi2_queue[NETMIDI2_SESSIONS_MAX];
     int midi2_current;              /* the session whose UMP is passing */
+    /* the port each session's peer has, of the second driver's, counted
+       through with the first's; -1 for none */
+    struct applemidi_ports midi2_ports;
+    int midi2_port[NETMIDI2_SESSIONS_MAX];
     unsigned long midi2_timed;
     unsigned long midi2_late;
     struct netmidi_camd_runtime camd;
@@ -633,7 +637,7 @@ static uint64_t now_us(void)
     return (uint64_t)time.tv_sec * 1000000 + (uint64_t)time.tv_usec;
 }
 
-static void midi2_deliver(struct runtime *rt, const uint8_t *bytes,
+static void midi2_deliver(struct runtime *rt, int index, const uint8_t *bytes,
                           size_t length)
 {
     if (rt->trace) {
@@ -644,10 +648,9 @@ static void midi2_deliver(struct runtime *rt, const uint8_t *bytes,
             printf("%02x", (unsigned int)bytes[i]);
         putchar('\n');
     }
-    if (bytes[0] == 0xf0)
-        netmidi_camd_deliver_sysex(&rt->camd, bytes, length);
-    else
-        netmidi_camd_deliver(&rt->camd, bytes, length);
+    if (rt->midi2_port[index] >= 0)
+        netmidi_camd_deliver_port(&rt->camd, rt->midi2_port[index], bytes,
+                                  length);
 }
 
 /* A message translated from a peer's UMPs. One that came with a JR
@@ -673,29 +676,31 @@ static void midi2_to_camd(void *context, const uint8_t *bytes, size_t length)
         ++rt->midi2_timed;
         if (due > now && due - now <= RTPMIDI_QUEUE_HORIZON &&
             (bytes[0] == 0xf0 ?
-                 rtpmidi_queue_push_sysex(&rt->midi2_queue, due, bytes,
+                 rtpmidi_queue_push_sysex(&rt->midi2_queue[index], due, bytes,
                                           length) :
-                 rtpmidi_queue_push(&rt->midi2_queue, due, bytes,
+                 rtpmidi_queue_push(&rt->midi2_queue[index], due, bytes,
                                     length)) == 0)
             return;
         if (due <= now)
             ++rt->midi2_late;
     }
-    midi2_deliver(rt, bytes, length);
+    midi2_deliver(rt, index, bytes, length);
 }
 
 /* What was held and is now due. */
 static void midi2_release(struct runtime *rt, uint64_t now)
 {
     struct rtpmidi_queued_event event;
+    int index;
 
-    while (rtpmidi_queue_pop_due(&rt->midi2_queue, now, &event)) {
-        if (event.sysex)
-            midi2_deliver(rt, event.sysex, event.sysex_length);
-        else
-            midi2_deliver(rt, event.bytes, event.length);
-        rtpmidi_queue_event_release(&event);
-    }
+    for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index)
+        while (rtpmidi_queue_pop_due(&rt->midi2_queue[index], now, &event)) {
+            if (event.sysex)
+                midi2_deliver(rt, index, event.sysex, event.sysex_length);
+            else
+                midi2_deliver(rt, index, event.bytes, event.length);
+            rtpmidi_queue_event_release(&event);
+        }
 }
 
 static void midi2_sink(void *context, int index, const uint32_t *words,
@@ -722,14 +727,18 @@ static void midi2_sink(void *context, int index, const uint32_t *words,
 }
 
 /* A session ended, was reset or lost data for good: nothing here knows
- * which notes its peer left sounding, so every channel is told to stop. */
-static void midi2_all_notes_off(struct runtime *rt)
+ * which notes its peer left sounding, so every channel of its port is told
+ * to stop. */
+static void midi2_all_notes_off(struct runtime *rt, int index)
 {
     uint8_t message[3] = {0xb0, 123, 0};
     unsigned int channel;
+    if (rt->midi2_port[index] < 0)
+        return;
     for (channel = 0; channel < 16; ++channel) {
         message[0] = (uint8_t)(0xb0 | channel);
-        netmidi_camd_deliver(&rt->camd, message, sizeof(message));
+        netmidi_camd_deliver_port(&rt->camd, rt->midi2_port[index], message,
+                                  sizeof(message));
     }
 }
 
@@ -771,8 +780,10 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
                     rt->midi2_timed = rt->midi2_late = 0;
                 }
                 /* what was still held would sound after the notes off */
-                rtpmidi_queue_reset(&rt->midi2_queue);
-                midi2_all_notes_off(rt);
+                rtpmidi_queue_reset(&rt->midi2_queue[index]);
+                midi2_all_notes_off(rt, index);
+                applemidi_ports_release(&rt->midi2_ports, index + 1);
+                rt->midi2_port[index] = -1;
                 rt->midi2_known[index] = 0;
             }
             continue;
@@ -780,8 +791,23 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
         peer = session->peer;
         if (session->state == NETMIDI2_ESTABLISHED &&
             !rt->midi2_known[index]) {
-            printf("MIDIHub: MIDI 2.0 session established peer=\"%s\"\n",
-                   session->peer_name);
+            /* a port of the second driver, by the same rule as an
+               AppleMIDI peer's: kept for its endpoint's name, or the
+               first free. Where all share the clusters, port 0. */
+            if (rt->shared_port) {
+                rt->midi2_port[index] = 0;
+            } else {
+                int port = applemidi_ports_take(
+                    &rt->midi2_ports, (const uint8_t *)session->peer_name,
+                    strlen(session->peer_name), index + 1);
+                rt->midi2_port[index] = port < 0 ? -1 :
+                                        NETMIDI_CAMD_MIDI2 + port;
+            }
+            printf("MIDIHub: MIDI 2.0 session established peer=\"%s\" port=%d\n",
+                   session->peer_name,
+                   rt->midi2_port[index] < 0 ? -1 :
+                   rt->shared_port ? 0 :
+                   rt->midi2_port[index] - NETMIDI_CAMD_MIDI2);
             rt->midi2_known[index] = 1;
             rt->midi2_gaps[index] = session->gaps;
             rt->midi2_resets[index] = session->resets;
@@ -798,7 +824,7 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
             rt->midi2_resets[index] = session->resets;
             ump_to_midi1_buffer(&rt->midi2_in[index], rt->midi2_sysex[index],
                                 sizeof(rt->midi2_sysex[index]));
-            midi2_all_notes_off(rt);
+            midi2_all_notes_off(rt, index);
         }
         netmidi2_writer_init(&packet, out, sizeof(out));
         if (netmidi2_table_tick(&rt->midi2, index, (uint32_t)(now / 10),
@@ -809,11 +835,13 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
 
 struct midi2_outgoing {
     struct runtime *rt;
+    int port;                   /* the port it was sent to; -1 for all */
     uint32_t words[NETMIDI2_MAX_UMP_WORDS];
     size_t count;
 };
 
-/* One UMP Data command to every established session. */
+/* One UMP Data command to the session of the port, or to every
+ * established session where all share. */
 static void midi2_flush(struct midi2_outgoing *outgoing)
 {
     static uint8_t out[NETMIDI2_MAX_PACKET];
@@ -826,7 +854,8 @@ static void midi2_flush(struct midi2_outgoing *outgoing)
     for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index) {
         struct netmidi2_session *session =
             netmidi2_table_session(&rt->midi2, index);
-        if (!session || session->state != NETMIDI2_ESTABLISHED)
+        if (!session || session->state != NETMIDI2_ESTABLISHED ||
+            (outgoing->port >= 0 && rt->midi2_port[index] != outgoing->port))
             continue;
         netmidi2_writer_init(&packet, out, sizeof(out));
         if (netmidi2_send_ump(session, outgoing->words, outgoing->count,
@@ -848,7 +877,8 @@ static void midi2_collect(void *context, const uint32_t *words,
     outgoing->count += count;
 }
 
-static void midi2_send_midi(struct runtime *rt, const uint8_t *message,
+static void midi2_send_midi(struct runtime *rt, int port,
+                            const uint8_t *message,
                             size_t length)
 {
     static struct midi2_outgoing outgoing;
@@ -856,6 +886,7 @@ static void midi2_send_midi(struct runtime *rt, const uint8_t *message,
     size_t i;
 
     outgoing.rt = rt;
+    outgoing.port = port;
     outgoing.count = 0;
     ump_from_midi1_init(&from, 0);
     for (i = 0; i < length; ++i)
@@ -1030,8 +1061,10 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
                 send_midi_to(rt, index, message, length) == 0)
                 result = 0;
     }
-    if (rt->midi2_enabled) {
-        midi2_send_midi(rt, message, length);
+    if (rt->midi2_enabled &&
+        (rt->shared_port || rt->camd.port_now >= NETMIDI_CAMD_MIDI2)) {
+        midi2_send_midi(rt, rt->shared_port ? -1 : rt->camd.port_now,
+                        message, length);
         result = 0;
     }
     return result;
@@ -1248,10 +1281,10 @@ int main(int argc, char **argv)
 
 #ifdef NETMIDI_SERVICE
     /* Started by the stack's service manager: no console, no arguments.
-       What it would print goes nowhere, or to the file ENV:applemidid.log
+       What it would print goes nowhere, or to the file ENV:netmidid.log
        names, for whoever wants to see it. */
     {
-        const char *log = getenv("applemidid.log");
+        const char *log = getenv("netmidid.log");
 
         if (!log || !*log || !freopen(log, "w", stdout))
             freopen("NIL:", "w", stdout);
@@ -1270,9 +1303,9 @@ int main(int argc, char **argv)
     } else {
 #ifdef __AROS__
 #ifdef NETMIDI_SERVICE
-        config_result = netmidi_config_load("ENV:AppleMIDI", &config);
+        config_result = netmidi_config_load("ENV:NetMIDI", &config);
         if (config_result == 1)
-            config_result = netmidi_config_load("ENVARC:AppleMIDI", &config);
+            config_result = netmidi_config_load("ENVARC:NetMIDI", &config);
 #else
         config_result = netmidi_config_load("ENV:MidiHub/Network", &config);
         if (config_result == 1)
@@ -1290,6 +1323,7 @@ int main(int argc, char **argv)
         strcpy(config.session_name, "AROS");
 #endif
     /* what the configuration says holds unless an argument says otherwise */
+    midi2_port = config.midi2_port;
     latency_ms = config.latency_ms;
     if (config.accept[0])
         accept_rule = config.accept;
@@ -1390,7 +1424,10 @@ int main(int argc, char **argv)
                             midi2_sink, &rt);
         /* a peer may send its timestamps: they are used */
         rt.midi2.jr_offered = UMP_JR_RECEIVE;
-        rtpmidi_queue_reset(&rt.midi2_queue);
+        for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index) {
+            rtpmidi_queue_reset(&rt.midi2_queue[index]);
+            rt.midi2_port[index] = -1;
+        }
         rt.midi2_enabled = 1;
     }
     if (netmidi_camd_open(&rt.camd) != 0) {
@@ -1400,12 +1437,20 @@ int main(int argc, char **argv)
     rt.shared_port = netmidi_camd_ports(&rt.camd) == 1;
     applemidi_ports_init(&rt.ports, rt.shared_port ? 0 :
                                     netmidi_camd_ports(&rt.camd));
-    for (index = 0; index < 16; ++index)
+    applemidi_ports_init(&rt.midi2_ports, rt.shared_port ? 0 :
+                                          netmidi_camd_ports(&rt.camd));
+    for (index = 0; index < 16; ++index) {
         if (config.port_name[index][0] &&
             applemidi_ports_keep(&rt.ports, index,
                                  config.port_name[index]) != 0)
-            printf("MIDIHub: port %d cannot be kept for \"%s\"\n", index,
-                   config.port_name[index]);
+            printf("MIDIHub: applemidi port %d cannot be kept for \"%s\"\n",
+                   index, config.port_name[index]);
+        if (config.midi2_port_name[index][0] &&
+            applemidi_ports_keep(&rt.midi2_ports, index,
+                                 config.midi2_port_name[index]) != 0)
+            printf("MIDIHub: networkmidi2 port %d cannot be kept for \"%s\"\n",
+                   index, config.midi2_port_name[index]);
+    }
     now = now_ticks();
     if (applemidi_peers_init(&rt.peers, random32(now),
                         (const uint8_t *)config.session_name,
@@ -1484,8 +1529,10 @@ int main(int argc, char **argv)
             if (wait_ticks < 1000 && (long)(wait_ticks * 100) < wait_us)
                 wait_us = (long)(wait_ticks * 100);
         }
-        if (rt.midi2_enabled &&
-            rtpmidi_queue_next_due(&rt.midi2_queue, &next_due)) {
+        for (index = 0; rt.midi2_enabled && index < NETMIDI2_SESSIONS_MAX;
+             ++index) {
+            if (!rtpmidi_queue_next_due(&rt.midi2_queue[index], &next_due))
+                continue;
             now = now_ticks();
             wait_ticks = next_due > now ? next_due - now : 0;
             if (wait_ticks < 1000 && (long)(wait_ticks * 100) < wait_us)

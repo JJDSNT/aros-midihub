@@ -135,8 +135,16 @@ Nothing open.
    is unchanged: there every peer shares the clusters `MIDIHub In` and
    `MIDIHub Out`, and its tests pass as before.
 
+**One runtime, since 2026-10-12 (AM24).** The service is switched on in
+its file and is the only thing on AROS that carries a transport to CAMD:
+the hosted tests of AppleMIDI and of Network MIDI 2.0 run against it and
+the drivers' ports, and the program `MIDIHub` is no longer built for AROS.
+The service is called `netmidid` since it carries both protocols, and its
+configuration is `ENV:NetMIDI`. The Linux build of the program remains:
+it is what the host tests run, with every peer on one port.
+
 **AM08 is done by its own measure**: a CAMD program opens a driver's port
-and plays to a peer. What it leaves is AM24 to AM26 below, AM16 and AM20.
+and plays to a peer. What it leaves is AM25 to AM27 below, AM16 and AM20.
 The time a message was meant for does not cross the driver (decision D4):
 a received message is played at its time by the service, and one sent
 carries the time the service took it from the port's ring.
@@ -147,8 +155,8 @@ carries the time the service took it from the port's ring.
 |---|---|---|---|
 | AM14 | IPv4 only: `struct applemidi_peer` holds a `uint32_t` address. | An address type that holds either family. Waits for the IPv6 answer in AROS issue #1559; do not start before it. | — |
 | AM15 | Eight peers, a constant. | A number from configuration with eight as the default, and a NO with a reason in the log when the table is full. | A test fills a table of two. |
-| AM16 | Configuration is one text file: local port, one peer to invite by address or by name (`peer_name`), session name, latency (`latency_ms`), who may connect (`accept`) and the ports kept for peers (`port.<n>`), the last four since 2026-10-12. The service reads `ENV:AppleMIDI` when it starts and not again; its session is called `AROS` unless the file says otherwise, the same on every machine. | Several sessions to invite; a name that tells machines apart, from the host's. Preferences reads and writes it, and the runtime takes a change without a restart. | The Preferences page edits all of it. |
-| AM24 | One runtime is left for AppleMIDI in a booted system, since 2026-10-12: the service is switched on in its file, and the hosted tests of AppleMIDI run against it and the driver's ports (`tools/applemidi-service-hosted.sh`, which took over what `tools/applemidi-node-hosted.sh` showed with a program started by hand, and `tools/applemidi-discovery-hosted.sh`). What remains is the program `MIDIHub` itself: on AROS it is still the only way to Network MIDI 2.0, as a client of `camd.library` on its own clusters (`tools/netmidi2-hosted.sh` starts it on port 5014, beside the service), and on Linux it is what the host tests run. | When Network MIDI 2.0 has its way through a driver (its backlog, NM11), remove the AROS build of the program and the clusters `MIDIHub In` and `MIDIHub Out` with it. | No program of this package opens `camd.library` to carry a transport. |
+| AM16 | Configuration is one text file: local port, one peer to invite by address or by name (`peer_name`), session name, latency (`latency_ms`), who may connect (`accept`) and the ports kept for peers (`applemidi.port.<n>`, `networkmidi2.port.<n>`), the last four since 2026-10-12. The service reads `ENV:NetMIDI` when it starts and not again; its session is called `AROS` unless the file says otherwise, the same on every machine. | Several sessions to invite; a name that tells machines apart, from the host's. Preferences reads and writes it, and the runtime takes a change without a restart. | The Preferences page edits all of it. |
+| AM27 | Preferences and the router of this package still know the runtime as it was: `MIDIHub.prefs` writes `ENV:MidiHub/Network`, which nothing on AROS reads any more, and saved routes name the clusters `MIDIHub In` and `MIDIHub Out`, which nothing makes. | Preferences writes `ENV:NetMIDI` and offers the drivers' ports; with BLE MIDI backlog L10, which is the same work for `btmidi`. | A route made in Preferences reaches a network peer. |
 | AM25 | A CAMD client sees `applemidi.in.3`, not the peer's name, and every port is there whether a peer is or not. A SysEx message from a second port while one is being gathered from a first is left out. | Names and presence wait for the driver-side block in CAMD (its backlog, B30 and B31); a buffer per port for SysEx. | — |
 | AM17 | A peer's name is cut at 63 bytes wherever that falls, which can split a UTF-8 character; our own name is refused over 63. | Cut at a character boundary. | A host test with a name of multi-byte characters. |
 | AM18 | A packet with a command we do not know (Apple's bit-rate limit, `RL`, is one) fails to decode and is then tried as RTP, which also fails. Nothing is lost, and nothing is counted. | Recognise the command as known and ignored. | A host test; a counter. |

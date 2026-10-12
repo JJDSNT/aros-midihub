@@ -11,14 +11,14 @@
 # eth1 is AROS's (192.168.166.2), aroshost the host's (192.168.166.1). It
 # needs passwordless sudo, ethtool and xvfb-run.
 #
-# AROS starts "MIDIHub --midi2 5673 5014" (5004 is the AppleMIDI service's,
-# which the stack starts) and a CAMD program listening on
-# the cluster "MIDIHub In". The host invites AROS and sends a Note On, a
-# Note Off, a Control Change and a SysEx message, as UMPs: the CAMD program
-# has to print the four as MIDI 1.0, and All Notes Off on the sixteen
-# channels once the host has said Bye. A second CAMD program plays a
-# scale and a SysEx message into "MIDIHub Out": the host has to print
-# them, having received UMPs.
+# The stack starts the service netmidid, whose configuration gives it a
+# port for Network MIDI 2.0 ("midi2_port = 5673"). A CAMD program listens
+# on networkmidi2.in.0, a port of the driver DEVS:Midi/networkmidi2. The
+# host invites AROS and sends a Note On, a Note Off, a Control Change and a
+# SysEx message, as UMPs: the CAMD program has to print the four as MIDI
+# 1.0, and All Notes Off on the sixteen channels once the host has said
+# Bye. A second CAMD program plays a scale and a SysEx message into
+# networkmidi2.out.0: the host has to print them, having received UMPs.
 # The Host is also advertised: the host's Avahi has to find it as
 # _midi2._udp with the endpoint's name and product id in its text record.
 # It needs a running avahi-daemon and avahi-utils for that.
@@ -33,7 +33,8 @@ peer="$work/netmidi2-peer"
 c=SYS:Extras/aros-midihub/C
 
 test -x "$aros/boot/linux/AROSBootstrap"
-test -f "$aros/Extras/aros-midihub/C/MIDIHub"
+test -f "$aros/System/Network/Services/netmidid"
+test -f "$aros/Devs/Midi/networkmidi2"
 test -f "$aros/Extras/aros-midihub/C/MIDIHubCAMDProbe"
 
 mkdir -p "$work"
@@ -59,6 +60,9 @@ echo 'eth1 DEV=DEVS:networks/eth.device UNIT=1 IP=192.168.166.2 NETMASK=255.255.
 printf 'HOST 192.168.166.2 arosbox.arosnet arosbox\nDOMAIN arosnet 192.168.166.\n' \
     > "$db/netdb-myhost"
 sed -i 's/OPENGUI=.*/OPENGUI=NO/' "$db/general.config"
+# the service's configuration, and what it would print to a file
+printf 'midi2_port = 5673\nsession_name = AROS Net MIDI\n' > "$sys/Prefs/Env-Archive/NetMIDI"
+printf 'SYS:netmidid.log' > "$sys/Prefs/Env-Archive/netmidid.log"
 sudo setcap cap_net_raw,cap_net_admin+ep "$sys/boot/linux/AROSBootstrap"
 cat > "$sys/S/netmidi2-run" <<RUNEOF
 FailAt 21
@@ -67,11 +71,9 @@ Path C S ADD QUIET
 Run >NIL: QUIET AROSTCP
 WaitForPort AROSTCP
 Wait 8
-Run >SYS:hub.log $c/MIDIHub --midi2 5673 5014
-Wait 2
-Run >SYS:camd-in.log $c/MIDIHubCAMDProbe --monitor "MIDIHub In" 40
-Wait 16
-$c/MIDIHubCAMDProbe >SYS:camd-out.log --send "MIDIHub Out"
+Run >SYS:camd-in.log $c/MIDIHubCAMDProbe --monitor networkmidi2.in.0 40
+Wait 18
+$c/MIDIHubCAMDProbe >SYS:camd-out.log --send networkmidi2.out.0
 Wait 14
 Shutdown
 RUNEOF
@@ -91,7 +93,8 @@ printf 'Run >NIL: Execute S:netmidi2-run\n' > "$sys/S/User-Startup"
 (cd "$sys" && timeout 120 xvfb-run -a boot/linux/AROSBootstrap \
     > "$work/serial.log" 2>&1) || true
 wait || true
-cp "$sys/hub.log" "$sys/camd-in.log" "$sys/camd-out.log" "$work/" 2> /dev/null || true
+cp "$sys/netmidid.log" "$work/hub.log" 2> /dev/null || true
+cp "$sys/camd-in.log" "$sys/camd-out.log" "$work/" 2> /dev/null || true
 
 status=0
 if grep -q 'MIDI 2.0 session established peer="Peer on 5674"' "$work/hub.log" 2> /dev/null &&
@@ -105,7 +108,7 @@ else
     echo "FAIL: from the host to CAMD"
     status=1
 fi
-if grep -q '^established slot=0 role=client peer="AROS MIDIHub"' "$work/peer.log" 2> /dev/null &&
+if grep -q '^established slot=0 role=client peer="AROS Net MIDI"' "$work/peer.log" 2> /dev/null &&
    grep -q '^midi from=0 903c64$' "$work/peer.log" &&
    grep -q '^midi from=0 804800$' "$work/peer.log" &&
    [ "$(grep -c '^midi from=0 9' "$work/peer.log")" = 8 ] &&
@@ -115,9 +118,9 @@ else
     echo "FAIL: from CAMD to the host"
     status=1
 fi
-line=$(grep '^=;aroshost;IPv4;AROS\\032MIDIHub;_midi2._udp;' "$work/browse.log" 2> /dev/null | head -1)
+line=$(grep '^=;aroshost;IPv4;AROS\\032Net\\032MIDI;_midi2._udp;' "$work/browse.log" 2> /dev/null | head -1)
 if echo "$line" | grep -q ';192.168.166.2;5673;' &&
-   echo "$line" | grep -q '"UMPEndpointName=AROS MIDIHub"' &&
+   echo "$line" | grep -q '"UMPEndpointName=AROS Net MIDI"' &&
    echo "$line" | grep -q '"ProductInstanceId=aros-midihub"'; then
     echo "ok: Avahi found the Host as _midi2._udp on port 5673, with its endpoint name and product id"
 else

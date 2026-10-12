@@ -100,17 +100,23 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
             if (!*value || strlen(value) >= sizeof(next.accept))
                 goto done;
             strcpy(next.accept, value);
-        } else if (strncmp(key, "port.", 5) == 0) {
+        } else if (strcmp(key, "midi2_port") == 0) {
+            if (port_value(value, &next.midi2_port))
+                goto done;
+        } else if (strncmp(key, "applemidi.port.", 15) == 0 ||
+                   strncmp(key, "networkmidi2.port.", 18) == 0) {
+            int second = key[0] == 'n';
+            const char *number = key + (second ? 18 : 15);
+            char (*names)[64] = second ? next.midi2_port_name : next.port_name;
             char *end;
             unsigned long port;
 
             errno = 0;
-            port = strtoul(key + 5, &end, 10);
-            if (errno || end == key + 5 || *end ||
-                port >= sizeof(next.port_name) / sizeof(next.port_name[0]) ||
-                !*value || strlen(value) >= sizeof(next.port_name[0]))
+            port = strtoul(number, &end, 10);
+            if (errno || end == number || *end || port >= 16 || !*value ||
+                strlen(value) >= sizeof(next.port_name[0]))
                 goto done;
-            strcpy(next.port_name[port], value);
+            strcpy(names[port], value);
         } else
             goto done;
     }

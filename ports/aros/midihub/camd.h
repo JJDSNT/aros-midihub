@@ -6,18 +6,23 @@
 /* CAMD-facing state owned by the Network MIDI runtime.  Keeping this wrapper
  * separate from the reusable bridge gives the resident process one boundary
  * for CAMD lifecycle and leaves room for one bridge per peer later. */
-/* The service has the ports of a driver, a peer to each. The program that
- * is a client of camd.library has one pair of clusters, which every peer
- * shares: all its messages are of port 0, whatever port is named. */
-#define NETMIDI_CAMD_PORTS 16
+/* The service has the ports of two drivers, a peer to each port: those of
+ * applemidi from 0, those of networkmidi2 from NETMIDI_CAMD_MIDI2. The
+ * program that is a client of camd.library has one pair of clusters, which
+ * every peer of either kind shares: all its messages are of port 0,
+ * whatever port is named. */
+#define NETMIDI_CAMD_PORTS 16       /* of each driver */
+#define NETMIDI_CAMD_DRIVERS 2
+#define NETMIDI_CAMD_MIDI2 NETMIDI_CAMD_PORTS
 
 struct netmidi_camd_runtime {
     struct aros_camd_bridge bridge;
     int opened;
 #ifdef NETMIDI_SERVICE
-    /* The service reaches CAMD through the adapters of the driver
-       DEVS:Midi/applemidi (adapters.c), not as a client of camd.library. */
-    void *adapters;             /* struct AppleMidiAdapters, once found */
+    /* The service reaches CAMD through the adapters of its two drivers
+       (adapters.c), not as a client of camd.library. */
+    void *adapters[NETMIDI_CAMD_DRIVERS];   /* struct NetMidiAdapters of
+                                               each driver, once found */
     int signal_bit;
     /* the bytes CAMD clients sent to each port, gathered into messages */
     struct {
@@ -27,7 +32,7 @@ struct netmidi_camd_runtime {
         uint8_t need;
         int in_sysex;
         size_t sysex_length;
-    } stream[NETMIDI_CAMD_PORTS];
+    } stream[NETMIDI_CAMD_PORTS * NETMIDI_CAMD_DRIVERS];
     uint8_t *sysex;             /* one message at a time, of any port */
     int sysex_port;
 #endif

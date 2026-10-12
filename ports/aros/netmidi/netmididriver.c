@@ -1,15 +1,18 @@
 /*
     Copyright (C) 2026, The AROS Development Team. All rights reserved.
 
-    Desc: CAMD driver for AppleMIDI (RTP-MIDI) sessions.
+    Desc: CAMD driver for network MIDI sessions.
 */
 
-/* camd.library loads this from DEVS:Midi and opens its ports,
-   applemidi.in.0 to applemidi.in.15 and applemidi.out.0 to
-   applemidi.out.15. It holds no network code: the sessions are run by a
-   service of the network stack, which finds the adapters made here by
-   their public name and attaches to them. A port is there whether or not
-   a peer is: what is sent to a port nobody serves is dropped. Modelled on
+/* Built twice: as DEVS:Midi/applemidi, for AppleMIDI (RTP-MIDI) sessions,
+   and with NETMIDI_DRIVER_NETWORKMIDI2 as DEVS:Midi/networkmidi2, for
+   Network MIDI 2.0 sessions, which reach CAMD translated to MIDI 1.0.
+   camd.library loads each and opens its ports, <name>.in.0 to
+   <name>.in.15 and <name>.out.0 to <name>.out.15. A driver holds no
+   network code: the sessions are run by a service of the network stack,
+   which finds the adapters made here by their public name and attaches to
+   them. A port is there whether or not a peer is: what is sent to a port
+   nobody serves is dropped. Modelled on
    rom/usb/classes/camdmidi/camd/poseidonusb.c. */
 
 #include <proto/exec.h>
@@ -19,7 +22,7 @@
 #include <exec/interrupts.h>
 #include <midi/camddevices.h>
 
-#include "applemidi_camd.h"
+#include "netmidi_camd.h"
 
 int main(void)
 {
@@ -27,16 +30,16 @@ int main(void)
     return -1;
 }
 
-AROS_UFP1(BOOL, AROS_SLIB_ENTRY(Init, AppleMidiCAMD, 0),
+AROS_UFP1(BOOL, AROS_SLIB_ENTRY(Init, NetMidiCAMD, 0),
         AROS_UFPA(APTR, sysbase, A6));
-AROS_UFP0(VOID, AROS_SLIB_ENTRY(Expunge, AppleMidiCAMD, 0));
-AROS_UFP5(struct MidiPortData *, AROS_SLIB_ENTRY(OpenPort, AppleMidiCAMD, 0),
+AROS_UFP0(VOID, AROS_SLIB_ENTRY(Expunge, NetMidiCAMD, 0));
+AROS_UFP5(struct MidiPortData *, AROS_SLIB_ENTRY(OpenPort, NetMidiCAMD, 0),
         AROS_UFPA(struct MidiDeviceData *, data, A3),
         AROS_UFPA(LONG, portnum, D0),
         AROS_UFPA(APTR, transmitfunc, A0),
         AROS_UFPA(APTR, receivefunc, A1),
         AROS_UFPA(APTR, userdata, A2));
-AROS_UFP2(VOID, AROS_SLIB_ENTRY(ClosePort, AppleMidiCAMD, 0),
+AROS_UFP2(VOID, AROS_SLIB_ENTRY(ClosePort, NetMidiCAMD, 0),
         AROS_UFPA(struct MidiDeviceData *, data, A3),
         AROS_UFPA(LONG, portnum, D0));
 AROS_UFP2(VOID, ActivateXmit,
@@ -53,25 +56,31 @@ static struct MidiDeviceData MidiDeviceData __attribute__((used)) =
   name,
   vers,
   1, 0,
-  (APTR)AROS_SLIB_ENTRY(Init, AppleMidiCAMD, 0),
-  (APTR)AROS_SLIB_ENTRY(Expunge, AppleMidiCAMD, 0),
-  (APTR)AROS_SLIB_ENTRY(OpenPort, AppleMidiCAMD, 0),
-  (APTR)AROS_SLIB_ENTRY(ClosePort, AppleMidiCAMD, 0),
-  APPLEMIDI_PORTS,
+  (APTR)AROS_SLIB_ENTRY(Init, NetMidiCAMD, 0),
+  (APTR)AROS_SLIB_ENTRY(Expunge, NetMidiCAMD, 0),
+  (APTR)AROS_SLIB_ENTRY(OpenPort, NetMidiCAMD, 0),
+  (APTR)AROS_SLIB_ENTRY(ClosePort, NetMidiCAMD, 0),
+  NETMIDI_DRIVER_PORTS,
   1
 };
 
+#ifdef NETMIDI_DRIVER_NETWORKMIDI2
+char name[] = NETWORKMIDI2_DRIVER_NAME;
+char vers[] = "$VER: Network MIDI 2.0 CAMD driver 1.0 (12.10.2026)";
+static char adapters_name[] = NETWORKMIDI2_ADAPTERS_NAME;
+#else
 char name[] = APPLEMIDI_DRIVER_NAME;
 char vers[] = "$VER: AppleMIDI CAMD driver 1.0 (12.10.2026)";
 static char adapters_name[] = APPLEMIDI_ADAPTERS_NAME;
+#endif
 
 struct ExecBase *SysBase = NULL;
 
-static struct AppleMidiAdapters *Adapters = NULL;
+static struct NetMidiAdapters *Adapters = NULL;
 
 /* A soft interrupt: moves what CAMD has to send into the port's ring and
    wakes the service. */
-AROS_INTH1(GetFromCAMD, struct AppleMidiAdapter *, port)
+AROS_INTH1(GetFromCAMD, struct NetMidiAdapter *, port)
 {
     AROS_INTFUNC_INIT
 
@@ -119,12 +128,12 @@ AROS_INTH1(GetFromCAMD, struct AppleMidiAdapter *, port)
     AROS_INTFUNC_EXIT
 }
 
-AROS_UFH1(BOOL, AROS_SLIB_ENTRY(Init, AppleMidiCAMD, 0),
+AROS_UFH1(BOOL, AROS_SLIB_ENTRY(Init, NetMidiCAMD, 0),
         AROS_UFHA(APTR, sysbase, A6))
 {
     AROS_USERFUNC_INIT
 
-    struct AppleMidiAdapters *adapters;
+    struct NetMidiAdapters *adapters;
     ULONG n;
 
     SysBase = sysbase;
@@ -133,19 +142,19 @@ AROS_UFH1(BOOL, AROS_SLIB_ENTRY(Init, AppleMidiCAMD, 0),
     adapters = AllocMem(sizeof(*adapters), MEMF_PUBLIC | MEMF_CLEAR);
     if (!adapters)
         return FALSE;
-    for (n = 0; n < APPLEMIDI_PORTS; n++)
+    for (n = 0; n < NETMIDI_DRIVER_PORTS; n++)
     {
-        struct AppleMidiAdapter *port = &adapters->aa_Port[n];
+        struct NetMidiAdapter *port = &adapters->aa_Port[n];
 
-        port->ad_TXBuffer = AllocMem(APPLEMIDI_TXBUF_SIZE, MEMF_PUBLIC);
+        port->ad_TXBuffer = AllocMem(NETMIDI_TXBUF_SIZE, MEMF_PUBLIC);
         if (!port->ad_TXBuffer)
         {
             while (n--)
-                FreeMem(adapters->aa_Port[n].ad_TXBuffer, APPLEMIDI_TXBUF_SIZE);
+                FreeMem(adapters->aa_Port[n].ad_TXBuffer, NETMIDI_TXBUF_SIZE);
             FreeMem(adapters, sizeof(*adapters));
             return FALSE;
         }
-        port->ad_TXBufSize = APPLEMIDI_TXBUF_SIZE;
+        port->ad_TXBufSize = NETMIDI_TXBUF_SIZE;
         port->ad_PortNum = n;
         port->ad_ActivateFunc = ActivateXmit;
         port->ad_CAMDTXFunc.is_Node.ln_Type = NT_INTERRUPT;
@@ -154,8 +163,8 @@ AROS_UFH1(BOOL, AROS_SLIB_ENTRY(Init, AppleMidiCAMD, 0),
         port->ad_CAMDTXFunc.is_Data = port;
         InitSemaphore(&port->ad_Lock);
     }
-    adapters->aa_Version = APPLEMIDI_ADAPTERS_VERSION;
-    adapters->aa_Ports = APPLEMIDI_PORTS;
+    adapters->aa_Version = NETMIDI_ADAPTERS_VERSION;
+    adapters->aa_Ports = NETMIDI_DRIVER_PORTS;
     adapters->aa_Semaphore.ss_Link.ln_Name = adapters_name;
     adapters->aa_Semaphore.ss_Link.ln_Pri = 0;
     Adapters = adapters;
@@ -169,7 +178,7 @@ AROS_UFH1(BOOL, AROS_SLIB_ENTRY(Init, AppleMidiCAMD, 0),
 /* camd.library is going. A service may still be attached, so the adapters
    are taken from the public list and left where they are: nothing finds
    them again, and no port of theirs is open. */
-AROS_UFH0(VOID, AROS_SLIB_ENTRY(Expunge, AppleMidiCAMD, 0))
+AROS_UFH0(VOID, AROS_SLIB_ENTRY(Expunge, NetMidiCAMD, 0))
 {
     AROS_USERFUNC_INIT
 
@@ -180,7 +189,7 @@ AROS_UFH0(VOID, AROS_SLIB_ENTRY(Expunge, AppleMidiCAMD, 0))
     AROS_USERFUNC_EXIT
 }
 
-AROS_UFH5(struct MidiPortData *, AROS_SLIB_ENTRY(OpenPort, AppleMidiCAMD, 0),
+AROS_UFH5(struct MidiPortData *, AROS_SLIB_ENTRY(OpenPort, NetMidiCAMD, 0),
         AROS_UFHA(struct MidiDeviceData *, data, A3),
         AROS_UFHA(LONG, portnum, D0),
         AROS_UFHA(APTR, transmitfunc, A0),
@@ -189,10 +198,10 @@ AROS_UFH5(struct MidiPortData *, AROS_SLIB_ENTRY(OpenPort, AppleMidiCAMD, 0),
 {
     AROS_USERFUNC_INIT
 
-    struct AppleMidiAdapter *port;
+    struct NetMidiAdapter *port;
 
     (void)data;
-    if (!Adapters || portnum < 0 || portnum >= APPLEMIDI_PORTS)
+    if (!Adapters || portnum < 0 || portnum >= NETMIDI_DRIVER_PORTS)
         return NULL;
     port = &Adapters->aa_Port[portnum];
 
@@ -208,16 +217,16 @@ AROS_UFH5(struct MidiPortData *, AROS_SLIB_ENTRY(OpenPort, AppleMidiCAMD, 0),
     AROS_USERFUNC_EXIT
 }
 
-AROS_UFH2(VOID, AROS_SLIB_ENTRY(ClosePort, AppleMidiCAMD, 0),
+AROS_UFH2(VOID, AROS_SLIB_ENTRY(ClosePort, NetMidiCAMD, 0),
         AROS_UFHA(struct MidiDeviceData *, data, A3),
         AROS_UFHA(LONG, portnum, D0))
 {
     AROS_USERFUNC_INIT
 
-    struct AppleMidiAdapter *port;
+    struct NetMidiAdapter *port;
 
     (void)data;
-    if (!Adapters || portnum < 0 || portnum >= APPLEMIDI_PORTS)
+    if (!Adapters || portnum < 0 || portnum >= NETMIDI_DRIVER_PORTS)
         return;
     port = &Adapters->aa_Port[portnum];
 
@@ -237,7 +246,7 @@ AROS_UFH2(VOID, ActivateXmit,
     AROS_USERFUNC_INIT
 
     (void)userdata;
-    if (Adapters && portnum < APPLEMIDI_PORTS)
+    if (Adapters && portnum < NETMIDI_DRIVER_PORTS)
         Cause(&Adapters->aa_Port[portnum].ad_CAMDTXFunc);
 
     AROS_USERFUNC_EXIT

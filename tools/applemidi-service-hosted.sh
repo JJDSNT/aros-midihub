@@ -1,7 +1,7 @@
 #!/bin/sh
 # Checks on Linux-hosted AROS that the AppleMIDI runtime runs as a service
 # of the AROSTCP service manager: nobody starts it, the stack does, from
-# db/services.d/applemidi, with no console and no arguments. node-rtpmidi
+# db/services.d/netmidi, with no console and no arguments. node-rtpmidi
 # on the host is its peer.
 #
 #   tools/applemidi-service-hosted.sh [AROS_DIR [WORK_DIR]]
@@ -11,7 +11,7 @@
 # avahi-daemon and avahi-utils, and the network once to fetch the package.
 #
 # Two peers on the host invite AROS, one of them under a name a port is
-# kept for in the service's configuration (ENVARC:AppleMIDI, "port.3 =
+# kept for in the service's configuration (ENVARC:NetMIDI, "applemidi.port.3 =
 # Kept peer"). Each sends a Note On, a Note Off, a Control Change and a
 # SysEx message; a CAMD program listening on applemidi.in.3 has to print
 # the four of the named peer, and one on applemidi.in.0 those of the
@@ -34,9 +34,9 @@ peer="$here/tests/interop/node_rtpmidi_peer.js"
 c=SYS:Extras/aros-midihub/C
 
 test -x "$aros/boot/linux/AROSBootstrap"
-test -f "$aros/System/Network/Services/applemidid"
+test -f "$aros/System/Network/Services/netmidid"
 test -f "$aros/Devs/Midi/applemidi"
-test -f "$aros/System/Network/AROSTCP/db/services.d/applemidi"
+test -f "$aros/System/Network/AROSTCP/db/services.d/netmidi"
 test -f "$aros/Extras/aros-midihub/C/MIDIHubCAMDProbe"
 
 mkdir -p "$work/node"
@@ -68,7 +68,7 @@ prepare() {
         > "$db/netdb-myhost"
     sed -i 's/OPENGUI=.*/OPENGUI=NO/' "$db/general.config"
     # have the service write what it would print to a file
-    printf 'SYS:applemidid.log' > "$sys/Prefs/Env-Archive/applemidid.log"
+    printf 'SYS:netmidid.log' > "$sys/Prefs/Env-Archive/netmidid.log"
     sudo setcap cap_net_raw,cap_net_admin+ep "$sys/boot/linux/AROSBootstrap"
     cat > "$sys/S/applemidi-run" <<RUNEOF
 FailAt 21
@@ -95,11 +95,11 @@ Wait 20
 $c/MIDIHubCAMDProbe >SYS:camd-send.log --send applemidi.out.3
 Wait 22
 Status >SYS:status-before.log
-Break \`Status COMMAND=applemidi\` C
+Break \`Status COMMAND=netmidi\` C
 Wait 3
 Status >SYS:status-after.log"
 # port 3 is kept for the peer of that name; the other takes the first free
-printf 'port.3 = Kept peer\n' > "$sys/Prefs/Env-Archive/AppleMIDI"
+printf 'applemidi.port.3 = Kept peer\n' > "$sys/Prefs/Env-Archive/NetMIDI"
 (
     for attempt in $(seq 1 60); do
         ping -c 1 -W 1 192.168.166.2 > /dev/null 2>&1 && break
@@ -114,7 +114,7 @@ printf 'port.3 = Kept peer\n' > "$sys/Prefs/Env-Archive/AppleMIDI"
 ) &
 boot 130 service
 wait || true
-cp "$sys/applemidid.log" "$sys/camd-0.log" "$sys/camd-3.log" "$sys/camd-send.log" \
+cp "$sys/netmidid.log" "$sys/camd-0.log" "$sys/camd-3.log" "$sys/camd-send.log" \
     "$sys/status-before.log" "$sys/status-after.log" "$work/" 2> /dev/null || true
 
 # the four messages, once: each port has one peer's and not the other's
@@ -124,8 +124,8 @@ four() {
     [ "$(grep -c '^CAMDProbe: b0 07 64$' "$1")" = 1 ] &&
     [ "$(grep -c '^CAMDProbe: SysEx 6 bytes: f0 7d 01 02 03 f7' "$1")" = 1 ]
 }
-if grep -q 'session connected port=0' "$work/applemidid.log" 2> /dev/null &&
-   grep -q 'session connected port=3' "$work/applemidid.log" &&
+if grep -q 'session connected port=0' "$work/netmidid.log" 2> /dev/null &&
+   grep -q 'session connected port=3' "$work/netmidid.log" &&
    four "$work/camd-0.log" && four "$work/camd-3.log" &&
    grep -q '^control receiver_feedback$' "$work/peer.log"; then
     echo "ok: the stack started the service; of two node-rtpmidi peers the one a port is kept for got port 3 and the other port 0, and a CAMD program on each port received its peer's four messages and not the other's"
@@ -149,8 +149,8 @@ else
     echo "FAIL: the service's advertisement"
     status=1
 fi
-if grep -aq 'command: applemidi$' "$work/status-before.log" 2> /dev/null &&
-   ! grep -aq 'command: applemidi$' "$work/status-after.log" 2> /dev/null; then
+if grep -aq 'command: netmidi$' "$work/status-before.log" 2> /dev/null &&
+   ! grep -aq 'command: netmidi$' "$work/status-after.log" 2> /dev/null; then
     echo "ok: told to stop, it stopped"
 else
     echo "FAIL: stopping the service"
@@ -162,14 +162,14 @@ fi
 prepare "Wait 14
 $c/MIDIHubCAMDProbe >SYS:camd-send-invite.log --send applemidi.out.0
 Wait 10"
-printf 'peer_ip = 192.168.166.1\npeer_port = 5104\n' > "$sys/Prefs/Env-Archive/AppleMIDI"
+printf 'peer_ip = 192.168.166.1\npeer_port = 5104\n' > "$sys/Prefs/Env-Archive/NetMIDI"
 timeout 80 node "$peer" 5104 > "$work/invite-peer.log" 2>&1 &
 boot 85 invite
 kill %1 2> /dev/null || true
 wait || true
-cp "$sys/applemidid.log" "$work/applemidid-invite.log" 2> /dev/null || true
-if grep -q 'session connected port=0' "$work/applemidid-invite.log" 2> /dev/null &&
-   grep -q 'clock exchange completed' "$work/applemidid-invite.log" &&
+cp "$sys/netmidid.log" "$work/netmidid-invite.log" 2> /dev/null || true
+if grep -q 'session connected port=0' "$work/netmidid-invite.log" 2> /dev/null &&
+   grep -q 'clock exchange completed' "$work/netmidid-invite.log" &&
    grep -q '^message 903c64$' "$work/invite-peer.log" &&
    grep -q '^message 804800$' "$work/invite-peer.log"; then
     echo "ok: the service invited the peer its configuration names, exchanged clocks, and a scale sent to applemidi.out.0 arrived there"
