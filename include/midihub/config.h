@@ -19,6 +19,12 @@ struct netmidi_network_config {
     /* "midi2_port": the UDP port Network MIDI 2.0 is answered on; without
      * it there is none */
     uint16_t midi2_port;
+    /* A Network MIDI 2.0 Host to invite, as a Client: at "midi2_peer_ip"
+     * and "midi2_peer_port", or wherever one is advertised whose endpoint
+     * is called "midi2_peer_name". Either needs midi2_port. */
+    char midi2_peer_ip[64];
+    uint16_t midi2_peer_port;
+    char midi2_peer_name[64];
     /* "peer_name": a peer to invite wherever it is advertised under that
      * session name. "latency_ms": added to the time each received event
      * is due, 0 to 2000. "accept": anyone, nobody, or a list of addresses

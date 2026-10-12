@@ -103,6 +103,15 @@ struct runtime {
        through with the first's; -1 for none */
     struct applemidi_ports midi2_ports;
     int midi2_port[NETMIDI2_SESSIONS_MAX];
+    /* A Host to invite, as its Client: by address, or wherever one is
+       advertised under the name wanted */
+    int midi2_host;                 /* its address and port are known */
+    uint64_t midi2_host_key;
+    char midi2_wanted[64];
+    uint64_t midi2_tried;
+    uint64_t midi2_wait;
+    int browse_apple;               /* which of discovery's searches */
+    int browse_midi2;
     unsigned long midi2_timed;
     unsigned long midi2_late;
     struct netmidi_camd_runtime camd;
@@ -1233,6 +1242,32 @@ static void periodic(struct runtime *rt, uint64_t now)
             int wanted = rt->wanted[0] && strcmp(seen.name, rt->wanted) == 0;
             if (ours)
                 continue;           /* our own registration, come back */
+            if (seen.browse == rt->browse_midi2) {
+                /* a Network MIDI 2.0 Host: known to its user by its
+                   endpoint's name, to the network by its instance's */
+                if (seen.present)
+                    printf(TAG "MIDI 2.0 host \"%s\" (\"%s\") found at %u.%u.%u.%u port %u\n",
+                           seen.endpoint, seen.name,
+                           (unsigned int)(seen.address >> 24),
+                           (unsigned int)((seen.address >> 16) & 255),
+                           (unsigned int)((seen.address >> 8) & 255),
+                           (unsigned int)(seen.address & 255),
+                           (unsigned int)seen.port);
+                else
+                    printf(TAG "MIDI 2.0 host \"%s\" is gone\n", seen.name);
+                if (rt->midi2_wanted[0] &&
+                    (strcmp(seen.endpoint, rt->midi2_wanted) == 0 ||
+                     strcmp(seen.name, rt->midi2_wanted) == 0)) {
+                    if (seen.present) {
+                        rt->midi2_host_key =
+                            ((uint64_t)seen.address << 16) | seen.port;
+                        if (!rt->midi2_host)
+                            rt->midi2_tried = rt->midi2_wait = 0;
+                    }
+                    rt->midi2_host = seen.present;
+                }
+                continue;
+            }
             if (seen.present)
                 printf(TAG "session \"%s\" found at %u.%u.%u.%u port %u\n",
                        seen.name, (unsigned int)(seen.address >> 24),
@@ -1268,6 +1303,27 @@ static void periodic(struct runtime *rt, uint64_t now)
             if (rt->wanted_wait > APPLEMIDI_WANTED_LONGEST_WAIT)
                 rt->wanted_wait = APPLEMIDI_WANTED_LONGEST_WAIT;
         }
+    }
+    /* The Host we are to be a Client of is known and we have no session
+       with it: invite it, and again more slowly while it does not answer. */
+    if (rt->midi2_enabled && rt->midi2_host &&
+        netmidi2_table_find(&rt->midi2, rt->midi2_host_key) < 0 &&
+        (!rt->midi2_tried ||
+         elapsed_ticks(now, rt->midi2_tried) >= rt->midi2_wait)) {
+        static uint8_t out[NETMIDI2_MAX_PACKET];
+        struct netmidi2_writer packet;
+
+        netmidi2_writer_init(&packet, out, sizeof(out));
+        if (netmidi2_table_invite(&rt->midi2, rt->midi2_host_key,
+                                  (uint32_t)(now / 10), &packet) >= 0) {
+            puts(TAG "inviting a MIDI 2.0 host");
+            midi2_send(rt, rt->midi2_host_key, &packet);
+        }
+        rt->midi2_tried = now ? now : 1;
+        rt->midi2_wait = rt->midi2_wait ? rt->midi2_wait * 2 :
+                         APPLEMIDI_WANTED_FIRST_WAIT;
+        if (rt->midi2_wait > APPLEMIDI_WANTED_LONGEST_WAIT)
+            rt->midi2_wait = APPLEMIDI_WANTED_LONGEST_WAIT;
     }
     for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
         if (rt->peers.peer[index].used)
@@ -1507,7 +1563,28 @@ int main(int argc, char **argv)
     /* An AppleMIDI session is found under its control port. */
     netmidi_discovery_add(&rt.discovery, rt.session_name, "_apple-midi._udp",
                           local_port);
-    netmidi_discovery_browse(&rt.discovery, "_apple-midi._udp");
+    rt.browse_apple = netmidi_discovery_browse(&rt.discovery,
+                                               "_apple-midi._udp");
+    rt.browse_midi2 = -1;
+    if (rt.midi2_enabled && config.midi2_peer_ip[0]) {
+        struct in_addr address;
+#ifdef __AROS__
+        address.s_addr = inet_addr(config.midi2_peer_ip);
+        if (address.s_addr != INADDR_NONE) {
+#else
+        if (inet_pton(AF_INET, config.midi2_peer_ip, &address) == 1) {
+#endif
+            rt.midi2_host_key = ((uint64_t)ntohl(address.s_addr) << 16) |
+                                config.midi2_peer_port;
+            rt.midi2_host = 1;
+        }
+    }
+    if (rt.midi2_enabled && config.midi2_peer_name[0]) {
+        snprintf(rt.midi2_wanted, sizeof(rt.midi2_wanted), "%s",
+                 config.midi2_peer_name);
+        rt.browse_midi2 = netmidi_discovery_browse(&rt.discovery,
+                                                   "_midi2._udp");
+    }
     if (rt.midi2_enabled) {
         /* A Network MIDI 2.0 Host is found as _midi2._udp, with the two
            strings it also gives in its Invitation Reply, and its records

@@ -70,6 +70,11 @@ int netmidi_config_save(const char *path,
         fprintf(file, "accept=%s\n", config->accept);
     if (config->midi2_port)
         fprintf(file, "midi2_port=%u\n", (unsigned)config->midi2_port);
+    if (config->midi2_peer_ip[0])
+        fprintf(file, "midi2_peer_ip=%s\nmidi2_peer_port=%u\n",
+                config->midi2_peer_ip, (unsigned)config->midi2_peer_port);
+    if (config->midi2_peer_name[0])
+        fprintf(file, "midi2_peer_name=%s\n", config->midi2_peer_name);
     for (port = 0; port < 16; ++port) {
         if (config->port_name[port][0])
             fprintf(file, "applemidi.port.%d=%s\n", port,
@@ -146,6 +151,17 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
         } else if (strcmp(key, "midi2_port") == 0) {
             if (port_value(value, &next.midi2_port))
                 goto done;
+        } else if (strcmp(key, "midi2_peer_port") == 0) {
+            if (port_value(value, &next.midi2_peer_port))
+                goto done;
+        } else if (strcmp(key, "midi2_peer_ip") == 0) {
+            if (!*value || strlen(value) >= sizeof(next.midi2_peer_ip))
+                goto done;
+            strcpy(next.midi2_peer_ip, value);
+        } else if (strcmp(key, "midi2_peer_name") == 0) {
+            if (!*value || strlen(value) >= sizeof(next.midi2_peer_name))
+                goto done;
+            strcpy(next.midi2_peer_name, value);
         } else if (strncmp(key, "applemidi.port.", 15) == 0 ||
                    strncmp(key, "networkmidi2.port.", 18) == 0) {
             int second = key[0] == 'n';
@@ -163,7 +179,10 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
         } else
             goto done;
     }
-    if (ferror(file) || (!!next.peer_ip[0] != !!next.peer_port))
+    if (ferror(file) || (!!next.peer_ip[0] != !!next.peer_port) ||
+        (!!next.midi2_peer_ip[0] != !!next.midi2_peer_port) ||
+        ((next.midi2_peer_ip[0] || next.midi2_peer_name[0]) &&
+         !next.midi2_port))
         goto done;
     *config = next;
     result = 0;

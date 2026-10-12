@@ -19,6 +19,9 @@
 #          20 ms late, with JR Timestamps. With no latency the notes are
 #          played as they come; with 40 ms of it they have to be played
 #          50 ms apart. Skipped when build/MIDIHub is not there.
+#   client The program MIDIHub as Client: its configuration names a Host
+#          by address, which it has to invite, and whose four messages it
+#          has to take. Skipped when build/MIDIHub is not there.
 #
 # Exit status: 0 when all passed.
 set -eu
@@ -100,8 +103,25 @@ if [ -x "$here/build/MIDIHub" ]; then
         echo "FAIL: timed delivery: no latency worst=$plain_worst late=$plain_late; 40 ms worst=$held_worst late=$held_late"
         status=1
     fi
+    printf 'local_port=5710\nmidi2_port=5713\nmidi2_peer_ip=127.0.0.1\nmidi2_peer_port=5714\n' \
+        > "$work/client.conf"
+    timeout 5 "$peer" 5714 --send > "$work/client-host.log" 2>&1 &
+    sleep 0.3
+    timeout -s INT 4 "$here/build/MIDIHub" --config "$work/client.conf" \
+        > "$work/client-hub.log" 2>&1 || true
+    wait || true
+    if grep -q 'inviting a MIDI 2.0 host' "$work/client-hub.log" &&
+       grep -q 'MIDI 2.0 session established peer="Peer on 5714"' "$work/client-hub.log" &&
+       grep -q 'MIDI 2.0 bytes=903c64' "$work/client-hub.log" &&
+       grep -q 'MIDI 2.0 bytes=f07d0102030405060708090af7' "$work/client-hub.log" &&
+       grep -q '^established slot=0 role=host peer="AROS MIDIHub"' "$work/client-host.log"; then
+        echo "ok: MIDIHub as Client invited the Host its configuration names and took its four messages"
+    else
+        echo "FAIL: MIDIHub as Client"
+        status=1
+    fi
 else
-    echo "skipped: timed delivery, build/MIDIHub is not built"
+    echo "skipped: timed delivery and the Client role, build/MIDIHub is not built"
 fi
 echo "logs: $work"
 exit $status

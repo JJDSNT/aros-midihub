@@ -83,10 +83,11 @@ int netmidi_discovery_item(char *text, unsigned long size, const char *key,
 int netmidi_discovery_browse(struct netmidi_discovery *discovery,
                              const char *type)
 {
-    if (!discovery || !type)
+    if (!discovery || !type ||
+        discovery->browses == NETMIDI_DISCOVERY_BROWSES)
         return -1;
-    discovery->browse_type = type;
-    return 0;
+    discovery->browse[discovery->browses].type = type;
+    return discovery->browses++;
 }
 
 int netmidi_discovery_next(struct netmidi_discovery *discovery,
@@ -137,6 +138,42 @@ AROS_UFH3(static IPTR, browse_hook,
     }
     event->port = message->bm_Instance.si_Port;
     event->present = message->bm_Code == MEVENT_ADD;
+    event->browse = (int)(IPTR)hook->h_SubEntry;
+    /* The text record comes as its items with a space between, a space
+       inside an item with a backslash before it. */
+    event->endpoint[0] = 0;
+    {
+        static const char key[] = "UMPEndpointName=";
+        const char *text = (const char *)message->bm_Instance.si_TXT;
+        unsigned int length = message->bm_Instance.si_TXTLength;
+        unsigned int at = 0, out;
+
+        while (at < length) {
+            unsigned int k = 0;
+
+            while (k < sizeof(key) - 1 && at + k < length &&
+                   text[at + k] == key[k])
+                ++k;
+            if (k == sizeof(key) - 1) {
+                at += k;
+                for (out = 0; at < length && text[at] != ' ' &&
+                              out + 1 < sizeof(event->endpoint); ++at) {
+                    if (text[at] == '\\' && at + 1 < length)
+                        ++at;
+                    event->endpoint[out++] = text[at];
+                }
+                event->endpoint[out] = 0;
+                break;
+            }
+            /* to the next item: past the next space that is not escaped */
+            while (at < length && text[at] != ' ') {
+                if (text[at] == '\\' && at + 1 < length)
+                    ++at;
+                ++at;
+            }
+            ++at;
+        }
+    }
     ++discovery->written;
     Permit();
     return 0;
@@ -153,7 +190,8 @@ static void forget(struct netmidi_discovery *discovery)
     discovery->engine = 0;
     for (i = 0; i < discovery->count; ++i)
         discovery->service[i].reference = NULL;
-    discovery->browse_reference = NULL;
+    for (i = 0; i < discovery->browses; ++i)
+        discovery->browse[i].reference = NULL;
 }
 
 int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
@@ -170,8 +208,9 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
         else
             ++pending;
     }
-    if (discovery->browse_type && !discovery->browse_reference)
-        ++pending;
+    for (i = 0; i < discovery->browses; ++i)
+        if (!discovery->browse[i].reference)
+            ++pending;
     if (!pending ||
         (discovery->last_attempt && now - discovery->last_attempt < 100000))
         return registered;
@@ -220,25 +259,28 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
             return 0;
         }
     }
-    if (discovery->browse_type && !discovery->browse_reference) {
+    for (i = 0; i < discovery->browses; ++i) {
         MDNSBrowseRef reference = NULL;
         struct TagItem tags[] = {
             { MDNS_BrowseRef, (IPTR)&reference },
             { TAG_DONE, 0 }
         };
-        struct Hook *hook = discovery->browse_hook;
+        struct Hook *hook = discovery->browse[i].hook;
 
+        if (discovery->browse[i].reference)
+            continue;
         if (!hook) {
             hook = AllocMem(sizeof(*hook), MEMF_PUBLIC | MEMF_CLEAR);
             if (!hook)
                 return registered;
             hook->h_Entry = (HOOKFUNC)(APTR)AROS_ASMSYMNAME(browse_hook);
             hook->h_Data = discovery;
-            discovery->browse_hook = hook;
+            hook->h_SubEntry = (APTR)(IPTR)i;       /* which search */
+            discovery->browse[i].hook = hook;
         }
-        if (BrowseServiceTypeA((STRPTR)discovery->browse_type, hook,
+        if (BrowseServiceTypeA((STRPTR)discovery->browse[i].type, hook,
                                tags) == MDNS_OK && reference)
-            discovery->browse_reference = reference;
+            discovery->browse[i].reference = reference;
     }
     return registered;
 }
@@ -251,9 +293,11 @@ void netmidi_discovery_close(struct netmidi_discovery *discovery)
         return;
     BonamiBase = discovery->library;
     /* the search first: after this the service calls the hook no more */
-    if (discovery->browse_reference)
-        StopBrowse(discovery->browse_reference);
-    discovery->browse_reference = NULL;
+    for (i = 0; i < discovery->browses; ++i) {
+        if (discovery->browse[i].reference)
+            StopBrowse(discovery->browse[i].reference);
+        discovery->browse[i].reference = NULL;
+    }
     for (i = 0; i < discovery->count; ++i) {
         if (discovery->service[i].reference)
             DeregisterService(discovery->service[i].reference);
@@ -265,9 +309,11 @@ void netmidi_discovery_close(struct netmidi_discovery *discovery)
     CloseLibrary(discovery->library);
     discovery->library = NULL;
     BonamiBase = NULL;
-    if (discovery->browse_hook)
-        FreeMem(discovery->browse_hook, sizeof(struct Hook));
-    discovery->browse_hook = NULL;
+    for (i = 0; i < discovery->browses; ++i) {
+        if (discovery->browse[i].hook)
+            FreeMem(discovery->browse[i].hook, sizeof(struct Hook));
+        discovery->browse[i].hook = NULL;
+    }
 }
 
 #else

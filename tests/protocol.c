@@ -176,6 +176,9 @@ static void config_round_trip(void)
     written.latency_ms = 40;
     strcpy(written.accept, "192.0.2.7,the iPad");
     written.midi2_port = 5673;
+    strcpy(written.midi2_peer_ip, "192.0.2.9");
+    written.midi2_peer_port = 5683;
+    strcpy(written.midi2_peer_name, "A Host");
     strcpy(written.port_name[3], "the iPad");
     strcpy(written.midi2_port_name[15], "A Workbench");
     assert(netmidi_config_save(path, &written) == 0);

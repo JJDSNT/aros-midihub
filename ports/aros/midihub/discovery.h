@@ -11,6 +11,7 @@
 
 #define NETMIDI_DISCOVERY_SERVICES 2
 #define NETMIDI_DISCOVERY_EVENTS 16
+#define NETMIDI_DISCOVERY_BROWSES 2
 
 /* A service instance someone else advertises, as it came or went. */
 struct netmidi_discovered {
@@ -18,6 +19,10 @@ struct netmidi_discovered {
     uint32_t address;               /* IPv4, host order; 0 when not known */
     uint16_t port;
     int present;                    /* 1 it is there, 0 it left */
+    int browse;                     /* which search found it: what
+                                       netmidi_discovery_browse returned */
+    char endpoint[64];              /* the UMPEndpointName of its text
+                                       record, or empty */
 };
 
 struct netmidi_discovery {
@@ -34,9 +39,12 @@ struct netmidi_discovery {
     } service[NETMIDI_DISCOVERY_SERVICES];
     int count;
     uint64_t last_attempt;
-    const char *browse_type;        /* what to look for, or NULL */
-    void *browse_reference;         /* the search, or NULL */
-    void *browse_hook;
+    struct {
+        const char *type;           /* what to look for, or NULL */
+        void *reference;            /* the search, or NULL */
+        void *hook;
+    } browse[NETMIDI_DISCOVERY_BROWSES];
+    int browses;
     /* written by the service's process, read by ours */
     struct netmidi_discovered event[NETMIDI_DISCOVERY_EVENTS];
     volatile unsigned long written;
@@ -68,7 +76,9 @@ int netmidi_discovery_item(char *text, unsigned long size, const char *key,
 int netmidi_discovery_poll(struct netmidi_discovery *discovery,
                            uint64_t now);
 /* Asks for instances of type to be looked for. Like a registration, the
- * search begins at the next poll at which the service answers. */
+ * search begins at the next poll at which the service answers. Returns
+ * the number events of this search carry in their browse field, -1 when
+ * there is no room for another. */
 int netmidi_discovery_browse(struct netmidi_discovery *discovery,
                              const char *type);
 /* The next instance that appeared or left, 1, or 0 when there is none
