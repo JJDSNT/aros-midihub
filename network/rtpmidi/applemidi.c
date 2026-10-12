@@ -74,6 +74,15 @@ size_t applemidi_name_fit(const uint8_t *name, size_t length, size_t limit)
     return cut;
 }
 
+size_t applemidi_text_length(const char *text, size_t limit)
+{
+    size_t length = 0;
+
+    while (length <= limit && text[length])
+        ++length;
+    return length;
+}
+
 int applemidi_decode(const uint8_t *data, size_t length,
                     struct applemidi_packet *packet)
 {

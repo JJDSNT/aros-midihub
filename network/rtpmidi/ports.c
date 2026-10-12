@@ -1,4 +1,5 @@
 #include "rtpmidi/ports.h"
+#include "rtpmidi/applemidi.h"
 
 #include <string.h>
 
@@ -17,7 +18,8 @@ static int kept_for(const struct applemidi_ports *ports, const uint8_t *name,
     if (!name || !length)
         return -1;
     for (port = 0; port < ports->count; ++port)
-        if (strlen(ports->kept[port]) == length &&
+        if (applemidi_text_length(ports->kept[port],
+                                  APPLEMIDI_PORT_NAME_MAX) == length &&
             memcmp(ports->kept[port], name, length) == 0)
             return port;
     return -1;
@@ -30,7 +32,7 @@ int applemidi_ports_keep(struct applemidi_ports *ports, int port,
 
     if (!ports || !name || port < 0 || port >= ports->count)
         return -1;
-    length = strlen(name);
+    length = applemidi_text_length(name, APPLEMIDI_PORT_NAME_MAX);
     if (!length || length > APPLEMIDI_PORT_NAME_MAX || ports->kept[port][0] ||
         kept_for(ports, (const uint8_t *)name, length) >= 0)
         return -1;

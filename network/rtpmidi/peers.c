@@ -21,7 +21,8 @@ int applemidi_peers_allow(struct applemidi_peers *peers, uint32_t address,
                           const char *name)
 {
     struct applemidi_allowed *entry;
-    size_t length = name ? strlen(name) : 0;
+    size_t length = name ?
+        applemidi_text_length(name, APPLEMIDI_PEER_NAME_MAX) : 0;
 
     if (!peers || peers->allowed_count == APPLEMIDI_ALLOWED_MAX ||
         (!address && !length) || length > APPLEMIDI_PEER_NAME_MAX)
@@ -46,7 +47,8 @@ static int may_connect(const struct applemidi_peers *peers, uint32_t address,
         return 0;
     for (i = 0; i < peers->allowed_count; ++i) {
         const struct applemidi_allowed *entry = &peers->allowed[i];
-        size_t length = strlen(entry->name);
+        size_t length = applemidi_text_length(entry->name,
+                                              APPLEMIDI_PEER_NAME_MAX);
         if (entry->address && entry->address == address)
             return 1;
         if (length && in->name && in->name_length == length &&

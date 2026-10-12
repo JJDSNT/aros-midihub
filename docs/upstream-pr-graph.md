@@ -131,7 +131,7 @@ somewhat smaller.
 | **M2** | `bonami.library` and the daemon's side of registering, updating and withdrawing a service, with the text record's escaping (MD02) and the time to live (MD19). | about 3,000 | #1560 | Where it lives, how it is split and what the library is called: issue #1559 |
 | **M3** | Browse, resolve, host lookup, queries; a client's own records answered (MD04). | about 3,000 | M2 | How clients get events: issue #1559, and MD01 here |
 | **M4** | `dnssd` and the other tools, the commodity, the Envoy bridge. | about 2,500 | M3 | Whether AROS wants them |
-| **N1** | `netmididriver.c` built twice and the adapters' header: two `DEVS:Midi` drivers of sixteen ports and no network code. | 320 | Nothing: it includes `proto/exec.h` and `midi/camddevices.h` only | PREP-1, PREP-3 |
+| **N1** | `netmididriver.c` built twice and the adapters' header: two `DEVS:Midi` drivers of sixteen ports and no network code. **Cut** on 2026-10-12: `tools/cut-netmidi-drivers.sh` writes it into an AROS tree as `workbench/devs/midi/netmidi`, and the branch `netmidi-drivers` in the worktree `~/AROS-netmidi` is upstream `master` with it and nothing else. Built by its own targets for hosted x86-64 and amiga-m68k; of the 126 headers it pulls in, none is one this repository changes. | 380 | Nothing: it includes `proto/exec.h` and `midi/camddevices.h` only | PREP-3: the build of that worktree from nothing, and a run on its unpatched `camd.library` |
 | **N2** | `rtpmidi.c`, `sender.c`, `receiver.c`, `timing.c` and their headers, as a link library. | 3,600 | Nothing | PREP-1, PREP-2 |
 | **N3** | `applemidi.c`, `session.c`, `peers.c`, `ports.c`, `clock.c`, into the same library. | 1,900 | N2 (they share headers and the library's build file) | — |
 | **N4** | The service: `main.c` as it will be once carved, `adapters.c`, `network.c`, the configuration reader, the `services.d` file. AppleMIDI only, peers by address or by who invites; **no discovery**. | 2,800 | N1 for `netmidi_camd.h`, N2 and N3 for the library | — |
@@ -178,11 +178,16 @@ somewhat smaller.
 2. The hosted tests that concern it, run from that worktree. The runners
    need sudo, a veth pair and Avahi, so they stay here (issue #1559 asks
    where such tests may live).
-3. The Codacy gate: no new finding. Today `strcpy`, `strncpy`, `strlen` or
-   `sprintf` appear 18 times in the configuration reader, 8 in
-   `netmidi2.c`, 5 in the service's `main.c`, 2 each in `peers.c` and
-   `ports.c`, and nowhere in the drivers, the adapters, the payload code or
-   the UMP translator.
+3. The Codacy gate: no new finding. Measured on 2026-10-12 with cppcheck
+   2.13, the checker behind it (`--enable=style,warning,portability`):
+   the RTP-MIDI and AppleMIDI code (N2, N3) has no `strcpy`, `strncpy`,
+   `strlen` or `sprintf` left, and 29 findings, 23 of them a variable
+   declared further out than it is used and one a buffer copied from
+   before it is written (of length zero, and harmless). The service's
+   `main.c` has 12, `netmidi2.c` 3, the adapters 2, `network.c` and the
+   configuration reader 1 each, the UMP translator none. The checker
+   cannot read the driver, whose entry points are AROS's register-argument
+   macros; it cannot read upstream's own USB MIDI driver either.
 4. The statement of origin in the pull request (RTP-MIDI backlog, U4): what
    was read, and that nothing was copied.
 5. The service's file with `Enabled=no` in its first pull request. A
