@@ -5,6 +5,8 @@
 #include <rtpmidi/applemidi.h>
 #include <midihub/config.h>
 #include <midihub/mdns.h>
+#include <netmidi2/netmidi2.h>
+#include <ump/ump.h>
 #include <rtpmidi/clock.h>
 #include <rtpmidi/peers.h>
 #include <rtpmidi/receiver.h>
@@ -73,6 +75,14 @@ struct runtime {
     unsigned int mdns_announcements;
     struct applemidi_peers peers;
     struct stream stream[APPLEMIDI_PEERS_MAX];
+    /* Network MIDI 2.0, on a port of its own when one is given */
+    int midi2_enabled;
+    struct netmidi2_table midi2;
+    struct ump_to_midi1 midi2_in[NETMIDI2_SESSIONS_MAX];
+    uint8_t midi2_sysex[NETMIDI2_SESSIONS_MAX][RTPMIDI_SYSEX_MAX];
+    int midi2_known[NETMIDI2_SESSIONS_MAX];
+    unsigned long midi2_gaps[NETMIDI2_SESSIONS_MAX];
+    unsigned long midi2_resets[NETMIDI2_SESSIONS_MAX];
     struct netmidi_camd_runtime camd;
 };
 
@@ -607,6 +617,194 @@ static void receive_packet(struct runtime *rt, int data_port)
     }
 }
 
+/* Network MIDI 2.0. A peer's UMPs become MIDI 1.0 for CAMD by the default
+ * translation, and what CAMD sends becomes UMPs with the MIDI 1.0 protocol:
+ * this endpoint declares no other. Each session has a translator of its
+ * own; all of them, like the AppleMIDI peers, meet in the one pair of
+ * clusters. */
+
+static uint64_t midi2_key(const struct sockaddr_in *address)
+{
+    return ((uint64_t)ntohl(address->sin_addr.s_addr) << 16) |
+           ntohs(address->sin_port);
+}
+
+static void midi2_send(struct runtime *rt, uint64_t key,
+                       const struct netmidi2_writer *packet)
+{
+    struct sockaddr_in address;
+    if (packet->length <= 4)
+        return;
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl((uint32_t)(key >> 16));
+    address.sin_port = htons((uint16_t)key);
+    netmidi_network_midi2_send(&rt->network, packet->data, packet->length,
+                               &address);
+}
+
+static void midi2_to_camd(void *context, const uint8_t *bytes, size_t length)
+{
+    struct runtime *rt = context;
+    size_t i;
+    printf("MIDIHub: MIDI 2.0 bytes=");
+    for (i = 0; i < length && i < 16; ++i)
+        printf("%02x", (unsigned int)bytes[i]);
+    puts(i < length ? "..." : "");
+    if (bytes[0] == 0xf0)
+        netmidi_camd_deliver_sysex(&rt->camd, bytes, length);
+    else
+        netmidi_camd_deliver(&rt->camd, bytes, length);
+}
+
+static void midi2_sink(void *context, int index, const uint32_t *words,
+                       size_t count)
+{
+    struct runtime *rt = context;
+    size_t i = 0;
+    while (i < count) {
+        unsigned n = ump_words(words[i]);
+        if (i + n > count)
+            break;
+        ump_to_midi1(&rt->midi2_in[index], words + i, n, midi2_to_camd, rt);
+        i += n;
+    }
+}
+
+/* A session ended, was reset or lost data for good: nothing here knows
+ * which notes its peer left sounding, so every channel is told to stop. */
+static void midi2_all_notes_off(struct runtime *rt)
+{
+    uint8_t message[3] = {0xb0, 123, 0};
+    unsigned int channel;
+    for (channel = 0; channel < 16; ++channel) {
+        message[0] = (uint8_t)(0xb0 | channel);
+        netmidi_camd_deliver(&rt->camd, message, sizeof(message));
+    }
+}
+
+static void midi2_receive(struct runtime *rt)
+{
+    static uint8_t in[2048], out[NETMIDI2_MAX_PACKET];
+    struct sockaddr_in source;
+    socklen_t source_length = sizeof(source);
+    struct netmidi2_writer packet;
+    int index;
+    int count = netmidi_network_midi2_receive(&rt->network, in, sizeof(in),
+                                              &source, &source_length);
+    if (count <= 0 || source_length < sizeof(source) ||
+        source.sin_family != AF_INET)
+        return;
+    netmidi2_writer_init(&packet, out, sizeof(out));
+    if (netmidi2_table_receive(&rt->midi2, midi2_key(&source), in,
+                               (size_t)count, (uint32_t)(now_ticks() / 10),
+                               &packet, &index) == 0)
+        midi2_send(rt, midi2_key(&source), &packet);
+}
+
+static void midi2_periodic(struct runtime *rt, uint64_t now)
+{
+    static uint8_t out[NETMIDI2_MAX_PACKET];
+    struct netmidi2_writer packet;
+    int index;
+
+    for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index) {
+        struct netmidi2_session *session =
+            netmidi2_table_session(&rt->midi2, index);
+        uint64_t peer;
+        if (!session) {
+            if (rt->midi2_known[index]) {
+                puts("MIDIHub: MIDI 2.0 session closed");
+                midi2_all_notes_off(rt);
+                rt->midi2_known[index] = 0;
+            }
+            continue;
+        }
+        peer = session->peer;
+        if (session->state == NETMIDI2_ESTABLISHED &&
+            !rt->midi2_known[index]) {
+            printf("MIDIHub: MIDI 2.0 session established peer=\"%s\"\n",
+                   session->peer_name);
+            rt->midi2_known[index] = 1;
+            rt->midi2_gaps[index] = session->gaps;
+            rt->midi2_resets[index] = session->resets;
+            ump_to_midi1_init(&rt->midi2_in[index], 0);
+            ump_to_midi1_buffer(&rt->midi2_in[index], rt->midi2_sysex[index],
+                                sizeof(rt->midi2_sysex[index]));
+        }
+        if (rt->midi2_known[index] &&
+            (session->gaps != rt->midi2_gaps[index] ||
+             session->resets != rt->midi2_resets[index])) {
+            puts("MIDIHub: MIDI 2.0 data lost or session reset");
+            rt->midi2_gaps[index] = session->gaps;
+            rt->midi2_resets[index] = session->resets;
+            ump_to_midi1_buffer(&rt->midi2_in[index], rt->midi2_sysex[index],
+                                sizeof(rt->midi2_sysex[index]));
+            midi2_all_notes_off(rt);
+        }
+        netmidi2_writer_init(&packet, out, sizeof(out));
+        if (netmidi2_table_tick(&rt->midi2, index, (uint32_t)(now / 10),
+                                &packet))
+            midi2_send(rt, peer, &packet);
+    }
+}
+
+struct midi2_outgoing {
+    struct runtime *rt;
+    uint32_t words[NETMIDI2_MAX_UMP_WORDS];
+    size_t count;
+};
+
+/* One UMP Data command to every established session. */
+static void midi2_flush(struct midi2_outgoing *outgoing)
+{
+    static uint8_t out[NETMIDI2_MAX_PACKET];
+    struct runtime *rt = outgoing->rt;
+    struct netmidi2_writer packet;
+    int index;
+
+    if (!outgoing->count)
+        return;
+    for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index) {
+        struct netmidi2_session *session =
+            netmidi2_table_session(&rt->midi2, index);
+        if (!session || session->state != NETMIDI2_ESTABLISHED)
+            continue;
+        netmidi2_writer_init(&packet, out, sizeof(out));
+        if (netmidi2_send_ump(session, outgoing->words, outgoing->count,
+                              (uint32_t)(now_ticks() / 10), &packet) == 0)
+            midi2_send(rt, session->peer, &packet);
+    }
+    outgoing->count = 0;
+}
+
+/* A UMP is never split between two commands (section 7.1). */
+static void midi2_collect(void *context, const uint32_t *words,
+                          unsigned count)
+{
+    struct midi2_outgoing *outgoing = context;
+    if (outgoing->count + count > NETMIDI2_MAX_UMP_WORDS)
+        midi2_flush(outgoing);
+    memcpy(outgoing->words + outgoing->count, words,
+           count * sizeof(*words));
+    outgoing->count += count;
+}
+
+static void midi2_send_midi(struct runtime *rt, const uint8_t *message,
+                            size_t length)
+{
+    static struct midi2_outgoing outgoing;
+    struct ump_from_midi1 from;
+    size_t i;
+
+    outgoing.rt = rt;
+    outgoing.count = 0;
+    ump_from_midi1_init(&from, 0);
+    for (i = 0; i < length; ++i)
+        ump_from_midi1_byte(&from, message[i], midi2_collect, &outgoing);
+    midi2_flush(&outgoing);
+}
+
 /* One message from CAMD to one peer. */
 static int send_midi_to(struct runtime *rt, int index, const uint8_t *message,
                         size_t length)
@@ -704,6 +902,10 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
                 APPLEMIDI_SESSION_CONNECTED &&
             send_midi_to(rt, index, message, length) == 0)
             result = 0;
+    if (rt->midi2_enabled) {
+        midi2_send_midi(rt, message, length);
+        result = 0;
+    }
     return result;
 }
 
@@ -842,6 +1044,8 @@ static void periodic(struct runtime *rt, uint64_t now)
     for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
         if (rt->peers.peer[index].used)
             periodic_peer(rt, index, now);
+    if (rt->midi2_enabled)
+        midi2_periodic(rt, now);
 }
 
 int main(int argc, char **argv)
@@ -850,6 +1054,7 @@ int main(int argc, char **argv)
     struct in_addr peer_address_bytes;
     uint16_t local_port;
     uint16_t peer_port;
+    uint16_t midi2_port = 0;
     struct netmidi_network_config config;
     const char *peer_ip;
     uint64_t now;
@@ -885,6 +1090,14 @@ int main(int argc, char **argv)
         }
 #endif
     }
+    /* Network MIDI 2.0 is off unless a port is given for it. */
+    if (argc - argi >= 2 && strcmp(argv[argi], "--midi2") == 0) {
+        if (parse_port(argv[argi + 1], &midi2_port) != 0) {
+            fputs("MIDIHub: --midi2 takes a UDP port\n", stderr);
+            return 20;
+        }
+        argi += 2;
+    }
     remaining = argc - argi;
     local_port = config.local_port;
     peer_port = config.peer_port;
@@ -896,7 +1109,7 @@ int main(int argc, char **argv)
          parse_port(argv[argi + 2], &peer_port) != 0) ||
         (remaining == 4 && strcmp(argv[argi + 3], "--probe-note") != 0 &&
          strcmp(argv[argi + 3], "--probe-sysex") != 0)) {
-        fputs("Usage: MIDIHub [--config file] [local-control-port [peer-ip peer-control-port [--probe-note|--probe-sysex]]]\n", stderr);
+        fputs("Usage: MIDIHub [--config file] [--midi2 port] [local-control-port [peer-ip peer-control-port [--probe-note|--probe-sysex]]]\n", stderr);
         return 20;
     }
     if (remaining >= 3)
@@ -936,6 +1149,15 @@ int main(int argc, char **argv)
     if (netmidi_network_open_pair(&rt.network, local_port) != 0) {
         fputs("MIDIHub: cannot bind UDP port pair\n", stderr);
         goto cleanup;
+    }
+    if (midi2_port) {
+        if (netmidi_network_open_midi2(&rt.network, midi2_port) != 0) {
+            fputs("MIDIHub: cannot bind the Network MIDI 2.0 port\n", stderr);
+            goto cleanup;
+        }
+        netmidi2_table_init(&rt.midi2, config.session_name, "aros-midihub",
+                            midi2_sink, &rt);
+        rt.midi2_enabled = 1;
     }
     if (netmidi_camd_open(&rt.camd) != 0) {
         fputs("MIDIHub: camd.library unavailable\n", stderr);
@@ -984,6 +1206,8 @@ int main(int argc, char **argv)
             receive_packet(&rt, 1);
         if (network_events & NETMIDI_NETWORK_EVENT_AUXILIARY)
             receive_mdns(&rt);
+        if (network_events & NETMIDI_NETWORK_EVENT_MIDI2)
+            midi2_receive(&rt);
         periodic(&rt, now_ticks());
         netmidi_camd_poll(&rt.camd, send_midi, &rt);
         /* asked to invite one peer: with that session over, so are we */
@@ -1000,6 +1224,17 @@ cleanup:
     for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
         if (rt.peers.peer[index].used)
             drop_peer(&rt, index, now_ticks());
+    for (index = 0; rt.midi2_enabled && index < NETMIDI2_SESSIONS_MAX; ++index) {
+        static uint8_t out[NETMIDI2_MAX_PACKET];
+        struct netmidi2_writer packet;
+        struct netmidi2_session *session =
+            netmidi2_table_session(&rt.midi2, index);
+        netmidi2_writer_init(&packet, out, sizeof(out));
+        if (session && netmidi2_bye(session, NETMIDI2_BYE_USER_TERMINATED,
+                                    (uint32_t)(now_ticks() / 10),
+                                    &packet) == 0)
+            midi2_send(&rt, session->peer, &packet);
+    }
     netmidi_camd_close(&rt.camd);
     netmidi_network_close(&rt.network);
     return result;

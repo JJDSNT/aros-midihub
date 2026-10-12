@@ -441,6 +441,10 @@ int netmidi2_receive_from(struct netmidi2_session *session, uint64_t peer,
                 bye(out, NETMIDI2_BYE_PROTOCOL_ERROR);
                 break;
             }
+            if (!active && session->refuse) {
+                bye(out, NETMIDI2_BYE_TOO_MANY_SESSIONS);
+                break;
+            }
             /* An invitation within a session is accepted again. */
             if (!active) {
                 session->peer = peer;
@@ -647,4 +651,131 @@ int netmidi2_tick(struct netmidi2_session *session, uint32_t now_ms,
         break;
     }
     return out->length > before;
+}
+
+/* Several sessions on one port */
+
+static void slot_sink(void *context, const uint32_t *words, size_t count)
+{
+    struct netmidi2_table_slot *slot = context;
+    if (slot->table->sink)
+        slot->table->sink(slot->table->context, slot->index, words, count);
+}
+
+void netmidi2_table_init(struct netmidi2_table *table, const char *name,
+                         const char *product_id, netmidi2_table_sink sink,
+                         void *context)
+{
+    int i;
+    memset(table, 0, sizeof(*table));
+    copy_text(table->name, sizeof(table->name), (const uint8_t *)name,
+              strlen(name));
+    copy_text(table->product_id, sizeof(table->product_id),
+              (const uint8_t *)product_id, strlen(product_id));
+    table->accept = 1;
+    table->sink = sink;
+    table->context = context;
+    for (i = 0; i < NETMIDI2_SESSIONS_MAX; ++i) {
+        table->slot[i].table = table;
+        table->slot[i].index = i;
+    }
+}
+
+int netmidi2_table_find(const struct netmidi2_table *table, uint64_t peer)
+{
+    int i;
+    for (i = 0; i < NETMIDI2_SESSIONS_MAX; ++i)
+        if (table->slot[i].used && table->slot[i].session.peer == peer)
+            return i;
+    return -1;
+}
+
+static int free_slot(const struct netmidi2_table *table)
+{
+    int i;
+    for (i = 0; i < NETMIDI2_SESSIONS_MAX; ++i)
+        if (!table->slot[i].used)
+            return i;
+    return -1;
+}
+
+static void slot_begin(struct netmidi2_table *table, int index, int host)
+{
+    struct netmidi2_table_slot *slot = &table->slot[index];
+    netmidi2_session_init(&slot->session, host, table->name,
+                          table->product_id, slot_sink, slot);
+    slot->used = 1;
+}
+
+int netmidi2_table_invite(struct netmidi2_table *table, uint64_t peer,
+                          uint32_t now_ms, struct netmidi2_writer *out)
+{
+    int index = free_slot(table);
+    if (index < 0 || netmidi2_table_find(table, peer) >= 0)
+        return -1;
+    slot_begin(table, index, 0);
+    if (netmidi2_invite_to(&table->slot[index].session, peer, now_ms, out)) {
+        table->slot[index].used = 0;
+        return -1;
+    }
+    return index;
+}
+
+int netmidi2_table_receive(struct netmidi2_table *table, uint64_t peer,
+                           const uint8_t *packet, size_t length,
+                           uint32_t now_ms, struct netmidi2_writer *out,
+                           int *index)
+{
+    int found = netmidi2_table_find(table, peer);
+    int result;
+
+    if (index)
+        *index = found;
+    if (found >= 0)
+        return netmidi2_receive_from(&table->slot[found].session, peer,
+                                     packet, length, now_ms, out);
+    /* Someone we have no session with. An idle Host answers for the
+       table, in a slot if there is one free and Invitations are taken;
+       the slot is kept only if a session began. */
+    found = table->accept ? free_slot(table) : -1;
+    if (found >= 0) {
+        slot_begin(table, found, 1);
+        result = netmidi2_receive_from(&table->slot[found].session, peer,
+                                       packet, length, now_ms, out);
+        if (table->slot[found].session.state == NETMIDI2_IDLE)
+            table->slot[found].used = 0;
+        else if (index)
+            *index = found;
+        return result;
+    }
+    netmidi2_session_init(&table->nobody, 1, table->name, table->product_id,
+                          NULL, NULL);
+    table->nobody.refuse = 1;
+    return netmidi2_receive_from(&table->nobody, peer, packet, length,
+                                 now_ms, out);
+}
+
+int netmidi2_table_tick(struct netmidi2_table *table, int index,
+                        uint32_t now_ms, struct netmidi2_writer *out)
+{
+    struct netmidi2_table_slot *slot;
+    int result;
+
+    if (index < 0 || index >= NETMIDI2_SESSIONS_MAX ||
+        !table->slot[index].used)
+        return 0;
+    slot = &table->slot[index];
+    result = netmidi2_tick(&slot->session, now_ms, out);
+    if (slot->session.state == NETMIDI2_IDLE)
+        slot->used = 0;
+    return result;
+}
+
+struct netmidi2_session *netmidi2_table_session(struct netmidi2_table *table,
+                                                int index)
+{
+    if (index < 0 || index >= NETMIDI2_SESSIONS_MAX ||
+        !table->slot[index].used)
+        return NULL;
+    return &table->slot[index].session;
 }

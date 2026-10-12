@@ -64,11 +64,9 @@ flowchart LR
     end
 
     subgraph NM[Network MIDI 2.0]
-        NM06["NM06 table of<br/>sessions"]:::ready
-        NM07["NM07 a runtime"]
         NM08["NM08 discovery"]
         NM09["NM09 timed delivery"]
-        NM10["NM10 run against<br/>another implementation"]
+        NM10["NM10 run against<br/>another implementation"]:::ready
         NM11["NM11 reach CAMD<br/>through a driver"]
         NM14["NM14 MIDI 2.0<br/>protocol"]
         NM15["NM15 IPv6"]
@@ -128,15 +126,10 @@ flowchart LR
 
     UP12 --> UP16
 
-    NM06 --> NM07
-    NM07 --> NM08
     AM10 --> NM08
-    NM07 --> NM09
     UP09 --> NM09
     R17 --> NM09
-    NM07 --> NM10
     NM10 --> NM17
-    NM07 --> NM11
     AM08 --> NM11
     ND1 --> NM11
     UP11 --> NM14
@@ -179,8 +172,8 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 103 open items, 61 have nothing in front of them, 31 sit behind something
-outside our hands or behind a decision, and 11 wait only for other work of
+Of 101 open items, 61 have nothing in front of them, 31 sit behind something
+outside our hands or behind a decision, and 9 wait only for other work of
 ours.
 
 **What opens the most**, counting everything that follows directly or
@@ -190,7 +183,6 @@ through other items:
 |---|---|---|
 | A yes in PR #1507 | 10 | B29 to B32, and what BLE MIDI lost to the driver model: names, presence, identity, time |
 | Answers in issue #1559 | 9 | Event delivery in mDNS and every cut of it after the first, and the three IPv6 items |
-| NM06, a table of sessions | 6 | Network MIDI 2.0's runtime and everything run on it |
 | Hardware | 5 | The test owed to PR #1507, and with it the PR's merge and the removal of the old class here |
 | D2, peers to ports | 4 | The driver, configuration, and Network MIDI 2.0's way into CAMD |
 | PR #1560 reviewed | 4 | Every later cut of mDNS |
@@ -200,8 +192,8 @@ and UMP and Network MIDI 2.0 were read against theirs the same day.
 
 **The longest chains** are in what waits for others: PR #1507, then B29,
 B31, B32 and BLE's timestamps; and #1560, then the three further cuts of
-mDNS. Within our own hands the longest is in Network MIDI 2.0 alone:
-NM06 → NM07 → NM10 → NM17.
+mDNS. Within our own hands no chain is longer than two steps any more:
+the work that others waited on has been done.
 
 **Four things outside our hands hold most of the 31:**
 
@@ -252,7 +244,9 @@ stood free have been closed.
    **AM07**, who may connect, need nothing.
 5. Done on 2026-10-12: UP01 and NM01, UMP and Network MIDI 2.0 read
    against their texts, with the corrections they called for.
-6. **Network MIDI 2.0's runtime** (NM06, NM07), which waits for nothing.
+6. Done on 2026-10-12: Network MIDI 2.0's table of sessions and runtime
+   (NM06, NM07). The UMP path runs end to end, on the host and on hosted
+   AROS, with our own code at both ends.
 
 7. **BLE MIDI**: T01 the day the hardware is at hand. W01 and L08 were done
    on 2026-10-12.

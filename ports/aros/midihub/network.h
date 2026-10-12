@@ -16,6 +16,7 @@ extern struct Library *SocketBase;
 struct netmidi_network_runtime {
     int control;
     int data;
+    int midi2;              /* Network MIDI 2.0's one port, or -1 */
     int platform_opened;
 };
 
@@ -23,13 +24,24 @@ enum netmidi_network_event {
     NETMIDI_NETWORK_EVENT_CONTROL = 1u << 0,
     NETMIDI_NETWORK_EVENT_DATA = 1u << 1,
     NETMIDI_NETWORK_EVENT_AUXILIARY = 1u << 2,
-    NETMIDI_NETWORK_EVENT_STOP = 1u << 3
+    NETMIDI_NETWORK_EVENT_STOP = 1u << 3,
+    NETMIDI_NETWORK_EVENT_MIDI2 = 1u << 4
 };
 
 void netmidi_network_init(struct netmidi_network_runtime *runtime);
 int netmidi_network_platform_open(struct netmidi_network_runtime *runtime);
 int netmidi_network_open_pair(struct netmidi_network_runtime *runtime,
                               uint16_t control_port);
+/* A third socket, for Network MIDI 2.0, which uses one port for sessions
+ * and data alike. Optional: without it nothing else changes. */
+int netmidi_network_open_midi2(struct netmidi_network_runtime *runtime,
+                               uint16_t port);
+int netmidi_network_midi2_send(const struct netmidi_network_runtime *runtime,
+                               const void *bytes, size_t length,
+                               const struct sockaddr_in *destination);
+int netmidi_network_midi2_receive(
+    const struct netmidi_network_runtime *runtime, void *bytes,
+    size_t capacity, struct sockaddr_in *source, socklen_t *source_length);
 void netmidi_network_close(struct netmidi_network_runtime *runtime);
 void netmidi_network_close_socket(int fd);
 int netmidi_network_send(const struct netmidi_network_runtime *runtime,

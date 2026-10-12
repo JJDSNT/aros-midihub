@@ -21,8 +21,8 @@ runtime and the discovery it needs are the ones
 - Endpoint Discovery and Stream Configuration requests are answered inside
   the session; the endpoint declares the MIDI 1.0 protocol only.
 - `tests/netmidi2.c` covers the codec and one session against itself.
-- **Nothing runs it.** No program on AROS or on the host opens a socket for
-  it, advertises `_midi2._udp` or looks for it.
+- It ran nowhere until NM07, below. It still advertises nothing and looks
+  for nobody: a peer is reached by typing its address.
 - Added in one commit on 2026-10-06, with two of the specification's packet
   examples already in its tests, and read against M2-124-UM 1.0 in full on
   2026-10-12: see NM01 under "Done". It has met no other implementation.
@@ -32,8 +32,7 @@ Priorities as in the other backlogs.
 ## Done
 
 On 2026-10-12, with `tests/netmidi2.c` (also under the address and
-undefined-behaviour sanitizers) and the whole host suite passing. Still
-nothing runs this code outside its tests.
+undefined-behaviour sanitizers) and the whole host suite passing.
 
 | # | What was done |
 |---|---|
@@ -44,6 +43,8 @@ nothing runs this code outside its tests.
 | NM05 | A reset is a new beginning for both directions (6.11): sequence numbers at zero, the repeats flushed, `resets` counted for the caller. It can be asked for (`netmidi2_reset()`): no UMP Data goes out until the reply, the command is repeated, and a reset never answered ends the session with Bye, "timeout". A reply to a reset never asked for is answered by asking for one (6.12). |
 | NM16 | The specification lets a Ping Id be any value (6.13), and a reply from another address no longer reaches the session (NM02). Nothing left to do. |
 | NM20 | The limits cite their sections: 64 words (7.1), 1400 bytes (5.1.1). The 64 commands a packet is parsed into is ours, and more than a 1400-byte packet can hold of anything but empty commands. |
+| NM06 | `struct netmidi2_table`: eight sessions on one port, each found by the address and port its packets come from, as Host for those who invite and as Client for those we invite. One more Client than there is room for gets Bye, "too many sessions"; a packet from someone with no session is answered as an idle Host would and takes no slot. `test_table` in `tests/netmidi2.c`. |
+| NM07 | The path runs. `tests/interop/netmidi2_peer.c` is an endpoint on a UDP socket for the host; `tools/netmidi2-host.sh` runs a Host and a Client, then a Host and two Clients at once, each sending a note, a controller and a SysEx message as MIDI 1.0 bytes and printing what the other end's became. On AROS, `MIDIHub --midi2 <port>` opens a third socket beside AppleMIDI's two: UMPs received are translated for the cluster `MIDIHub In`, what a CAMD program sends to `MIDIHub Out` goes out as UMPs to every established session, and a session that ends, is reset or loses data is followed by All Notes Off on every channel. `tools/netmidi2-hosted.sh` has the host as Client of hosted AROS over the veth pair, with a CAMD program at the AROS end of each direction. Both ends are our own code. |
 
 ## P0 — wrong or unsafe as it is
 
@@ -53,12 +54,10 @@ Nothing open.
 
 | # | Limit or defect | What to do | Done when |
 |---|---|---|---|
-| NM06 | One session. A Host is one endpoint that several Clients connect to, each known by its address and port (3.2). | A table of sessions by address and port, as `applemidi_peers` is, with a limit and the "too many sessions" reply, which a single session already gives. | Two clients at once in a host test. |
-| NM07 | No runtime. | A host program first, so the protocol can be tried on Linux before AROS: one UDP socket, the clock, a session table, UMP in and out through the translators. Then the same loop on AROS beside AppleMIDI's. | Two instances on the host exchange notes; then on hosted AROS over the veth pair. |
 | NM08 | No discovery. Section 4 has a Host advertise `_midi2._udp` with a TXT record holding `UMPEndpointName` and `ProductInstanceId`, the same two strings as in the Invitation Reply, and keep the records' time to live at a minute or less (4.6). A Client browses for it. | Through the system mDNS service, after AppleMIDI has done the same for its own name (AppleMIDI backlog AM09, AM10). The TXT value has spaces in it (mDNS backlog MD02), and the minute needs the service to take a time to live from its client. | `avahi-browse -r _midi2._udp` shows the endpoint and its TXT record. |
 | NM09 | No time. A UMP is delivered when its packet arrives. The jitter-reduction timestamps that would say when it was meant are dropped by the translator (UMP backlog UP09). | Use them once UP09 hands them over, with the same latency setting as RTP-MIDI (its backlog, R17). | With 20 ms of jitter from `tc netem`, intervals between notes at the receiver are those of the sender. |
-| NM10 | Never run against another implementation. | Find one that runs without hardware, as rtpmidid does for AppleMIDI. Candidates to check for availability, none confirmed: Windows MIDI Services' network transport, the MIDI Association's reference tools, an ALSA bridge on Linux. | A table here says which peer was tried, when, and what failed. |
-| NM11 | A peer reaches CAMD only as MIDI 1.0: the endpoint declares the MIDI 1.0 protocol, and a `DEVS:Midi` driver is given and gives bytes. | Keep it for the first version and say so. A port per session in the driver that AppleMIDI builds, or a second driver: decision D1. | A CAMD program plays to a Network MIDI 2.0 peer. |
+| NM10 | Never run against another implementation: every test has our code at both ends, so an error made the same way twice passes. | Find one that runs without hardware. Candidates to check for availability, none confirmed: Windows MIDI Services' network transport, the MIDI Association's reference tools, an ALSA bridge on Linux. `tests/interop/netmidi2_peer.c` is the other end to point at it. | A table here says which peer was tried, when, and what failed. |
+| NM11 | A peer reaches CAMD only as MIDI 1.0, and only through the clusters of the program `MIDIHub`, where it is mixed with every other peer of either protocol. That is a CAMD client, the shape the review of `btmidi.class` turned down for a transport. | A port per session in a `DEVS:Midi` driver: the one AppleMIDI builds (its backlog, AM08), or a second: decision D1. Native UMP to a CAMD client is CAMD backlog B32. | A CAMD program opens a driver's port and plays to a Network MIDI 2.0 peer. |
 
 ## P2 — complete before an upstream proposal
 
@@ -82,7 +81,7 @@ Nothing open.
 | # | Question | Leaning |
 |---|---|---|
 | D1 | One driver or two. A Network MIDI 2.0 peer could take a port of the driver that AppleMIDI sessions use, or have a driver of its own (`networkmidi2`, as [the target architecture](aros-network-midi-target-architecture.md) names it). | Two drivers over one runtime: a user chooses a peer by what it is, and the two protocols share sockets handling, discovery and configuration but not names. |
-| D2 | When to start the runtime. NM01 to NM05 are done; what is left of P1 begins with the table of sessions (NM06) and a program on the host (NM07), neither of which waits for anything. | After the AppleMIDI driver's decisions are taken, or now if they are slow: nothing here depends on them until NM11. |
+| D2 | Whether Network MIDI 2.0 stays an option of the program `MIDIHub` (`--midi2`), off unless asked for, until the driver exists. | Yes: it is how the path is tested on AROS, and it adds nothing to a run that does not ask for it. |
 
 ## Not scheduled here
 

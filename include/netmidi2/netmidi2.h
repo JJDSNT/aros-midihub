@@ -153,6 +153,8 @@ struct netmidi2_session {
     uint32_t state_since_ms;
     unsigned retries;
     uint8_t bye_reason;             /* repeated until Bye Reply */
+    int refuse;                     /* a Host with no room: an Invitation
+                                       gets Bye, "too many sessions" */
     /* Who the session is with: a number the caller makes of the peer's
      * address and port, which is what identifies a session (3.2, 6.4). */
     uint64_t peer;
@@ -210,5 +212,61 @@ int netmidi2_tick(struct netmidi2_session *session, uint32_t now_ms,
 /* Ends the session: writes a Bye. */
 int netmidi2_bye(struct netmidi2_session *session, uint8_t reason, uint32_t now_ms,
                struct netmidi2_writer *out);
+
+/* Several sessions on one UDP port: a Host with its Clients, each known by
+ * the address and port it sends from (section 3.2), and the sessions this
+ * side began as a Client. The caller still owns the socket and the clock.
+ * A slot is in use from an Invitation, sent or accepted, until its session
+ * is idle again. */
+#define NETMIDI2_SESSIONS_MAX 8
+
+struct netmidi2_table;
+
+/* UMPs received in the session at index. */
+typedef void (*netmidi2_table_sink)(void *context, int index,
+                                    const uint32_t *words, size_t count);
+
+struct netmidi2_table_slot {
+    struct netmidi2_table *table;
+    int index;
+    int used;
+    struct netmidi2_session session;
+};
+
+struct netmidi2_table {
+    char name[NETMIDI2_NAME_MAX + 1];
+    char product_id[NETMIDI2_PRODUCT_ID_MAX + 1];
+    int accept;                     /* act as a Host: take Invitations */
+    netmidi2_table_sink sink;
+    void *context;
+    struct netmidi2_table_slot slot[NETMIDI2_SESSIONS_MAX];
+    struct netmidi2_session nobody; /* answers for those with no session */
+};
+
+void netmidi2_table_init(struct netmidi2_table *table, const char *name,
+                         const char *product_id, netmidi2_table_sink sink,
+                         void *context);
+/* The slot of the session with peer, or -1. */
+int netmidi2_table_find(const struct netmidi2_table *table, uint64_t peer);
+/* As a Client: begins a session with the Host at peer. Returns its slot,
+ * -1 when there is none free or one with that peer exists. */
+int netmidi2_table_invite(struct netmidi2_table *table, uint64_t peer,
+                          uint32_t now_ms, struct netmidi2_writer *out);
+/* One UDP payload from peer. Whatever is added to out is for that peer.
+ * *index is the session it belonged to or made, -1 when none. Returns -1
+ * when the packet was not Network MIDI 2.0. */
+int netmidi2_table_receive(struct netmidi2_table *table, uint64_t peer,
+                           const uint8_t *packet, size_t length,
+                           uint32_t now_ms, struct netmidi2_writer *out,
+                           int *index);
+/* Call regularly for every slot in use; out is for that slot's peer.
+ * Returns 1 when out holds a packet. A session that has ended gives its
+ * slot back here. */
+int netmidi2_table_tick(struct netmidi2_table *table, int index,
+                        uint32_t now_ms, struct netmidi2_writer *out);
+/* The session in a slot, or NULL: for its state, its peer, its counters,
+ * and for netmidi2_send_ump(), netmidi2_bye() and netmidi2_reset(). */
+struct netmidi2_session *netmidi2_table_session(struct netmidi2_table *table,
+                                                int index);
 
 #endif

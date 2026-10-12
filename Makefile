@@ -9,7 +9,8 @@ FLUIDSYNTH_LIBS ?= $(shell pkg-config --libs fluidsynth 2>/dev/null)
 SOURCES = network/rtpmidi/applemidi.c network/rtpmidi/rtpmidi.c network/rtpmidi/session.c network/rtpmidi/peers.c src/config.c network/rtpmidi/timing.c network/rtpmidi/clock.c network/rtpmidi/sender.c network/rtpmidi/receiver.c network/mdns/embedded.c src/routes.c
 PROGRAM_SOURCES = ports/aros/midihub/main.c ports/aros/midihub/camd.c \
                   ports/aros/midihub/network.c \
-                  ports/aros/camd_bridge.c
+                  ports/aros/camd_bridge.c \
+                  src/netmidi2.c src/ump.c
 HEADERS = include/rtpmidi/applemidi.h include/rtpmidi/rtpmidi.h \
           include/rtpmidi/session.h include/rtpmidi/peers.h include/midihub/config.h include/rtpmidi/timing.h include/rtpmidi/clock.h include/rtpmidi/receiver.h \
           include/rtpmidi/sender.h include/midihub/mdns.h include/midihub/routes.h \

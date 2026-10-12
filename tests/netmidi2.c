@@ -454,11 +454,129 @@ static void test_against_specification(void)
           buffer[4] == NETMIDI2_BYE && buffer[6] == NETMIDI2_BYE_TIMEOUT);
 }
 
+/* Several sessions on one port (section 3.2). */
+static unsigned table_counts[NETMIDI2_SESSIONS_MAX];
+static uint32_t table_last[NETMIDI2_SESSIONS_MAX];
+
+static void table_take(void *context, int index, const uint32_t *words,
+                       size_t count)
+{
+    (void)context;
+    table_counts[index] += (unsigned)count;
+    table_last[index] = words[count - 1];
+}
+
+static int table_reply_is(const struct netmidi2_writer *reply, uint8_t code,
+                          uint8_t csd1)
+{
+    struct netmidi2_command_packet commands[4];
+    return netmidi2_parse(reply->data, reply->length, commands, 4) == 1 &&
+           commands[0].code == code && commands[0].csd1 == csd1;
+}
+
+static void test_table(void)
+{
+    static struct netmidi2_table table;
+    uint8_t in[256], out[256];
+    struct netmidi2_writer packet, reply;
+    int index;
+    unsigned i;
+    uint32_t word;
+
+    now = 90000;
+    netmidi2_table_init(&table, "AROS MIDIHub", "aros-1", table_take, NULL);
+
+    /* as many Clients as there are slots, each known by where it sends from */
+    for (i = 0; i < NETMIDI2_SESSIONS_MAX; ++i) {
+        netmidi2_writer_init(&packet, in, sizeof(in));
+        netmidi2_add_identity(&packet, NETMIDI2_INVITATION, 0, "Client", "c");
+        netmidi2_writer_init(&reply, out, sizeof(out));
+        CHECK(netmidi2_table_receive(&table, 1000 + i, in, packet.length, now,
+                                     &reply, &index) == 0);
+        CHECK(index == (int)i && table_reply_is(&reply,
+                  NETMIDI2_INVITATION_ACCEPTED, 3));
+        CHECK(netmidi2_table_find(&table, 1000 + i) == (int)i);
+    }
+    /* one more is told there is no room, and takes none */
+    netmidi2_writer_init(&reply, out, sizeof(out));
+    CHECK(netmidi2_table_receive(&table, 5000, in, packet.length, now, &reply,
+                                 &index) == 0);
+    CHECK(index == -1 && table_reply_is(&reply, NETMIDI2_BYE,
+              NETMIDI2_BYE_TOO_MANY_SESSIONS));
+    CHECK(netmidi2_table_find(&table, 5000) == -1);
+    /* each Client's data goes to its own slot, with its own sequence */
+    for (i = 0; i < NETMIDI2_SESSIONS_MAX; ++i) {
+        word = 0x20900040u | (i << 8);
+        netmidi2_writer_init(&packet, in, sizeof(in));
+        netmidi2_add_ump(&packet, 0, &word, 1);
+        netmidi2_writer_init(&reply, out, sizeof(out));
+        CHECK(netmidi2_table_receive(&table, 1000 + i, in, packet.length, now,
+                                     &reply, &index) == 0);
+        CHECK(index == (int)i && table_counts[i] == 1 &&
+              table_last[i] == word);
+    }
+    /* data from someone with no session: Bye, not established */
+    netmidi2_writer_init(&reply, out, sizeof(out));
+    CHECK(netmidi2_table_receive(&table, 5000, in, packet.length, now, &reply,
+                                 &index) == 0);
+    CHECK(index == -1 && table_reply_is(&reply, NETMIDI2_BYE,
+              NETMIDI2_BYE_NOT_ESTABLISHED));
+    /* a Client leaves: its slot is free at the next tick, the others stay */
+    netmidi2_writer_init(&packet, in, sizeof(in));
+    netmidi2_add(&packet, NETMIDI2_BYE, NETMIDI2_BYE_USER_TERMINATED, 0, NULL, 0);
+    netmidi2_writer_init(&reply, out, sizeof(out));
+    CHECK(netmidi2_table_receive(&table, 1003, in, packet.length, now, &reply,
+                                 &index) == 0);
+    CHECK(index == 3 && table_reply_is(&reply, NETMIDI2_BYE_REPLY, 0));
+    netmidi2_writer_init(&reply, out, sizeof(out));
+    (void)netmidi2_table_tick(&table, 3, now, &reply);
+    CHECK(!netmidi2_table_session(&table, 3) &&
+          netmidi2_table_session(&table, 2) &&
+          netmidi2_table_find(&table, 1003) == -1);
+    /* and the one that was refused can have it */
+    netmidi2_writer_init(&packet, in, sizeof(in));
+    netmidi2_add_identity(&packet, NETMIDI2_INVITATION, 0, "Late", "l");
+    netmidi2_writer_init(&reply, out, sizeof(out));
+    CHECK(netmidi2_table_receive(&table, 5000, in, packet.length, now, &reply,
+                                 &index) == 0);
+    CHECK(index == 3 && !strcmp(netmidi2_table_session(&table, 3)->peer_name,
+                                "Late"));
+    /* a stranger's packet that starts nothing leaves no slot behind */
+    netmidi2_writer_init(&packet, in, sizeof(in));
+    netmidi2_add(&packet, NETMIDI2_BYE, 0, 0, NULL, 0);
+    netmidi2_writer_init(&reply, out, sizeof(out));
+    netmidi2_writer_init(&reply, out, sizeof(out));
+    (void)netmidi2_table_tick(&table, 0, now, &reply);
+    netmidi2_writer_init(&packet, in, sizeof(in));
+    netmidi2_add(&packet, NETMIDI2_BYE, 0, 0, NULL, 0);
+    netmidi2_writer_init(&reply, out, sizeof(out));
+    CHECK(netmidi2_table_receive(&table, 1000, in, packet.length, now, &reply,
+                                 &index) == 0);
+    netmidi2_writer_init(&reply, out, sizeof(out));
+    (void)netmidi2_table_tick(&table, 0, now, &reply);
+    CHECK(!netmidi2_table_session(&table, 0));
+    netmidi2_writer_init(&packet, in, sizeof(in));
+    netmidi2_add(&packet, NETMIDI2_PING, 0, 0, (const uint8_t *)"abcd", 4);
+    netmidi2_writer_init(&reply, out, sizeof(out));
+    CHECK(netmidi2_table_receive(&table, 7000, in, packet.length, now, &reply,
+                                 &index) == 0);
+    CHECK(index == -1 && table_reply_is(&reply, NETMIDI2_PING_REPLY, 0) &&
+          !netmidi2_table_session(&table, 0));
+    /* as a Client too, from the same table: one session to a Host, no two */
+    netmidi2_writer_init(&reply, out, sizeof(out));
+    index = netmidi2_table_invite(&table, 9000, now, &reply);
+    CHECK(index == 0 && table_reply_is(&reply, NETMIDI2_INVITATION, 3));
+    CHECK(netmidi2_table_invite(&table, 9000, now, &reply) == -1);
+    CHECK(netmidi2_table_session(&table, 0)->state == NETMIDI2_INVITING &&
+          !netmidi2_table_session(&table, 0)->host);
+}
+
 int main(void)
 {
     test_codec();
     test_session();
     test_against_specification();
+    test_table();
     if (failures) {
         fprintf(stderr, "Network MIDI 2.0: %d failures\n", failures);
         return EXIT_FAILURE;
