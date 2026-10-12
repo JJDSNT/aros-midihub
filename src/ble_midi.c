@@ -25,6 +25,10 @@ void blemidi_midi_decoder_init(struct blemidi_midi_decoder *decoder)
 static int emit(void *context, blemidi_midi_byte_callback callback,
                 uint16_t timestamp, uint8_t byte)
 {
+    /* F9 and FD are undefined in MIDI 1.0, whose receivers are to ignore
+       them: they are taken off the stream here */
+    if (byte == 0xf9 || byte == 0xfd)
+        return 0;
     return callback(context, timestamp, byte) == 0 ? 0 : -1;
 }
 

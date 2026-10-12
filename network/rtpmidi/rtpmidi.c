@@ -944,6 +944,7 @@ void rtpmidi_reader_init(struct rtpmidi_reader *reader,
     reader->offset = 0;
     reader->timestamp = packet->timestamp;
     reader->running_status = 0;
+    reader->undefined = 0;
 }
 
 int rtpmidi_reader_next(struct rtpmidi_reader *reader,
@@ -963,6 +964,8 @@ int rtpmidi_reader_next(struct rtpmidi_reader *reader,
         return -1;
     packet = reader->packet;
     midi = packet->midi;
+again:
+    delta = 0;
     offset = reader->offset;
     if (offset >= packet->midi_length)
         return 0;
@@ -1024,12 +1027,26 @@ int rtpmidi_reader_next(struct rtpmidi_reader *reader,
         needed = 0;
     else if (status >= 0xf8 && status != 0xf9 && status != 0xfd)
         needed = 0;
-    else
-        /* F4, F5, F9, FD. MIDI 1.0 (page 6) has a receiver ignore them;
-           RFC 6295 section 3.2 forbids them in the list unless the
-           session was set up to carry them, and we set up no such
-           session. The caller drops the packet: backlog R29. */
-        return -2;
+    else {
+        /* F4, F5, F9, FD. RFC 6295 section 3.2 forbids them in the list
+           unless the session was set up to carry them, and says how they
+           are coded then: F9 and FD as System Real Time, one octet; F4
+           and F5 with their data octets and an F7 to close them. MIDI 1.0
+           (page 6) has a receiver ignore an undefined status "without
+           causing any problems to the system": it is stepped over, in
+           either form, counted, and the commands around it are taken. */
+        if (status == 0xf4 || status == 0xf5) {
+            while (offset < packet->midi_length && !(midi[offset] & 0x80))
+                ++offset;
+            if (offset >= packet->midi_length || midi[offset] != 0xf7)
+                return -1;
+            ++offset;
+        }
+        reader->timestamp += delta;
+        reader->offset = offset;
+        ++reader->undefined;
+        goto again;
+    }
     if (packet->midi_length - offset < needed)
         return -1;
     event->bytes[0] = status;

@@ -265,7 +265,7 @@ struct rtpmidi_reader {
     const struct rtpmidi_packet *packet;
     size_t offset;
     uint32_t timestamp;
-    uint8_t running_status;
+    uint8_t running_status;    unsigned int undefined;     /* undefined statuses stepped over */
 };
 
 void rtpmidi_reader_init(struct rtpmidi_reader *reader,

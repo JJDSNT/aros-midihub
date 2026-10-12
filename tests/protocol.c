@@ -1328,6 +1328,52 @@ static void rtp_command_reader(void)
     packet.midi_length = 1;
     rtpmidi_reader_init(&reader, &packet);
     assert(rtpmidi_reader_next(&reader, &event) == -1);
+
+    /* Undefined statuses (backlog R29): stepped over in both forms RFC
+     * 6295 section 3.2 gives them, with their delta times kept, and the
+     * commands around them taken. */
+    {
+        static const uint8_t around[] = {
+            0x90, 60, 100,
+            0x00, 0xf9,                     /* as System Real Time */
+            0x05, 0x80, 60, 0,
+            0x00, 0xf4, 1, 2, 0xf7,         /* with data, closed by F7 */
+            0x03, 0x40, 61,                 /* no running status after it */
+        };
+        static const uint8_t after[] = {
+            0xfd, 0x02, 0xf5, 0xf7, 0x04, 0xb0, 7, 100, 0x01, 0xf9
+        };
+        static const uint8_t open_ended[] = {0x90, 60, 100, 0x00, 0xf4, 1, 2};
+
+        packet.z = 0;
+        packet.timestamp = 1000;
+        packet.midi = around;
+        packet.midi_length = sizeof(around);
+        rtpmidi_reader_init(&reader, &packet);
+        assert(rtpmidi_reader_next(&reader, &event) == 1 &&
+               event.bytes[0] == 0x90 && event.timestamp == 1000);
+        assert(rtpmidi_reader_next(&reader, &event) == 1 &&
+               event.bytes[0] == 0x80 && event.timestamp == 1005);
+        /* F4 is a System Common status: it stops running status, so the
+         * data after it belongs to nothing */
+        assert(rtpmidi_reader_next(&reader, &event) == -1);
+        assert(reader.undefined == 2);
+
+        packet.midi = after;
+        packet.midi_length = sizeof(after);
+        rtpmidi_reader_init(&reader, &packet);
+        assert(rtpmidi_reader_next(&reader, &event) == 1 &&
+               event.bytes[0] == 0xb0 && event.timestamp == 1006);
+        assert(rtpmidi_reader_next(&reader, &event) == 0);
+        assert(reader.undefined == 3);
+
+        /* one with data and nothing to close it cannot be stepped over */
+        packet.midi = open_ended;
+        packet.midi_length = sizeof(open_ended);
+        rtpmidi_reader_init(&reader, &packet);
+        assert(rtpmidi_reader_next(&reader, &event) == 1);
+        assert(rtpmidi_reader_next(&reader, &event) == -1);
+    }
 }
 
 static void rtp_system_common(void)

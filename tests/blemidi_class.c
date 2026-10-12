@@ -246,6 +246,29 @@ static void put(struct blemidi_writer *writer, uint16_t timestamp,
         assert(blemidi_writer_put(writer, timestamp, midi[i]) == 0);
 }
 
+/* F9 and FD, which MIDI 1.0 leaves undefined, are in neither direction's
+   stream; the messages around them are. */
+static void undefined_statuses(void)
+{
+    struct blemidi_decoder decoder;
+    struct blemidi_writer writer;
+    struct packets packets;
+    static const uint8_t packet[] = {0x80, 0x80, 0x90, 60, 100, 0x81, 0xf9,
+                                     0x82, 0xfd, 0x83, 0xf8, 0x84, 64, 90};
+    static const uint8_t midi[] = {0x90, 60, 100, 0xf8, 0x90, 64, 90};
+    static const uint8_t stream[] = {0x90, 60, 0xf9, 100, 0xfd, 0xf8};
+    static const uint8_t written[] = {0x80, 0x80, 0x90, 60, 100, 0x80, 0xf8};
+
+    blemidi_decoder_init(&decoder);
+    DECODES(&decoder, packet, midi);
+    packets.count = 0;
+    blemidi_writer_init(&writer, take_packet, &packets);
+    put(&writer, 0, stream, sizeof(stream));
+    assert(blemidi_writer_flush(&writer) == 0);
+    assert(packets.count == 1);
+    WRITES(packets, 0, written);
+}
+
 /* What the writer makes of a MIDI byte stream is one of the forms the
    figures draw, and the decoder gives the stream back. */
 static void writer_follows_the_figures(void)
@@ -343,6 +366,7 @@ int main(void)
 {
     figures_of_section_7();
     figures_of_section_8();
+    undefined_statuses();
     timestamps_of_section_9();
     writer_follows_the_figures();
     puts("blemidi-class-test: ok");
