@@ -39,8 +39,10 @@ int blemidi_midi_decode(struct blemidi_midi_decoder *decoder,
     uint8_t previous_low = 0;
     int after_timestamp = 0, have_timestamp = 0;
 
+    /* bit 6 of the header is reserved: sent as 0, not looked at here
+       (BLE-MIDI 1.0, section 7) */
     if (!decoder || !packet || !callback || length < 2 ||
-        (packet[0] & 0xc0) != 0x80)
+        !(packet[0] & 0x80))
         return -1;
     high = (uint16_t)(packet[0] & 0x3f) << 7;
     timestamp = decoder->timestamp;
@@ -136,16 +138,14 @@ int blemidi_midi_decode(struct blemidi_midi_decoder *decoder,
             unsigned size;
             if (!running)
                 return -1;
+            /* with a timestamp byte of its own or, without one, at the
+               time of the message before it (section 7, rule 2) */
             size = message_size(running);
-            if (after_timestamp || i > 1) {
-                if (emit(context, callback, timestamp, running))
-                    return -1;
-                need = (uint8_t)(size - 1);
-                after_timestamp = 0;
-            }
-            if (emit(context, callback, timestamp, byte))
+            if (emit(context, callback, timestamp, running) ||
+                emit(context, callback, timestamp, byte))
                 return -1;
-            need--;
+            need = (uint8_t)(size - 2);
+            after_timestamp = 0;
         }
         i++;
     }

@@ -246,6 +246,18 @@ build/ble-midi-test: tests/ble_midi.c src/ble_midi.c src/ble_peripheral.c \
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/ble_midi.c src/ble_midi.c src/ble_peripheral.c
 
+# The codec of btmidi.class lives in the AROS tree; its test is run where
+# a checkout of the class is at hand.
+BTMIDI_CLASS ?= $(HOME)/AROS-btmidi/rom/bluetooth/classes/btmidi
+
+build/blemidi-class-test: tests/blemidi_class.c $(BTMIDI_CLASS)/blemidi.c \
+                          $(BTMIDI_CLASS)/blemidi.h
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(BTMIDI_CLASS) -o $@ tests/blemidi_class.c $(BTMIDI_CLASS)/blemidi.c
+
+test-blemidi-class: build/blemidi-class-test
+	./build/blemidi-class-test
+
 demo: build/MIDIHub
 
 m68k: build/MIDIHub-m68k

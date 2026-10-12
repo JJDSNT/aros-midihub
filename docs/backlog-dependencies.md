@@ -158,7 +158,7 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 96 open items, 59 have nothing in front of them, 31 sit behind something
+Of 99 open items, 62 have nothing in front of them, 31 sit behind something
 outside our hands or behind a decision, and 6 wait only for other work of
 ours.
 
@@ -213,7 +213,7 @@ their own backlog, not from this graph.
 | UMP | UP06, UP07, UP08, UP13, UP15 |
 | Network MIDI 2.0 | NM12, NM13, NM17, NM18, NM19 |
 | CAMD | B16, B22 |
-| BLE MIDI | L13, L01, L06, T04, T06, L05, W03, W05, W06, L09, L04, L07 |
+| BLE MIDI | L01, L06, T04, T06, L05, W03, W05, W06, L15, L09, L04, L07, L14, L16, L17 |
 | mDNS | MD20, MD21, MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
 
 None of these is a P0 in its own list: the defects in code as it is that
@@ -237,8 +237,8 @@ stood free have been closed.
    (NM06, NM07). The UMP path runs end to end, on the host and on hosted
    AROS, with our own code at both ends.
 
-7. **BLE MIDI**: T01 the day the hardware is at hand. W01 and L08 were done
-   on 2026-10-12.
+7. **BLE MIDI**: T01 the day the hardware is at hand. W01, L08 and L13
+   (the codec read against its specification) were done on 2026-10-12.
 8. **mDNS**: MD19 before Network MIDI 2.0's discovery; the rest of its P1
    and P2 whenever the transports are waiting on something.
 

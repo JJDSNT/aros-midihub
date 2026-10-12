@@ -22,7 +22,6 @@ it matters. The detail of each entry is in the three parts below.
 | Priority | Item | In one line | Waits for |
 |---|---|---|---|
 | P0 | T01 | The driver version has never run on a radio; the PR promises the test | A Pi 3 and a phone |
-| P1 | L13 | The packet codec has not been read against the specification's text | Nothing: the text is in `docs/` since 2026-10-12 |
 | P1 | L01 | A device's port number depends on which other devices are bound | Nothing in the class; B29 for the real answer |
 | P1 | L06 | A sixteenth device is refused without a word | Nothing; with L01 |
 | P1 | L10 | MIDIHub.prefs does not know the driver's ports; saved routes break | Nothing |
@@ -36,6 +35,7 @@ it matters. The detail of each entry is in the three parts below.
 | P2 | W06, T05 | Never built or run for m68k | Nothing |
 | P2 | T02 | The central role has never met a real peripheral | A BLE MIDI device |
 | P2 | L09 | The driver has to be written to disk | A build decision |
+| P2 | L15 | The class's codec is tested from this repository, not in the AROS tree | Where the maintainers want a class's host test |
 | P2 | L02 | A port has a number, not the device's name | CAMD backlog B31 |
 | P2 | L03 | All sixteen ports always look present | CAMD backlog B30 |
 | P2 | W04 | USB and BLE name a device's port in two ways | CAMD backlog B29 |
@@ -43,29 +43,61 @@ it matters. The detail of each entry is in the three parts below.
 | P2 | L12 | The time a BLE packet carries is thrown away | CAMD backlog B32 |
 | P3 | L04 | A program cannot link to a port before its device exists | The maintainer's agreement |
 | P3 | L07 | Two centrals cannot send SysEx at once | Nothing; only if it matters |
+| P3 | L14 | A message begun inside an unfinished SysEx costs its whole packet | A device seen doing it |
+| P3 | L16 | The class asks for no encryption, which the specification recommends | T01, to see what phones do |
+| P3 | L17 | As the central we never ask for a short interval ourselves | T02 |
 
-Three entries are new on 2026-10-12 and have no row in the parts below:
+Entries new on 2026-10-12, with no row in the parts below:
 
 - **L11.** `ports/aros/btmidi` is the client version of the class, and
   `contrib-aros-midihub` builds it under the same name as the upstream
   class. Remove it and the `camd_bridge` it shares once MIDIHub works with
   the upstream class (L10) and the pull request is merged. Done when the
   hosted tree has one `btmidi.class`, built from the AROS tree.
-- **L13.** `blemidi.c` in the class and `src/ble_midi.c` here were written
-  without the text of "Specification for MIDI over Bluetooth Low Energy"
-  1.0 beside them. Read both against it, as `src/ump.c` was read against
-  its specification, and write the section beside each rule: the header
-  and timestamp bytes, running status, a SysEx message over several
-  packets, System Real Time inside one, the connection interval and the
-  characteristic's properties. Done when every rule cites its section and
-  the differences found are entries here.
 - **L12.** A BLE MIDI packet carries a 13-bit millisecond timestamp per
   message. The decoder parses it and the class drops it: a driver hands
   CAMD bytes, and bytes have no time. Messages reach clients when the
   packet arrives, with the connection interval's jitter. Done when a client
   sees the sender's spacing; that needs a timed receive for drivers (B32).
 
+- **L14.** Section 8 lets nothing but System Real Time come before a
+  SysEx message is complete, and the decoder holds a sender to it: a
+  packet with any other status inside an unfinished SysEx is refused
+  whole, the class starts the decoder afresh, and the messages of that
+  packet are lost with the rest of the SysEx. MIDI 1.0 lets any status
+  end a SysEx. Done, if a device is seen doing it, when such a status
+  ends the SysEx and is taken.
+- **L15.** `tests/blemidi_class.c` here builds the class's `blemidi.c`
+  from a checkout of the AROS tree (`make test-blemidi-class`) and is not
+  part of `make test`. The pull request carries no test of the codec.
+  Done when the test is where the maintainers want it, or they say a
+  class has none.
+- **L16.** Section 3 recommends encryption for all three properties of
+  the characteristic. The class registers it without asking for any.
+  Done when it is known what phones and Windows expect (T01) and the
+  class asks for that.
+- **L17.** Section 4 has the device ask for an interval of 15 ms or less.
+  As the peripheral we ask for exactly 15 ms, the shortest iOS takes
+  (`BTMIDI_CONN_INTERVAL`, `bConnAskParams()` in the stack). As the
+  central the stack opens every LE link at 30 to 50 ms and takes a
+  shorter interval when the peripheral asks; one that does not ask stays
+  there. Done when a real peripheral has been watched (T02) and, if any
+  stays long, the class can ask the stack for a short link.
+
 ## Done
+
+On 2026-10-12, in the worktree of the pull request and not yet pushed to
+it, and in `src/ble_midi.c` here:
+
+| # | What was done |
+|---|---|
+| L13 | The class's `blemidi.c` and `src/ble_midi.c`, whose decoders are the same code, were read against "Specification for MIDI over Bluetooth Low Energy (BLE-MIDI)" 1.0 (MMA/AMEI RP-052), text and figures, and the class's rules now cite their sections. `tests/blemidi_class.c` decodes every packet the figures of sections 7 and 8 draw and has the writer produce them. **Agreed as it was:** the two UUIDs and the properties read, write without response and notify (3), with a read answered by no payload (3, 5: the stack returns nothing for a stream characteristic; the central reads once and ignores what comes); packets of the link's payload, the MTU less 3 (7); the header and timestamp bytes; running status within a packet only, kept across System Common and Real Time, ended by the packet (7, rules 1 to 4); a SysEx over packets, its continuation known by the missing timestamp byte, Real Time inside it, the end with a timestamp byte (8); thirteen bits of milliseconds, the high part going up when the low part goes down (9). The writer never leaves a status out, which the text allows, and sends a Real Time byte that came inside a message before that message, where the figure of page 5 draws it after: both keep the two apart, as the text asks. **Differed, corrected:** a header with its reserved bit 6 set was refused; it is taken now, the bit not looked at. A condition in the running status path that was always true is gone. **Differed, left:** L14, L16, L17. **Found beside it:** F9 and FD, undefined in MIDI 1.0, pass as System Real Time (RTP-MIDI backlog R28, which reads the MIDI 1.0 rules for all three codecs). **Not read:** the stack's MTU exchange (6), which the class only takes the result of, and how a receiver relates the sender's clock to its own (9), which waits for L12. |
+
+Corrected here on the same day, about L08 below: `blemidi_check()` leaves
+the decoder as it was, but the class then starts it afresh, so a SysEx
+running over packets does not survive a bad packet in the middle: its
+remaining packets are refused one by one and CAMD ends the message at the
+next status.
 
 In commit `658d741303` on the pull request's branch (2026-10-12):
 
