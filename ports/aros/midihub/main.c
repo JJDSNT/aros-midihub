@@ -64,6 +64,11 @@ struct runtime {
     int configured;             /* a peer was named to invite */
     uint32_t configured_address;
     uint16_t configured_port;
+    /* a peer to invite wherever it is advertised, by its session's name */
+    char wanted[64];
+    int wanted_present;
+    uint64_t wanted_tried;
+    uint64_t wanted_wait;
     int probe_note;
     int probe_sysex;
     int probe_state;
@@ -935,11 +940,51 @@ static void periodic(struct runtime *rt, uint64_t now)
 
     /* The system's mDNS service may come up after us, or again. */
     {
+        struct netmidi_discovered seen;
         int registered = netmidi_discovery_poll(&rt->discovery, now);
         if (registered > rt->discovered)
             puts("MIDIHub: advertised by the system mDNS service");
         if (registered >= 0)
             rt->discovered = registered;
+        while (netmidi_discovery_next(&rt->discovery, &seen)) {
+            int ours = strcmp(seen.name, rt->session_name) == 0;
+            int wanted = rt->wanted[0] && strcmp(seen.name, rt->wanted) == 0;
+            if (ours)
+                continue;           /* our own registration, come back */
+            if (seen.present)
+                printf("MIDIHub: session \"%s\" found at %u.%u.%u.%u port %u\n",
+                       seen.name, (unsigned int)(seen.address >> 24),
+                       (unsigned int)((seen.address >> 16) & 255),
+                       (unsigned int)((seen.address >> 8) & 255),
+                       (unsigned int)(seen.address & 255),
+                       (unsigned int)seen.port);
+            else
+                printf("MIDIHub: session \"%s\" is gone\n", seen.name);
+            if (!wanted)
+                continue;
+            if (seen.present) {
+                rt->configured = 1;
+                rt->configured_address = seen.address;
+                rt->configured_port = seen.port;
+                if (!rt->wanted_present) {
+                    rt->wanted_wait = 0;        /* newly there: at once */
+                    rt->wanted_tried = 0;
+                }
+            }
+            rt->wanted_present = seen.present;
+        }
+        /* The peer we want is advertised and we have no session with it:
+           invite it, and again more slowly while it does not answer. */
+        if (rt->wanted_present && configured_index(rt) < 0 &&
+            (!rt->wanted_tried ||
+             elapsed_ticks(now, rt->wanted_tried) >= rt->wanted_wait)) {
+            printf("MIDIHub: inviting \"%s\"\n", rt->wanted);
+            invite_configured(rt, now);
+            rt->wanted_tried = now ? now : 1;
+            rt->wanted_wait = rt->wanted_wait ? rt->wanted_wait * 2 : 50000;
+            if (rt->wanted_wait > 600000)
+                rt->wanted_wait = 600000;
+        }
     }
     for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
         if (rt->peers.peer[index].used)
@@ -955,6 +1000,7 @@ int main(int argc, char **argv)
     uint16_t local_port;
     uint16_t peer_port;
     uint16_t midi2_port = 0;
+    const char *peer_name = NULL;
     struct netmidi_network_config config;
     const char *peer_ip;
     uint64_t now;
@@ -998,6 +1044,11 @@ int main(int argc, char **argv)
         }
         argi += 2;
     }
+    /* A peer to invite by the name its session is advertised under. */
+    if (argc - argi >= 2 && strcmp(argv[argi], "--peer-name") == 0) {
+        peer_name = argv[argi + 1];
+        argi += 2;
+    }
     remaining = argc - argi;
     local_port = config.local_port;
     peer_port = config.peer_port;
@@ -1009,7 +1060,7 @@ int main(int argc, char **argv)
          parse_port(argv[argi + 2], &peer_port) != 0) ||
         (remaining == 4 && strcmp(argv[argi + 3], "--probe-note") != 0 &&
          strcmp(argv[argi + 3], "--probe-sysex") != 0)) {
-        fputs("Usage: MIDIHub [--config file] [--midi2 port] [local-control-port [peer-ip peer-control-port [--probe-note|--probe-sysex]]]\n", stderr);
+        fputs("Usage: MIDIHub [--config file] [--midi2 port] [--peer-name session] [local-control-port [peer-ip peer-control-port [--probe-note|--probe-sysex]]]\n", stderr);
         return 20;
     }
     if (remaining >= 3)
@@ -1071,6 +1122,9 @@ int main(int argc, char **argv)
     /* An AppleMIDI session is found under its control port. */
     netmidi_discovery_add(&rt.discovery, rt.session_name, "_apple-midi._udp",
                           local_port);
+    netmidi_discovery_browse(&rt.discovery, "_apple-midi._udp");
+    if (peer_name)
+        snprintf(rt.wanted, sizeof(rt.wanted), "%s", peer_name);
     if (netmidi_discovery_poll(&rt.discovery, now) < 0)
         puts("MIDIHub: no system mDNS service; peers have to be given by address");
     if (rt.configured && invite_configured(&rt, now) != 0)
@@ -1107,8 +1161,9 @@ int main(int argc, char **argv)
             midi2_receive(&rt);
         periodic(&rt, now_ticks());
         netmidi_camd_poll(&rt.camd, send_midi, &rt);
-        /* asked to invite one peer: with that session over, so are we */
-        if (rt.configured && configured_index(&rt) < 0)
+        /* asked to invite one peer by its address: with that session
+           over, so are we. One wanted by name is waited for instead. */
+        if (rt.configured && !rt.wanted[0] && configured_index(&rt) < 0)
             break;
     }
     result = 0;

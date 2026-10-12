@@ -47,8 +47,6 @@ flowchart LR
         AM06["AM06 run against<br/>rtpmidid"]:::ready
         AM07["AM07 who may<br/>connect"]:::ready
         AM08["AM08 DEVS:Midi<br/>driver"]
-        AM10["AM10 browse<br/>for peers"]:::ready
-        AM12["AM12 reconnection"]
         AM14["AM14 IPv6"]
         AM16["AM16 configuration"]
         AM19["AM19 fuzzing<br/>and captures"]
@@ -111,7 +109,6 @@ flowchart LR
 
     AM07 --> AM16
     R17 --> AM16
-    AM10 --> AM12
     AM08 --> AM20
     D1 --> AM08
     D2 --> AM08
@@ -122,7 +119,6 @@ flowchart LR
 
     UP12 --> UP16
 
-    AM10 --> NM08
     UP09 --> NM09
     R17 --> NM09
     AM08 --> NM11
@@ -167,8 +163,8 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 99 open items, 61 have nothing in front of them, 31 sit behind something
-outside our hands or behind a decision, and 7 wait only for other work of
+Of 98 open items, 61 have nothing in front of them, 31 sit behind something
+outside our hands or behind a decision, and 6 wait only for other work of
 ours.
 
 **What opens the most**, counting everything that follows directly or
@@ -221,7 +217,7 @@ their own backlog, not from this graph.
 | Network MIDI 2.0 | NM12, NM13, NM17, NM18, NM19 |
 | CAMD | B16, B22 |
 | BLE MIDI | L13, L01, L06, T04, T06, L05, W03, W05, W06, L09, L04, L07 |
-| mDNS | MD19, MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
+| mDNS | MD19, MD20, MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
 
 None of these is a P0 in its own list: the defects in code as it is that
 stood free have been closed.
@@ -235,9 +231,9 @@ stood free have been closed.
    and Apple's need a machine this one is not.
 3. Done on 2026-10-12: AM05, several peers at once.
 4. **AM08**, the driver, which needs the decisions D1, D2 and D4 first.
-   Meanwhile: AM09, registering through the system mDNS service, was done
-   on 2026-10-12; **AM10**, browsing for peers, follows it, and **AM07**,
-   who may connect, needs nothing.
+   Done meanwhile on 2026-10-12: registering through the system mDNS
+   service (AM09), browsing for peers (AM10) and inviting again a peer
+   that comes back (AM12). **AM07**, who may connect, needs nothing.
 5. Done on 2026-10-12: UP01 and NM01, UMP and Network MIDI 2.0 read
    against their texts, with the corrections they called for.
 6. Done on 2026-10-12: Network MIDI 2.0's table of sessions and runtime

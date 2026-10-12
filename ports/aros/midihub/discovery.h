@@ -10,6 +10,15 @@
  * used for tests) nothing is advertised and the calls say so. */
 
 #define NETMIDI_DISCOVERY_SERVICES 2
+#define NETMIDI_DISCOVERY_EVENTS 16
+
+/* A service instance someone else advertises, as it came or went. */
+struct netmidi_discovered {
+    char name[64];
+    uint32_t address;               /* IPv4, host order; 0 when not known */
+    uint16_t port;
+    int present;                    /* 1 it is there, 0 it left */
+};
 
 struct netmidi_discovery {
     void *library;                  /* bonami.library, opened */
@@ -22,6 +31,13 @@ struct netmidi_discovery {
     } service[NETMIDI_DISCOVERY_SERVICES];
     int count;
     uint64_t last_attempt;
+    const char *browse_type;        /* what to look for, or NULL */
+    void *browse_reference;         /* the search, or NULL */
+    void *browse_hook;
+    /* written by the service's process, read by ours */
+    struct netmidi_discovered event[NETMIDI_DISCOVERY_EVENTS];
+    volatile unsigned long written;
+    unsigned long read;
 };
 
 void netmidi_discovery_init(struct netmidi_discovery *discovery);
@@ -36,6 +52,16 @@ int netmidi_discovery_add(struct netmidi_discovery *discovery,
  * now, -1 where there is no service to ask. */
 int netmidi_discovery_poll(struct netmidi_discovery *discovery,
                            uint64_t now);
+/* Asks for instances of type to be looked for. Like a registration, the
+ * search begins at the next poll at which the service answers. */
+int netmidi_discovery_browse(struct netmidi_discovery *discovery,
+                             const char *type);
+/* The next instance that appeared or left, 1, or 0 when there is none
+ * waiting. An instance is reported as present only once its address and
+ * port are known, and may be reported so more than once. Our own
+ * registrations come back here too; the caller knows its own name. */
+int netmidi_discovery_next(struct netmidi_discovery *discovery,
+                           struct netmidi_discovered *event);
 /* Withdraws everything, with the goodbye the service sends for it. */
 void netmidi_discovery_close(struct netmidi_discovery *discovery);
 
