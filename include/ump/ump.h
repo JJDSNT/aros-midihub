@@ -122,6 +122,37 @@ struct ump_to_midi1 {
  * messages are for at once (7.2.2.3). */
 int ump_jr_after_clock(const struct ump_to_midi1 *state, int32_t *ticks);
 
+/* The sender's clock against ours, from its JR Clock messages (7.2.2.1).
+ * Each says what time it was at the sender as it left; it arrives a little
+ * later, and not always by the same little. Of the last eight, the one
+ * that arrived soonest after its own time is the measure, as the text
+ * lets a receiver choose ("smoothing or averaging"). Our time is in
+ * microseconds; a tick is 32 of them. After a second without a clock the
+ * count starts anew: the sender's sixteen bits wrap every 2.09712 seconds
+ * and it has to send one every 250 ms. */
+#define UMP_JR_CLOCKS_KEPT 8
+#define UMP_JR_TICK_US 32
+#define UMP_JR_CLOCK_GAP_US 1000000u
+struct ump_jr_clock {
+    uint8_t known;
+    uint16_t last;                  /* the last clock, as sent */
+    uint64_t sender_ticks;          /* the same, counted on past its wraps */
+    uint64_t last_local_us;
+    int64_t kept[UMP_JR_CLOCKS_KEPT];   /* ours less the sender's, in us */
+    unsigned count;
+    unsigned next;
+    int64_t offset_us;
+};
+
+void ump_jr_clock_init(struct ump_jr_clock *clock);
+/* A JR Clock that arrived at local_us. */
+void ump_jr_clock_seen(struct ump_jr_clock *clock, uint16_t sender_clock,
+                       uint64_t local_us);
+/* When, by our time, a message with this JR Timestamp is meant. Returns 0
+ * until a clock has been seen. */
+int ump_jr_clock_due(const struct ump_jr_clock *clock, uint16_t timestamp,
+                     uint64_t *local_us);
+
 typedef void (*ump_midi1_sink)(void *context, const uint8_t *bytes, size_t length);
 
 void ump_to_midi1_init(struct ump_to_midi1 *state, uint8_t group);
@@ -153,16 +184,19 @@ enum {
 };
 
 enum { UMP_PROTOCOL_MIDI1 = 0x01, UMP_PROTOCOL_MIDI2 = 0x02 };
+/* Jitter reduction timestamps, as Endpoint Info and Stream Configuration
+ * carry them in their two lowest bits (figures 13, 18 and 19). */
+enum { UMP_JR_TRANSMIT = 0x01, UMP_JR_RECEIVE = 0x02 };
 
 unsigned ump_stream_status(const uint32_t *words);
 /* Endpoint Info Notification (7.1.2): UMP 1.1, no function blocks, which
  * the specification allows and which leaves Function Block Discovery
  * without an answer to give (7.1.8), and the protocols given
  * (UMP_PROTOCOL_* bits). Writes 4 words. */
-void ump_endpoint_info(uint32_t *words, unsigned protocols);
+void ump_endpoint_info(uint32_t *words, unsigned protocols, unsigned jr);
 /* Stream Configuration Notification (7.1.6.3) for protocol, with no
  * jitter-reduction timestamps either way. Writes 4 words. */
-void ump_stream_config(uint32_t *words, unsigned protocol);
+void ump_stream_config(uint32_t *words, unsigned protocol, unsigned jr);
 /* Endpoint Name (7.1.4) or Product Instance Id (7.1.5) Notification: text
  * split over as many 4-word UMPs as needed (14 bytes each). Returns the
  * words written, 0 when capacity is too small or the text is not one the

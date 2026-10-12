@@ -90,6 +90,13 @@ struct runtime {
     int midi2_known[NETMIDI2_SESSIONS_MAX];
     unsigned long midi2_gaps[NETMIDI2_SESSIONS_MAX];
     unsigned long midi2_resets[NETMIDI2_SESSIONS_MAX];
+    /* Each peer's clock against ours, from its JR Clock messages, and what
+       its timestamps have us hold until its time (M2-104-UM 7.2.2) */
+    struct ump_jr_clock midi2_clock[NETMIDI2_SESSIONS_MAX];
+    struct rtpmidi_event_queue midi2_queue;
+    int midi2_current;              /* the session whose UMP is passing */
+    unsigned long midi2_timed;
+    unsigned long midi2_late;
     struct netmidi_camd_runtime camd;
     /* What CAMD handed over in one turn of the loop and has not gone out
        yet: it leaves together, one packet to a peer where it fits. */
@@ -589,18 +596,76 @@ static void midi2_send(struct runtime *rt, uint64_t key,
                                &address);
 }
 
-static void midi2_to_camd(void *context, const uint8_t *bytes, size_t length)
+static uint64_t now_us(void)
 {
-    struct runtime *rt = context;
-    size_t i;
-    printf("MIDIHub: MIDI 2.0 bytes=");
-    for (i = 0; i < length && i < 16; ++i)
-        printf("%02x", (unsigned int)bytes[i]);
-    puts(i < length ? "..." : "");
+    struct timeval time;
+    gettimeofday(&time, NULL);
+    return (uint64_t)time.tv_sec * 1000000 + (uint64_t)time.tv_usec;
+}
+
+static void midi2_deliver(struct runtime *rt, const uint8_t *bytes,
+                          size_t length)
+{
+    if (rt->trace) {
+        size_t i;
+        printf("MIDIHub: MIDI 2.0 delivered at=%llu bytes=",
+               (unsigned long long)now_ticks());
+        for (i = 0; i < length && i < 16; ++i)
+            printf("%02x", (unsigned int)bytes[i]);
+        putchar('\n');
+    }
     if (bytes[0] == 0xf0)
         netmidi_camd_deliver_sysex(&rt->camd, bytes, length);
     else
         netmidi_camd_deliver(&rt->camd, bytes, length);
+}
+
+/* A message translated from a peer's UMPs. One that came with a JR
+ * Timestamp, from a peer whose clock is known, waits for its time and the
+ * latency asked for; any other is for at once (7.2.2.3). */
+static void midi2_to_camd(void *context, const uint8_t *bytes, size_t length)
+{
+    struct runtime *rt = context;
+    int index = rt->midi2_current;
+    const struct ump_jr *jr = &rt->midi2_in[index].jr;
+    uint64_t due_us;
+    size_t i;
+
+    printf("MIDIHub: MIDI 2.0 bytes=");
+    for (i = 0; i < length && i < 16; ++i)
+        printf("%02x", (unsigned int)bytes[i]);
+    puts(i < length ? "..." : "");
+    if (jr->have_timestamp &&
+        ump_jr_clock_due(&rt->midi2_clock[index], jr->timestamp, &due_us)) {
+        uint64_t now = now_ticks();
+        uint64_t due = due_us / 100 + rt->latency;
+
+        ++rt->midi2_timed;
+        if (due > now && due - now <= RTPMIDI_QUEUE_HORIZON &&
+            (bytes[0] == 0xf0 ?
+                 rtpmidi_queue_push_sysex(&rt->midi2_queue, due, bytes,
+                                          length) :
+                 rtpmidi_queue_push(&rt->midi2_queue, due, bytes,
+                                    length)) == 0)
+            return;
+        if (due <= now)
+            ++rt->midi2_late;
+    }
+    midi2_deliver(rt, bytes, length);
+}
+
+/* What was held and is now due. */
+static void midi2_release(struct runtime *rt, uint64_t now)
+{
+    struct rtpmidi_queued_event event;
+
+    while (rtpmidi_queue_pop_due(&rt->midi2_queue, now, &event)) {
+        if (event.sysex)
+            midi2_deliver(rt, event.sysex, event.sysex_length);
+        else
+            midi2_deliver(rt, event.bytes, event.length);
+        rtpmidi_queue_event_release(&event);
+    }
 }
 
 static void midi2_sink(void *context, int index, const uint32_t *words,
@@ -612,7 +677,16 @@ static void midi2_sink(void *context, int index, const uint32_t *words,
         unsigned n = ump_words(words[i]);
         if (i + n > count)
             break;
-        ump_to_midi1(&rt->midi2_in[index], words + i, n, midi2_to_camd, rt);
+        {
+            unsigned long clocks = rt->midi2_in[index].jr.clocks;
+
+            rt->midi2_current = index;
+            ump_to_midi1(&rt->midi2_in[index], words + i, n, midi2_to_camd,
+                         rt);
+            if (rt->midi2_in[index].jr.clocks != clocks)
+                ump_jr_clock_seen(&rt->midi2_clock[index],
+                                  rt->midi2_in[index].jr.clock, now_us());
+        }
         i += n;
     }
 }
@@ -661,6 +735,13 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
         if (!session) {
             if (rt->midi2_known[index]) {
                 puts("MIDIHub: MIDI 2.0 session closed");
+                if (rt->midi2_timed) {
+                    printf("MIDIHub: %lu of %lu timed MIDI 2.0 events came after their time\n",
+                           rt->midi2_late, rt->midi2_timed);
+                    rt->midi2_timed = rt->midi2_late = 0;
+                }
+                /* what was still held would sound after the notes off */
+                rtpmidi_queue_reset(&rt->midi2_queue);
                 midi2_all_notes_off(rt);
                 rt->midi2_known[index] = 0;
             }
@@ -677,6 +758,7 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
             ump_to_midi1_init(&rt->midi2_in[index], 0);
             ump_to_midi1_buffer(&rt->midi2_in[index], rt->midi2_sysex[index],
                                 sizeof(rt->midi2_sysex[index]));
+            ump_jr_clock_init(&rt->midi2_clock[index]);
         }
         if (rt->midi2_known[index] &&
             (session->gaps != rt->midi2_gaps[index] ||
@@ -1236,6 +1318,9 @@ int main(int argc, char **argv)
         }
         netmidi2_table_init(&rt.midi2, config.session_name, MIDI2_PRODUCT_ID,
                             midi2_sink, &rt);
+        /* a peer may send its timestamps: they are used */
+        rt.midi2.jr_offered = UMP_JR_RECEIVE;
+        rtpmidi_queue_reset(&rt.midi2_queue);
         rt.midi2_enabled = 1;
     }
     if (netmidi_camd_open(&rt.camd) != 0) {
@@ -1320,6 +1405,13 @@ int main(int argc, char **argv)
             if (wait_ticks < 1000 && (long)(wait_ticks * 100) < wait_us)
                 wait_us = (long)(wait_ticks * 100);
         }
+        if (rt.midi2_enabled &&
+            rtpmidi_queue_next_due(&rt.midi2_queue, &next_due)) {
+            now = now_ticks();
+            wait_ticks = next_due > now ? next_due - now : 0;
+            if (wait_ticks < 1000 && (long)(wait_ticks * 100) < wait_us)
+                wait_us = (long)(wait_ticks * 100);
+        }
         netmidi_network_wait(&rt.network, -1, wait_us,
                              netmidi_camd_signal_bit(&rt.camd),
                              &network_events);
@@ -1332,6 +1424,8 @@ int main(int argc, char **argv)
         if (network_events & NETMIDI_NETWORK_EVENT_MIDI2)
             midi2_receive(&rt);
         periodic(&rt, now_ticks());
+        if (rt.midi2_enabled)
+            midi2_release(&rt, now_ticks());
         netmidi_camd_poll(&rt.camd, send_midi, &rt);
         flush_midi(&rt);
         /* asked to invite one peer by its address: with that session

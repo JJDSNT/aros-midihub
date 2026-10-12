@@ -250,6 +250,45 @@ static void test_jr_timestamps(void)
     CHECK(jr_state.dropped.not_translated == 1);
 }
 
+/* The sender's clock against ours (7.2.2.1). */
+static void test_jr_clock(void)
+{
+    struct ump_jr_clock clock;
+    uint64_t local = 5000000, due;
+    uint16_t sender = 65000;
+    unsigned i;
+
+    ump_jr_clock_init(&clock);
+    CHECK(!ump_jr_clock_due(&clock, 100, &due));
+    /* A clock every 200 ms, 6250 ticks, each 1 ms on its way but the
+       fourth, which takes 20: what it would say is not believed. The
+       sender's sixteen bits wrap on the way. */
+    for (i = 0; i < 12; ++i) {
+        ump_jr_clock_seen(&clock, sender, local + (i == 3 ? 20000 : 1000));
+        /* a message stamped 10 ms after this clock */
+        CHECK(ump_jr_clock_due(&clock, (uint16_t)(sender + 312), &due));
+        CHECK(due == local + 1000 + 312 * 32);
+        /* and one stamped 5 ms before it */
+        CHECK(ump_jr_clock_due(&clock, (uint16_t)(sender - 156), &due));
+        CHECK(due == local + 1000 - 156 * 32);
+        sender = (uint16_t)(sender + 6250);
+        local += 200000;
+    }
+    /* A path that became slower for good is followed after eight. */
+    for (i = 0; i < 8; ++i) {
+        ump_jr_clock_seen(&clock, sender, local + 9000);
+        sender = (uint16_t)(sender + 6250);
+        local += 200000;
+    }
+    CHECK(ump_jr_clock_due(&clock, (uint16_t)(sender - 6250), &due));
+    CHECK(due == local - 200000 + 9000);
+    /* Three seconds of silence: the count starts anew. */
+    local += 3000000;
+    ump_jr_clock_seen(&clock, 1234, local);
+    CHECK(clock.count == 1);
+    CHECK(ump_jr_clock_due(&clock, 1234, &due) && due == local);
+}
+
 static void test_ump_to_midi1(void)
 {
     static const uint32_t voice[] = { 0x22903c64u, 0x22c00500u, 0x22e00040u };
@@ -608,13 +647,18 @@ static void test_stream(void)
     char text[32];
     unsigned n, i, j;
 
-    ump_endpoint_info(words, UMP_PROTOCOL_MIDI1);
+    ump_endpoint_info(words, UMP_PROTOCOL_MIDI1, 0);
     CHECK(words[0] == 0xf0010101u);
     CHECK(words[1] == 0x80000100u);
     CHECK(ump_stream_status(words) == UMP_ENDPOINT_INFO);
 
-    ump_stream_config(words, UMP_PROTOCOL_MIDI1);
+    ump_stream_config(words, UMP_PROTOCOL_MIDI1, 0);
     CHECK(words[0] == 0xf0060100u);
+    /* figures 13 and 19: receive in bit 1, transmit in bit 0 */
+    ump_endpoint_info(words, UMP_PROTOCOL_MIDI1, UMP_JR_RECEIVE);
+    CHECK(words[1] == 0x80000102u);
+    ump_stream_config(words, UMP_PROTOCOL_MIDI1, UMP_JR_RECEIVE);
+    CHECK(words[0] == 0xf0060102u);
 
     /* "AROS MIDIHub Pi3" is 16 bytes: a Start and an End packet */
     n = ump_stream_text(words, 16, UMP_ENDPOINT_NAME, "AROS MIDIHub Pi3", 16);
@@ -644,6 +688,7 @@ int main(void)
     test_midi1_to_ump();
     test_ump_to_midi1();
     test_jr_timestamps();
+    test_jr_clock();
     test_midi2_down();
     test_against_specification();
     test_stream();

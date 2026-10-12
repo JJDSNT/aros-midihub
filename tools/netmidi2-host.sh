@@ -14,8 +14,13 @@
 #   three  A Host and two Clients at once. The Host has to print what each
 #          Client sent, under two different slots, and each Client what the
 #          Host sent.
+#   timed  The program MIDIHub (the Linux build, build/MIDIHub) as Host and
+#          a Client that sends twelve notes meant 50 ms apart, each up to
+#          20 ms late, with JR Timestamps. With no latency the notes are
+#          played as they come; with 40 ms of it they have to be played
+#          50 ms apart. Skipped when build/MIDIHub is not there.
 #
-# Exit status: 0 when both passed.
+# Exit status: 0 when all passed.
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -66,6 +71,37 @@ if received "$work/three-host.log" 0 && received "$work/three-host.log" 1 &&
 else
     echo "FAIL: a Host with two Clients"
     status=1
+fi
+# The spacing of the notes MIDIHub delivered, as "worst late" where worst
+# is the furthest any interval is from 50 ms, in tenths of a millisecond.
+timed() {
+    timeout -s INT 6 "$here/build/MIDIHub" --midi2 "$2" --latency "$1" \
+        --trace "$3" > "$work/timed-$1-hub.log" 2>&1 &
+    sleep 0.5
+    timeout 5 "$peer" "$4" 127.0.0.1 "$2" --jr > "$work/timed-$1-peer.log" 2>&1 || true
+    wait || true
+    awk -F'[= ]' '/MIDI 2.0 delivered at=.*bytes=90/ {
+            if (n++) { d = $6 - last - 500; if (d < 0) d = -d; if (d > worst) worst = d }
+            last = $6
+        }
+        / timed MIDI 2.0 events came after/ { late = $2 }
+        END { print (n == 12 ? worst + 0 : "none"), late }' "$work/timed-$1-hub.log"
+}
+if [ -x "$here/build/MIDIHub" ]; then
+    set -- $(timed 0 5693 5690 5694)
+    plain_worst=$1; plain_late=${2:-}
+    set -- $(timed 40 5703 5700 5704)
+    held_worst=$1; held_late=${2:-}
+    if [ "$plain_worst" != none ] && [ "$held_worst" != none ] &&
+       [ "$plain_late" = 12 ] && [ "$plain_worst" -gt 50 ] &&
+       [ "$held_late" = 0 ] && [ "$held_worst" -le 30 ]; then
+        echo "ok: twelve timestamped notes sent unevenly: played as they came with no latency (off by up to $plain_worst tenths of a ms), 50 ms apart with 40 ms of it (off by at most $held_worst)"
+    else
+        echo "FAIL: timed delivery: no latency worst=$plain_worst late=$plain_late; 40 ms worst=$held_worst late=$held_late"
+        status=1
+    fi
+else
+    echo "skipped: timed delivery, build/MIDIHub is not built"
 fi
 echo "logs: $work"
 exit $status

@@ -281,7 +281,7 @@ static void answer_stream(struct netmidi2_session *session, const uint32_t *word
     if (status == UMP_ENDPOINT_DISCOVERY) {
         filter = words[1] & 0xff;
         if (filter & UMP_FILTER_ENDPOINT_INFO) {
-            ump_endpoint_info(reply, session->protocols);
+            ump_endpoint_info(reply, session->protocols, session->jr_offered);
             (void)netmidi2_send_ump(session, reply, 4, session->now_ms, out);
         }
         if (filter & UMP_FILTER_ENDPOINT_NAME) {
@@ -299,12 +299,16 @@ static void answer_stream(struct netmidi2_session *session, const uint32_t *word
                 (void)netmidi2_send_ump(session, reply, n, session->now_ms, out);
         }
         if (filter & UMP_FILTER_STREAM_CONFIG) {
-            ump_stream_config(reply, UMP_PROTOCOL_MIDI1);
+            ump_stream_config(reply, UMP_PROTOCOL_MIDI1, session->jr);
             (void)netmidi2_send_ump(session, reply, 4, session->now_ms, out);
         }
     } else if (status == UMP_STREAM_CONFIG_REQUEST) {
-        /* This endpoint speaks the MIDI 1.0 protocol in UMP only. */
-        ump_stream_config(reply, UMP_PROTOCOL_MIDI1);
+        /* This endpoint speaks the MIDI 1.0 protocol in UMP only. It
+           takes the peer's timestamps when the caller uses them, and
+           sends none: what cannot be changed is answered as it is
+           (7.1.6.1, step 3). */
+        session->jr = words[0] & session->jr_offered & UMP_JR_RECEIVE;
+        ump_stream_config(reply, UMP_PROTOCOL_MIDI1, session->jr);
         (void)netmidi2_send_ump(session, reply, 4, session->now_ms, out);
     }
 }
@@ -704,6 +708,7 @@ static void slot_begin(struct netmidi2_table *table, int index, int host)
     struct netmidi2_table_slot *slot = &table->slot[index];
     netmidi2_session_init(&slot->session, host, table->name,
                           table->product_id, slot_sink, slot);
+    slot->session.jr_offered = table->jr_offered;
     slot->used = 1;
 }
 
@@ -750,6 +755,7 @@ int netmidi2_table_receive(struct netmidi2_table *table, uint64_t peer,
     }
     netmidi2_session_init(&table->nobody, 1, table->name, table->product_id,
                           NULL, NULL);
+    table->nobody.jr_offered = table->jr_offered;
     table->nobody.refuse = 1;
     return netmidi2_receive_from(&table->nobody, peer, packet, length,
                                  now_ms, out);

@@ -180,6 +180,29 @@ static void test_session(void)
     CHECK(client_in.count == 0);         /* stream replies are not passed on as MIDI */
     CHECK(client.rx_started && client.rx_expected == 4);
 
+    /* A Stream Configuration Request for timestamps both ways (UMP
+       specification 7.1.6.2): none are taken unless the caller uses
+       them, and none are ever sent. */
+    {
+        uint32_t request[4] = { 0xf0050103u, 0, 0, 0 };
+
+        netmidi2_writer_init(&w, buffer, sizeof(buffer));
+        CHECK(netmidi2_send_ump(&client, request, 4, now, &w) == 0);
+        exchange(&w, 1, 0);
+        CHECK(host.jr == 0);
+        host.jr_offered = UMP_JR_RECEIVE;
+        netmidi2_writer_init(&w, buffer, sizeof(buffer));
+        CHECK(netmidi2_send_ump(&client, request, 4, now, &w) == 0);
+        exchange(&w, 1, 0);
+        CHECK(host.jr == UMP_JR_RECEIVE);
+        request[0] = 0xf0050100u;
+        netmidi2_writer_init(&w, buffer, sizeof(buffer));
+        CHECK(netmidi2_send_ump(&client, request, 4, now, &w) == 0);
+        exchange(&w, 1, 0);
+        CHECK(host.jr == 0);
+        CHECK(client_in.count == 0);
+    }
+
     /* Idle: after data the sender says it has none, repeating for FEC */
     netmidi2_writer_init(&w, buffer, sizeof(buffer));
     now += 150;

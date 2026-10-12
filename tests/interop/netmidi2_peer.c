@@ -2,7 +2,7 @@
  * a host: socket, sessions (src/netmidi2.c) and the translation between
  * UMP and MIDI 1.0 bytes (src/ump.c). POSIX only; nothing of AROS.
  *
- *   netmidi2-peer PORT [HOST_ADDRESS HOST_PORT] [--send]
+ *   netmidi2-peer PORT [HOST_ADDRESS HOST_PORT] [--send|--jr]
  *
  * It listens on PORT as a Host. With an address it also invites that Host
  * as a Client. With --send it sends, once to each session that becomes
@@ -128,6 +128,70 @@ static void send_midi(int index, const uint8_t *bytes, size_t length)
         send_to(session->peer, &packet);
 }
 
+static uint64_t now_us(void)
+{
+    struct timeval time;
+    gettimeofday(&time, NULL);
+    return (uint64_t)time.tv_sec * 1000000 + (uint64_t)time.tv_usec;
+}
+
+/* Our time as a JR Clock or JR Timestamp carries it: ticks of 1/31250
+ * second, sixteen bits (M2-104-UM 7.2.2). */
+static uint32_t jr_ticks(uint64_t us)
+{
+    return (uint32_t)((us / 32) & 0xffff);
+}
+
+static void send_words(int index, const uint32_t *words, unsigned count)
+{
+    static uint8_t buffer[NETMIDI2_MAX_PACKET];
+    struct netmidi2_session *session = netmidi2_table_session(&table, index);
+    struct netmidi2_writer packet;
+
+    netmidi2_writer_init(&packet, buffer, sizeof(buffer));
+    if (session && netmidi2_send_ump(session, words, count, now_ms(),
+                                     &packet) == 0)
+        send_to(session->peer, &packet);
+}
+
+/* --jr: asks the other end to take our timestamps, lets it learn our
+ * clock, then sends twelve notes meant 50 ms apart, each up to 20 ms late
+ * and unevenly so, with the time it was meant for. Nothing is read
+ * meanwhile: it lasts a second. */
+static void send_timed(int index)
+{
+    uint32_t words[4];
+    uint64_t start;
+    unsigned seed = 7;
+    int i;
+
+    words[0] = 0xf0050102u;         /* Stream Configuration Request:
+                                       MIDI 1.0 protocol, you receive JR */
+    words[1] = words[2] = words[3] = 0;
+    send_words(index, words, 4);
+    for (i = 0; i < 5; ++i) {
+        usleep(20000);
+        words[0] = 0x00100000u | jr_ticks(now_us());
+        send_words(index, words, 1);
+    }
+    start = now_us() + 50000;
+    for (i = 0; i < 12; ++i) {
+        uint64_t ideal = start + (uint64_t)i * 50000;
+        uint64_t leave, now;
+
+        seed = seed * 1103515245u + 12345u;
+        leave = ideal + (seed >> 16) % 20000;
+        now = now_us();
+        if (leave > now)
+            usleep((useconds_t)(leave - now));
+        words[0] = 0x00100000u | jr_ticks(now_us());
+        words[1] = 0x00200000u | jr_ticks(ideal);
+        words[2] = 0x20900064u | ((uint32_t)(40 + i) << 8);
+        send_words(index, words, 3);
+    }
+    usleep(300000);
+}
+
 int main(int argc, char **argv)
 {
     static uint8_t in[2048], out[NETMIDI2_MAX_PACKET];
@@ -139,11 +203,12 @@ int main(int argc, char **argv)
     struct netmidi2_writer packet;
     char name[64];
     int sending = 0;
+    int timing = 0;
     int index;
     int argi = 2;
 
     if (argc < 2) {
-        fputs("usage: netmidi2-peer PORT [HOST_ADDRESS HOST_PORT] [--send]\n",
+        fputs("usage: netmidi2-peer PORT [HOST_ADDRESS HOST_PORT] [--send|--jr]\n",
               stderr);
         return 2;
     }
@@ -182,6 +247,8 @@ int main(int argc, char **argv)
     }
     if (argi < argc && strcmp(argv[argi], "--send") == 0)
         sending = 1;
+    if (argi < argc && strcmp(argv[argi], "--jr") == 0)
+        timing = 1;
     printf("listening port=%s\n", argv[1]);
 
     while (!stopping) {
@@ -224,6 +291,14 @@ int main(int argc, char **argv)
                        session->peer_name, session->peer_product_id);
                 announced[index] = 1;
                 established_at[index] = now;
+            }
+            if (timing && announced[index] && !sent[index] &&
+                session->state == NETMIDI2_ESTABLISHED &&
+                now - established_at[index] >= 300) {
+                send_timed(index);
+                sent[index] = 1;
+                puts("sent");
+                stopping = 1;
             }
             if (sending && announced[index] && !sent[index] &&
                 session->state == NETMIDI2_ESTABLISHED &&

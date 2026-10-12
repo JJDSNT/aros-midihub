@@ -133,6 +133,9 @@ struct netmidi2_session {
     char peer_name[NETMIDI2_NAME_MAX + 1];
     char peer_product_id[NETMIDI2_PRODUCT_ID_MAX + 1];
     unsigned protocols;             /* UMP_PROTOCOL_* this endpoint takes */
+    unsigned jr_offered;            /* UMP_JR_RECEIVE when the caller uses
+                                       the peer's timestamps */
+    unsigned jr;                    /* what was agreed in this session */
 
     uint16_t tx_sequence;
     struct netmidi2_sent_ump sent[NETMIDI2_FEC_REPEATS];
@@ -237,6 +240,8 @@ struct netmidi2_table {
     char name[NETMIDI2_NAME_MAX + 1];
     char product_id[NETMIDI2_PRODUCT_ID_MAX + 1];
     int accept;                     /* act as a Host: take Invitations */
+    unsigned jr_offered;            /* for every session: UMP_JR_RECEIVE
+                                       when the caller uses timestamps */
     netmidi2_table_sink sink;
     void *context;
     struct netmidi2_table_slot slot[NETMIDI2_SESSIONS_MAX];

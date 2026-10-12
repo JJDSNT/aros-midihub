@@ -221,6 +221,55 @@ int ump_jr_after_clock(const struct ump_to_midi1 *state, int32_t *ticks)
     return 1;
 }
 
+void ump_jr_clock_init(struct ump_jr_clock *clock)
+{
+    memset(clock, 0, sizeof(*clock));
+}
+
+void ump_jr_clock_seen(struct ump_jr_clock *clock, uint16_t sender_clock,
+                       uint64_t local_us)
+{
+    int64_t offset;
+    unsigned i;
+
+    if (clock->known &&
+        local_us - clock->last_local_us > UMP_JR_CLOCK_GAP_US) {
+        clock->known = 0;           /* how often it wrapped is not known */
+        clock->count = clock->next = 0;
+    }
+    if (clock->known)
+        clock->sender_ticks += (uint16_t)(sender_clock - clock->last);
+    else
+        clock->sender_ticks = sender_clock;
+    clock->known = 1;
+    clock->last = sender_clock;
+    clock->last_local_us = local_us;
+    offset = (int64_t)local_us -
+             (int64_t)(clock->sender_ticks * UMP_JR_TICK_US);
+    clock->kept[clock->next] = offset;
+    clock->next = (clock->next + 1) % UMP_JR_CLOCKS_KEPT;
+    if (clock->count < UMP_JR_CLOCKS_KEPT)
+        ++clock->count;
+    for (i = 0; i < clock->count; ++i)
+        if (clock->kept[i] < offset)
+            offset = clock->kept[i];
+    clock->offset_us = offset;
+}
+
+int ump_jr_clock_due(const struct ump_jr_clock *clock, uint16_t timestamp,
+                     uint64_t *local_us)
+{
+    int64_t ticks;
+
+    if (!clock || !local_us || !clock->known)
+        return 0;
+    /* near the last clock, before it or after: a signed sixteen bits */
+    ticks = (int64_t)clock->sender_ticks +
+            (int16_t)(uint16_t)(timestamp - clock->last);
+    *local_us = (uint64_t)(ticks * UMP_JR_TICK_US + clock->offset_us);
+    return 1;
+}
+
 void ump_to_midi1_buffer(struct ump_to_midi1 *state, uint8_t *buffer,
                          size_t capacity)
 {
@@ -501,23 +550,23 @@ static uint32_t stream_word0(unsigned form, unsigned status)
 
 /* Section 7.1.2, figure 13: the static bit and the count of function
  * blocks in the second word's first byte, M2 and M1 at bits 9 and 8. */
-void ump_endpoint_info(uint32_t *words, unsigned protocols)
+void ump_endpoint_info(uint32_t *words, unsigned protocols, unsigned jr)
 {
     /* UMP version 1.1; static function blocks, none declared. */
     words[0] = stream_word0(0, UMP_ENDPOINT_INFO) | 0x0101;
     words[1] = 0x80000000u |
                ((protocols & UMP_PROTOCOL_MIDI2) ? 0x200u : 0) |
-               ((protocols & UMP_PROTOCOL_MIDI1) ? 0x100u : 0);
+               ((protocols & UMP_PROTOCOL_MIDI1) ? 0x100u : 0) | (jr & 0x3);
     words[2] = 0;
     words[3] = 0;
 }
 
 /* Section 7.1.6.3: the protocol in the first word's third byte, as in
  * figure 18 for the request. */
-void ump_stream_config(uint32_t *words, unsigned protocol)
+void ump_stream_config(uint32_t *words, unsigned protocol, unsigned jr)
 {
     words[0] = stream_word0(0, UMP_STREAM_CONFIG_NOTIFY) |
-               ((uint32_t)(protocol & 0xff) << 8);
+               ((uint32_t)(protocol & 0xff) << 8) | (jr & 0x3);
     words[1] = 0;
     words[2] = 0;
     words[3] = 0;
