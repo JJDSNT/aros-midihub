@@ -18,7 +18,7 @@ HEADERS = include/rtpmidi/applemidi.h include/rtpmidi/rtpmidi.h \
           ports/aros/midihub/camd.h ports/aros/midihub/network.h \
           ports/aros/camd_bridge.h
 
-.PHONY: test check-patches test-network test-synth test-synth-fluid demo m68k synth-m68k clean
+.PHONY: fuzz test check-patches test-network test-synth test-synth-fluid demo m68k synth-m68k clean
 
 test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test build/camd-identity-file-test build/camd-identity-store-recovery-test build/camd-legacy-identity-set-test build/camd-app-endpoint-test
 	./build/protocol-test
@@ -257,6 +257,20 @@ build/blemidi-class-test: tests/blemidi_class.c $(BTMIDI_CLASS)/blemidi.c \
 
 test-blemidi-class: build/blemidi-class-test
 	./build/blemidi-class-test
+
+# The decoders against packets nobody would send, under the sanitizers.
+# make fuzz FUZZ_ROUNDS=1000000 FUZZ_SEED=7
+FUZZ_ROUNDS ?= 100000
+FUZZ_SEED ?= 0
+build/fuzz: tests/fuzz.c $(SOURCES) src/netmidi2.c src/ump.c src/ble_midi.c
+	mkdir -p build
+	$(CC) -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -g -O1 \
+	    -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+	    -Iinclude -o $@ tests/fuzz.c network/rtpmidi/*.c src/netmidi2.c \
+	    src/ump.c src/ble_midi.c
+
+fuzz: build/fuzz
+	./build/fuzz $(FUZZ_ROUNDS) $(FUZZ_SEED)
 
 demo: build/MIDIHub
 

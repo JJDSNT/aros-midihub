@@ -34,14 +34,14 @@ flowchart LR
     end
 
     subgraph RTP[RTP-MIDI]
-        R21["R21 fuzzing<br/>and captures"]
+        R21["R21 captures from<br/>real peers"]
         R23["R23 enhanced<br/>chapter C"]
     end
 
     subgraph AM[AppleMIDI]
         AM06["AM06 run against<br/>rtpmidid"]:::ready
         AM14["AM14 IPv6"]
-        AM19["AM19 fuzzing<br/>and captures"]
+        AM19["AM19 state machines<br/>fuzzed, captures"]
     end
 
     subgraph UMP[UMP]
@@ -137,7 +137,7 @@ that is the project owner's.
 
 ## What the graph says
 
-Of 82 open items, 51 have nothing in front of them, 27 sit behind something
+Of 81 open items, 50 have nothing in front of them, 27 sit behind something
 outside our hands or behind a decision, and 4 wait only for other work of
 ours.
 
@@ -190,7 +190,7 @@ their own backlog, not from this graph.
 | RTP-MIDI | R32, R18, R22 |
 | AppleMIDI | AM16, AM27, AM25, AM26, AM21 |
 | UMP | UP06, UP08, UP13, UP15 |
-| Network MIDI 2.0 | NM12, NM13, NM17, NM18, NM19 |
+| Network MIDI 2.0 | NM12, NM13, NM18, NM19 |
 | CAMD | B16, B22 |
 | BLE MIDI | L01, L06, T04, T06, L05, W03, W05, W06, L15, L09, L04, L07, L14, L16, L17 |
 | mDNS | MD20, MD04, MD05, MD07, MD08, MD09, MD10, MD11, MD12, MD13, MD16, MD17, MD18 |
