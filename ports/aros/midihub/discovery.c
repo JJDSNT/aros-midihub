@@ -20,8 +20,10 @@ void netmidi_discovery_init(struct netmidi_discovery *discovery)
     memset(discovery, 0, sizeof(*discovery));
 }
 
-int netmidi_discovery_add(struct netmidi_discovery *discovery,
-                          const char *name, const char *type, uint16_t port)
+int netmidi_discovery_add_text(struct netmidi_discovery *discovery,
+                               const char *name, const char *type,
+                               uint16_t port, const char *text,
+                               uint32_t seconds)
 {
     if (!discovery || !name || !type || !port ||
         discovery->count == NETMIDI_DISCOVERY_SERVICES)
@@ -29,8 +31,52 @@ int netmidi_discovery_add(struct netmidi_discovery *discovery,
     discovery->service[discovery->count].name = name;
     discovery->service[discovery->count].type = type;
     discovery->service[discovery->count].port = port;
+    discovery->service[discovery->count].text = text;
+    discovery->service[discovery->count].seconds = seconds;
     discovery->service[discovery->count].reference = NULL;
     ++discovery->count;
+    return 0;
+}
+
+int netmidi_discovery_add(struct netmidi_discovery *discovery,
+                          const char *name, const char *type, uint16_t port)
+{
+    return netmidi_discovery_add_text(discovery, name, type, port, NULL, 0);
+}
+
+int netmidi_discovery_item(char *text, unsigned long size, const char *key,
+                           const char *value)
+{
+    unsigned long start, out;
+    const char *part[3];
+    int p;
+
+    if (!text || !size || !key || !value)
+        return -1;
+    for (start = 0; start < size && text[start]; ++start)
+        ;
+    if (start == size)
+        return -1;
+    out = start;
+    part[0] = key;
+    part[1] = "=";
+    part[2] = value;
+    if (out && out + 1 < size)
+        text[out++] = ' ';
+    for (p = 0; p < 3; ++p) {
+        const char *c;
+
+        for (c = part[p]; *c; ++c) {
+            if (out + 3 > size) {
+                text[start] = 0;
+                return -1;
+            }
+            if (*c == ' ' || *c == '\\')
+                text[out++] = '\\';
+            text[out++] = *c;
+        }
+    }
+    text[out] = 0;
     return 0;
 }
 
@@ -149,12 +195,22 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
             { MDNS_ServiceType, (IPTR)discovery->service[i].type },
             { MDNS_Port, (IPTR)discovery->service[i].port },
             { MDNS_RegisterRef, (IPTR)&reference },
+            { TAG_IGNORE, 0 },
+            { TAG_IGNORE, 0 },
             { TAG_DONE, 0 }
         };
         LONG result;
 
         if (discovery->service[i].reference)
             continue;
+        if (discovery->service[i].text) {
+            tags[4].ti_Tag = MDNS_TXTRecord;
+            tags[4].ti_Data = (IPTR)discovery->service[i].text;
+        }
+        if (discovery->service[i].seconds) {
+            tags[5].ti_Tag = MDNS_TimeToLive;
+            tags[5].ti_Data = (IPTR)discovery->service[i].seconds;
+        }
         result = RegisterServiceA(tags);
         if (result == MDNS_OK && reference) {
             discovery->service[i].reference = reference;

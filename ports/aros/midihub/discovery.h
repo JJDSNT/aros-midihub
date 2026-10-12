@@ -27,6 +27,9 @@ struct netmidi_discovery {
         const char *name;
         const char *type;
         uint16_t port;
+        const char *text;           /* its text record, or NULL */
+        uint32_t seconds;           /* its records' time to live, 0 for
+                                       the service's own choice */
         void *reference;            /* the registration, or NULL */
     } service[NETMIDI_DISCOVERY_SERVICES];
     int count;
@@ -45,6 +48,18 @@ void netmidi_discovery_init(struct netmidi_discovery *discovery);
  * strings have to last as long as the program. Nothing is sent here. */
 int netmidi_discovery_add(struct netmidi_discovery *discovery,
                           const char *name, const char *type, uint16_t port);
+/* The same with a text record and a time to live for the instance's
+ * records. text is the items with a space between, a space or backslash
+ * inside an item written with a backslash before it; netmidi_discovery_item
+ * writes one so. */
+int netmidi_discovery_add_text(struct netmidi_discovery *discovery,
+                               const char *name, const char *type,
+                               uint16_t port, const char *text,
+                               uint32_t seconds);
+/* Appends "key=value" to text as one item. Returns -1, with text as it
+ * was, when it does not fit in size. */
+int netmidi_discovery_item(char *text, unsigned long size, const char *key,
+                           const char *value);
 /* Registers what is not yet registered. The service may start after the
  * program, or stop and start again with the network, so this is called
  * regularly; it tries at most once in ten seconds. now is in

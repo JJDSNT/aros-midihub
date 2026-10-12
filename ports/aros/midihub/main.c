@@ -97,6 +97,10 @@ struct runtime {
     size_t outgoing_count;
 };
 
+/* What we answer when asked which device this is, in an Invitation Reply
+   and in the service's text record: the same string in both. */
+#define MIDI2_PRODUCT_ID "aros-midihub"
+
 static uint64_t now_ticks(void)
 {
     struct timeval time;
@@ -1230,7 +1234,7 @@ int main(int argc, char **argv)
             fputs("MIDIHub: cannot bind the Network MIDI 2.0 port\n", stderr);
             goto cleanup;
         }
-        netmidi2_table_init(&rt.midi2, config.session_name, "aros-midihub",
+        netmidi2_table_init(&rt.midi2, config.session_name, MIDI2_PRODUCT_ID,
                             midi2_sink, &rt);
         rt.midi2_enabled = 1;
     }
@@ -1277,6 +1281,20 @@ int main(int argc, char **argv)
     netmidi_discovery_add(&rt.discovery, rt.session_name, "_apple-midi._udp",
                           local_port);
     netmidi_discovery_browse(&rt.discovery, "_apple-midi._udp");
+    if (rt.midi2_enabled) {
+        /* A Network MIDI 2.0 Host is found as _midi2._udp, with the two
+           strings it also gives in its Invitation Reply, and its records
+           live a minute at most, so that one that vanished is forgotten
+           (M2-124-UM sections 4.4 and 4.6). */
+        static char midi2_text[256];
+
+        netmidi_discovery_item(midi2_text, sizeof(midi2_text),
+                               "UMPEndpointName", rt.session_name);
+        netmidi_discovery_item(midi2_text, sizeof(midi2_text),
+                               "ProductInstanceId", MIDI2_PRODUCT_ID);
+        netmidi_discovery_add_text(&rt.discovery, rt.session_name,
+                                   "_midi2._udp", midi2_port, midi2_text, 60);
+    }
     if (peer_name)
         snprintf(rt.wanted, sizeof(rt.wanted), "%s", peer_name);
     if (netmidi_discovery_poll(&rt.discovery, now) < 0)

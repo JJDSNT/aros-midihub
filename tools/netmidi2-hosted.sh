@@ -18,7 +18,10 @@
 # channels once the host has said Bye. A second CAMD program plays a
 # scale and a SysEx message into "MIDIHub Out": the host has to print
 # them, having received UMPs.
-# Exit status: 0 when both directions passed.
+# The Host is also advertised: the host's Avahi has to find it as
+# _midi2._udp with the endpoint's name and product id in its text record.
+# It needs a running avahi-daemon and avahi-utils for that.
+# Exit status: 0 when both directions and the advertisement passed.
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -81,6 +84,9 @@ printf 'Run >NIL: Execute S:netmidi2-run\n' > "$sys/S/User-Startup"
     sleep 12
     timeout 30 "$peer" 5674 192.168.166.2 5673 --send > "$work/peer.log" 2>&1
 ) &
+# what the host's Avahi makes of the service AROS advertises; that its
+# records live the minute asked for is tools/mdns-ttl-hosted.sh's to show
+(sleep 26; timeout 10 avahi-browse -rpt _midi2._udp > "$work/browse.log" 2>&1 || true) &
 (cd "$sys" && timeout 120 xvfb-run -a boot/linux/AROSBootstrap \
     > "$work/serial.log" 2>&1) || true
 wait || true
@@ -106,6 +112,15 @@ if grep -q '^established slot=0 role=client peer="AROS MIDIHub"' "$work/peer.log
     echo "ok: a scale and a SysEx message played by a CAMD program on AROS reached the host as UMPs, eight notes and no more"
 else
     echo "FAIL: from CAMD to the host"
+    status=1
+fi
+line=$(grep '^=;aroshost;IPv4;AROS\\032MIDIHub;_midi2._udp;' "$work/browse.log" 2> /dev/null | head -1)
+if echo "$line" | grep -q ';192.168.166.2;5673;' &&
+   echo "$line" | grep -q '"UMPEndpointName=AROS MIDIHub"' &&
+   echo "$line" | grep -q '"ProductInstanceId=aros-midihub"'; then
+    echo "ok: Avahi found the Host as _midi2._udp on port 5673, with its endpoint name and product id"
+else
+    echo "FAIL: the Host's advertisement: $line"
     status=1
 fi
 echo "logs: $work"
