@@ -29,9 +29,16 @@ unsigned ump_words(uint32_t first_word);
 
 /* Scaling between resolutions, e.g. 7-bit velocity to 16-bit and back:
  * up by the min-center-max method (appendix D.1.3), down by dropping the
- * low bits (D.1.4). */
+ * low bits (D.1.4). "MIDI 2.0 Bit Scaling and Resolution", M2-115-U
+ * version 1.0.2, which that appendix defers to, gives the same two methods
+ * in its section 3, and the code was read against it too. */
 uint32_t ump_scale_up(uint32_t value, unsigned from_bits, unsigned to_bits);
 uint32_t ump_scale_down(uint32_t value, unsigned from_bits, unsigned to_bits);
+/* Down by rounding to the nearest and keeping within the range: the
+ * zero-extension method of M2-115-U section 4.4, for values that are
+ * numbers in a unit and not a share of a range. */
+uint32_t ump_scale_down_rounding(uint32_t value, unsigned from_bits,
+                                 unsigned to_bits);
 
 /* MIDI 1.0 byte stream to UMP. Feed bytes as they arrive (running status
  * and real time bytes inside SysEx are handled); each complete message

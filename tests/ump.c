@@ -214,6 +214,73 @@ static void test_against_specification(void)
         CHECK(ump_scale_up(0x3fff, 14, 32) == 0xffffffffu);
     }
 
+    /* M2-115-U, the authority over that appendix: its tables 5 to 8. */
+    {
+        static const uint32_t up16[][2] = {
+            {0x00, 0x0000}, {0x05, 0x0a00}, {0x1e, 0x3c00}, {0x20, 0x4000},
+            {0x40, 0x8000}, {0x46, 0x8c30}, {0x60, 0xc104}, {0x78, 0xf1c7},
+            {0x7f, 0xffff}
+        };
+        static const uint32_t up32[][2] = {
+            {0x00, 0x00000000u}, {0x05, 0x0a000000u}, {0x1e, 0x3c000000u},
+            {0x20, 0x40000000u}, {0x40, 0x80000000u}, {0x46, 0x8c30c30cu},
+            {0x60, 0xc1041041u}, {0x78, 0xf1c71c71u}, {0x7f, 0xffffffffu}
+        };
+        static const uint32_t wide[][2] = {
+            {0x0000, 0x00000000u}, {0x0005, 0x00050000u},
+            {0x001e, 0x001e0000u}, {0x4000, 0x40000000u},
+            {0x8000, 0x80000000u}, {0x9c40, 0x9c403880u},
+            {0xc000, 0xc0008001u}, {0xfde8, 0xfde8fbd1u},
+            {0xffff, 0xffffffffu}
+        };
+        /* table 10: downscaling with rounding */
+        static const uint32_t rounded[][2] = {
+            {0x1400, 0x0a}, {0x15ff, 0x0b}, {0x8000, 0x40}, {0xae00, 0x57},
+            {0xaeba, 0x57}, {0xaf00, 0x58}, {0xfe00, 0x7f}, {0xffff, 0x7f}
+        };
+        unsigned i;
+        for (i = 0; i < 9; ++i) {
+            CHECK(ump_scale_up(up16[i][0], 7, 16) == up16[i][1]);
+            CHECK(ump_scale_up(up32[i][0], 7, 32) == up32[i][1]);
+            CHECK(ump_scale_up(wide[i][0], 16, 32) == wide[i][1]);
+        }
+        for (i = 0; i < 8; ++i)
+            CHECK(ump_scale_down_rounding(rounded[i][0], 16, 7) ==
+                  rounded[i][1]);
+        /* the top of the widest field does not wrap */
+        CHECK(ump_scale_down_rounding(0xffffffffu, 32, 14) == 0x3fff);
+        CHECK(ump_scale_down_rounding(0x80000000u, 32, 14) == 0x2000);
+    }
+
+    /* M2-115-U section 4.1 and M2-104-UM section 7.4.7.1: which fourteen
+       bits of a registered controller go to MIDI 1.0. */
+    {
+        /* just under half a step above 0x2000: the data is 14 bits and 18 */
+        static const uint32_t below = (0x2000u << 18) | 0x1ffffu;
+        static const uint32_t above = (0x2000u << 18) | 0x20000u;
+        uint32_t message[2];
+
+        /* RPN 0/1, fine tuning: a number, rounded */
+        message[0] = 0x40200001u;
+        message[1] = below;
+        to_midi(message, 2, 0);
+        CHECK(midi_messages == 4 && midi[8] == 0x40 && midi[11] == 0x00);
+        message[1] = above;
+        to_midi(message, 2, 0);
+        CHECK(midi_messages == 4 && midi[8] == 0x40 && midi[11] == 0x01);
+        /* RPN 0/0, pitch bend range: the low bits are to be ignored */
+        message[0] = 0x40200000u;
+        to_midi(message, 2, 0);
+        CHECK(midi_messages == 4 && midi[8] == 0x40 && midi[11] == 0x00);
+        /* RPN 0/40, and any assignable controller: a share of a range */
+        message[0] = 0x40200028u;
+        to_midi(message, 2, 0);
+        CHECK(midi_messages == 4 && midi[8] == 0x40 && midi[11] == 0x00);
+        message[0] = 0x40300001u;
+        to_midi(message, 2, 0);
+        CHECK(midi_messages == 4 && midi[8] == 0x40 && midi[11] == 0x00);
+    }
+
     /* Section 7.6, table 17: of the system status bytes, F4, F5, F9 and FD
        are reserved, and F0 and F7 are not system messages in a UMP. */
     {

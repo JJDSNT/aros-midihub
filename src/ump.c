@@ -17,7 +17,22 @@ uint32_t ump_scale_down(uint32_t value, unsigned from_bits, unsigned to_bits)
     return value >> (from_bits - to_bits);
 }
 
-/* Appendix D.1.3, the min-center-max method. */
+/* M2-115-U section 4.4.1. */
+uint32_t ump_scale_down_rounding(uint32_t value, unsigned from_bits,
+                                 unsigned to_bits)
+{
+    unsigned scale_bits = from_bits - to_bits;
+    uint64_t shifted;
+    uint64_t maximum = ((uint64_t)1 << to_bits) - 1;
+
+    if (!scale_bits)
+        return value;
+    shifted = ((uint64_t)value + ((uint64_t)1 << (scale_bits - 1))) >>
+              scale_bits;
+    return (uint32_t)(shifted > maximum ? maximum : shifted);
+}
+
+/* Appendix D.1.3 and M2-115-U section 3.3.1, the min-center-max method. */
 uint32_t ump_scale_up(uint32_t value, unsigned from_bits, unsigned to_bits)
 {
     unsigned scale_bits = to_bits - from_bits;
@@ -243,7 +258,20 @@ static int midi2_voice_down(const uint32_t *words, ump_midi1_sink sink, void *co
            and the index select, the top fourteen bits are the data. The
            parameter is left selected; the specification asks for no
            more. */
-        value14 = ump_scale_down(data, 32, 14);
+        /* Which fourteen bits: M2-115-U section 4.1 has the registered
+           controllers with an index below 32 scaled as numbers, which
+           on the way down means rounded. Five of them the UMP
+           specification gives a layout of their own (7.4.7.1), with the
+           low bits to be ignored. Everything else is a share of a range
+           and loses its low bits. */
+        if (opcode == 0x2 && (byte3 & 0x7f) < 32 &&
+            !((byte2 & 0x7f) == 0 &&
+              ((byte3 & 0x7f) == 0 || (byte3 & 0x7f) == 2 ||
+               (byte3 & 0x7f) == 3 || (byte3 & 0x7f) == 4 ||
+               (byte3 & 0x7f) == 6)))
+            value14 = ump_scale_down_rounding(data, 32, 14);
+        else
+            value14 = ump_scale_down(data, 32, 14);
         put_cc(sink, context, channel, opcode == 0x2 ? 101 : 99, byte2 & 0x7f);
         put_cc(sink, context, channel, opcode == 0x2 ? 100 : 98, byte3 & 0x7f);
         put_cc(sink, context, channel, 6, (uint8_t)(value14 >> 7));

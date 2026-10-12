@@ -22,6 +22,7 @@ it matters. The detail of each entry is in the three parts below.
 | Priority | Item | In one line | Waits for |
 |---|---|---|---|
 | P0 | T01 | The driver version has never run on a radio; the PR promises the test | A Pi 3 and a phone |
+| P1 | L13 | The packet codec has not been read against the specification's text | Nothing: the text is in `docs/` since 2026-10-12 |
 | P1 | L01 | A device's port number depends on which other devices are bound | Nothing in the class; B29 for the real answer |
 | P1 | L06 | A sixteenth device is refused without a word | Nothing; with L01 |
 | P1 | L10 | MIDIHub.prefs does not know the driver's ports; saved routes break | Nothing |
@@ -43,13 +44,21 @@ it matters. The detail of each entry is in the three parts below.
 | P3 | L04 | A program cannot link to a port before its device exists | The maintainer's agreement |
 | P3 | L07 | Two centrals cannot send SysEx at once | Nothing; only if it matters |
 
-Two entries are new on 2026-10-12 and have no row in the parts below:
+Three entries are new on 2026-10-12 and have no row in the parts below:
 
 - **L11.** `ports/aros/btmidi` is the client version of the class, and
   `contrib-aros-midihub` builds it under the same name as the upstream
   class. Remove it and the `camd_bridge` it shares once MIDIHub works with
   the upstream class (L10) and the pull request is merged. Done when the
   hosted tree has one `btmidi.class`, built from the AROS tree.
+- **L13.** `blemidi.c` in the class and `src/ble_midi.c` here were written
+  without the text of "Specification for MIDI over Bluetooth Low Energy"
+  1.0 beside them. Read both against it, as `src/ump.c` was read against
+  its specification, and write the section beside each rule: the header
+  and timestamp bytes, running status, a SysEx message over several
+  packets, System Real Time inside one, the connection interval and the
+  characteristic's properties. Done when every rule cites its section and
+  the differences found are entries here.
 - **L12.** A BLE MIDI packet carries a 13-bit millisecond timestamp per
   message. The decoder parses it and the class drops it: a driver hands
   CAMD bytes, and bytes have no time. Messages reach clients when the
