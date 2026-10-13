@@ -26,7 +26,7 @@ it matters. The detail of each entry is in the three parts below.
 | P1 | L06 | A sixteenth device is refused without a word | Nothing; with L01 |
 | P1 | L10 | MIDIHub.prefs does not show a port's device; the rest was done on 2026-10-12 and not seen in the window | A query in the class for a port's device |
 | P1 | L11 | This repository still builds the old client copy of the class | L10, and the PR merged |
-| P1 | T04 | Never run with an unpatched `camd.library` | Nothing |
+| P1 | T04 | Never run with an unpatched `camd.library`; the network drivers, built the same way, are not found by it without the driver-scan fix ([pull requests](upstream-pr-graph.md), C0) | Nothing: a clean tree exists now |
 | P1 | T06 | A port that outlives its binding was read, never run | Nothing |
 | P1 | T03 | The decoder has run on the host only | T01 |
 | P2 | L05 | A class cannot make CAMD look at `DEVS:Midi` again | Nothing; with W03 |

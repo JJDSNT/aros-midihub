@@ -74,6 +74,7 @@ flowchart TD
     end
 
     subgraph CAMDX[CAMD]
+        C0["C0 a driver is found<br/>at an aligned address"]
         C1["C1 driver-side block:<br/>identity, presence, name"]
     end
 
@@ -93,6 +94,9 @@ flowchart TD
     PREP1 --> N1
     PREP3 --> N1
     U_CAMD --> N1
+    U_CAMD --> C0
+    C0 -. "or no port appears" .-> N1
+    C0 -.-> P1507
     PREP1 --> N2
     PREP2 --> N2
     N2 --> N3
@@ -131,7 +135,8 @@ somewhat smaller.
 | **M2** | `bonami.library` and the daemon's side of registering, updating and withdrawing a service, with the text record's escaping (MD02) and the time to live (MD19). | about 3,000 | #1560 | Where it lives, how it is split and what the library is called: issue #1559 |
 | **M3** | Browse, resolve, host lookup, queries; a client's own records answered (MD04). | about 3,000 | M2 | How clients get events: issue #1559, and MD01 here |
 | **M4** | `dnssd` and the other tools, the commodity, the Envoy bridge. | about 2,500 | M3 | Whether AROS wants them |
-| **N1** | `netmididriver.c` built twice and the adapters' header: two `DEVS:Midi` drivers of sixteen ports and no network code. **Cut** on 2026-10-12: `tools/cut-netmidi-drivers.sh` writes it into an AROS tree as `workbench/devs/midi/netmidi`, and the branch `netmidi-drivers` in the worktree `~/AROS-netmidi` is upstream `master` with it and nothing else. Built by its own targets for hosted x86-64 and amiga-m68k; of the 126 headers it pulls in, none is one this repository changes. | 380 | Nothing: it includes `proto/exec.h` and `midi/camddevices.h` only | PREP-3: the build of that worktree from nothing, and a run on its unpatched `camd.library` |
+| **C0** | One change to `OpenMidiDevice()`, seventeen lines: a driver's `MidiDeviceData` is looked for at aligned addresses. Without it upstream's `camd.library` loads our drivers, does not recognise them, and unloads them. **Cut**: branch `camd-driver-scan-align` in `~/AROS-netmidi`, one commit on upstream `master` (it is `patches/aros-camd-driver-scan-align.patch` here). | 17 | Nothing | — |
+| **N1** | `netmididriver.c` built twice and the adapters' header: two `DEVS:Midi` drivers of sixteen ports and no network code. **Cut** on 2026-10-12: `tools/cut-netmidi-drivers.sh` writes it into an AROS tree as `workbench/devs/midi/netmidi`, and the branch `netmidi-drivers` in the worktree `~/AROS-netmidi` is upstream `master` with it and nothing else. Built by its own targets for hosted x86-64 and amiga-m68k; of the 126 headers it pulls in, none is one this repository changes. | 380 | Nothing to compile: it includes `proto/exec.h` and `midi/camddevices.h` only. **To be of any use, C0**: seen on 2026-10-12 | — |
 | **N2** | `rtpmidi.c`, `sender.c`, `receiver.c`, `timing.c` and their headers, as the link library `rtpmidi`. **Cut** on 2026-10-12: `tools/cut-netmidi-library.sh n2` writes it as `workbench/network/netmidi/rtpmidi`. It builds there by its own target for hosted x86-64, needs nothing but the C library's headers, and has no finding of the checker. | 3,600 | Nothing | Where upstream wants it; the tests stay here |
 | **N3** | `applemidi.c`, `session.c`, `peers.c`, `ports.c`, `clock.c`, into the same library. **Cut** the same day (`tools/cut-netmidi-library.sh n3`): built for hosted x86-64 and amiga-m68k. | 1,900 | N2 (they share headers and the library's build file) | — |
 | **N4** | The service: `main.c` as it will be once carved, `adapters.c`, `network.c`, the configuration reader, the `services.d` file. AppleMIDI only, peers by address or by who invites; **no discovery**. | 2,800 | N1 for `netmidi_camd.h`, N2 and N3 for the library | — |
@@ -164,9 +169,13 @@ somewhat smaller.
   with its probes and its `TAG`. Carved out, as `mdnsd` was for #1560.
 - **What is local to `~/AROS`**: the CAMD version 42 and 43 work is
   uncommitted there (thirty files changed, more added) and is what every
-  hosted run here used. Nothing in N1 to N9 includes or calls it, by its
-  sources; **that it also runs without it has not been seen** (T04 of the
-  BLE backlog is the same question for `btmidi`). Preferences, the
+  hosted run here used. Nothing in N1 to N9 includes or calls it, and the
+  AppleMIDI path runs without it on upstream's CAMD once C0 is in (seen
+  on 2026-10-12; see PREP-3 below). Without C0 the drivers build and are
+  never found: that does not break upstream's build, it makes the pull
+  request do nothing. The same is likely true of `btmidi`'s driver in
+  #1507, which is built the same way; T04 of the BLE backlog is that
+  question, and it has not been run. Preferences, the
   identities tool and the compatibility program do use it, and are not
   among the pull requests.
 
@@ -200,15 +209,17 @@ Nothing below waits for another answer than its own review.
 
 1. **PREP-1 to PREP-3**, here. They are the bulk of the work left: the
    code is written, the cut is not.
-2. **N1**, the drivers. Small, self-contained, the shape the review of
+2. **C0**, the fix in CAMD: seventeen lines, a defect of upstream's own,
+   and what N1 and very likely #1507 need to do anything.
+3. **N1**, the drivers. Small, self-contained, the shape the review of
    `btmidi.class` asked for, and inert alone: ports that take what is sent
    and drop it. Send it with the sentence that the service follows.
-3. **N2**, then **N3**: the protocol library, with nothing using it yet.
+4. **N2**, then **N3**: the protocol library, with nothing using it yet.
    A library nobody links builds; the reviewer may ask for its user, and
    N4 can then be opened as a draft beside it.
-4. **N4**, the service without discovery, and **N5** with it or after.
-5. **N6** whenever, then **N7**.
-6. **N8** and **N9** when M2 and M3 are in, which is when issue #1559 has
+5. **N4**, the service without discovery, and **N5** with it or after.
+6. **N6** whenever, then **N7**.
+7. **N8** and **N9** when M2 and M3 are in, which is when issue #1559 has
    its answers.
 
 Beside it, and not in its way: #1507 moves with the radio test, #1560
@@ -230,14 +241,25 @@ On 2026-10-12:
 - **PREP-2, the gate.** Done for N2, N3 and N6: nothing left for cppcheck
   and no `strcpy`, `strncpy`, `strlen` or `sprintf`. Open for the service's
   files, eighteen findings in all, which are best closed after the carve.
-- **PREP-3, the clean tree.** A worktree of upstream `master` with N1 and
-  nothing else (`~/AROS-netmidi`, branch `netmidi-drivers`) and a build
-  tree for it (`~/aros-build-netmidi-clean`) exist. The first attempts to
-  build it failed for a reason of this machine's, not of the cut's: the
-  translation catalogs are git submodules, and a new worktree has none
-  until `git submodule update --init` is run in it. The build was started
-  again with them. Not yet seen: that build finished, and the drivers
-  running on its unpatched `camd.library`.
+- **PREP-3, the clean tree.** Done for N1 on 2026-10-12, and it found
+  what reading could not. A worktree of upstream `master` with N1 and
+  nothing else (`~/AROS-netmidi`, branch `netmidi-drivers`) was built from
+  nothing in `~/aros-build-netmidi-clean`, with the compiler of the
+  existing hosted tree: it builds, the two drivers among the rest. The
+  service, the probe and `mdnsd` were then built on top of it from this
+  repository, and `tools/applemidi-service-hosted.sh` run there, on
+  upstream's own `camd.library`: sessions connected and **no port of the
+  drivers appeared**, so nothing crossed CAMD in either direction. With
+  one of this repository's CAMD patches applied, the driver-scan
+  alignment (C0 above), and none of the others, the test passes whole,
+  seven checks of seven. So nothing in N1 to N9 needs the version 42 and
+  43 work, and N1 does need C0.
+
+  Two things to know about such a tree: a new worktree has no translation
+  catalogs until `git submodule update --init` is run in it, and the build
+  then fails on missing `MSG_` names; and this repository must be attached
+  to it by its source directories, not whole, or the build system reads
+  the build trees that are inside it.
 
 ## What stays here
 
