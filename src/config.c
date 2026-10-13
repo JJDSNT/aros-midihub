@@ -111,8 +111,10 @@ int netmidi_config_save(const char *path,
     if (config->midi2_peer_ip[0])
         fprintf(file, "midi2_peer_ip=%s\nmidi2_peer_port=%u\n",
                 config->midi2_peer_ip, (unsigned)config->midi2_peer_port);
+#ifdef NETMIDI_DISCOVERY
     if (config->midi2_peer_name[0])
         fprintf(file, "midi2_peer_name=%s\n", config->midi2_peer_name);
+#endif
 #endif
     for (port = 0; port < 16; ++port) {
         if (config->port_name[port][0])
@@ -209,9 +211,12 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
         } else if (strcmp(key, "midi2_peer_ip") == 0) {
             if (!*value || take(next.midi2_peer_ip, sizeof(next.midi2_peer_ip), value))
                 goto done;
+#ifdef NETMIDI_DISCOVERY
         } else if (strcmp(key, "midi2_peer_name") == 0) {
-            if (!*value || take(next.midi2_peer_name, sizeof(next.midi2_peer_name), value))
+            if (!*value || take(next.midi2_peer_name,
+                                sizeof(next.midi2_peer_name), value))
                 goto done;
+#endif
         } else if (strncmp(key, "networkmidi2.port.", 18) == 0) {
             if (port_name(key + 18, value, next.midi2_port_name))
                 goto done;
@@ -226,9 +231,12 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
         goto done;
 #ifdef NETMIDI_MIDI2
     if ((!!next.midi2_peer_ip[0] != !!next.midi2_peer_port) ||
-        ((next.midi2_peer_ip[0] || next.midi2_peer_name[0]) &&
-         !next.midi2_port))
+        (next.midi2_peer_ip[0] && !next.midi2_port))
         goto done;
+#ifdef NETMIDI_DISCOVERY
+    if (next.midi2_peer_name[0] && !next.midi2_port)
+        goto done;
+#endif
 #endif
     *config = next;
     result = 0;

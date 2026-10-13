@@ -60,6 +60,8 @@ echo 'eth1 DEV=DEVS:networks/eth.device UNIT=1 IP=192.168.166.2 NETMASK=255.255.
 printf 'HOST 192.168.166.2 arosbox.arosnet arosbox\nDOMAIN arosnet 192.168.166.\n' \
     > "$db/netdb-myhost"
 sed -i 's/OPENGUI=.*/OPENGUI=NO/' "$db/general.config"
+# upstream's cut installs the service disabled, as it does sshd
+sed -i 's/^Enabled=.*/Enabled=yes/' "$db/services.d/netmidi"
 # the service's configuration, and what it would print to a file
 printf 'midi2_port = 5673\nsession_name = AROS Net MIDI\n' > "$sys/Prefs/Env-Archive/NetMIDI"
 printf 'SYS:netmidid.log' > "$sys/Prefs/Env-Archive/netmidid.log"
@@ -119,7 +121,18 @@ else
     status=1
 fi
 line=$(grep '^=;aroshost;IPv4;AROS\\032Net\\032MIDI;_midi2._udp;' "$work/browse.log" 2> /dev/null | head -1)
-if echo "$line" | grep -q ';192.168.166.2;5673;' &&
+# the cut of the service without discovery (N7) advertises nothing: its
+# product id is still this machine's own, and given in the session
+if ! grep -aq '_midi2._udp' "$aros/System/Network/Services/netmidid"; then
+    id=$(cat "$sys/Prefs/Env-Archive/NetMIDI.id" 2> /dev/null) || true
+    if echo "$id" | grep -Eq '^AROS-[0-9a-f]{16}$' &&
+       grep -qF "role=client peer=\"AROS Net MIDI\" id=\"$id\"" "$work/peer.log"; then
+        echo "ok: built without discovery, so not advertised; the product id given in the session is this machine's own ($id), the one kept in ENVARC:"
+    else
+        echo "FAIL: the product id: '$id'"
+        status=1
+    fi
+elif echo "$line" | grep -q ';192.168.166.2;5673;' &&
    echo "$line" | grep -q '"UMPEndpointName=AROS Net MIDI"' &&
    echo "$line" | grep -Eq '"ProductInstanceId=AROS-[0-9a-f]{16}"' &&
    id=$(cat "$sys/Prefs/Env-Archive/NetMIDI.id" 2> /dev/null) &&

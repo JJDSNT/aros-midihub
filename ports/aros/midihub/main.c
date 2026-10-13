@@ -136,11 +136,12 @@ struct runtime {
        through with the first's; -1 for none */
     struct applemidi_ports midi2_ports;
     int midi2_port[NETMIDI2_SESSIONS_MAX];
-    /* A Host to invite, as its Client: by address, or wherever one is
-       advertised under the name wanted */
+    /* A Host to invite, as its Client */
     int midi2_host;                 /* its address and port are known */
     uint64_t midi2_host_key;
-    char midi2_wanted[64];
+#ifdef NETMIDI_DISCOVERY
+    char midi2_wanted[64];          /* or one advertised under this name */
+#endif
     uint64_t midi2_tried;
     uint64_t midi2_wait;
     struct netmidi_port_counts midi2_count[NETMIDI2_SESSIONS_MAX];
@@ -177,11 +178,10 @@ struct runtime {
 #define TAG "MIDIHub: "
 #endif
 
-#ifdef NETMIDI_MIDI2
-/* What we answer when asked which device this is, in an Invitation Reply
-   and in the service's text record: the same string in both. */
+#if defined(NETMIDI_MIDI2) && !defined(NETMIDI_SERVICE)
+/* What the program answers when asked which device this is. The
+   service's is this machine's own: see product_instance_id(). */
 #define MIDI2_PRODUCT_ID "aros-midihub"
-/* The service's is this machine's own: see product_instance_id(). */
 #endif
 
 static uint64_t now_ticks(void)
@@ -929,7 +929,7 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
     int index;
 
     for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index) {
-        struct netmidi2_session *session =
+        const struct netmidi2_session *session =
             netmidi2_table_session(&rt->midi2, index);
         uint64_t peer;
         if (!session) {
@@ -963,7 +963,8 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
             } else {
                 int port = applemidi_ports_take(
                     &rt->midi2_ports, (const uint8_t *)session->peer_name,
-                    strlen(session->peer_name), index + 1);
+                    applemidi_text_length(session->peer_name,
+                        sizeof(session->peer_name) - 1), index + 1);
                 rt->midi2_port[index] = port < 0 ? -1 :
                                         NETMIDI_CAMD_MIDI2 + port;
             }
@@ -976,7 +977,8 @@ static void midi2_periodic(struct runtime *rt, uint64_t now)
             {
                 size_t n = applemidi_name_fit(
                     (const uint8_t *)session->peer_name,
-                    strlen(session->peer_name),
+                    applemidi_text_length(session->peer_name,
+                        sizeof(session->peer_name) - 1),
                     sizeof(rt->midi2_count[index].name) - 1);
 
                 memcpy(rt->midi2_count[index].name, session->peer_name, n);

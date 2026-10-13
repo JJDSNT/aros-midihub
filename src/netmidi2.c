@@ -1,3 +1,7 @@
+/*
+    Copyright (C) 2026, The AROS Development Team. All rights reserved.
+*/
+
 #include "netmidi2/netmidi2.h"
 #include "ump/ump.h"
 

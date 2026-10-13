@@ -54,8 +54,17 @@ echo 'eth1 DEV=DEVS:networks/eth.device UNIT=1 IP=192.168.166.2 NETMASK=255.255.
 printf 'HOST 192.168.166.2 arosbox.arosnet arosbox\nDOMAIN arosnet 192.168.166.\n' \
     > "$db/netdb-myhost"
 sed -i 's/OPENGUI=.*/OPENGUI=NO/' "$db/general.config"
+# upstream's cut installs the service disabled, as it does sshd
+sed -i 's/^Enabled=.*/Enabled=yes/' "$db/services.d/netmidi"
+# the cut of the service without discovery (N7) is told the Host's address
+discovery=1
+grep -aq '_midi2._udp' "$aros/System/Network/Services/netmidid" || discovery=0
 # the service's configuration, and what it would print to a file
-printf 'midi2_port = 5673\nsession_name = AROS Net MIDI\nmidi2_peer_name = Host Endpoint\n' > "$sys/Prefs/Env-Archive/NetMIDI"
+if [ $discovery = 1 ]; then
+    printf 'midi2_port = 5673\nsession_name = AROS Net MIDI\nmidi2_peer_name = Host Endpoint\n' > "$sys/Prefs/Env-Archive/NetMIDI"
+else
+    printf 'midi2_port = 5673\nsession_name = AROS Net MIDI\nmidi2_peer_ip = 192.168.166.1\nmidi2_peer_port = 5683\n' > "$sys/Prefs/Env-Archive/NetMIDI"
+fi
 printf 'SYS:netmidid.log' > "$sys/Prefs/Env-Archive/netmidid.log"
 # a product id made before: it has to be the one used
 printf 'AROS-kept000000000001' > "$sys/Prefs/Env-Archive/NetMIDI.id"
@@ -84,6 +93,7 @@ printf 'Run >NIL: Execute S:netmidi2-run\n' > "$sys/S/User-Startup"
         sleep 1
     done
     sleep 12
+    [ $discovery = 0 ] ||
     timeout 34 avahi-publish -s "0a1b-host" _midi2._udp 5683 \
         "UMPEndpointName=Host Endpoint" "ProductInstanceId=0a1b" \
         > "$work/publish.log" 2>&1 &
@@ -97,11 +107,16 @@ cp "$sys/netmidid.log" "$work/hub.log" 2> /dev/null || true
 cp "$sys/camd-in.log" "$sys/camd-out.log" "$work/" 2> /dev/null || true
 
 status=0
-if grep -q 'MIDI 2.0 host "Host Endpoint" ("0a1b-host") found at 192.168.166.1 port 5683' "$work/hub.log" 2> /dev/null &&
+if { [ $discovery = 0 ] ||
+     grep -q 'MIDI 2.0 host "Host Endpoint" ("0a1b-host") found at 192.168.166.1 port 5683' "$work/hub.log" 2> /dev/null; } &&
    grep -q 'inviting a MIDI 2.0 host' "$work/hub.log" &&
    grep -q 'MIDI 2.0 session established peer="Peer on 5683" port=0' "$work/hub.log" &&
    grep -q '^established slot=0 role=host peer="AROS Net MIDI" id="AROS-kept000000000001"' "$work/peer.log"; then
-    echo "ok: the service found the Host by its endpoint's name and became its Client, under the product id it had kept"
+    if [ $discovery = 1 ]; then
+        echo "ok: the service found the Host by its endpoint's name and became its Client, under the product id it had kept"
+    else
+        echo "ok: the service invited the Host its configuration names by address, once it was there, and became its Client, under the product id it had kept"
+    fi
 else
     echo "FAIL: finding and inviting the Host"
     status=1

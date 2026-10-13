@@ -26,11 +26,14 @@ struct netmidi_network_config {
      * it there is none */
     uint16_t midi2_port;
     /* A Network MIDI 2.0 Host to invite, as a Client: at "midi2_peer_ip"
-     * and "midi2_peer_port", or wherever one is advertised whose endpoint
-     * is called "midi2_peer_name". Either needs midi2_port. */
+     * and "midi2_peer_port". It needs midi2_port. */
     char midi2_peer_ip[64];
     uint16_t midi2_peer_port;
+#ifdef NETMIDI_DISCOVERY
+    /* "midi2_peer_name": the Host to invite is the one advertised whose
+     * endpoint is called that, wherever it is. It needs midi2_port. */
     char midi2_peer_name[64];
+#endif
 #endif
 #ifdef NETMIDI_DISCOVERY
     /* "peer_name": a peer to invite wherever it is advertised under that
