@@ -18,6 +18,7 @@ Branches of `JJDSNT/AROS` opened against `aros-development-team/AROS`
 | #1543 | `arostcp-ipv4-multicast` | AROSTCP: IPv4 multicast on SANA-II interfaces, with a netdb crash and hosted eth.device multicast | merged, after two reviews |
 | #1558 | `arostcp-close-leaves-groups` | AROSTCP: a closing socket takes its group memberships with it | merged |
 | #1560 | `mdnsd-hostname` | mdnsd: answer for the host's name over multicast DNS | merged 2026-10-13 |
+| #1591 | `mdns-register` | mdnsd, bonami.library: register a service over multicast DNS | open, sent 2026-10-13 |
 
 Issue #1559 asks the maintainer where the mDNS service should live, how to
 split it, how clients should get events, which protocol limits block it,
