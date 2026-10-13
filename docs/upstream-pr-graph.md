@@ -277,6 +277,27 @@ On 2026-10-13:
   `netmidi-library` (N2), `netmidi-sessions` (N3) and `netmidi-service`
   (N4), each one commit on the one before from N1 on; none is pushed.
 
+## What has been sent
+
+On 2026-10-13, on upstream `master` of that day (`084dfe6634`), after the
+five commits were built together on it in the clean tree and the hosted
+test run there:
+
+- **C0** is pull request #1585, from the branch `camd-driver-scan-align`.
+- **N1** is pull request #1586, from the branch `netmidi-drivers`.
+
+Held back, with the reason:
+
+- **N2** (branch `netmidi-rtpmidi`, one commit on `master`) and with it
+  N3 and N4. Its sources have no copyright header, which every file of
+  the tree has, and the statement of origin (RTP-MIDI backlog, U4) is not
+  made: that nothing was copied from MIDIKit or librtpmidid is for the
+  author to say, not for a cut script.
+- Upstream has since put a service of the stack in
+  `workbench/network/common/timesync`; N4 is cut into
+  `workbench/network/netmidi`. Which place is right is asked in N4's
+  pull request, not decided here.
+
   Two things to know about such a tree: a new worktree has no translation
   catalogs until `git submodule update --init` is run in it, and the build
   then fails on missing `MSG_` names; and this repository must be attached
