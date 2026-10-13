@@ -93,6 +93,7 @@ struct runtime {
     char session_name[64];
     struct applemidi_peers peers;
     struct stream stream[APPLEMIDI_PEERS_MAX];
+#ifdef NETMIDI_MIDI2
     /* Network MIDI 2.0, on a port of its own when one is given */
     int midi2_enabled;
     struct netmidi2_table midi2;
@@ -120,14 +121,17 @@ struct runtime {
     uint64_t midi2_tried;
     uint64_t midi2_wait;
     struct netmidi_port_counts midi2_count[NETMIDI2_SESSIONS_MAX];
+#endif
     uint64_t published;             /* when the counts were last told */
     int chatty;                     /* a line of text to every packet */
     unsigned long unknown_commands; /* AppleMIDI commands not used */
-    char product_id[PRODUCT_ID_MAX + 1];
     int browse_apple;               /* which of discovery's searches */
+#ifdef NETMIDI_MIDI2
+    char product_id[PRODUCT_ID_MAX + 1];
     int browse_midi2;
     unsigned long midi2_timed;
     unsigned long midi2_late;
+#endif
     struct netmidi_camd_runtime camd;
     /* What CAMD handed over in one turn of the loop and has not gone out
        yet: it leaves together, one packet to a peer where it fits. */
@@ -708,6 +712,7 @@ static void receive_packet(struct runtime *rt, int data_port)
     }
 }
 
+#ifdef NETMIDI_MIDI2
 /* Network MIDI 2.0. A peer's UMPs become MIDI 1.0 for CAMD by the default
  * translation, and what CAMD sends becomes UMPs with the MIDI 1.0 protocol:
  * this endpoint declares no other. Each session has a translator of its
@@ -1026,6 +1031,8 @@ static void midi2_send_midi(struct runtime *rt, int port,
     midi2_flush(&outgoing);
 }
 
+#endif /* NETMIDI_MIDI2 */
+
 /* One message from CAMD to one peer. */
 static int send_midi_to(struct runtime *rt, int index, const uint8_t *message,
                         size_t length)
@@ -1200,12 +1207,14 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
                 result = 0;
             }
     }
+#ifdef NETMIDI_MIDI2
     if (rt->midi2_enabled &&
         (rt->shared_port || rt->camd.port_now >= NETMIDI_CAMD_MIDI2)) {
         midi2_send_midi(rt, rt->shared_port ? -1 : rt->camd.port_now,
                         message, length);
         result = 0;
     }
+#endif
     return result;
 }
 
@@ -1344,6 +1353,7 @@ static void periodic_peer(struct runtime *rt, int index, uint64_t now)
     }
 }
 
+#ifdef NETMIDI_MIDI2
 /* The Product Instance Id tells one device from another and is how a
    system knows a device again (M2-124-UM section 4.4): it has to differ
    between machines and stay the same on one. It is made once, of random
@@ -1390,6 +1400,8 @@ static void product_instance_id(char *id, uint64_t now)
 #endif
 }
 
+#endif
+
 /* Tells whoever asks what has passed on each port: about once a second. */
 static void publish_counts(struct runtime *rt, uint64_t now)
 {
@@ -1411,6 +1423,7 @@ static void publish_counts(struct runtime *rt, uint64_t now)
         counts[stream->port] = stream->count;
         counts[stream->port].present = 1;
     }
+#ifdef NETMIDI_MIDI2
     for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index) {
         int port = rt->midi2_port[index];
 
@@ -1419,6 +1432,7 @@ static void publish_counts(struct runtime *rt, uint64_t now)
         counts[port] = rt->midi2_count[index];
         counts[port].present = 1;
     }
+#endif
     netmidi_camd_publish(&rt->camd, rt->session_name, rt->peers.refused,
                          counts, NETMIDI_CAMD_PORTS * NETMIDI_CAMD_DRIVERS);
 }
@@ -1441,6 +1455,7 @@ static void periodic(struct runtime *rt, uint64_t now)
             int wanted = rt->wanted[0] && strcmp(seen.name, rt->wanted) == 0;
             if (ours)
                 continue;           /* our own registration, come back */
+#ifdef NETMIDI_MIDI2
             if (seen.browse == rt->browse_midi2) {
                 /* a Network MIDI 2.0 Host: known to its user by its
                    endpoint's name, to the network by its instance's */
@@ -1467,6 +1482,7 @@ static void periodic(struct runtime *rt, uint64_t now)
                 }
                 continue;
             }
+#endif
             if (seen.present)
                 printf(TAG "session \"%s\" found at %u.%u.%u.%u port %u\n",
                        seen.name, (unsigned int)(seen.address >> 24),
@@ -1503,6 +1519,7 @@ static void periodic(struct runtime *rt, uint64_t now)
                 rt->wanted_wait = APPLEMIDI_WANTED_LONGEST_WAIT;
         }
     }
+#ifdef NETMIDI_MIDI2
     /* The Host we are to be a Client of is known and we have no session
        with it: invite it, and again more slowly while it does not answer. */
     if (rt->midi2_enabled && rt->midi2_host &&
@@ -1524,11 +1541,14 @@ static void periodic(struct runtime *rt, uint64_t now)
         if (rt->midi2_wait > APPLEMIDI_WANTED_LONGEST_WAIT)
             rt->midi2_wait = APPLEMIDI_WANTED_LONGEST_WAIT;
     }
+#endif
     for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
         if (rt->peers.peer[index].used)
             periodic_peer(rt, index, now);
+#ifdef NETMIDI_MIDI2
     if (rt->midi2_enabled)
         midi2_periodic(rt, now);
+#endif
 }
 
 /* What a configuration file looked like when it was read, to know when it
@@ -1731,6 +1751,7 @@ static int run(int argc, char **argv)
         fputs(TAG "cannot bind UDP port pair\n", stderr);
         goto cleanup;
     }
+#ifdef NETMIDI_MIDI2
     if (midi2_port) {
         if (netmidi_network_open_midi2(&rt.network, midi2_port) != 0) {
             fputs(TAG "cannot bind the Network MIDI 2.0 port\n", stderr);
@@ -1747,6 +1768,7 @@ static int run(int argc, char **argv)
         }
         rt.midi2_enabled = 1;
     }
+#endif
     if (netmidi_camd_open(&rt.camd) != 0) {
         fputs(TAG "camd.library unavailable\n", stderr);
         goto cleanup;
@@ -1754,19 +1776,23 @@ static int run(int argc, char **argv)
     rt.shared_port = netmidi_camd_ports(&rt.camd) == 1;
     applemidi_ports_init(&rt.ports, rt.shared_port ? 0 :
                                     netmidi_camd_ports(&rt.camd));
+#ifdef NETMIDI_MIDI2
     applemidi_ports_init(&rt.midi2_ports, rt.shared_port ? 0 :
                                           netmidi_camd_ports(&rt.camd));
+#endif
     for (index = 0; index < 16; ++index) {
         if (config.port_name[index][0] &&
             applemidi_ports_keep(&rt.ports, index,
                                  config.port_name[index]) != 0)
             printf(TAG "applemidi port %d cannot be kept for \"%s\"\n",
                    index, config.port_name[index]);
+#ifdef NETMIDI_MIDI2
         if (config.midi2_port_name[index][0] &&
             applemidi_ports_keep(&rt.midi2_ports, index,
                                  config.midi2_port_name[index]) != 0)
             printf(TAG "networkmidi2 port %d cannot be kept for \"%s\"\n",
                    index, config.midi2_port_name[index]);
+#endif
     }
     now = now_ticks();
     if (applemidi_peers_init(&rt.peers, random32(now),
@@ -1810,6 +1836,7 @@ static int run(int argc, char **argv)
                           local_port);
     rt.browse_apple = netmidi_discovery_browse(&rt.discovery,
                                                "_apple-midi._udp");
+#ifdef NETMIDI_MIDI2
     rt.browse_midi2 = -1;
     if (rt.midi2_enabled && config.midi2_peer_ip[0]) {
         struct in_addr address;
@@ -1846,6 +1873,7 @@ static int run(int argc, char **argv)
         netmidi_discovery_add_text(&rt.discovery, rt.session_name,
                                    "_midi2._udp", midi2_port, midi2_text, 60);
     }
+#endif
     if (peer_name)
         snprintf(rt.wanted, sizeof(rt.wanted), "%s", peer_name);
     if (netmidi_discovery_poll(&rt.discovery, now) < 0)
@@ -1871,6 +1899,7 @@ static int run(int argc, char **argv)
             if (wait_ticks < 1000 && (long)(wait_ticks * 100) < wait_us)
                 wait_us = (long)(wait_ticks * 100);
         }
+#ifdef NETMIDI_MIDI2
         for (index = 0; rt.midi2_enabled && index < NETMIDI2_SESSIONS_MAX;
              ++index) {
             if (!rtpmidi_queue_next_due(&rt.midi2_queue[index], &next_due))
@@ -1880,6 +1909,7 @@ static int run(int argc, char **argv)
             if (wait_ticks < 1000 && (long)(wait_ticks * 100) < wait_us)
                 wait_us = (long)(wait_ticks * 100);
         }
+#endif
         netmidi_network_wait(&rt.network, -1, wait_us,
                              netmidi_camd_signal_bit(&rt.camd),
                              &network_events);
@@ -1889,8 +1919,10 @@ static int run(int argc, char **argv)
             receive_packet(&rt, 0);
         if (network_events & NETMIDI_NETWORK_EVENT_DATA)
             receive_packet(&rt, 1);
+#ifdef NETMIDI_MIDI2
         if (network_events & NETMIDI_NETWORK_EVENT_MIDI2)
             midi2_receive(&rt);
+#endif
         periodic(&rt, now_ticks());
         /* A changed configuration is taken by beginning anew: sessions
            end with a goodbye and are made again under what it says now.
@@ -1903,8 +1935,10 @@ static int run(int argc, char **argv)
                 goto cleanup;
             }
         }
+#ifdef NETMIDI_MIDI2
         if (rt.midi2_enabled)
             midi2_release(&rt, now_ticks());
+#endif
         netmidi_camd_poll(&rt.camd, send_midi, &rt);
         flush_midi(&rt);
         /* asked to invite one peer by its address: with that session
@@ -1919,6 +1953,7 @@ cleanup:
     for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
         if (rt.peers.peer[index].used)
             drop_peer(&rt, index, now_ticks());
+#ifdef NETMIDI_MIDI2
     for (index = 0; rt.midi2_enabled && index < NETMIDI2_SESSIONS_MAX; ++index) {
         static uint8_t out[NETMIDI2_MAX_PACKET];
         struct netmidi2_writer packet;
@@ -1930,16 +1965,19 @@ cleanup:
                                     &packet) == 0)
             midi2_send(&rt, session->peer, &packet);
     }
+#endif
     netmidi_camd_close(&rt.camd);
     netmidi_network_close(&rt.network);
     for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index) {
         free(rt.stream[index].sysex.bytes);
         rt.stream[index].sysex.bytes = NULL;
     }
+#ifdef NETMIDI_MIDI2
     for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index) {
         free(rt.midi2_sysex[index]);
         rt.midi2_sysex[index] = NULL;
     }
+#endif
     return result;
 }
 
