@@ -306,9 +306,12 @@ advertisement left out, Network MIDI 2.0 as a Host 3, as a Client by
 address 3. The hosted tests enable the service themselves and, where it
 has no discovery, give the Host by address and ask Avahi nothing.
 
-- **N6** stands alone: branch `netmidi-ump`, one commit on `master`. It
-  can go whenever it is wanted; it is 2,100 lines beside the 4,300 of N2
-  that wait for review.
+- **N6** is pull request #1588, from the branch `netmidi-ump`, one
+  commit on `master`, sent the same day. Built for hosted x86-64 and
+  amiga-m68k. Its origin is said in it: written here from M2-104-UM and
+  M2-124-UM, and compared with NetUMP, BEBSDK, AM_MIDI2.0Lib and ni-midi2,
+  with which it shares one run of tokens, the specification's table of
+  packet sizes by message type.
 - **N5** (`netmidi-status`) needs N4; **N7** (`netmidi-service-midi2`)
   needs N4 and N6.
 
