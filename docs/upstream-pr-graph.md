@@ -135,7 +135,7 @@ somewhat smaller.
 | **M2** | `bonami.library` and the daemon's side of registering, updating and withdrawing a service, with the text record's escaping (MD02) and the time to live (MD19). | about 3,000 | #1560 | Where it lives, how it is split and what the library is called: issue #1559 |
 | **M3** | Browse, resolve, host lookup, queries; a client's own records answered (MD04). | about 3,000 | M2 | How clients get events: issue #1559, and MD01 here |
 | **M4** | `dnssd` and the other tools, the commodity, the Envoy bridge. | about 2,500 | M3 | Whether AROS wants them |
-| **C0** | One change to `OpenMidiDevice()`, seventeen lines: a driver's `MidiDeviceData` is looked for at aligned addresses. Without it upstream's `camd.library` loads our drivers, does not recognise them, and unloads them. **Cut**: branch `camd-driver-scan-align` in `~/AROS-netmidi`, one commit on upstream `master` (it is `patches/aros-camd-driver-scan-align.patch` here). | 17 | Nothing | — |
+| **C0** | One change to `OpenMidiDevice()`, seventeen lines: a driver's `MidiDeviceData` is looked for at aligned addresses. It is a defect of upstream's own and not about our drivers: on hosted x86-64, upstream's `camd.library` finds **no** driver in `DEVS:Midi`, its own `debugdriver` and `hostmidi` among them; a program listing the clusters sees none, and with the change sees all of them (seen in the clean tree on 2026-10-12, with CAMD built both ways). **Cut**: branch `camd-driver-scan-align` in `~/AROS-netmidi`, one commit on upstream `master` (it is `patches/aros-camd-driver-scan-align.patch` here). | 17 | Nothing | — |
 | **N1** | `netmididriver.c` built twice and the adapters' header: two `DEVS:Midi` drivers of sixteen ports and no network code. **Cut** on 2026-10-12: `tools/cut-netmidi-drivers.sh` writes it into an AROS tree as `workbench/devs/midi/netmidi`, and the branch `netmidi-drivers` in the worktree `~/AROS-netmidi` is upstream `master` with it and nothing else. Built by its own targets for hosted x86-64 and amiga-m68k; of the 126 headers it pulls in, none is one this repository changes. | 380 | Nothing to compile: it includes `proto/exec.h` and `midi/camddevices.h` only. **To be of any use, C0**: seen on 2026-10-12 | — |
 | **N2** | `rtpmidi.c`, `sender.c`, `receiver.c`, `timing.c` and their headers, as the link library `rtpmidi`. **Cut** on 2026-10-12: `tools/cut-netmidi-library.sh n2` writes it as `workbench/network/netmidi/rtpmidi`. It builds there by its own target for hosted x86-64, needs nothing but the C library's headers, and has no finding of the checker. | 3,600 | Nothing | Where upstream wants it; the tests stay here |
 | **N3** | `applemidi.c`, `session.c`, `peers.c`, `ports.c`, `clock.c`, into the same library. **Cut** the same day (`tools/cut-netmidi-library.sh n3`): built for hosted x86-64 and amiga-m68k. | 1,900 | N2 (they share headers and the library's build file) | — |
@@ -173,9 +173,9 @@ somewhat smaller.
   AppleMIDI path runs without it on upstream's CAMD once C0 is in (seen
   on 2026-10-12; see PREP-3 below). Without C0 the drivers build and are
   never found: that does not break upstream's build, it makes the pull
-  request do nothing. The same is likely true of `btmidi`'s driver in
-  #1507, which is built the same way; T04 of the BLE backlog is that
-  question, and it has not been run. Preferences, the
+  request do nothing. The same holds for `btmidi`'s driver in #1507 on
+  that target, since no driver at all is found there without C0; T04 of
+  the BLE backlog, the class itself on upstream's CAMD, has not been run. Preferences, the
   identities tool and the compatibility program do use it, and are not
   among the pull requests.
 
@@ -209,8 +209,9 @@ Nothing below waits for another answer than its own review.
 
 1. **PREP-1 to PREP-3**, here. They are the bulk of the work left: the
    code is written, the cut is not.
-2. **C0**, the fix in CAMD: seventeen lines, a defect of upstream's own,
-   and what N1 and very likely #1507 need to do anything.
+2. **C0**, the fix in CAMD: seventeen lines for a defect of upstream's
+   own, without which no MIDI driver at all is found on a 64-bit hosted
+   AROS. It stands by itself and is what N1 and #1507 need to do anything.
 3. **N1**, the drivers. Small, self-contained, the shape the review of
    `btmidi.class` asked for, and inert alone: ports that take what is sent
    and drop it. Send it with the sentence that the service follows.
