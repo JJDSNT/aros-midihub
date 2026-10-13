@@ -101,7 +101,7 @@ rules are the ones the earlier pull requests taught us
 | U1 | Where it lives: under `workbench/devs/midi/` as the driver, with the session code beside it, or in contrib first. A question for the maintainers, to ask with working code to show. |
 | U2 | Names and layout by AROS convention. Done on 2026-10-12: `rtpmidi_*` and `applemidi_*`, sources in `network/rtpmidi/`, headers in `include/rtpmidi/`, no program name in the code or its text. `config.c` and the embedded responder (`netmidi_*`) belong to the program and stay with it. |
 | U3 | The Codacy gate: no new finding. Variables declared at first use, no `strcpy`/`strncpy`/`strlen`, `SocketBase` passed as a parameter. `main.c` uses `strcpy` and `printf` freely today. |
-| U4 | Origin of the code. The README names MIDIKit and librtpmidid as references. Confirm that nothing was copied from either and say so in the pull request; if anything was, its licence and notice go with it. |
+| U4 | **Done on 2026-10-13.** Origin of the code: written here, from the RFCs. The README names MIDIKit and librtpmidid as references; the sources of `network/rtpmidi` and `include/rtpmidi` were compared with both trees mechanically and share no line and no run of tokens but `#include` lists and loop headers. Said in pull request #1587. |
 | U5 | A first cut small enough to review: the codecs and their tests alone, then the session layer, then the driver. |
 
 ## Decisions needed

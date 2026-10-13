@@ -1,3 +1,7 @@
+/*
+    Copyright (C) 2026, The AROS Development Team. All rights reserved.
+*/
+
 /* The service's side of the CAMD drivers DEVS:Midi/applemidi and
  * DEVS:Midi/networkmidi2: what camd.h declares, answered through the
  * drivers' adapters. The service is no client of camd.library. A driver

@@ -1,3 +1,7 @@
+/*
+    Copyright (C) 2026, The AROS Development Team. All rights reserved.
+*/
+
 #ifndef __AROS__
 #define _DEFAULT_SOURCE 1
 #endif

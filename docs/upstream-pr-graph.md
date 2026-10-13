@@ -286,13 +286,19 @@ test run there:
 - **C0** is pull request #1585, from the branch `camd-driver-scan-align`.
 - **N1** is pull request #1586, from the branch `netmidi-drivers`.
 
-Held back, with the reason:
+- **N2** is pull request #1587, from the branch `netmidi-rtpmidi`, one
+  commit on `master`. Before it went, the library's and the service's
+  sources were given the tree's copyright header, and U4 of the RTP-MIDI
+  backlog was closed: the code was written here, and a mechanical
+  comparison with MIDIKit and rtpmidid (lines, runs of twelve tokens, runs
+  of forty with the names made anonymous) found nothing in common but
+  `#include` lists and loop headers. The pull request says so.
 
-- **N2** (branch `netmidi-rtpmidi`, one commit on `master`) and with it
-  N3 and N4. Its sources have no copyright header, which every file of
-  the tree has, and the statement of origin (RTP-MIDI backlog, U4) is not
-  made: that nothing was copied from MIDIKit or librtpmidid is for the
-  author to say, not for a cut script.
+Waiting, with the reason:
+
+- **N3** needs N2 merged and **N4** needs N1 and N3: they are the
+  branches `netmidi-sessions` and `netmidi-service` in `~/AROS-netmidi`,
+  on top of the three sent, and go as each of those is in.
 - Upstream has since put a service of the stack in
   `workbench/network/common/timesync`; N4 is cut into
   `workbench/network/netmidi`. Which place is right is asked in N4's

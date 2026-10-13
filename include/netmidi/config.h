@@ -1,3 +1,7 @@
+/*
+    Copyright (C) 2026, The AROS Development Team. All rights reserved.
+*/
+
 #ifndef NETMIDI_CONFIG_H
 #define NETMIDI_CONFIG_H
 

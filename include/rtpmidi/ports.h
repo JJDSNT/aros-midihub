@@ -1,3 +1,7 @@
+/*
+    Copyright (C) 2026, The AROS Development Team. All rights reserved.
+*/
+
 #ifndef APPLEMIDI_PORTS_H
 #define APPLEMIDI_PORTS_H
 

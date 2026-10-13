@@ -1,3 +1,7 @@
+/*
+    Copyright (C) 2026, The AROS Development Team. All rights reserved.
+*/
+
 #ifndef NETMIDI_CAMD_RUNTIME_H
 #define NETMIDI_CAMD_RUNTIME_H
 

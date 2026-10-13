@@ -1,3 +1,7 @@
+/*
+    Copyright (C) 2026, The AROS Development Team. All rights reserved.
+*/
+
 #ifndef RTPMIDI_TIMING_H
 #define RTPMIDI_TIMING_H
 
