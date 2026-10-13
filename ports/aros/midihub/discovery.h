@@ -1,15 +1,20 @@
-#ifndef MIDIHUB_AROS_DISCOVERY_H
-#define MIDIHUB_AROS_DISCOVERY_H
+/*
+    Copyright (C) 2026, The AROS Development Team. All rights reserved.
+*/
+
+#ifndef NETMIDI_DISCOVERY_H
+#define NETMIDI_DISCOVERY_H
 
 #include <stdint.h>
 
-/* The program's name on the network, through the system's mDNS service:
- * bonami.library and mdnsd on AROS. The program holds no socket on port
- * 5353 and answers no question itself; the service does, for every
- * program on the machine. Where there is no such service (the host build
- * used for tests) nothing is advertised and the calls say so. */
+/* Our name on the network, through the system's mDNS service:
+ * bonami.library and mdnsd. We hold no socket on port 5353 and answer no
+ * question ourselves; the service does, for every program on the machine.
+ * Where there is no such service nothing is advertised and the calls say
+ * so. */
 
 #define NETMIDI_DISCOVERY_SERVICES 2
+#ifdef NETMIDI_BROWSE
 #define NETMIDI_DISCOVERY_EVENTS 16
 #define NETMIDI_DISCOVERY_BROWSES 2
 
@@ -24,6 +29,7 @@ struct netmidi_discovered {
     char endpoint[64];              /* the UMPEndpointName of its text
                                        record, or empty */
 };
+#endif
 
 struct netmidi_discovery {
     void *library;                  /* bonami.library, opened */
@@ -39,6 +45,7 @@ struct netmidi_discovery {
     } service[NETMIDI_DISCOVERY_SERVICES];
     int count;
     uint64_t last_attempt;
+#ifdef NETMIDI_BROWSE
     struct {
         const char *type;           /* what to look for, or NULL */
         void *reference;            /* the search, or NULL */
@@ -49,6 +56,7 @@ struct netmidi_discovery {
     struct netmidi_discovered event[NETMIDI_DISCOVERY_EVENTS];
     volatile unsigned long written;
     unsigned long read;
+#endif
 };
 
 void netmidi_discovery_init(struct netmidi_discovery *discovery);
@@ -75,6 +83,7 @@ int netmidi_discovery_item(char *text, unsigned long size, const char *key,
  * now, -1 where there is no service to ask. */
 int netmidi_discovery_poll(struct netmidi_discovery *discovery,
                            uint64_t now);
+#ifdef NETMIDI_BROWSE
 /* Asks for instances of type to be looked for. Like a registration, the
  * search begins at the next poll at which the service answers. Returns
  * the number events of this search carry in their browse field, -1 when
@@ -87,6 +96,7 @@ int netmidi_discovery_browse(struct netmidi_discovery *discovery,
  * registrations come back here too; the caller knows its own name. */
 int netmidi_discovery_next(struct netmidi_discovery *discovery,
                            struct netmidi_discovered *event);
+#endif
 /* Withdraws everything, with the goodbye the service sends for it. */
 void netmidi_discovery_close(struct netmidi_discovery *discovery);
 

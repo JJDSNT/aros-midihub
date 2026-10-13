@@ -95,7 +95,7 @@ int netmidi_config_save(const char *path,
     if (config->peer_ip[0])
         fprintf(file, "peer_ip=%s\npeer_port=%u\n", config->peer_ip,
                 (unsigned)config->peer_port);
-#ifdef NETMIDI_DISCOVERY
+#ifdef NETMIDI_BROWSE
     if (config->peer_name[0])
         fprintf(file, "peer_name=%s\n", config->peer_name);
 #endif
@@ -111,7 +111,7 @@ int netmidi_config_save(const char *path,
     if (config->midi2_peer_ip[0])
         fprintf(file, "midi2_peer_ip=%s\nmidi2_peer_port=%u\n",
                 config->midi2_peer_ip, (unsigned)config->midi2_peer_port);
-#ifdef NETMIDI_DISCOVERY
+#ifdef NETMIDI_BROWSE
     if (config->midi2_peer_name[0])
         fprintf(file, "midi2_peer_name=%s\n", config->midi2_peer_name);
 #endif
@@ -175,7 +175,7 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
             if (!*value || take(next.session_name, sizeof(next.session_name), value))
                 goto done;
             next.session_name_given = 1;
-#ifdef NETMIDI_DISCOVERY
+#ifdef NETMIDI_BROWSE
         } else if (strcmp(key, "peer_name") == 0) {
             if (!*value || take(next.peer_name, sizeof(next.peer_name), value))
                 goto done;
@@ -211,7 +211,7 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
         } else if (strcmp(key, "midi2_peer_ip") == 0) {
             if (!*value || take(next.midi2_peer_ip, sizeof(next.midi2_peer_ip), value))
                 goto done;
-#ifdef NETMIDI_DISCOVERY
+#ifdef NETMIDI_BROWSE
         } else if (strcmp(key, "midi2_peer_name") == 0) {
             if (!*value || take(next.midi2_peer_name,
                                 sizeof(next.midi2_peer_name), value))
@@ -233,7 +233,7 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
     if ((!!next.midi2_peer_ip[0] != !!next.midi2_peer_port) ||
         (next.midi2_peer_ip[0] && !next.midi2_port))
         goto done;
-#ifdef NETMIDI_DISCOVERY
+#ifdef NETMIDI_BROWSE
     if (next.midi2_peer_name[0] && !next.midi2_port)
         goto done;
 #endif

@@ -56,9 +56,10 @@ printf 'HOST 192.168.166.2 arosbox.arosnet arosbox\nDOMAIN arosnet 192.168.166.\
 sed -i 's/OPENGUI=.*/OPENGUI=NO/' "$db/general.config"
 # upstream's cut installs the service disabled, as it does sshd
 sed -i 's/^Enabled=.*/Enabled=yes/' "$db/services.d/netmidi"
-# the cut of the service without discovery (N7) is told the Host's address
+# a cut of the service that looks for nobody by name (N7, N8) is told the
+# Host's address
 discovery=1
-grep -aq '_midi2._udp' "$aros/System/Network/Services/netmidid" || discovery=0
+grep -aq 'MIDI 2.0 host "%s"' "$aros/System/Network/Services/netmidid" || discovery=0
 # the service's configuration, and what it would print to a file
 if [ $discovery = 1 ]; then
     printf 'midi2_port = 5673\nsession_name = AROS Net MIDI\nmidi2_peer_name = Host Endpoint\n' > "$sys/Prefs/Env-Archive/NetMIDI"

@@ -143,8 +143,8 @@ somewhat smaller.
 | **N5** | `C:NetMIDIStatus`. **Cut** on 2026-10-13: `tools/cut-netmidi-status.sh` writes it as `workbench/network/netmidi/netmidistat`; it reads `netmidi_status.h` from the service's directory. | 80 | N4 for `netmidi_status.h`, unless the header goes with N1 | — |
 | **N6** | `ump.c` and `netmidi2.c` with their headers, as the link library `netmidi2`. **Cut** on 2026-10-13: `tools/cut-netmidi2-library.sh` writes it as `workbench/network/netmidi/netmidi2`. It needs nothing but the C library's headers and has no finding of the checker. | 2,100 | Nothing | PREP-2 |
 | **N7** | Network MIDI 2.0 in the service: the third socket, the translation, ports of the second driver, Host and Client by address. **Cut** on 2026-10-13: `tools/cut-netmidi-service.sh n7` writes the service again with `NETMIDI_MIDI2` left in, 580 lines more than N4's in seven files. No finding of the checker. | 580 over N4 | N4, N6 | — |
-| **N8** | `discovery.c`, registering half: `_apple-midi._udp` and `_midi2._udp`. | 150 | N4, and **M2** for `proto/bonami.h` | — |
-| **N9** | `discovery.c`, browsing half: a peer or a Host wanted by name. | 180 | N8, and **M3** | — |
+| **N8** | `discovery.c`, registering half: `_apple-midi._udp` and `_midi2._udp`. **Cut** on 2026-10-13: `tools/cut-netmidi-service.sh n8`, the service with `NETMIDI_DISCOVERY` left in and `discovery.c` beside it. The checker has no finding. | 290 over N7 | N4, and **M2** for `proto/bonami.h` | — |
+| **N9** | `discovery.c`, browsing half: a peer or a Host wanted by name. **Cut** the same day: `tools/cut-netmidi-service.sh n9`, with `NETMIDI_BROWSE` left in too. The checker cannot read the hook the mDNS service calls, an AROS register-argument function, and so says nothing of `discovery.c` in this cut. | 290 over N8 | N8, and **M3** | — |
 | **C1** | The driver-side block in `camd.library` (B29 to B31), and later UMP and time (B32). | — | Nothing to build | The maintainer's yes; an issue with the sketch is the step that is ours |
 
 ## What would break the build, and how the order avoids it
@@ -244,8 +244,12 @@ On 2026-10-13:
   the Linux build with it. The package sets the last two for everything it
   builds, since they decide which fields the configuration has. All eight
   combinations compile. N7 is the same cut with `NETMIDI_MIDI2` left in
-  (`tools/cut-netmidi-service.sh n7`); N8 will be the same with
-  `NETMIDI_DISCOVERY`, plus `discovery.c`, and its script is not written.
+  (`tools/cut-netmidi-service.sh n7`), N8 the same with
+  `NETMIDI_DISCOVERY` and `discovery.c`, and N9 with `NETMIDI_BROWSE`
+  too. That fourth marker was made on 2026-10-13 to tell the two halves
+  of discovery apart: being advertised, and looking for a peer or a Host
+  by name, with the configuration keys `peer_name` and `midi2_peer_name`
+  that only the second gives a meaning to. Twelve combinations compile.
   N5 and N6 are plain copies with a build file each
   (`tools/cut-netmidi-status.sh`, `tools/cut-netmidi2-library.sh`).
 
@@ -256,9 +260,13 @@ On 2026-10-13:
   10, 20, up to once a minute, and from the start after a session;
   `tools/applemidi-service-hosted.sh` has the case (the peer absent, then
   there, gone and back: two sessions).
-- **PREP-2, the gate.** Done for N2 to N7: nothing left for cppcheck and
-  no `strcpy`, `strncpy`, `strlen` or `sprintf`. Open for what N8 and N9
-  add to the service.
+- **PREP-2, the gate.** Done for N2 to N9: nothing left for cppcheck
+  2.13 and no `strcpy`, `strncpy`, `strlen` or `sprintf`. **It is not the
+  gate itself**: upstream's Codacy found in N6 what cppcheck 2.13 here
+  does not find with everything enabled, a buffer handed on unwritten
+  when a UMP Data command carries no word (`netmidi2_add_ump()`; fixed
+  the same hour, and #1588 passes). A clean run here says a cut is
+  probably clean, and the pull request's own check says whether it is.
 - **PREP-3, the clean tree.** Done for N1 on 2026-10-12, and it found
   what reading could not. A worktree of upstream `master` with N1 and
   nothing else (`~/AROS-netmidi`, branch `netmidi-drivers`) was built from
@@ -314,6 +322,18 @@ has no discovery, give the Host by address and ask Avahi nothing.
   packet sizes by message type.
 - **N5** (`netmidi-status`) needs N4; **N7** (`netmidi-service-midi2`)
   needs N4 and N6.
+- **N8** (`netmidi-service-advertised`) and **N9**
+  (`netmidi-service-browse`) are cut the same day, each one commit on the
+  one before. They cannot be sent before the mDNS library is in (M2, M3),
+  which waits for #1560 and the answers to issue #1559: the cuts include
+  `proto/bonami.h`, and their build file names no target for it yet. In
+  the clean tree they were built against this repository's
+  `bonami.library` and `mdnsd`, and the hosted tests run on each: N8
+  advertised and seen by Avahi both as `_apple-midi._udp` and as
+  `_midi2._udp` (8, 3 and 3 checks, the Client given its Host by
+  address); N9 the same with the Host found by its endpoint's name, and
+  the five checks of `tools/applemidi-discovery-hosted.sh`, a peer found
+  by its session's name and invited again when it comes back.
 
 Waiting, with the reason:
 

@@ -1,0 +1,35 @@
+
+include $(SRCDIR)/config/aros.cfg
+
+# netmidid: MIDI over the network as a service of the network stack. It
+# runs the AppleMIDI (RTP-MIDI) sessions: answers invitations on UDP 5004
+# and 5005, invites the peer its configuration names, and keeps the clocks.
+# Given a port for it, it runs Network MIDI 2.0 (UDP) sessions too, as a
+# Host and as the Client of the Host its configuration names. It is no
+# client of camd.library: CAMD clients reach its peers through the ports of
+# DEVS:Midi/applemidi and DEVS:Midi/networkmidi2, whose adapters it
+# attaches to, a peer to a port. The protocols are the link libraries
+# rtpmidi's and netmidi2's; here are the sockets, the clock and the
+# configuration, ENV:NetMIDI. It is advertised by the system's mDNS
+# service, which it asks through bonami.library: it holds no socket on
+# port 5353 itself.
+
+FILES := main adapters network config discovery
+
+USER_INCLUDES := -I$(SRCDIR)/$(CURDIR)/include \
+    -I$(SRCDIR)/$(CURDIR)/../rtpmidi/include \
+    -I$(SRCDIR)/$(CURDIR)/../netmidi2/include \
+    -I$(SRCDIR)/workbench/devs/midi/netmidi
+USER_CPPFLAGS := -DNETMIDI_SERVICE
+
+#MM- workbench-network-netmidi : workbench-network-netmidid
+#MM- workbench-network-netmidid : workbench-network-netmidid-svccfg
+#MM workbench-network-netmidid : includes linklibs linklibs-rtpmidi \
+#MM      linklibs-netmidi2 \
+#MM      network-includes-copy
+
+%build_prog mmake=workbench-network-netmidid \
+    progname=netmidid targetdir=$(AROS_SYSTEM)/Network/Services \
+    files="$(FILES)" uselibs="rtpmidi netmidi2"
+
+%common

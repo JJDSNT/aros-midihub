@@ -1,13 +1,21 @@
+/*
+    Copyright (C) 2026, The AROS Development Team. All rights reserved.
+*/
+
 #include "discovery.h"
 
 #include <string.h>
 
 #ifdef __AROS__
+#ifdef NETMIDI_BROWSE
 #include <aros/asmcall.h>
+#endif
 #include <exec/libraries.h>
 #include <exec/memory.h>
 #include <proto/exec.h>
+#ifdef NETMIDI_BROWSE
 #include <utility/hooks.h>
+#endif
 #include <proto/bonami.h>
 #include <bonami/mdns.h>
 
@@ -80,6 +88,7 @@ int netmidi_discovery_item(char *text, unsigned long size, const char *key,
     return 0;
 }
 
+#ifdef NETMIDI_BROWSE
 int netmidi_discovery_browse(struct netmidi_discovery *discovery,
                              const char *type)
 {
@@ -102,9 +111,11 @@ int netmidi_discovery_next(struct netmidi_discovery *discovery,
     ++discovery->read;
     return 1;
 }
+#endif
 
 #ifdef __AROS__
 
+#ifdef NETMIDI_BROWSE
 /* Called in mdnsd's process, not ours: it may only copy what it is given.
  * The program looks at the ring from its own loop. */
 AROS_UFH3(static IPTR, browse_hook,
@@ -180,6 +191,7 @@ AROS_UFH3(static IPTR, browse_hook,
 
     AROS_USERFUNC_EXIT
 }
+#endif
 
 /* The service went away: what it held for us went with it. */
 static void forget(struct netmidi_discovery *discovery)
@@ -190,8 +202,10 @@ static void forget(struct netmidi_discovery *discovery)
     discovery->engine = 0;
     for (i = 0; i < discovery->count; ++i)
         discovery->service[i].reference = NULL;
+#ifdef NETMIDI_BROWSE
     for (i = 0; i < discovery->browses; ++i)
         discovery->browse[i].reference = NULL;
+#endif
 }
 
 int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
@@ -208,9 +222,11 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
         else
             ++pending;
     }
+#ifdef NETMIDI_BROWSE
     for (i = 0; i < discovery->browses; ++i)
         if (!discovery->browse[i].reference)
             ++pending;
+#endif
     if (!pending ||
         (discovery->last_attempt && now - discovery->last_attempt < 100000))
         return registered;
@@ -228,12 +244,12 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
         discovery->engine = 1;
     }
     for (i = 0; i < discovery->count; ++i) {
-        MDNSRegisterRef reference = NULL;
+        /* the service writes the registration where the tag says */
         struct TagItem tags[] = {
             { MDNS_ServiceName, (IPTR)discovery->service[i].name },
             { MDNS_ServiceType, (IPTR)discovery->service[i].type },
             { MDNS_Port, (IPTR)discovery->service[i].port },
-            { MDNS_RegisterRef, (IPTR)&reference },
+            { MDNS_RegisterRef, (IPTR)&discovery->service[i].reference },
             { TAG_IGNORE, 0 },
             { TAG_IGNORE, 0 },
             { TAG_DONE, 0 }
@@ -251,18 +267,19 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
             tags[5].ti_Data = (IPTR)discovery->service[i].seconds;
         }
         result = RegisterServiceA(tags);
-        if (result == MDNS_OK && reference) {
-            discovery->service[i].reference = reference;
+        if (result != MDNS_OK)
+            discovery->service[i].reference = NULL;
+        if (discovery->service[i].reference) {
             ++registered;
         } else if (result == MDNSERR_NOENGINE) {
             forget(discovery);
             return 0;
         }
     }
+#ifdef NETMIDI_BROWSE
     for (i = 0; i < discovery->browses; ++i) {
-        MDNSBrowseRef reference = NULL;
         struct TagItem tags[] = {
-            { MDNS_BrowseRef, (IPTR)&reference },
+            { MDNS_BrowseRef, (IPTR)&discovery->browse[i].reference },
             { TAG_DONE, 0 }
         };
         struct Hook *hook = discovery->browse[i].hook;
@@ -279,9 +296,10 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
             discovery->browse[i].hook = hook;
         }
         if (BrowseServiceTypeA((STRPTR)discovery->browse[i].type, hook,
-                               tags) == MDNS_OK && reference)
-            discovery->browse[i].reference = reference;
+                               tags) != MDNS_OK)
+            discovery->browse[i].reference = NULL;
     }
+#endif
     return registered;
 }
 
@@ -292,12 +310,14 @@ void netmidi_discovery_close(struct netmidi_discovery *discovery)
     if (!discovery || !discovery->library)
         return;
     BonamiBase = discovery->library;
+#ifdef NETMIDI_BROWSE
     /* the search first: after this the service calls the hook no more */
     for (i = 0; i < discovery->browses; ++i) {
         if (discovery->browse[i].reference)
             StopBrowse(discovery->browse[i].reference);
         discovery->browse[i].reference = NULL;
     }
+#endif
     for (i = 0; i < discovery->count; ++i) {
         if (discovery->service[i].reference)
             DeregisterService(discovery->service[i].reference);
@@ -309,11 +329,13 @@ void netmidi_discovery_close(struct netmidi_discovery *discovery)
     CloseLibrary(discovery->library);
     discovery->library = NULL;
     BonamiBase = NULL;
+#ifdef NETMIDI_BROWSE
     for (i = 0; i < discovery->browses; ++i) {
         if (discovery->browse[i].hook)
             FreeMem(discovery->browse[i].hook, sizeof(struct Hook));
         discovery->browse[i].hook = NULL;
     }
+#endif
 }
 
 #else

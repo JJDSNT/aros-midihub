@@ -2,7 +2,7 @@ CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Werror -std=c99
 # The program has everything the runtime can do; the cuts sent upstream are
 # the same source with some of these left out (docs/upstream-pr-graph.md).
-CPPFLAGS ?= -Iinclude -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY
+CPPFLAGS ?= -Iinclude -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -DNETMIDI_BROWSE
 M68K_CC ?= m68k-aros-gcc
 M68K_CFLAGS ?= -O2 -Wall -Wextra -Werror -Wno-volatile-register-var -std=gnu99
 FLUIDSYNTH_CFLAGS ?= $(shell pkg-config --cflags fluidsynth 2>/dev/null)

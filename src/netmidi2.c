@@ -134,7 +134,8 @@ int netmidi2_add_ping(struct netmidi2_writer *writer, uint8_t code, uint32_t id)
 int netmidi2_add_ump(struct netmidi2_writer *writer, uint16_t sequence,
                    const uint32_t *words, size_t count)
 {
-    uint8_t payload[NETMIDI2_MAX_UMP_WORDS * 4];
+    /* with no words it goes as it is: a UMP Data command may be empty */
+    uint8_t payload[NETMIDI2_MAX_UMP_WORDS * 4] = {0};
     size_t i;
 
     if (count > NETMIDI2_MAX_UMP_WORDS)

@@ -60,6 +60,8 @@ prepare() {
         > "$db/netdb-myhost"
     sed -i 's/OPENGUI=.*/OPENGUI=NO/' "$db/general.config"
     # what the service would print, to a file
+    # upstream's cut installs the service disabled, as it does sshd
+    sed -i 's/^Enabled=.*/Enabled=yes/' "$sys/System/Network/AROSTCP/db/services.d/netmidi"
     printf 'SYS:netmidid.log' > "$sys/Prefs/Env-Archive/netmidid.log"
     sudo setcap cap_net_raw,cap_net_admin+ep "$sys/boot/linux/AROSBootstrap"
 }
