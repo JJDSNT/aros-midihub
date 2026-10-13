@@ -20,8 +20,8 @@ orders, [mDNS and AROSTCP](mdns-arostcp.md) and
   hosts, asks for any record, and follows interfaces coming and going and
   the stack being reloaded.
 - What AROSTCP lacked for multicast is merged upstream (PR #1543, #1558).
-- The first cut, a responder for the host's own name, is PR #1560: open,
-  checks passing, no review yet. Issue #1559 asks six questions about the
+- The first cut, a responder for the host's own name, is PR #1560: merged
+  on 2026-10-13. Issue #1559 asks six questions about the
   rest: where it lives, how to split it, how clients get events, which
   protocol limits block it, where tests go, what to call the library. No
   answer yet.
@@ -85,8 +85,8 @@ history of `tools/mdns-*-hosted.sh`. Under it:
 
 | # | What | Waits for |
 |---|---|---|
-| MU1 | PR #1560, the responder for the host's name: answer its review. | The reviewer |
-| MU2 | The second cut: registering, updating and withdrawing a service through the library. | #1560 merged; the answers on location, split and the library's name |
+| MU1 | PR #1560, the responder for the host's name. **Merged 2026-10-13.** | Nothing |
+| MU2 | The second cut: registering, updating and withdrawing a service through the library. | The answers on location, split and the library's name |
 | MU3 | The third cut: browse, resolve, host lookup and queries, which is where clients get events. | MU2 and MD01 |
 | MU4 | The tools, the commodity, the Envoy bridge. | MU3; whether AROS wants them at all |
 | MU5 | Where the tests go: seven runners need sudo, veth and Avahi, which AROS's own tests do not have. | The answer in issue #1559 |

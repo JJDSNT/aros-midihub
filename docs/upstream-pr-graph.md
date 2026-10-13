@@ -39,7 +39,6 @@ flowchart TD
 
     subgraph OUT[Not ours to move]
         REV1507[/"review and radio test<br/>of #1507"/]:::outside
-        REV1560[/"review of #1560"/]:::outside
         I1559[/"answers in issue #1559"/]:::outside
         CAMDQ[/"the maintainer's yes to a<br/>driver-side block in CAMD"/]:::outside
     end
@@ -55,7 +54,7 @@ flowchart TD
     end
 
     subgraph MDNS[mDNS]
-        P1560["#1560 mdnsd, the<br/>host's name (open)"]:::open
+        P1560["#1560 mdnsd, the<br/>host's name (merged)"]:::there
         M2["M2 the library:<br/>register a service"]
         M3["M3 browse, resolve,<br/>lookup, queries"]
         M4["M4 tools, commodity,<br/>Envoy bridge"]
@@ -84,7 +83,6 @@ flowchart TD
 
     U_NET --> P1560
     U_SVC --> P1560
-    REV1560 --> P1560
     P1560 --> M2
     I1559 --> M2
     M2 --> M3
@@ -131,8 +129,8 @@ somewhat smaller.
 | | What goes in | Lines | Needs merged first | Waits for |
 |---|---|---|---|---|
 | **#1507** | `btmidi.class` and its driver stub. Three commits are local in `~/AROS-btmidi` and not pushed: the adapter's version and whole-packet check are pushed; the codec's citations with the reserved header bit, and F9/FD left out, are not. | — | Nothing: the stack is merged | The radio test promised in the PR (T01), then the review |
-| **#1560** | `mdnsd` answering for the host's name. | 1,600 | Nothing | Its review |
-| **M2** | `bonami.library` and the daemon's side of registering, updating and withdrawing a service, with the text record's escaping (MD02) and the time to live (MD19). | about 3,000 | #1560 | Where it lives, how it is split and what the library is called: issue #1559 |
+| **#1560** | `mdnsd` answering for the host's name. | 1,600 | Nothing | Nothing: merged 2026-10-13 |
+| **M2** | `bonami.library` and the daemon's side of registering, updating and withdrawing a service, with the text record's escaping (MD02) and the time to live (MD19). | about 3,000 | #1560 (merged) | Where it lives, how it is split and what the library is called: issue #1559 |
 | **M3** | Browse, resolve, host lookup, queries; a client's own records answered (MD04). | about 3,000 | M2 | How clients get events: issue #1559, and MD01 here |
 | **M4** | `dnssd` and the other tools, the commodity, the Envoy bridge. | about 2,500 | M3 | Whether AROS wants them |
 | **C0** | One change to `OpenMidiDevice()`, seventeen lines: a driver's `MidiDeviceData` is looked for at aligned addresses. It is a defect of upstream's own and not about our drivers: on hosted x86-64, upstream's `camd.library` finds **no** driver in `DEVS:Midi`, its own `debugdriver` and `hostmidi` among them; a program listing the clusters sees none, and with the change sees all of them (seen in the clean tree on 2026-10-12, with CAMD built both ways). **Cut**: branch `camd-driver-scan-align` in `~/AROS-netmidi`, one commit on upstream `master` (it is `patches/aros-camd-driver-scan-align.patch` here). | 17 | Nothing | — |
@@ -224,8 +222,8 @@ Nothing below waits for another answer than its own review.
 7. **N8** and **N9** when M2 and M3 are in, which is when issue #1559 has
    its answers.
 
-Beside it, and not in its way: #1507 moves with the radio test, #1560
-with its review, and C1 begins with an issue, not with code.
+Beside it, and not in its way: #1507 moves with the radio test, and C1
+begins with an issue, not with code.
 
 ## Where the preparations stand
 
@@ -325,7 +323,8 @@ has no discovery, give the Host by address and ask Avahi nothing.
 - **N8** (`netmidi-service-advertised`) and **N9**
   (`netmidi-service-browse`) are cut the same day, each one commit on the
   one before. They cannot be sent before the mDNS library is in (M2, M3),
-  which waits for #1560 and the answers to issue #1559: the cuts include
+  which waits for the answers to issue #1559 (#1560, its other
+  condition, was merged on 2026-10-13): the cuts include
   `proto/bonami.h`, and their build file names no target for it yet. In
   the clean tree they were built against this repository's
   `bonami.library` and `mdnsd`, and the hosted tests run on each: N8

@@ -27,7 +27,6 @@ flowchart LR
     subgraph OUT[Outside our hands]
         I1559[/"AROS issue #1559<br/>IPv6 answer"/]:::outside
         P1507[/"AROS PR #1507<br/>yes to a driver-side block"/]:::outside
-        P1560[/"AROS PR #1560<br/>review"/]:::outside
         HW[/"Hardware: Pi 3, phone,<br/>a BLE MIDI device, a Mac"/]:::outside
     end
 
@@ -124,7 +123,6 @@ flowchart LR
     MD01 --> MU3
     MDD1 --> MD15
     MDD2 --> MU6
-    P1560 --> MU1
     MU1 --> MU2
     MU2 --> MU3
     MU3 --> MU4
@@ -152,17 +150,16 @@ through other items:
 | A yes in PR #1507 | 10 | B29 to B32, and what BLE MIDI lost to the driver model: names, presence, identity, time |
 | Answers in issue #1559 | 9 | Event delivery in mDNS and every cut of it after the first, and the three IPv6 items |
 | Hardware | 5 | The test owed to PR #1507, and with it the PR's merge and the removal of the old class here |
-| PR #1560 reviewed | 4 | Every later cut of mDNS |
 
 The specification texts, which held 23 items, are in hand since 2026-10-12,
 and UMP and Network MIDI 2.0 were read against theirs the same day.
 
 **The longest chains** are in what waits for others: PR #1507, then B29,
-B31, B32 and BLE's timestamps; and #1560, then the three further cuts of
-mDNS. Within our own hands no chain is longer than two steps any more:
+B31, B32 and BLE's timestamps; and the three further cuts of mDNS, now that
+#1560 is merged. Within our own hands no chain is longer than two steps any more:
 the work that others waited on has been done.
 
-**Four things outside our hands hold most of the 31:**
+**Three things outside our hands hold most of the 31:**
 
 - *PR #1507* holds CAMD's driver-side block and, behind it, most of what
   BLE MIDI lost. Nothing in RTP-MIDI or AppleMIDI waits for it.
@@ -170,7 +167,8 @@ the work that others waited on has been done.
   hold AppleMIDI's use of the service, which can be built on the library in
   this repository.
 - *Hardware* holds the one thing we promised a reviewer: T01.
-- *PR #1560* holds only mDNS's later cuts.
+- *PR #1560* is merged (2026-10-13); mDNS's later cuts wait for issue
+  #1559 alone.
 
 **mDNS and the transports no longer wait for each other.** What Network
 MIDI 2.0 needed of the service to advertise itself (NM08), spaces in a
