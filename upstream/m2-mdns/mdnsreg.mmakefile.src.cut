@@ -1,0 +1,23 @@
+
+include $(SRCDIR)/config/aros.cfg
+
+# The tests' stand-in for the package's dnssd; see mdnsreg.c. Copied next
+# to it into workbench/network/mdns/test of the tree under test as
+# mmakefile.src, and never committed there.
+USER_CFLAGS := $(CFLAGS_GNU99)
+
+#MM- workbench-network-mdns-test : \
+#MM      workbench-network-mdns-test-dnssd \
+#MM      workbench-network-mdns-test-probe
+#MM workbench-network-mdns-test-dnssd : workbench-network-mdns-bonami
+#MM workbench-network-mdns-test-probe : workbench-network-mdns-bonami
+
+%build_prog mmake=workbench-network-mdns-test-dnssd \
+    progname=dnssd targetdir=$(AROSDIR)/Extras/aros-midihub/C \
+    files="mdnsreg"
+
+%build_prog mmake=workbench-network-mdns-test-probe \
+    progname=BonamiProbe targetdir=$(AROSDIR)/Extras/aros-midihub/C \
+    files="mdnsreg"
+
+%common

@@ -86,7 +86,7 @@ history of `tools/mdns-*-hosted.sh`. Under it:
 | # | What | Waits for |
 |---|---|---|
 | MU1 | PR #1560, the responder for the host's name. **Merged 2026-10-13.** | Nothing |
-| MU2 | The second cut: registering, updating and withdrawing a service through the library. | The answers on location, split and the library's name |
+| MU2 | The second cut: registering, updating and withdrawing a service through the library. **Cut 2026-10-13**: branch `mdns-register` in `~/AROS-net`, built and tested in the clean tree; see the graph of pull requests. | The answers on location, split and the library's name |
 | MU3 | The third cut: browse, resolve, host lookup and queries, which is where clients get events. | MU2 and MD01 |
 | MU4 | The tools, the commodity, the Envoy bridge. | MU3; whether AROS wants them at all |
 | MU5 | Where the tests go: seven runners need sudo, veth and Avahi, which AROS's own tests do not have. | The answer in issue #1559 |

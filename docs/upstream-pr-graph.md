@@ -130,7 +130,7 @@ somewhat smaller.
 |---|---|---|---|---|
 | **#1507** | `btmidi.class` and its driver stub. Three commits are local in `~/AROS-btmidi` and not pushed: the adapter's version and whole-packet check are pushed; the codec's citations with the reserved header bit, and F9/FD left out, are not. | — | Nothing: the stack is merged | The radio test promised in the PR (T01), then the review |
 | **#1560** | `mdnsd` answering for the host's name. | 1,600 | Nothing | Nothing: merged 2026-10-13 |
-| **M2** | `bonami.library` and the daemon's side of registering, updating and withdrawing a service, with the text record's escaping (MD02) and the time to live (MD19). | about 3,000 | #1560 (merged) | Where it lives, how it is split and what the library is called: issue #1559 |
+| **M2** | `bonami.library` and the daemon's side of registering, updating and withdrawing a service, with the text record's escaping (MD02) and the time to live (MD19). **Cut**: branch `mdns-register` in `~/AROS-net`, one commit on upstream `master`. | 2,160 | #1560 (merged) | Where it lives, how it is split and what the library is called: issue #1559 |
 | **M3** | Browse, resolve, host lookup, queries; a client's own records answered (MD04). | about 3,000 | M2 | How clients get events: issue #1559, and MD01 here |
 | **M4** | `dnssd` and the other tools, the commodity, the Envoy bridge. | about 2,500 | M3 | Whether AROS wants them |
 | **C0** | One change to `OpenMidiDevice()`, seventeen lines: a driver's `MidiDeviceData` is looked for at aligned addresses. It is a defect of upstream's own and not about our drivers: on hosted x86-64, upstream's `camd.library` finds **no** driver in `DEVS:Midi`, its own `debugdriver` and `hostmidi` among them; a program listing the clusters sees none, and with the change sees all of them (seen in the clean tree on 2026-10-12, with CAMD built both ways). **Cut**: branch `camd-driver-scan-align` in `~/AROS-netmidi`, one commit on upstream `master` (it is `patches/aros-camd-driver-scan-align.patch` here). | 17 | Nothing | — |
@@ -333,6 +333,32 @@ has no discovery, give the Host by address and ask Avahi nothing.
   address); N9 the same with the Host found by its endpoint's name, and
   the five checks of `tools/applemidi-discovery-hosted.sh`, a peer found
   by its session's name and invited again when it comes back.
+
+- **M2** is cut on 2026-10-13, the day #1560 was merged: the branch
+  `mdns-register` in `~/AROS-net`, one commit on upstream `master`, local
+  and not pushed. It is not made by a script as the network MIDI cuts
+  are: #1560 gave the daemon's state other names than it has here
+  (`struct MDNSDaemon`, `md_`), so registering was ported by hand onto
+  upstream's files. What it adds to `workbench/network/mdns`: `mdns_reg.c`
+  and `mdns_client.c` in mdnsd, `mdns_ipc.h` between the two,
+  `library/` with `bonami.library` and its first five functions (open,
+  close, register, update, deregister, at the offsets they have here),
+  and `include/`. It assumes the three answers issue #1559 still owes:
+  that directory, that split and the name `bonami.library`. Built for
+  hosted x86-64, also with `-Wall -Wextra -Werror`, and for amiga-m68k.
+  In the clean tree, laid over N8 (scratch branch `m2-check`), N8's
+  `netmidid` builds against it unchanged and its hosted test passes with
+  Avahi seeing the session (8 checks), and the mDNS tests pass: time to
+  live 3, simultaneous probes 2, answer delay 3, unicast answers 5, the
+  host's name 13, #1560's own 13, and the new
+  `tools/mdns-register-hosted.sh` 6 (the four records, a duplicate
+  refused, a changed port and text, a service for another host, the
+  goodbyes, a client that ended without closing). The tests' client
+  there is `upstream/m2-mdns/mdnsreg.c`, a register-only program under
+  the names of the package's `dnssd` and `BonamiProbe`; it is not part of
+  the cut. Not run against it: the text record's backslash through the
+  AROS shell, and anything on real hardware. N8's build file can name
+  `workbench-network-mdns-bonami` once that target is upstream.
 
 Waiting, with the reason:
 
