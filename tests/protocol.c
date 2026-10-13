@@ -6,7 +6,7 @@
 #include "rtpmidi/sender.h"
 #include "rtpmidi/peers.h"
 #include "rtpmidi/ports.h"
-#include <midihub/config.h>
+#include <netmidi/config.h>
 #include "rtpmidi/timing.h"
 
 #include <assert.h>

@@ -1,11 +1,19 @@
-#ifndef MIDIHUB_AROS_CAMD_H
-#define MIDIHUB_AROS_CAMD_H
+#ifndef NETMIDI_CAMD_RUNTIME_H
+#define NETMIDI_CAMD_RUNTIME_H
 
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef NETMIDI_SERVICE
+/* What takes a message a CAMD client sent: returns 0 when it was sent on. */
+typedef int (*aros_camd_output)(void *context, const uint8_t *message,
+                                size_t length);
+#else
 #include "../camd_bridge.h"
+#endif
 
-/* CAMD-facing state owned by the Network MIDI runtime.  Keeping this wrapper
- * separate from the reusable bridge gives the resident process one boundary
- * for CAMD lifecycle and leaves room for one bridge per peer later. */
+/* The runtime's way to CAMD: one boundary, behind which is either the
+ * drivers' adapters or, in the program, a client of camd.library. */
 /* The service has the ports of two drivers, a peer to each port: those of
  * applemidi from 0, those of networkmidi2 from NETMIDI_CAMD_MIDI2. The
  * program that is a client of camd.library has one pair of clusters, which
@@ -16,7 +24,9 @@
 #define NETMIDI_CAMD_MIDI2 NETMIDI_CAMD_PORTS
 
 struct netmidi_camd_runtime {
+#ifndef NETMIDI_SERVICE
     struct aros_camd_bridge bridge;
+#endif
     int opened;
 #ifdef NETMIDI_SERVICE
     /* The service reaches CAMD through the adapters of its two drivers

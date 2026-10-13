@@ -1,4 +1,4 @@
-#include <midihub/config.h>
+#include <netmidi/config.h>
 
 #include <ctype.h>
 #include <errno.h>

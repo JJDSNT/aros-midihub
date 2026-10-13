@@ -192,7 +192,7 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
            $(MIDIHUB_ROOT)/ports/aros/midihub/network \
            $(MIDIHUB_ROOT)/ports/aros/midihub/discovery" \
     objdir=$(GENDIR)/$(CURDIR)/netmidid \
-    cppflags="-DNETMIDI_SERVICE -DNETMIDI_MIDI2" \
+    cppflags="-DNETMIDI_SERVICE -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -I$(MIDIHUB_ROOT)/ports/aros/netmidi" \
     uselibs=arosmidihub \
     targetdir=$(AROS_SYSTEM)/Network/Services
 

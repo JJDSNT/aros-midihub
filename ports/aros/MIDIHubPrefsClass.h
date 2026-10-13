@@ -1,7 +1,7 @@
 #ifndef MIDIHUB_PREFS_CLASS_H
 #define MIDIHUB_PREFS_CLASS_H
 
-#include <midihub/config.h>
+#include <netmidi/config.h>
 #include <midihub/routes.h>
 #include <exec/types.h>
 #include <midi/camd.h>

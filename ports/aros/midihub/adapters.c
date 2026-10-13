@@ -15,8 +15,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "../netmidi/netmidi_camd.h"
-#include "../netmidi/netmidi_status.h"
+#include "netmidi_camd.h"
+#include "netmidi_status.h"
 #include "rtpmidi/rtpmidi.h"
 
 int netmidi_camd_open(struct netmidi_camd_runtime *runtime)

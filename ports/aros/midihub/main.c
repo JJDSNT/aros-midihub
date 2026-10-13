@@ -3,9 +3,11 @@
 #endif
 
 #include <rtpmidi/applemidi.h>
-#include <midihub/config.h>
+#include <netmidi/config.h>
+#ifdef NETMIDI_MIDI2
 #include <netmidi2/netmidi2.h>
 #include <ump/ump.h>
+#endif
 #include <rtpmidi/clock.h>
 #include <sys/stat.h>
 #include <rtpmidi/peers.h>
@@ -16,7 +18,9 @@
 #include <rtpmidi/sender.h>
 #include <rtpmidi/timing.h>
 #include "camd.h"
+#ifdef NETMIDI_DISCOVERY
 #include "discovery.h"
+#endif
 #include "network.h"
 
 #include <arpa/inet.h>
@@ -72,8 +76,10 @@ struct stream {
 
 struct runtime {
     struct netmidi_network_runtime network;
+#ifdef NETMIDI_DISCOVERY
     struct netmidi_discovery discovery;
     int discovered;             /* services the system advertises for us */
+#endif
     int configured;             /* a peer was named to invite */
     uint32_t configured_address;
     uint16_t configured_port;
@@ -81,11 +87,13 @@ struct runtime {
        a second: room for the network's unevenness, paid for in delay. */
     uint32_t latency;
     int trace;                  /* print each message as it is delivered */
+#ifdef NETMIDI_DISCOVERY
     /* a peer to invite wherever it is advertised, by its session's name */
     char wanted[64];
     int wanted_present;
     uint64_t wanted_tried;
     uint64_t wanted_wait;
+#endif
     int probe_note;
     int probe_sysex;
     int probe_state;
@@ -125,7 +133,9 @@ struct runtime {
     uint64_t published;             /* when the counts were last told */
     int chatty;                     /* a line of text to every packet */
     unsigned long unknown_commands; /* AppleMIDI commands not used */
+#ifdef NETMIDI_DISCOVERY
     int browse_apple;               /* which of discovery's searches */
+#endif
 #ifdef NETMIDI_MIDI2
     char product_id[PRODUCT_ID_MAX + 1];
     int browse_midi2;
@@ -1442,6 +1452,7 @@ static void periodic(struct runtime *rt, uint64_t now)
     publish_counts(rt, now);
     int index;
 
+#ifdef NETMIDI_DISCOVERY
     /* The system's mDNS service may come up after us, or again. */
     {
         struct netmidi_discovered seen;
@@ -1519,6 +1530,7 @@ static void periodic(struct runtime *rt, uint64_t now)
                 rt->wanted_wait = APPLEMIDI_WANTED_LONGEST_WAIT;
         }
     }
+#endif
 #ifdef NETMIDI_MIDI2
     /* The Host we are to be a Client of is known and we have no session
        with it: invite it, and again more slowly while it does not answer. */
@@ -1706,7 +1718,9 @@ static int run(int argc, char **argv)
 #ifndef NETMIDI_SERVICE
     rt.chatty = 1;      /* the program the host tests read */
 #endif
+#ifdef NETMIDI_DISCOVERY
     netmidi_discovery_init(&rt.discovery);
+#endif
     rt.configured = *peer_ip != 0;
     rt.probe_note = remaining == 4 &&
                     strcmp(argv[argi + 3], "--probe-note") == 0;
@@ -1831,11 +1845,13 @@ static int run(int argc, char **argv)
             }
         }
     }
+#ifdef NETMIDI_DISCOVERY
     /* An AppleMIDI session is found under its control port. */
     netmidi_discovery_add(&rt.discovery, rt.session_name, "_apple-midi._udp",
                           local_port);
     rt.browse_apple = netmidi_discovery_browse(&rt.discovery,
                                                "_apple-midi._udp");
+#endif
 #ifdef NETMIDI_MIDI2
     rt.browse_midi2 = -1;
     if (rt.midi2_enabled && config.midi2_peer_ip[0]) {
@@ -1851,6 +1867,7 @@ static int run(int argc, char **argv)
             rt.midi2_host = 1;
         }
     }
+#ifdef NETMIDI_DISCOVERY
     if (rt.midi2_enabled && config.midi2_peer_name[0]) {
         snprintf(rt.midi2_wanted, sizeof(rt.midi2_wanted), "%s",
                  config.midi2_peer_name);
@@ -1874,10 +1891,16 @@ static int run(int argc, char **argv)
                                    "_midi2._udp", midi2_port, midi2_text, 60);
     }
 #endif
+#endif
+#ifdef NETMIDI_DISCOVERY
     if (peer_name)
         snprintf(rt.wanted, sizeof(rt.wanted), "%s", peer_name);
     if (netmidi_discovery_poll(&rt.discovery, now) < 0)
         puts(TAG "no system mDNS service; peers have to be given by address");
+#else
+    /* built without discovery: a peer is given by its address, or invites */
+    (void)peer_name;
+#endif
     if (rt.configured && invite_configured(&rt, now) != 0)
         goto cleanup;
     printf(TAG "listening on UDP %u/%u\n", (unsigned int)local_port,
@@ -1943,13 +1966,19 @@ static int run(int argc, char **argv)
         flush_midi(&rt);
         /* asked to invite one peer by its address: with that session
            over, so are we. One wanted by name is waited for instead. */
-        if (rt.configured && !rt.wanted[0] && configured_index(&rt) < 0)
+#ifdef NETMIDI_DISCOVERY
+        if (rt.wanted[0])
+            continue;
+#endif
+        if (rt.configured && configured_index(&rt) < 0)
             break;
     }
     result = 0;
 
 cleanup:
+#ifdef NETMIDI_DISCOVERY
     netmidi_discovery_close(&rt.discovery);
+#endif
     for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
         if (rt.peers.peer[index].used)
             drop_peer(&rt, index, now_ticks());

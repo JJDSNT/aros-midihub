@@ -1,5 +1,5 @@
 #include <blemidi/ble_midi.h>
-#include <midihub/config.h>
+#include <netmidi/config.h>
 #include <midihub/routes.h>
 #include "MIDIHubPrefsClass.h"
 #include "router_control.h"
