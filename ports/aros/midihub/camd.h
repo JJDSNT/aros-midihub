@@ -12,13 +12,19 @@ typedef int (*aros_camd_output)(void *context, const uint8_t *message,
 #include "../camd_bridge.h"
 #endif
 
+#ifdef NETMIDI_SERVICE
+/* The service's way to CAMD. It has the ports of two drivers, a peer to
+ * each port: those of applemidi from 0, those of networkmidi2 from
+ * NETMIDI_CAMD_MIDI2. */
+#else
 /* The runtime's way to CAMD: one boundary, behind which is either the
- * drivers' adapters or, in the program, a client of camd.library. */
-/* The service has the ports of two drivers, a peer to each port: those of
+ * drivers' adapters or, in the program, a client of camd.library. The
+ * service has the ports of two drivers, a peer to each port: those of
  * applemidi from 0, those of networkmidi2 from NETMIDI_CAMD_MIDI2. The
  * program that is a client of camd.library has one pair of clusters, which
  * every peer of either kind shares: all its messages are of port 0,
  * whatever port is named. */
+#endif
 #define NETMIDI_CAMD_PORTS 16       /* of each driver */
 #define NETMIDI_CAMD_DRIVERS 2
 #define NETMIDI_CAMD_MIDI2 NETMIDI_CAMD_PORTS
@@ -68,7 +74,7 @@ void netmidi_camd_deliver_sysex(struct netmidi_camd_runtime *runtime,
 void netmidi_camd_poll(struct netmidi_camd_runtime *runtime,
                        aros_camd_output output, void *context);
 
-/* What has passed on a port, for whoever asks the service (R18). The
+/* What has passed on a port, for whoever asks the service. The
  * runtime counts; where there is a way to ask, netmidi_camd_publish makes
  * the counts public. */
 struct netmidi_port_counts {

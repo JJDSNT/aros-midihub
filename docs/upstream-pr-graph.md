@@ -139,7 +139,7 @@ somewhat smaller.
 | **N1** | `netmididriver.c` built twice and the adapters' header: two `DEVS:Midi` drivers of sixteen ports and no network code. **Cut** on 2026-10-12: `tools/cut-netmidi-drivers.sh` writes it into an AROS tree as `workbench/devs/midi/netmidi`, and the branch `netmidi-drivers` in the worktree `~/AROS-netmidi` is upstream `master` with it and nothing else. Built by its own targets for hosted x86-64 and amiga-m68k; of the 126 headers it pulls in, none is one this repository changes. | 380 | Nothing to compile: it includes `proto/exec.h` and `midi/camddevices.h` only. **To be of any use, C0**: seen on 2026-10-12 | — |
 | **N2** | `rtpmidi.c`, `sender.c`, `receiver.c`, `timing.c` and their headers, as the link library `rtpmidi`. **Cut** on 2026-10-12: `tools/cut-netmidi-library.sh n2` writes it as `workbench/network/netmidi/rtpmidi`. It builds there by its own target for hosted x86-64, needs nothing but the C library's headers, and has no finding of the checker. | 3,600 | Nothing | Where upstream wants it; the tests stay here |
 | **N3** | `applemidi.c`, `session.c`, `peers.c`, `ports.c`, `clock.c`, into the same library. **Cut** the same day (`tools/cut-netmidi-library.sh n3`): built for hosted x86-64 and amiga-m68k. | 1,900 | N2 (they share headers and the library's build file) | — |
-| **N4** | The service: `main.c` as it will be once carved, `adapters.c`, `network.c`, the configuration reader, the `services.d` file. AppleMIDI only, peers by address or by who invites; **no discovery**. | 2,800 | N1 for `netmidi_camd.h`, N2 and N3 for the library | — |
+| **N4** | The service: `main.c`, `adapters.c`, `network.c`, the configuration reader, the `services.d` file. AppleMIDI only, peers by address or by who invites; **no discovery**. **Cut** on 2026-10-13: `tools/cut-netmidi-service.sh` writes it as `workbench/network/netmidi/netmidid`, made from this repository's one source by `unifdef`; the service file is its own, `Enabled=no` as upstream's `sshd` has it. Built by its own target in the clean tree on N1 and N3, it passes the hosted test there on upstream's CAMD with C0: seven checks, the eighth (the advertisement) left out with discovery. No finding of the checker. | 2,200 | N1 for `netmidi_camd.h`, N2 and N3 for the library | — |
 | **N5** | `C:NetMIDIStatus`. | 60 | N4 for `netmidi_status.h`, unless the header goes with N1 | — |
 | **N6** | `ump.c` and `netmidi2.c` with their headers. | 2,100 | Nothing | PREP-2 |
 | **N7** | Network MIDI 2.0 in the service: the third socket, the translation, ports of the second driver. | part of `main.c` | N4, N6 | — |
@@ -191,10 +191,11 @@ somewhat smaller.
    2.13, the checker behind it (`--enable=style,warning,portability`):
    the RTP-MIDI and AppleMIDI code (N2, N3) had 29 findings, 23 of them a
    variable declared further out than it is used, and has none since the
-   same day, nor any `strcpy`, `strncpy`, `strlen` or `sprintf`. The service's
-   `main.c` has 12, the adapters 2, `network.c` and the
-   configuration reader 1 each; the UMP translator and, since the same day,
-   `netmidi2.c` have none. The checker
+   same day, nor any `strcpy`, `strncpy`, `strlen` or `sprintf`. The
+   service as it is cut for N4 had 15 and has none since 2026-10-13, with
+   the same four calls gone from it; the UMP translator and `netmidi2.c`
+   have none. The parts of `main.c` that N7 and N8 add have not been put
+   to it yet. The checker
    cannot read the driver, whose entry points are AROS's register-argument
    macros; it cannot read upstream's own USB MIDI driver either.
 4. The statement of origin in the pull request (RTP-MIDI backlog, U4): what
@@ -228,20 +229,33 @@ with its review, and C1 begins with an issue, not with code.
 
 ## Where the preparations stand
 
-On 2026-10-12:
+On 2026-10-13:
 
-- **PREP-1, the carve.** Done for N1, N2 and N3: each has a script that
-  writes it into an AROS tree with a build file of its own
-  (`tools/cut-netmidi-drivers.sh`, `tools/cut-netmidi-library.sh`), and
-  none of the three carries the package's name or needs anything else of
-  it. Not begun for the service (N4): its `main.c` is two thousand lines
-  in which AppleMIDI, Network MIDI 2.0, discovery, the command line and
-  the probes are one file. The plan is to mark the four with conditionals
-  that leave today's builds as they are, and have the cut made from the
-  one source by `unifdef`, so that the service sent is the service tested.
-- **PREP-2, the gate.** Done for N2, N3 and N6: nothing left for cppcheck
-  and no `strcpy`, `strncpy`, `strlen` or `sprintf`. Open for the service's
-  files, eighteen findings in all, which are best closed after the carve.
+- **PREP-1, the carve.** Done for N1, N2, N3 and N4: each has a script
+  that writes it into an AROS tree with a build file of its own
+  (`tools/cut-netmidi-drivers.sh`, `tools/cut-netmidi-library.sh`,
+  `tools/cut-netmidi-service.sh`), and none carries the package's name or
+  needs anything else of it. The service is cut from the one source
+  everything here is built and tested from: three markers say what a part
+  of it belongs to, `NETMIDI_SERVICE` (the service, and not the program
+  the host tests run, which has a command line and sends probes),
+  `NETMIDI_MIDI2` and `NETMIDI_DISCOVERY`, in `main.c`, `network.c` and
+  the configuration reader; `unifdef` takes off what N4 leaves out, and
+  the Linux build with it. The package sets the last two for everything it
+  builds, since they decide which fields the configuration has. All eight
+  combinations compile. N7 and N8 are then the same cut with a marker
+  left in, plus the files each adds; their scripts are not written.
+
+  Reading the cut found a defect the tests had not: the service ended
+  when the session with the peer its configuration names by address was
+  over, as the test program is meant to. With no discovery that is the
+  only peer it invites. It now invites it again, after 5 seconds, then
+  10, 20, up to once a minute, and from the start after a session;
+  `tools/applemidi-service-hosted.sh` has the case (the peer absent, then
+  there, gone and back: two sessions).
+- **PREP-2, the gate.** Done for N2, N3, N4 and N6: nothing left for
+  cppcheck and no `strcpy`, `strncpy`, `strlen` or `sprintf`. Open for
+  what N7 and N8 add to the service, and for N5.
 - **PREP-3, the clean tree.** Done for N1 on 2026-10-12, and it found
   what reading could not. A worktree of upstream `master` with N1 and
   nothing else (`~/AROS-netmidi`, branch `netmidi-drivers`) was built from
@@ -255,6 +269,13 @@ On 2026-10-12:
   alignment (C0 above), and none of the others, the test passes whole,
   seven checks of seven. So nothing in N1 to N9 needs the version 42 and
   43 work, and N1 does need C0.
+
+  Done for N4 on 2026-10-13 in the same tree: N1, N3 and N4 written by
+  their scripts, `make linklibs-rtpmidi workbench-network-netmidid`, and
+  the hosted test run on what that built. The branches there are
+  `camd-driver-scan-align` (C0), `netmidi-drivers` (N1),
+  `netmidi-library` (N2), `netmidi-sessions` (N3) and `netmidi-service`
+  (N4), each one commit on the one before from N1 on; none is pushed.
 
   Two things to know about such a tree: a new worktree has no translation
   catalogs until `git submodule update --init` is run in it, and the build

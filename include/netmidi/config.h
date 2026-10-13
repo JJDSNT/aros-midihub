@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-/* A text file shared by the command line program and future Preferences UI.
- * Ports are control ports; the data socket uses the following port. */
+/* What the service is told, a text file of "key = value" lines. Ports are
+ * control ports; the data socket uses the following port. */
 struct netmidi_network_config {
     uint16_t local_port;
     uint16_t peer_port;
@@ -12,10 +12,11 @@ struct netmidi_network_config {
     char session_name[64];
     int session_name_given;     /* the file says it: not the default */
     /* "applemidi.port.<n> = <name>": port n of the driver applemidi is
-     * kept for the peer whose session has that name.
-     * "networkmidi2.port.<n> = <name>": the same of the driver
-     * networkmidi2, by the peer's endpoint name. */
+     * kept for the peer whose session has that name. */
     char port_name[16][64];
+#ifdef NETMIDI_MIDI2
+    /* "networkmidi2.port.<n> = <name>": the same of the driver
+     * networkmidi2, by the peer's endpoint name. */
     char midi2_port_name[16][64];
     /* "midi2_port": the UDP port Network MIDI 2.0 is answered on; without
      * it there is none */
@@ -26,11 +27,15 @@ struct netmidi_network_config {
     char midi2_peer_ip[64];
     uint16_t midi2_peer_port;
     char midi2_peer_name[64];
+#endif
+#ifdef NETMIDI_DISCOVERY
     /* "peer_name": a peer to invite wherever it is advertised under that
-     * session name. "latency_ms": added to the time each received event
-     * is due, 0 to 2000. "accept": anyone, nobody, or a list of addresses
-     * and session names with commas between. */
+     * session name. */
     char peer_name[64];
+#endif
+    /* "latency_ms": added to the time each received event is due, 0 to
+     * 2000. "accept": anyone, nobody, or a list of addresses and session
+     * names with commas between. */
     /* "max_peers": AppleMIDI peers at once, 1 to 8; 0 for all there is
      * room for */
     int max_peers;

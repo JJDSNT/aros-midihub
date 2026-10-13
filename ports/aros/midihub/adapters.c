@@ -1,6 +1,6 @@
 /* The service's side of the CAMD drivers DEVS:Midi/applemidi and
- * DEVS:Midi/networkmidi2: the same calls as camd.c, which is a client of
- * camd.library, answered through the drivers' adapters instead. A driver
+ * DEVS:Midi/networkmidi2: what camd.h declares, answered through the
+ * drivers' adapters. The service is no client of camd.library. A driver
  * may be loaded after the service starts, or not at all: until its
  * adapters are found, what arrives from the network for its ports is
  * dropped. Each port is one peer's: which, the caller decides. The ports
@@ -194,14 +194,14 @@ static void attach_all(struct netmidi_camd_runtime *runtime)
 
 void netmidi_camd_close(struct netmidi_camd_runtime *runtime)
 {
-    struct NetMidiAdapter *port;
     int number;
 
     if (!runtime)
         return;
     for (number = 0; number < NETMIDI_CAMD_PORTS * NETMIDI_CAMD_DRIVERS;
          ++number) {
-        port = port_of(runtime, number);
+        struct NetMidiAdapter *port = port_of(runtime, number);
+
         if (!port)
             continue;
         Disable();
@@ -253,7 +253,6 @@ void netmidi_camd_deliver_port(struct netmidi_camd_runtime *runtime,
                                size_t length)
 {
     struct NetMidiAdapter *port;
-    size_t i;
 
     if (!runtime || !runtime->opened)
         return;
@@ -263,11 +262,14 @@ void netmidi_camd_deliver_port(struct netmidi_camd_runtime *runtime,
         return;
     /* the driver closes the port under the same lock */
     ObtainSemaphore(&port->ad_Lock);
-    if (port->ad_IsOpen)
+    if (port->ad_IsOpen) {
+        size_t i;
+
         for (i = 0; i < length; ++i)
             AROS_UFC2NR(void, port->ad_RXFunc,
                 AROS_UFCA(UWORD, message[i], D0),
                 AROS_UFCA(APTR, port->ad_UserData, A2));
+    }
     ReleaseSemaphore(&port->ad_Lock);
 }
 

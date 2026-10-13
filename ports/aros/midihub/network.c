@@ -17,6 +17,7 @@
 #include <proto/exec.h>
 #include <resources/entropy.h>
 struct Library *SocketBase;
+struct Library *EntropyBase;
 #else
 #include <fcntl.h>
 #include <unistd.h>
@@ -25,8 +26,9 @@ struct Library *SocketBase;
 int netmidi_network_random(void *buffer, size_t length)
 {
 #ifdef __AROS__
-    /* a base of our own for the call's inline; resources are not closed */
-    struct Library *EntropyBase = OpenResource((CONST_STRPTR)ENTROPYNAME);
+    /* the base the call's inline uses; resources are not closed */
+    if (!EntropyBase)
+        EntropyBase = OpenResource((CONST_STRPTR)ENTROPYNAME);
     if (!EntropyBase || !buffer)
         return -1;
     return GetEntropy(buffer, (ULONG)length) == (LONG)length ? 0 : -1;
@@ -57,7 +59,9 @@ void netmidi_network_init(struct netmidi_network_runtime *runtime)
     memset(runtime, 0, sizeof(*runtime));
     runtime->control = -1;
     runtime->data = -1;
+#ifdef NETMIDI_MIDI2
     runtime->midi2 = -1;
+#endif
 }
 
 int netmidi_network_platform_open(struct netmidi_network_runtime *runtime)
@@ -107,6 +111,7 @@ int netmidi_network_open_pair(struct netmidi_network_runtime *runtime,
     return 0;
 }
 
+#ifdef NETMIDI_MIDI2
 int netmidi_network_open_midi2(struct netmidi_network_runtime *runtime,
                                uint16_t port)
 {
@@ -137,13 +142,16 @@ int netmidi_network_midi2_receive(
     return recvfrom(runtime->midi2, bytes, (int)capacity, 0,
                     (struct sockaddr *)source, source_length);
 }
+#endif
 
 void netmidi_network_close(struct netmidi_network_runtime *runtime)
 {
     if (!runtime)
         return;
+#ifdef NETMIDI_MIDI2
     netmidi_network_close_socket(runtime->midi2);
     runtime->midi2 = -1;
+#endif
     netmidi_network_close_socket(runtime->data);
     netmidi_network_close_socket(runtime->control);
     runtime->data = -1;
@@ -214,11 +222,13 @@ int netmidi_network_wait(const struct netmidi_network_runtime *runtime,
         if (auxiliary_fd > maximum)
             maximum = auxiliary_fd;
     }
+#ifdef NETMIDI_MIDI2
     if (runtime->midi2 >= 0) {
         FD_SET(runtime->midi2, &read_set);
         if (runtime->midi2 > maximum)
             maximum = runtime->midi2;
     }
+#endif
     timeout.tv_sec = timeout_us / 1000000;
     timeout.tv_usec = timeout_us % 1000000;
 #ifdef __AROS__
@@ -236,8 +246,10 @@ int netmidi_network_wait(const struct netmidi_network_runtime *runtime,
             *events |= NETMIDI_NETWORK_EVENT_CONTROL;
         if (FD_ISSET(runtime->data, &read_set))
             *events |= NETMIDI_NETWORK_EVENT_DATA;
+#ifdef NETMIDI_MIDI2
         if (runtime->midi2 >= 0 && FD_ISSET(runtime->midi2, &read_set))
             *events |= NETMIDI_NETWORK_EVENT_MIDI2;
+#endif
         if (auxiliary_fd >= 0 && FD_ISSET(auxiliary_fd, &read_set))
             *events |= NETMIDI_NETWORK_EVENT_AUXILIARY;
     }

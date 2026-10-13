@@ -39,6 +39,10 @@ USER_INCLUDES := -I$(MIDIHUB_ROOT)/include \
     -I$(MIDIHUB_ROOT)/network/mdns/aros/src
 # Older m68k AROS inline stubs intentionally use volatile register variables.
 USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
+# What the package builds has all of it: Network MIDI 2.0 and discovery.
+# Everything that shares struct netmidi_network_config has to be built
+# with the same two, since they decide which fields it has.
+USER_CPPFLAGS := -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY
 
 %build_linklib mmake=linklibs-arosmidihub \
     libname=arosmidihub \

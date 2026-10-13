@@ -67,6 +67,8 @@ prepare() {
     printf 'HOST 192.168.166.2 arosbox.arosnet arosbox\nDOMAIN arosnet 192.168.166.\n' \
         > "$db/netdb-myhost"
     sed -i 's/OPENGUI=.*/OPENGUI=NO/' "$db/general.config"
+    # upstream's cut installs the service disabled, as it does sshd
+    sed -i 's/^Enabled=.*/Enabled=yes/' "$db/services.d/netmidi"
     # have the service write what it would print to a file
     printf 'SYS:netmidid.log' > "$sys/Prefs/Env-Archive/netmidid.log"
     sudo setcap cap_net_raw,cap_net_admin+ep "$sys/boot/linux/AROSBootstrap"
@@ -155,7 +157,10 @@ else
     echo "FAIL: the service's counts: $(cat "$work/counts.log" 2> /dev/null | head -3)"
     status=1
 fi
-if grep -q '^=;aroshost;IPv4;.*;_apple-midi._udp;.*;192.168.166.2;5004;' "$work/browse.log" 2> /dev/null; then
+# the cut of the service alone (N4) has no discovery in it
+if ! grep -aq '_apple-midi._udp' "$aros/System/Network/Services/netmidid"; then
+    echo "skipped: this service was built without discovery, so advertises nothing"
+elif grep -q '^=;aroshost;IPv4;.*;_apple-midi._udp;.*;192.168.166.2;5004;' "$work/browse.log" 2> /dev/null; then
     echo "ok: Avahi saw the session it advertises"
 else
     echo "FAIL: the service's advertisement"
@@ -206,6 +211,35 @@ if [ "$(grep -c '^message 903[047]5a$' "$work/invite-peer.log" 2> /dev/null)" = 
     echo "ok: a chord put to CAMD at once reached node-rtpmidi, six notes ($messages messages left in $packets packets in this boot)"
 else
     echo "FAIL: the chord: sent '$sent'; $(grep -c '^message [89]03[047]' "$work/invite-peer.log" 2> /dev/null) of its six notes arrived"
+    status=1
+fi
+# A service does not end with its peer. The peer its configuration names
+# is not there when it starts: the first invitation runs out. It is there
+# later, for twelve seconds, says goodbye, and comes back: the service has
+# to have a session with it both times.
+prepare "Wait 75"
+printf 'peer_ip = 192.168.166.1\npeer_port = 5104\n' > "$sys/Prefs/Env-Archive/NetMIDI"
+(
+    for attempt in $(seq 1 60); do
+        ping -c 1 -W 1 192.168.166.2 > /dev/null 2>&1 && break
+        sleep 1
+    done
+    sleep 22
+    timeout 12 node "$peer" 5104 > "$work/again-peer-1.log" 2>&1 || true
+    sleep 2
+    timeout 25 node "$peer" 5104 > "$work/again-peer-2.log" 2>&1 || true
+) &
+boot 110 again
+wait || true
+cp "$sys/netmidid.log" "$work/netmidid-again.log" 2> /dev/null || true
+sessions=$(grep -c 'session connected' "$work/netmidid-again.log" 2> /dev/null) || true
+if grep -q 'invitation timed out' "$work/netmidid-again.log" 2> /dev/null &&
+   [ "${sessions:-0}" -ge 2 ] &&
+   grep -q '^stream ' "$work/again-peer-1.log" &&
+   grep -q '^stream ' "$work/again-peer-2.log"; then
+    echo "ok: its peer absent, then there, gone and back: the service invited it again each time ($sessions sessions)"
+else
+    echo "FAIL: inviting the configured peer again: ${sessions:-0} sessions"
     status=1
 fi
 echo "logs: $work"
