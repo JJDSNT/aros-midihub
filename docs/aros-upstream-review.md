@@ -144,3 +144,15 @@ The driver repeatedly invokes `ad_TXFunc` and discards bytes until the callback 
 Owner identity is a raw `struct Task *`. The comment notes that a new task at a reused address is indistinguishable from the original owner. Explore generation/token or explicit registration ownership that cannot silently transfer to a new task. Test termination/recreation cycles.
 
 No builds or runtime tests executed. These are actionable review candidates, not proven failures.
+
+## Maintainer review — #1587 RTP-MIDI and #1588 Network MIDI 2.0 (2026-10-17)
+
+**NM2-001 — Zero-sized output buffer writes a terminator out of bounds**  
+**PR:** #1588. **Location:** `workbench/network/netmidi/netmidi2/netmidi2.c`, static `copy_text()`, invoked by public `netmidi2_identity()`.  
+**Severity:** medium; **category:** source-confirmed bounds defect for the zero-capacity input, runtime test pending.
+
+`copy_text(to, size, from, length)` terminates with `to[i] = 0` even when `size == 0`. The loop executes zero times and `i == 0`, so `to[0]` is written despite no capacity. `netmidi2_identity()` accepts caller-supplied `name_size` and `id_size` without rejecting zero; either may reach the helper. Guard `size == 0` before writing; document whether null output pointers with zero capacity are allowed and validate accordingly. Test both output sizes independently at 0, 1 and normal capacity, including malformed/empty identity packets and sanitizer builds.
+
+**#1587 sampled checks:** `rtpmidi_sender_record()` validates supported MIDI messages before copying into history; `rtpmidi_sender_packet()` rejects zero and oversized messages before copying to a fixed local event. These checks are positive observations, **not approval of the full 3,000+ line PR**. Continue reviewing RTP framing, recovery journal, SysEx and integer wraparound.
+
+No tests run and no upstream PR code changed.
