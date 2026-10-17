@@ -108,3 +108,17 @@ Inspected `ports/aros/midihub/adapters.c` and `ports/aros/netmidi/netmididriver.
 5. **Status readers:** independently review the public named `NetMidiStatus` semaphore's removal/free protocol under concurrent readers.
 
 **Conclusion:** service code already implements the expected gone-version and reattachment checks; do not report a proven UAF or memory leak from source inspection alone. The remaining work is concurrency reproduction, lifecycle tests and a separate design decision on administrative driver reload. No tests were executed and no upstream PRs were modified.
+
+## Maintainer-style review finding — #1586 (2026-10-17)
+
+**NM-001 — Unbounded work in software interrupt when service is absent**  
+**Location:** `workbench/devs/midi/netmidi/netmididriver.c`, `GetFromCAMD()`, branch `if (!task)` (approximately lines 94–108).  
+**Severity:** medium (provisional); **category:** concrete code-level risk, not reproduced.
+
+The driver repeatedly invokes `ad_TXFunc` and discards bytes until the callback returns a value above `0xff`. Unlike the attached-service path, this no-service path has no work budget. If a CAMD producer keeps making bytes available, the software interrupt can execute for an unbounded interval, delaying other work. The intention to drain CAMD output when no service exists is sound; the absence of a processing bound is the issue.
+
+**Suggested change to investigate:** bound the number of bytes drained per invocation and define a safe rescheduling strategy that does not spin or lose the wakeup needed to continue draining. Do not simply stop after N bytes without proving CAMD will re-activate transmission.
+
+**Required test:** producer supplies sustained MIDI bytes while no service is attached; verify bounded interrupt duration, eventual draining, no starvation, and recovery when service attaches. Also test finite SysEx and abrupt service shutdown.
+
+**Status:** source-level finding only. No runtime reproduction, build, or upstream modification performed.
