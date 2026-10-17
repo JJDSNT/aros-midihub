@@ -77,3 +77,15 @@ Read `rom/usb/classes/camdmidi/camd/poseidonusb.c` from AROS master alongside `b
 - **Legacy USB caveat:** `poseidonusb.c` provides a valid CAMD ABI reference but contains its own historical implementation limitations; do not copy its locking or buffer handling unquestioningly.
 
 **Verification status:** code inspection only; no cross-target builds, race reproduction or runtime tests executed. No confirmed new defect at this stage.
+
+## Driver unload/reload — revisit an existing deferred decision (2026-10-17)
+
+**Existing decision, not a new discovery:** `docs/camd-improvements.md` §1.3 explicitly rejects unloading drivers merely because a USB or network device disconnects, and says runtime driver-file replacement/unload is not planned. `docs/camd-backlog.md` references that decision; `docs/camd-endpoint-abi-draft.md` assumes loaded drivers persist until `camd.library` expunges.
+
+**Reopen the scope distinction, not the hot-plug architecture:**
+- **Device disconnect / network peer offline:** retain loaded transport driver; publish endpoint offline/disconnected state. Do not tie driver unload to hot-plug.
+- **Administrative driver upgrade/replacement / recovery:** investigate controlled quiesce, unload and reload (or safe replacement without unload) as a separate future capability.
+
+**Research gate:** inventory CAMD's actual driver-load and `RethinkCAMD()` paths; establish how open ports, callbacks/soft interrupts, pending TX/RX, legacy links, provider leases, network service pointers, named semaphores and `MidiDeviceData` references are drained; define failure/rollback and identity preservation; compare AROS Exec/DOS `UnLoadSeg` conventions and 68k/x86/x86-64 ABI. No public API or code change before proving safety and backward compatibility.
+
+**Priority:** architectural backlog / follow-up investigation, **not a confirmed defect in #1586**. The PR's current deliberate retained allocation is consistent with the documented no-unload model; revisit that policy independently.
