@@ -122,3 +122,25 @@ The driver repeatedly invokes `ad_TXFunc` and discards bytes until the callback 
 **Required test:** producer supplies sustained MIDI bytes while no service is attached; verify bounded interrupt duration, eventual draining, no starvation, and recovery when service attaches. Also test finite SysEx and abrupt service shutdown.
 
 **Status:** source-level finding only. No runtime reproduction, build, or upstream modification performed.
+
+## Maintainer review — #1591 bonami/mdnsd (2026-10-17)
+
+**BA-001 — Task liveness test may mistake a running owner for a dead task**  
+**Location:** `workbench/network/mdns/mdns_client.c`, `task_alive()` / `mdnsClientReap()`.  
+**Severity:** high (provisional); **status:** source-level risk, scheduler semantics not yet independently validated.
+
+`task_alive()` scans `SysBase->TaskReady` and `SysBase->TaskWait` only. A task executing on a CPU need not appear on either list. If the periodic reaper runs while a registered owner is running, `mdnsRegRelease()` can remove its live services. Check AROS scheduler task states and SMP behavior, and choose an appropriate native lifetime mechanism rather than extending unsafe raw pointer scans. Reproduce with a registered service whose owner remains CPU-active while mdnsd reaps; verify that announcements persist until explicit close or actual owner termination.
+
+**BA-002 — Synchronous IPC can wait indefinitely if daemon stops without replying**  
+**Location:** `workbench/network/mdns/library/bonami_ipc.c`, `bonamiSend()`.  
+**Severity:** medium (provisional); **status:** failure-mode risk.
+
+`FindPort()` and `PutMsg()` are protected together by `Forbid()`, which addresses port removal between lookup and enqueue, but `WaitPort(replyPort)` has no deadline. The code assumes every enqueued message is eventually answered. Review daemon shutdown/drain and unexpected termination; a crash or failure to reply may strand callers. A timeout alone is not safe if a late reply still targets a freed reply port. Any cancellation protocol must account for message ownership and late replies. Test daemon shutdown and fault injection with pending calls.
+
+**BA-003 — Task identity reuse is explicitly acknowledged**  
+**Location:** `mdns_client.c`, `mdnsClientReap()` comment.  
+**Severity:** medium (provisional); **status:** design limitation.
+
+Owner identity is a raw `struct Task *`. The comment notes that a new task at a reused address is indistinguishable from the original owner. Explore generation/token or explicit registration ownership that cannot silently transfer to a new task. Test termination/recreation cycles.
+
+No builds or runtime tests executed. These are actionable review candidates, not proven failures.
