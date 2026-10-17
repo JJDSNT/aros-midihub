@@ -89,3 +89,22 @@ Read `rom/usb/classes/camdmidi/camd/poseidonusb.c` from AROS master alongside `b
 **Research gate:** inventory CAMD's actual driver-load and `RethinkCAMD()` paths; establish how open ports, callbacks/soft interrupts, pending TX/RX, legacy links, provider leases, network service pointers, named semaphores and `MidiDeviceData` references are drained; define failure/rollback and identity preservation; compare AROS Exec/DOS `UnLoadSeg` conventions and 68k/x86/x86-64 ABI. No public API or code change before proving safety and backward compatibility.
 
 **Priority:** architectural backlog / follow-up investigation, **not a confirmed defect in #1586**. The PR's current deliberate retained allocation is consistent with the documented no-unload model; revisit that policy independently.
+
+## Service-side adapter audit — third pass (2026-10-17)
+
+Inspected `ports/aros/midihub/adapters.c` and `ports/aros/netmidi/netmididriver.c` on Midihub main, comparing the driver with the upstream #1586 source.
+
+**Observed safeguards:**
+- `attach()` uses `FindSemaphore` under `Forbid()`, checks adapter layout version and port count, detaches a disappeared driver and resets stream/SysEx state before attaching a replacement.
+- `wake_driver()` checks `aa_Version` and `ad_IsOpen` with task switching forbidden before `Cause()`, avoiding a call into an unloaded driver's interrupt code when the expunge follows the same synchronization contract.
+- `netmidi_camd_deliver_port()` serializes delivery against `ClosePort()` with `ad_Lock`; `netmidi_camd_close()` clears service task/signal references before freeing its signal bit.
+- `netmidi_camd_poll()` re-runs `attach_all()` before reading ring buffers. The driver deliberately retains adapter memory on expunge so stale pointers remain allocated until the service notices removal.
+
+**Open verification questions, not confirmed defects:**
+1. **Service replacement and stale notifications:** prove no `Signal()` targets a dead task while `netmidi_camd_close()` detaches, including a simultaneous CAMD soft interrupt.
+2. **Expunge under active service:** prove no receive callback, ring consumption or soft interrupt runs against unloaded code; validate the assumptions about `Forbid()`, `Disable()` and `Cause()` on relevant AROS targets.
+3. **Generation/ABA:** if a driver is replaced, prove that the service cannot confuse a stale adapter with a new generation; version is a *layout* version, not a lifetime generation.
+4. **Retained allocation policy:** quantify memory retained per expunge/reload and decide whether a future controlled-unload protocol needs leases/refcounts, quiesce/drain and explicit final reclamation.
+5. **Status readers:** independently review the public named `NetMidiStatus` semaphore's removal/free protocol under concurrent readers.
+
+**Conclusion:** service code already implements the expected gone-version and reattachment checks; do not report a proven UAF or memory leak from source inspection alone. The remaining work is concurrency reproduction, lifecycle tests and a separate design decision on administrative driver reload. No tests were executed and no upstream PRs were modified.
