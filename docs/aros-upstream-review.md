@@ -40,3 +40,28 @@ Categories: **confirmed bug**, **plausible risk requiring reproduction**, **port
 4. Re-run compatibility tests and review the final diff as an AROS maintainer would before requesting upstream review.
 
 Related: [upstream PR tracker](upstream-prs.md), [PR dependency graph](upstream-pr-graph.md), [CAMD endpoint architecture review](camd-endpoint-architecture-review.md).
+
+## Initial read-only audit notes (2026-10-17)
+
+These are **observations and hypotheses**, not confirmed defects. No upstream branches were changed.
+
+### #1507 — BLE MIDI
+
+- The earlier upstream review correctly rejected publishing hardware as a CAMD application node; the current PR now uses a `MidiDeviceData` driver in `DEVS:Midi`. Do not reopen that resolved architecture issue.
+- `rom/bluetooth/classes/btmidi/btmidi_central.c`, `btmidi_force_binding` and `btmidi_binding_task`: the failed-start path calls `cleanup(binding)` **before** signalling the parent, explicitly addressing the previous use-after-free risk. Verify the parent/child handshake under rapid start/failure/stop and with the AROS task-switching model.
+- `btmidi_release_binding` waits for `binding->task` to clear; check all early exits, signal delivery and potential task context restrictions. Compare with existing AROS Bluetooth class shutdown patterns.
+- `btmidi_camd.c` uses `Forbid()` for owner reservation and a semaphore for receive/close exclusion; review lock ordering and callback reentrancy, especially whether CAMD receive hooks can re-enter close.
+
+### #1586 — Network CAMD drivers
+
+- `workbench/devs/midi/netmidi/netmididriver.c`, `Init`: allocates public adapter state and per-port TX buffers, publishes a named semaphore.
+- `Expunge`: removes the named semaphore, marks `aa_Version` as gone and deliberately leaves adapter allocations alive because a service may retain references. **Potential bounded/unbounded retention concern** depending on real driver reload and service shutdown behavior; establish lifecycle and compare with upstream conventions before calling it a leak.
+- `OpenPort` / `ClosePort` serialize via `ad_Lock`; examine whether all service callbacks, interrupt paths and expunge use compatible synchronization and whether stale adapter pointers can be dereferenced after code unload.
+- Verify driver module format, alignment and `MidiDeviceData` discovery on hosted x86-64, explicitly covering the recently fixed CAMD scan.
+
+### Next verification steps
+
+1. Read complete implementations and corresponding AROS master references (Bluetooth classes, USB CAMD driver, Exec semaphores and CAMD loader).
+2. Trace state transitions and ownership across all tasks and service attachments.
+3. Run focused tests for failure injection, rapid reconnect, unload/reload and 32/64-bit builds.
+4. Record line-precise, reproducible findings separately from stylistic suggestions before proposing fixes.
