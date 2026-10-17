@@ -65,3 +65,15 @@ These are **observations and hypotheses**, not confirmed defects. No upstream br
 2. Trace state transitions and ownership across all tasks and service attachments.
 3. Run focused tests for failure injection, rapid reconnect, unload/reload and 32/64-bit builds.
 4. Record line-precise, reproducible findings separately from stylistic suggestions before proposing fixes.
+
+## Upstream reference comparison — second pass (2026-10-17)
+
+Read `rom/usb/classes/camdmidi/camd/poseidonusb.c` from AROS master alongside `btmidi_camd.c`, `btmidi_central.c` and `netmididriver.c` from the respective PR heads.
+
+- **Confirmed design consistency:** both new drivers publish a `MidiDeviceData` record with `__attribute__((used))`, like the upstream USB CAMD driver. This is the correct hardware-driver layer, not an application-side `CreateMidiA` shortcut.
+- **#1507 startup cleanup:** `btmidi_binding_task` cleans up before signalling a failed start. The shutdown path aborts/waits for Bluetooth channels, detaches the CAMD task, releases signals and closes timer resources. This narrows earlier lifetime concerns, but concurrent callbacks and cleanup still require execution tests.
+- **#1586 expunge policy:** `netmidi_camd.h` explicitly says CAMD normally loads the driver once; `Expunge` marks adapters gone and deliberately retains allocations to protect references held by the network service. **Do not assert a leak from this alone.** Verify if expunge/reload is reachable and whether stale service references are checked before *every* access, including callbacks.
+- **#1586 TX behavior:** `GetFromCAMD` drains pending CAMD bytes when no service is attached; when attached, it fills a power-of-two ring and sets `ad_TXMore` on backpressure. Review the service-side ring consumer and signal/task detachment under concurrent restart.
+- **Legacy USB caveat:** `poseidonusb.c` provides a valid CAMD ABI reference but contains its own historical implementation limitations; do not copy its locking or buffer handling unquestioningly.
+
+**Verification status:** code inspection only; no cross-target builds, race reproduction or runtime tests executed. No confirmed new defect at this stage.
