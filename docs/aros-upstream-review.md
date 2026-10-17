@@ -156,3 +156,37 @@ No builds or runtime tests executed. These are actionable review candidates, not
 **#1587 sampled checks:** `rtpmidi_sender_record()` validates supported MIDI messages before copying into history; `rtpmidi_sender_packet()` rejects zero and oversized messages before copying to a fixed local event. These checks are positive observations, **not approval of the full 3,000+ line PR**. Continue reviewing RTP framing, recovery journal, SysEx and integer wraparound.
 
 No tests run and no upstream PR code changed.
+
+## Remaining review work — actionable checklist (2026-10-17)
+
+This checklist tracks **review work still to do**, not implemented fixes. Mark an item complete only after attaching evidence (commit, test output, reviewed diff or upstream source reference). The audit is **not complete**.
+
+### P0 — resolve before recommending upstream merge
+
+- [ ] **#1588 / NM2-001:** fix the zero-capacity output write in `netmidi2_identity()` / `copy_text()`; define NULL/zero-capacity contract; add 0/1/normal-size regression tests and run sanitizer tests on host.
+- [ ] **#1591 / BA-001:** inspect the actual AROS task scheduler on supported targets and reproduce/discount false owner death when the owner is executing. Replace raw task-list liveness detection with an AROS-supported lifecycle strategy; test live owner, sleeping owner, terminated owner and task address reuse.
+- [ ] **#1591 / BA-002:** trace `mdnsd` shutdown, message-port removal, queue draining and all reply paths. Prove that `bonamiSend()` cannot wait forever on normal shutdown; design cancellation/timeout with late-reply ownership safety if necessary.
+- [ ] **#1591 / BA-003:** assess raw `struct Task *` reuse as owner identity; document severity and test task termination/recreation; use generation-safe ownership if required.
+
+### P1 — targeted risk validation and full review
+
+- [ ] **#1586 / NM-001:** measure work in `GetFromCAMD()` without attached service under sustained MIDI production. If unbounded, introduce a safe work budget and reactivation strategy; verify no starvation or stranded MIDI.
+- [ ] **#1586:** exercise service stop/restart, concurrent `Cause()`/`Signal()`, `ClosePort()` and driver expunge. Confirm no stale task signals or callback into unloaded code; verify adapter reattachment and layout checks.
+- [ ] **#1507:** review complete BLE MIDI diff and all previous review concerns against current code: binding-start failure, use-after-free, pairing consent, GATT busy/failure retry, notification queue saturation, lock ordering, callback reentrancy, unplug/shutdown.
+- [ ] **#1587:** finish complete sender/receiver/packet/timing audit, including RTP framing, recovery journal, SysEx boundaries, malformed and reordered packets, timestamp and sequence wraparound, integer overflow, interoperability and fuzz tests.
+- [ ] **#1588:** finish full UMP/Network MIDI 2.0 audit: command parsing, count/size validation, FEC/history bounds, malformed packet handling, endian/alignment, MIDI 1.0↔UMP conversion and native MIDI 1.0 coexistence; check against available authoritative MIDI specifications.
+- [ ] **#1591:** review remaining daemon registration, DNS encoding, packet construction, name conflict resolution, mDNS TTL/goodbye, IPC ABI and build integration beyond the three initial findings.
+
+### P2 — architecture and release readiness
+
+- [ ] **CAMD driver unload/reload:** revisit the *previously deferred* administrative unload/hot-replacement feature separately from device hot-plug. Inventory CAMD loader/`RethinkCAMD()`, references, leases, callback drain, rollback, identity preservation and eventual memory reclamation. Do **not** misclassify deliberate retained allocations in #1586 as a proven leak.
+- [ ] **AROS native-first pass for each PR:** compare to master APIs/macros, naming/build conventions, error paths, 68k/x86/x86-64 ABI and size impact; distinguish maintainer-style improvements from functional defects.
+- [ ] **Midihub-only code:** review endpoint registry/provider, legacy CAMD projection, service/router/synth and integration tests that are not part of the five upstream PRs.
+- [ ] **Evidence and sign-off:** run relevant target builds, host sanitizers, negative/fault-injection tests, compatibility and interoperability suites; re-review amended diffs and record one verdict per PR: **block / changes requested / ready**, with remaining risks.
+
+### Execution rules
+
+1. Prioritize **NM2-001** and **BA-001**, then IPC lifecycle and concurrency findings; continue full coverage of all five PRs.
+2. For every finding, record PR, path/symbol, severity, reproduction or source proof, native AROS precedent, fix and regression test.
+3. A checked item requires actual verification. Source inspection alone is not a test pass.
+4. Review first; do not push upstream changes or post PR review comments without explicit approval.
