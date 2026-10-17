@@ -190,3 +190,34 @@ This checklist tracks **review work still to do**, not implemented fixes. Mark a
 2. For every finding, record PR, path/symbol, severity, reproduction or source proof, native AROS precedent, fix and regression test.
 3. A checked item requires actual verification. Source inspection alone is not a test pass.
 4. Review first; do not push upstream changes or post PR review comments without explicit approval.
+
+## Permanent review scopes: Bonami, CAMD and Drivers (2026-10-17)
+
+The review is organized by **three enduring technical scopes**, rather than by PR number alone. A PR is a delivery vehicle; a scope owns the architectural contract and acceptance criteria. Existing findings and the prioritized checklist above remain authoritative until verified.
+
+| Scope | Ownership and boundaries | PRs / code | Current findings |
+|---|---|---|---|
+| **Bonami** | mDNS/DNS-SD discovery and announcement, registration lifecycle, Exec message-port IPC, daemon shutdown, ownership and resource safety | AROS #1591; Bonami/mdnsd sources | BA-001, BA-002, BA-003 |
+| **CAMD** | Core CAMD library, ABI and compatibility, dynamic endpoints, identities, cluster projection, hot-plug notifications, driver loading and controlled unloading/replacement | AROS CAMD master/upstream changes; Midihub CAMD architecture and tests | Deferred driver unload/reload design; core ABI/lifecycle validation |
+| **Drivers** | MIDI transport protocols and libraries, CAMD transport adapters, BLE MIDI, AppleMIDI/RTP-MIDI, UMP/Network MIDI 2.0, data-path concurrency and interoperability | AROS #1507, #1586, #1587, #1588; Midihub network service and adapters | NM-001, NM2-001 |
+
+### Scope interfaces and ownership
+
+- **Bonami ↔ Drivers:** Bonami owns discovery/registration and service identity; Drivers own MIDI transport session negotiation and data transfer. Review both sides of discovery-to-session handoff, with one cross-scope integration test.
+- **CAMD ↔ Drivers:** CAMD owns public legacy ABI, endpoint registry/lifecycle and driver-loading contract; Drivers own transport-specific `MidiDeviceData` implementations and runtime adapters. CAMD defines the safe unload contract; Drivers prove their shutdown and detach compliance.
+- **CAMD ↔ Bonami:** no direct protocol coupling expected. Cross-scope review is required only if lifecycle/notification behavior introduces a dependency.
+
+### Review deliverables for each scope
+
+1. **Inventory:** relevant upstream PRs, master source files, Midihub source/tests, external specifications and open findings.
+2. **Maintainer review:** line-level findings with evidence, severity, native AROS precedent, fix and regression test; identify compatibility and portability risks.
+3. **Validation:** targeted negative tests, concurrency and failure injection, relevant target builds, interop tests and re-review of changes.
+4. **Verdict:** `blocked`, `changes requested` or `ready for upstream review`; do not mark ready based solely on partial inspection.
+
+### Suggested execution order
+
+1. **Bonami:** resolve BA-001 first, then BA-002/BA-003 and full daemon/IPC review.
+2. **CAMD:** independently audit core lifecycle, current no-unload policy and the feasibility of administrative unload/reload; preserve legacy behavior.
+3. **Drivers:** validate NM2-001 and NM-001; finish full reviews of #1507, #1586, #1587 and #1588, then exercise cross-scope integration.
+
+Keep the checklist above as the task-level backlog. New findings must be assigned to **one owning scope** and may list other scopes as integration dependencies. Do not merge architectural backlog items with confirmed merge-blocking defects.
