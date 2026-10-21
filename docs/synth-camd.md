@@ -69,3 +69,30 @@ yet been run inside AROS with AHI audio. GeneralUser GS has known timbre
 differences because
 TinySoundFont does not implement SoundFont modulators. See
 [the SoundFont investigation](soundfonts.md).
+
+## Native service lifecycle: follow-up work
+
+`MIDIHubSynth` is already a standalone executable, publishes the Exec port
+`MIDIHub.Synth`, and can be started/stopped from MIDIHub.prefs. Keep this
+existing design while consolidating it as a native AROS service within the
+`contrib/extras` package; core integration is only a possible later step.
+
+- Evaluate a control protocol comparable to the existing Router's
+  `STATUS`, `RELOAD`, and `STOP`, rather than introducing another
+  service-management framework. The Synth does **not** currently expose
+  that full command contract; Stop presently signals Ctrl-C.
+- Define safe live application of changed SoundFont/backend preferences where
+  feasible, including error reporting and fallback when a bank cannot load.
+  Changes requiring a restart must be reported explicitly, not silently
+  applied as if hot reload already worked.
+- Validate actual AROS boot/startup behavior, idempotent start, shutdown,
+  CAMD port cleanup, AHI resource release, and behavior with Preferences
+  closed. Native AROS AHI playback remains unverified.
+- Keep the optional future loadable-engine/plugin design separate from the
+  service-integration milestone. No new `midihub.library` or plugin host is
+  required to make the existing Synth a system-managed service.
+- Preserve the current `ENV:MidiHub/` and `ENVARC:MidiHub/` contracts until
+  any migration to the proposed system-level SoundFont default is explicitly
+  designed. See
+  [system-soundfonts-themes-analogy.md](system-soundfonts-themes-analogy.md).
+
