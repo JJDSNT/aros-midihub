@@ -14,10 +14,10 @@ Status: tracked research / future design; no implementation or upstream approval
 
 ## 2. AHI output from the SoundFont synthesizer
 
-- Existing implementation reference: [synth-camd.md](synth-camd.md). MIDIHubSynth already consumes CAMD events and outputs PCM via ahi.device; this is **not** a proposal to add AHI output from scratch.
-- Revisit how synth audio selects and opens an AHI device/mode, handles output disappearance and reappearance, sample-rate negotiation, latency/buffering, underruns, clocking and shutdown. Compare existing synth behavior with #1727's btaudio.audio and Poseidon usbaudio.class, especially AHI allocation lifetime and reconnect.
-- Investigate whether the current unit-0/default-output approach needs configurable AHI device/mode selection through MIDIHub.prefs, and what can be implemented without changing AHI's public API. Verify code and real device behavior before deciding.
-- Keep MIDI transport, CAMD receiver, SoundFont backend and AHI output responsibilities separate. AHI output is audio rendering, not a CAMD driver.
+- Existing implementation: [synth-camd.md](synth-camd.md). MIDIHubSynth is an **AHI client**, generating PCM from MIDI events and writing it through ahi.device; it is not an AHI driver.
+- **Reference relevance correction:** AROS [#1727](https://github.com/aros-development-team/AROS/pull/1727) implements **btaudio.audio, an AHI driver**, not an AHI client. Its mode registration, hardware callbacks and A2DP transport are not a useful primary reference for MIDIHubSynth's output path. Do not plan a synth AHI redesign around this PR.
+- Only incidental lessons (timing, buffering, resource lifetime) may be consulted where directly applicable. For future synth improvements, seek examples of AHI **client** applications and compare their usage of ahi.device to MIDIHubSynth.
+- No implementation change or new AHI work is implied by this reference.
 
 ## 3. Bluetooth MIDI 2.0 / UMP
 
