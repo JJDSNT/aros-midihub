@@ -38,6 +38,28 @@ A useful AROS analogy is Trident and Poseidon: the management application does n
                                                  AHI
 ```
 
+## Package placement and core readiness
+
+MIDIHub remains an AROS `contrib/extras` package. Moving the entire package
+into the AROS core is **not** a current objective or prerequisite for shipping
+its features. Components should nevertheless follow native AROS conventions
+for installation, startup, service lifecycle, preferences, filesystem assigns,
+and subsystem interfaces so that individual mature components can later be
+considered for core integration without substantial redesign.
+
+Core integration is an option to evaluate component by component, not an
+assumed migration. In particular, CAMD continues to own MIDI infrastructure,
+AHI audio output, and native transport subsystems their respective drivers.
+The final owner of persistent routing (standalone service versus CAMD-owned
+facility) remains open; neither the package layout nor the MIDIHub name
+should predetermine that decision. Do not add a generic MIDIHub service
+library or move Preferences into `SYS:Prefs` solely to anticipate upstreaming.
+
+The proposed shared `SOUNDFONTS:` catalogue and system default-bank
+preference are documented separately in
+[system-soundfonts-themes-analogy.md](system-soundfonts-themes-analogy.md);
+they are not implemented system conventions yet.
+
 ## Architectural boundaries
 
 ### CAMD
