@@ -15,7 +15,9 @@
 # it, invite it, and hand its Note On, Note Off, Control Change and SysEx
 # message to a CAMD program on networkmidi2.in.0; a scale and a SysEx
 # message a second CAMD program plays into networkmidi2.out.0 have to
-# reach the Host. That is the case "messages"; the case "again" is this:
+# reach the Host. AROS's own Host has to be advertised as _midi2._udp with
+# its endpoint's name and product id. That is the case "messages"; the case
+# "again" is this:
 #
 #   again   The Host is advertised with nothing behind it until AROS has
 #           invited it four times, so that its wait between invitations has
@@ -114,6 +116,9 @@ printf 'Run >NIL: Execute S:netmidi2-run\n' > "$sys/S/User-Startup"
         ping -c 1 -W 1 192.168.166.2 > /dev/null 2>&1 && break
         sleep 1
     done
+    # what AROS advertises of its own Host, seen by the host's Avahi
+    [ $discovery = 0 ] ||
+    timeout 40 avahi-browse -rp _midi2._udp > "$work/browse.log" 2>&1 &
     sleep 12
     [ $discovery = 0 ] ||
     timeout 34 avahi-publish -s "0a1b-host" _midi2._udp 5683 \
@@ -158,6 +163,15 @@ if grep -q '^midi from=0 903c64$' "$work/peer.log" 2> /dev/null &&
 else
     echo "FAIL: from CAMD to the Host"
     status=1
+fi
+if [ $discovery = 1 ]; then
+    if grep -q '^=;aroshost;IPv4;AROS\\032Net\\032MIDI;_midi2._udp;local;[^;]*;192\.168\.166\.2;5673;.*"UMPEndpointName=AROS Net MIDI"' "$work/browse.log" 2> /dev/null &&
+       grep '^=;aroshost;IPv4;AROS\\032Net\\032MIDI;_midi2._udp' "$work/browse.log" | grep -q '"ProductInstanceId=AROS-kept000000000001"'; then
+        echo "ok: Avahi resolved AROS's own Host, _midi2._udp at 192.168.166.2 port 5673, with its endpoint's name and product id in the text record"
+    else
+        echo "FAIL: AROS's Host was not advertised as _midi2._udp (see $work/browse.log)"
+        status=1
+    fi
 fi
 fi
 
