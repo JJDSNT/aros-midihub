@@ -1,17 +1,35 @@
+AROS PR: [#1743](https://github.com/aros-development-team/AROS/pull/1743), branch `review/netmidid-advertise` (`build/ready-netmidid-advertise`); updated 2026-10-22 after the review, revision `5666327816`.
+
 Publish netmidid's AppleMIDI session as `_apple-midi._udp` through the merged
 system `bonami.library`/`mdnsd` registration API. Other DNS-SD clients can
 discover the session name and its control port without entering the AROS
 address manually.
 
 The daemon owns multicast sockets, probing, conflicts, records and goodbyes;
-netmidid only registers its session. It retries late library/daemon availability,
-checks registration handles at most once per ten seconds and withdraws on
-shutdown. A stale handle after daemon restart is discarded and registered
-again. The public `UpdateServiceA()` call used for validation also refreshes
-the announcement in the current responder.
+netmidid only registers its session. It retries late library/daemon
+availability, checks its registration at most once per ten seconds and
+withdraws it on shutdown. A stale handle after a daemon restart is discarded
+and registered again.
 
-The service remains disabled by default (`Enabled=no`). Its start order is
-after mdnsd. Existing `ENV:NetMIDI` configuration applies, for example:
+**mdnsd: no announcement for an update that changes nothing.** The handle
+check is an `UpdateServiceA()` with no tags. On master, `mdnsRegUpdate()`
+re-announced an announced service on every update, so that check would have
+cost two multicast announcements every ten seconds. The first commit makes
+mdnsd announce an update only when it changes the text, port or time to
+live (RFC 6762 sections 8.3 and 8.4); an empty update is now only a check
+that the daemon still knows the handle. This benefits any client of the API.
+
+**Configuration changes.** A change to `ENV:NetMIDI` begins the sessions
+anew, as before, but keeps the registration when the session name and port
+are unchanged. Only a registration no longer asked for is withdrawn.
+
+**Refusals.** A registration refused for another reason than an absent
+daemon (`MDNSERR_DUPLICATE`, a rejected name, no memory) is retried every ten
+seconds and its reason printed once.
+
+The service remains disabled by default (`Enabled=no`), and its file keeps
+the description of each key and the warning about `accept`. It starts after
+mdnsd. Existing `ENV:NetMIDI` configuration applies, for example:
 
 ```ini
 session_name=AROS MIDI
@@ -23,61 +41,25 @@ is absent. Successful registration is asynchronous; probing may still be
 pending. Instance names follow the merged API's current constraints: one
 label, at most 63 bytes, without literal dots.
 
-### Dependencies and scope
+### Scope
 
-**Dependent draft: requires #1679**, the netmidid service and its AppleMIDI
-transport. #1591, which
-provides registration and the responder, is already merged. The branch
-contains the #1679 commits (the netmidid core, its AppleMIDI transport and
-the review fix) and one advertisement commit, `17e4bdc37a`; rebase onto master
-when the parent merges. `discovery.c` and `discovery.h` are unchanged from
-the earlier revision.
-
-This AppleMIDI-only slice does not depend on #1693, #1695 or the status-command
-PR. It does not browse/resolve remote peers or add the Network MIDI 2.0
-advertisement. It adds no Bonami callbacks, dispatcher or event-delivery API.
-The implementation and lifetime behavior of the merged library are preserved.
+Rebased on master, after #1693. Only the AppleMIDI session is advertised;
+the Network MIDI 2.0 advertisement (`_midi2._udp`) is a separate change. No
+browse or resolve, no Bonami callbacks, dispatcher or event-delivery API.
 
 ### Validation
 
-- Complete service builds and links pass for hosted x86-64 and amiga-m68k,
-  through generated makefiles and direct SDK builds. Direct builds use
-  `-Wall -Wextra -Werror` with the existing m68k volatile-register exclusion.
-  Matching Bonami headers are generated from the merged library sources,
-  avoiding older installed SDK interfaces.
-- Seventeen ASan/UBSan checks compile the exact exported discovery source
-  with mocked platform calls: no services, unavailable library/daemon,
-  registration, rate limiting, a daemon observed absent, a fast restart,
-  reused foreign handles, transient update failure and idempotent cleanup.
-- Native hosted UP AROS and node-rtpmidi 1.0.0: both invitation directions, clocks,
-  notes/controller/SysEx through CAMD, port isolation/reservation, counters,
-  service stop and reconnect pass over three boots. The status command used
-  for inspection is a separately proposed change.
-- Native packet capture checks the exact configured instance and PTR/SRV/TXT/A
-  records, AROS address and port, late daemon startup, re-registration after
-  daemon restart, and TTL-zero goodbyes at daemon/service stop. MIDI traffic
-  also succeeds while mdnsd is initially absent.
-
-### Fresh Avahi interoperability (2026-10-20)
-
-The configured instance is now verified by Avahi 0.8 in a continuous native
-hosted run. A unique name per run prevents cached entries from satisfying the
-test. The browser stays alive for the entire scenario, and the harness requires
-two ordered add/resolve/remove cycles: initial late daemon startup, daemon
-shutdown, restart and re-registration, then netmidid shutdown. Both resolutions
-report the expected AROS address and control port (192.168.166.2:5004).
-
-The earlier observation gap came from using `avahi-browse -t`, which exits
-after its initial list before this test's late responder starts. The corrected
-companion harness uses `-rp`, checks browser lifetime, and validates the
-unique instance and event order. No AROS implementation change was needed.
-The final run also verifies PTR/SRV/TXT/A and both TTL-zero withdrawals in the
-packet capture, plus MIDI traffic by IP while mdnsd is initially absent.
-Harness: `tools/review-netmidi-advertise-hosted.py` in the companion workspace.
-
-These tests use existing SDKs and an existing hosted UP image with newly
-built service/library/responder binaries. They do not claim a full
-current-master rebuild, hardware/SMP execution, Apple Bonjour or Windows
-runtime validation, or complete RFC 6762/6763 compliance. The merged
-library's public-port/IPC concurrency limitations remain separate work.
-The companion aros-midihub workspace contains the test harness and fixtures.
+- A host fixture compiling the exact `mdns_reg.c`, `mdns_dns.c`,
+  `mdns_host.c`, `mdns_packet.c` and `mdns_client.c` (Exec, clock and
+  network mocked) runs 26 RFC cases under ASan/UBSan. The new case, two
+  empty updates then a changed port, fails on master (3 announcements for
+  the empty updates) and passes here (none, then the announcement for the
+  port).
+- 27 ASan/UBSan checks compile the exact `discovery.c` with mocked library
+  calls: no services, unavailable library/daemon, registration, rate
+  limiting, a daemon observed absent, a fast restart, reused foreign
+  handles, transient update failure, a configuration that keeps, drops or
+  renames the service, a refused registration retried, and idempotent
+  cleanup.
+- netmidid (all sources, with the rtpmidi and netmidi2 link libraries) and
+  mdnsd compile and link for x86-64 and amiga-m68k with `-Werror`.
