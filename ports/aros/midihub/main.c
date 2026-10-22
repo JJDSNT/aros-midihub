@@ -127,7 +127,7 @@ void netmidid_port_release(struct netmidid *d, int driver, int owner)
 int netmidid_browse(struct netmidid *d, const struct netmidid_transport *t,
                     const char *type)
 {
-    int browse = netmidi_discovery_browse(&d->discovery, type);
+    int browse = netmidi_discovery_browse(d->discovery, type);
 
     if (browse >= 0)
         d->browse_owner[browse] = t;
@@ -196,6 +196,13 @@ static void publish_counts(struct netmidid *d, uint64_t now)
                          counts, NETMIDI_CAMD_PORTS * NETMIDI_CAMD_DRIVERS);
 }
 
+#ifdef NETMIDI_DISCOVERY
+/* Outlives a run: a change of the configuration that leaves a service as
+   it was leaves its advertisement alone. */
+static struct netmidi_discovery discovery;
+static int discovered;              /* services advertised, as last seen */
+#endif
+
 /* A turn of the loop for everything but the sockets. Returns 1 when a
  * transport says the program is done. */
 static int periodic(struct netmidid *d, uint64_t now)
@@ -207,17 +214,17 @@ static int periodic(struct netmidid *d, uint64_t now)
 #ifdef NETMIDI_DISCOVERY
     /* The system's mDNS service may come up after us, or again. */
     {
-        int registered = netmidi_discovery_poll(&d->discovery, now);
+        int registered = netmidi_discovery_poll(d->discovery, now);
 #ifdef NETMIDI_BROWSE
         struct netmidi_discovered seen;
 #endif
 
-        if (registered > d->discovered)
+        if (registered > discovered)
             puts(TAG "advertised by the system mDNS service");
         if (registered >= 0)
-            d->discovered = registered;
+            discovered = registered;
 #ifdef NETMIDI_BROWSE
-        while (netmidi_discovery_next(&d->discovery, &seen)) {
+        while (netmidi_discovery_next(d->discovery, &seen)) {
             const struct netmidid_transport *owner;
 
             if (strcmp(seen.name, d->session_name) == 0)
@@ -438,7 +445,8 @@ static int run(int argc, char **argv)
     netmidi_network_init(&d->network);
     d->latency = (uint32_t)d->config.latency_ms * 10;
 #ifdef NETMIDI_DISCOVERY
-    netmidi_discovery_init(&d->discovery);
+    d->discovery = &discovery;
+    netmidi_discovery_begin(d->discovery);
 #endif
 
     if (netmidi_network_platform_open(&d->network) != 0) {
@@ -494,7 +502,7 @@ static int run(int argc, char **argv)
     }
     now = netmidid_now();
 #ifdef NETMIDI_DISCOVERY
-    if (netmidi_discovery_poll(&d->discovery, now) < 0)
+    if (netmidi_discovery_poll(d->discovery, now) < 0)
         puts(TAG "no system mDNS service: not advertised");
 #endif
     for (i = 0; i < TRANSPORT_COUNT; ++i)
@@ -552,9 +560,6 @@ static int run(int argc, char **argv)
     result = 0;
 
 cleanup:
-#ifdef NETMIDI_DISCOVERY
-    netmidi_discovery_close(&d->discovery);
-#endif
     for (i = 0; i < TRANSPORT_COUNT; ++i)
         if (running[i] && transports[i]->stop)
             transports[i]->stop(d, state[i]);
@@ -606,6 +611,9 @@ int main(int argc, char **argv)
 #endif
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+#ifdef NETMIDI_DISCOVERY
+    netmidi_discovery_init(&discovery);
+#endif
     do
 #ifdef NETMIDI_SERVICE
         result = run();
@@ -613,5 +621,8 @@ int main(int argc, char **argv)
         result = run(argc, argv);
 #endif
     while (result == RUN_AGAIN);
+#ifdef NETMIDI_DISCOVERY
+    netmidi_discovery_close(&discovery);
+#endif
     return result;
 }

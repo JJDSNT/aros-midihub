@@ -12,10 +12,12 @@ struct TagItem { IPTR ti_Tag, ti_Data; };
 enum { TAG_DONE, TAG_IGNORE, MDNS_ServiceName, MDNS_ServiceType, MDNS_Port,
        MDNS_RegisterRef, MDNS_TXTRecord, MDNS_TimeToLive };
 enum { MDNS_OK, MDNSERR_NOENGINE, MDNSERR_NOTFOUND, MDNSERR_BADPARAM,
-       MDNSERR_NOMEM };
+       MDNSERR_NOMEM, MDNSERR_DUPLICATE };
+#define TAG "netmidid: "
 static int available = 1, generation = 1, active, opens, registrations;
 static int refreshes, withdrawals, releases, library_available = 1;
-static LONG forced_update;
+static LONG forced_update, forced_register;
+static const char *expected_name = "AROS Test";
 static struct Library library;
 static struct Library *OpenLibrary(CONST_STRPTR name, int version)
 {
@@ -30,9 +32,10 @@ static LONG RegisterServiceA(struct TagItem *tags)
 {
     void **result = NULL;
     if (!available) return MDNSERR_NOENGINE;
+    if (forced_register) return forced_register;
     for (; tags->ti_Tag; ++tags) {
         if (tags->ti_Tag == MDNS_ServiceName)
-            assert(!strcmp((const char *)tags->ti_Data, "AROS Test"));
+            assert(!strcmp((const char *)tags->ti_Data, expected_name));
         if (tags->ti_Tag == MDNS_ServiceType)
             assert(!strcmp((const char *)tags->ti_Data, "_apple-midi._udp"));
         if (tags->ti_Tag == MDNS_Port) assert(tags->ti_Data == 5004);

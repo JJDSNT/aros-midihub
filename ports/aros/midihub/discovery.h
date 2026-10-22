@@ -14,6 +14,9 @@
  * so. */
 
 #define NETMIDI_DISCOVERY_SERVICES 2
+#define NETMIDI_DISCOVERY_NAME 64   /* one DNS label and its end */
+#define NETMIDI_DISCOVERY_TYPE 32
+#define NETMIDI_DISCOVERY_TEXT 256
 #ifdef NETMIDI_BROWSE
 #define NETMIDI_DISCOVERY_EVENTS 16
 #define NETMIDI_DISCOVERY_BROWSES 2
@@ -35,12 +38,14 @@ struct netmidi_discovery {
     void *library;                  /* bonami.library, opened */
     int engine;                     /* the service answered */
     struct {
-        const char *name;
-        const char *type;
+        char name[NETMIDI_DISCOVERY_NAME];
+        char type[NETMIDI_DISCOVERY_TYPE];
         uint16_t port;
-        const char *text;           /* its text record, or NULL */
+        char text[NETMIDI_DISCOVERY_TEXT];  /* its text record, or empty */
         uint32_t seconds;           /* its records' time to live, 0 for
                                        the service's own choice */
+        int wanted;                 /* asked for since the last begin */
+        long refused;               /* why it was last refused, or 0 */
         void *reference;            /* the registration, or NULL */
     } service[NETMIDI_DISCOVERY_SERVICES];
     int count;
@@ -59,9 +64,15 @@ struct netmidi_discovery {
 #endif
 };
 
+/* Once, before anything else. */
 void netmidi_discovery_init(struct netmidi_discovery *discovery);
+/* Before the services are asked for again, as when the configuration
+ * changed: one asked for again as it was keeps its registration, and the
+ * network sees no change; the others are withdrawn at the next poll.
+ * Searches end here, and are asked for again. */
+void netmidi_discovery_begin(struct netmidi_discovery *discovery);
 /* Asks for an instance of type on port to be advertised under name. The
- * strings have to last as long as the program. Nothing is sent here. */
+ * strings are copied. Nothing is sent here. */
 int netmidi_discovery_add(struct netmidi_discovery *discovery,
                           const char *name, const char *type, uint16_t port);
 /* The same with a text record and a time to live for the instance's
@@ -76,11 +87,12 @@ int netmidi_discovery_add_text(struct netmidi_discovery *discovery,
  * was, when it does not fit in size. */
 int netmidi_discovery_item(char *text, unsigned long size, const char *key,
                            const char *value);
-/* Registers what is not yet registered. The service may start after the
- * program, or stop and start again with the network, so this is called
- * regularly; it tries at most once in ten seconds. now is in
- * ten-thousandths of a second. Returns the number of services registered
- * now, -1 where there is no service to ask. */
+/* Withdraws what is no longer asked for and registers what is not yet
+ * registered. The service may start after the program, or stop and start
+ * again with the network, so this is called regularly; it tries at most
+ * once in ten seconds. now is in ten-thousandths of a second. Returns the
+ * number of services registered now, -1 where there is no service to
+ * ask. */
 int netmidi_discovery_poll(struct netmidi_discovery *discovery,
                            uint64_t now);
 #ifdef NETMIDI_BROWSE

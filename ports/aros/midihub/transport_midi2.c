@@ -614,7 +614,7 @@ static int midi2_open(struct netmidid *d, void *self)
                                "UMPEndpointName", d->session_name);
         netmidi_discovery_item(midi2_text, sizeof(midi2_text),
                                "ProductInstanceId", rt->product_id);
-        netmidi_discovery_add_text(&d->discovery, d->session_name,
+        netmidi_discovery_add_text(d->discovery, d->session_name,
                                    "_midi2._udp", rt->port, midi2_text, 60);
     }
 #endif

@@ -3,7 +3,9 @@
 */
 
 #include "discovery.h"
+#include "netmidid.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #ifdef __AROS__
@@ -28,20 +30,73 @@ void netmidi_discovery_init(struct netmidi_discovery *discovery)
     memset(discovery, 0, sizeof(*discovery));
 }
 
+#ifdef NETMIDI_BROWSE
+static void stop_browses(struct netmidi_discovery *discovery);
+#endif
+
+void netmidi_discovery_begin(struct netmidi_discovery *discovery)
+{
+    int i;
+
+    if (!discovery)
+        return;
+    for (i = 0; i < discovery->count; ++i)
+        discovery->service[i].wanted = 0;
+#ifdef NETMIDI_BROWSE
+    /* a search is asked for anew by the transport that wants it */
+    stop_browses(discovery);
+    discovery->browses = 0;
+    discovery->read = discovery->written;
+#endif
+    /* what changed is seen to at once */
+    discovery->last_attempt = 0;
+}
+
+/* Copies text, its end included, when that fits in size bytes. */
+static void copy(char *to, const char *text, size_t size)
+{
+    const char *end = memchr(text, 0, size);
+
+    if (end)
+        memcpy(to, text, (size_t)(end - text) + 1);
+}
+
 int netmidi_discovery_add_text(struct netmidi_discovery *discovery,
                                const char *name, const char *type,
                                uint16_t port, const char *text,
                                uint32_t seconds)
 {
-    if (!discovery || !name || !type || !port ||
-        discovery->count == NETMIDI_DISCOVERY_SERVICES)
+    int i;
+
+    if (!text)
+        text = "";
+    if (!discovery || !name || !type || !*name || !*type || !port ||
+        !memchr(name, 0, NETMIDI_DISCOVERY_NAME) ||
+        !memchr(type, 0, NETMIDI_DISCOVERY_TYPE) ||
+        !memchr(text, 0, NETMIDI_DISCOVERY_TEXT))
         return -1;
-    discovery->service[discovery->count].name = name;
-    discovery->service[discovery->count].type = type;
+    for (i = 0; i < discovery->count; ++i)
+        if (discovery->service[i].port == port &&
+            discovery->service[i].seconds == seconds &&
+            strcmp(discovery->service[i].name, name) == 0 &&
+            strcmp(discovery->service[i].type, type) == 0 &&
+            strcmp(discovery->service[i].text, text) == 0) {
+            discovery->service[i].wanted = 1;
+            return 0;
+        }
+    if (discovery->count == NETMIDI_DISCOVERY_SERVICES)
+        return -1;
+    memset(&discovery->service[discovery->count], 0,
+           sizeof(discovery->service[0]));
+    copy(discovery->service[discovery->count].name, name,
+         NETMIDI_DISCOVERY_NAME);
+    copy(discovery->service[discovery->count].type, type,
+         NETMIDI_DISCOVERY_TYPE);
+    copy(discovery->service[discovery->count].text, text,
+         NETMIDI_DISCOVERY_TEXT);
     discovery->service[discovery->count].port = port;
-    discovery->service[discovery->count].text = text;
     discovery->service[discovery->count].seconds = seconds;
-    discovery->service[discovery->count].reference = NULL;
+    discovery->service[discovery->count].wanted = 1;
     ++discovery->count;
     return 0;
 }
@@ -208,6 +263,39 @@ static void forget(struct netmidi_discovery *discovery)
 #endif
 }
 
+/* What is no longer asked for is withdrawn, with its goodbye. */
+static void withdraw_unwanted(struct netmidi_discovery *discovery)
+{
+    int i, kept = 0;
+
+    for (i = 0; i < discovery->count; ++i) {
+        if (!discovery->service[i].wanted) {
+            if (discovery->service[i].reference && discovery->library)
+                DeregisterService(discovery->service[i].reference);
+            continue;
+        }
+        if (kept != i)
+            discovery->service[kept] = discovery->service[i];
+        ++kept;
+    }
+    discovery->count = kept;
+}
+
+static const char *refusal(long result)
+{
+    switch (result) {
+    case MDNSERR_DUPLICATE:
+        return "this machine already advertises that name";
+    case MDNSERR_BADPARAM:
+        return "the name is not one DNS label of at most 63 bytes "
+               "without dots";
+    case MDNSERR_NOMEM:
+        return "the mDNS service is out of memory";
+    default:
+        return "the mDNS service refused it";
+    }
+}
+
 int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
 {
     int registered = 0;
@@ -216,6 +304,7 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
 
     if (!discovery)
         return -1;
+    withdraw_unwanted(discovery);
     for (i = 0; i < discovery->count; ++i) {
         if (discovery->service[i].reference)
             ++registered;
@@ -244,11 +333,11 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
             return registered;      /* mdnsd is not running, yet */
         discovery->engine = 1;
     }
-    /* A successful registration is not proof that mdnsd is still the same
-       process. A harmless update validates its handle even if the daemon
-       stopped and restarted between polls. On success mdnsd also refreshes
-       the announcement; the check is bounded to once per ten seconds.
-       No private daemon data or callback API is needed. */
+    /* A registration made is no proof that mdnsd is still the process
+       that took it. An update that changes nothing asks it whether it
+       still knows the handle, and sends nothing to the network; a daemon
+       that was restarted between polls does not, and the services are
+       registered again. Once in ten seconds at most. */
     for (i = 0; i < discovery->count; ++i) {
         struct TagItem unchanged[] = { { TAG_DONE, 0 } };
         LONG result;
@@ -262,6 +351,7 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
             return 0;
         }
     }
+    registered = 0;
     for (i = 0; i < discovery->count; ++i) {
         /* the service writes the registration where the tag says */
         struct TagItem tags[] = {
@@ -275,9 +365,11 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
         };
         LONG result;
 
-        if (discovery->service[i].reference)
+        if (discovery->service[i].reference) {
+            ++registered;
             continue;
-        if (discovery->service[i].text) {
+        }
+        if (discovery->service[i].text[0]) {
             tags[4].ti_Tag = MDNS_TXTRecord;
             tags[4].ti_Data = (IPTR)discovery->service[i].text;
         }
@@ -289,10 +381,17 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
         if (result != MDNS_OK)
             discovery->service[i].reference = NULL;
         if (discovery->service[i].reference) {
+            discovery->service[i].refused = 0;
             ++registered;
         } else if (result == MDNSERR_NOENGINE) {
             forget(discovery);
             return 0;
+        } else if (result != discovery->service[i].refused) {
+            /* said once for each reason, not at every attempt */
+            discovery->service[i].refused = result;
+            fprintf(stderr, TAG "\"%s\" (%s) is not advertised: %s\n",
+                    discovery->service[i].name, discovery->service[i].type,
+                    refusal(result));
         }
     }
 #ifdef NETMIDI_BROWSE
@@ -322,42 +421,58 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
     return registered;
 }
 
-void netmidi_discovery_close(struct netmidi_discovery *discovery)
+#ifdef NETMIDI_BROWSE
+/* The searches end: after StopBrowse the service calls the hook no more,
+   and the hooks are freed. */
+static void stop_browses(struct netmidi_discovery *discovery)
 {
     int i;
 
-    if (!discovery || !discovery->library)
-        return;
-    BonamiBase = discovery->library;
-#ifdef NETMIDI_BROWSE
-    /* the search first: after this the service calls the hook no more */
+    if (discovery->library) {
+        BonamiBase = discovery->library;
+        for (i = 0; i < discovery->browses; ++i)
+            if (discovery->browse[i].reference)
+                StopBrowse(discovery->browse[i].reference);
+    }
     for (i = 0; i < discovery->browses; ++i) {
-        if (discovery->browse[i].reference)
-            StopBrowse(discovery->browse[i].reference);
         discovery->browse[i].reference = NULL;
-    }
-#endif
-    for (i = 0; i < discovery->count; ++i) {
-        if (discovery->service[i].reference)
-            DeregisterService(discovery->service[i].reference);
-        discovery->service[i].reference = NULL;
-    }
-    if (discovery->engine)
-        CloseMDNSEngine();
-    discovery->engine = 0;
-    CloseLibrary(discovery->library);
-    discovery->library = NULL;
-    BonamiBase = NULL;
-#ifdef NETMIDI_BROWSE
-    for (i = 0; i < discovery->browses; ++i) {
         if (discovery->browse[i].hook)
             FreeMem(discovery->browse[i].hook, sizeof(struct Hook));
         discovery->browse[i].hook = NULL;
     }
+}
 #endif
+
+void netmidi_discovery_close(struct netmidi_discovery *discovery)
+{
+    if (!discovery)
+        return;
+#ifdef NETMIDI_BROWSE
+    stop_browses(discovery);
+#endif
+    if (discovery->library) {
+        int i;
+
+        BonamiBase = discovery->library;
+        for (i = 0; i < discovery->count; ++i)
+            if (discovery->service[i].reference)
+                DeregisterService(discovery->service[i].reference);
+        if (discovery->engine)
+            CloseMDNSEngine();
+        CloseLibrary(discovery->library);
+    }
+    memset(discovery, 0, sizeof(*discovery));
+    BonamiBase = NULL;
 }
 
 #else
+
+#ifdef NETMIDI_BROWSE
+static void stop_browses(struct netmidi_discovery *discovery)
+{
+    (void)discovery;
+}
+#endif
 
 int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
 {

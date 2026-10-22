@@ -1163,7 +1163,7 @@ static int applemidi_open(struct netmidid *d, void *self)
         return -1;
 #ifdef NETMIDI_DISCOVERY
     /* An AppleMIDI session is found under its control port. */
-    netmidi_discovery_add(&d->discovery, d->session_name, "_apple-midi._udp",
+    netmidi_discovery_add(d->discovery, d->session_name, "_apple-midi._udp",
                           rt->local_port);
 #ifdef NETMIDI_BROWSE
     netmidid_browse(d, &netmidid_applemidi, "_apple-midi._udp");

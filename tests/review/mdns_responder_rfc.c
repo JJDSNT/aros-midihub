@@ -283,6 +283,33 @@ int main(int argc, char **argv)
         mdnsRegTick(&md);
         printf("after port update: port=%u, announcements=%u\n", service->rs_Port, announcements);
         failure = service->rs_Port != 6000 || announcements < 2;
+    } else if (!strcmp(argv[1], "update-unchanged")) {
+        /* An update that changes nothing, the way a client asks whether
+           its handle is still known, sends nothing; one that changes the
+           port is announced (RFC 6762 sections 8.3 and 8.4). */
+        struct MDNSIPCMsg message;
+        unsigned quiet;
+        memset(&message, 0, sizeof(message));
+        message.mi_Handle = service->rs_ClientRef;
+        own_message(&message);
+        if (mdnsRegUpdate(&md, &message))
+            abort();
+        message.mi_Port = service->rs_Port;
+        if (mdnsRegUpdate(&md, &message))
+            abort();
+        ticks += 50;
+        mdnsRegTick(&md);
+        ticks += 50;
+        mdnsRegTick(&md);
+        quiet = announcements;
+        message.mi_Port = (UWORD)(service->rs_Port + 1);
+        if (mdnsRegUpdate(&md, &message))
+            abort();
+        ticks += 50;
+        mdnsRegTick(&md);
+        printf("unchanged update: announcements=%u; changed port: %u\n",
+               quiet, announcements);
+        failure = quiet != 0 || announcements == 0;
     } else if (!strcmp(argv[1], "probe-txt")) {
         static const UBYTE peer_txt[] = {3, 'v', '=', 'z'};
         service->rs_State = MDNS_NAME_PROBING;

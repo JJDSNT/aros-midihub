@@ -88,8 +88,9 @@ struct netmidid {
     /* which transport reads each socket */
     const struct netmidid_transport *socket_owner[NETMIDI_NETWORK_SOCKETS];
 #ifdef NETMIDI_DISCOVERY
-    struct netmidi_discovery discovery;
-    int discovered;             /* services the system advertises for us */
+    /* what the system's mDNS service advertises for us: kept across a
+       change of the configuration, which begins the rest anew */
+    struct netmidi_discovery *discovery;
 #ifdef NETMIDI_BROWSE
     /* which transport is told what each search finds */
     const struct netmidid_transport *browse_owner[NETMIDI_DISCOVERY_BROWSES];
