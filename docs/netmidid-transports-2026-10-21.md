@@ -137,3 +137,40 @@ would change a merged library and is left as its own proposal.
 Not done yet (after both steps): a full build of each cut in the clean upstream tree, and
 replacing the published branches. Both wait for the owner, since #1679 is
 under review (see the handoff).
+
+## Prepared for publication (not pushed)
+
+Local branches in `build/upstream-pr-prep`, each from the published head
+of its PR or from the new #1679 head, author Jaime Dias, no other
+attribution:
+
+| PR | local branch | head | over |
+|---|---|---|---|
+| #1679 | `transports/netmidid-service` | `37915bd98f` | published `f541409f06`, one commit added |
+| #1693 | `transports/netmidid-midi2` | `f861f995d3` | `37915bd98f`; N7 cut |
+| #1743 | `transports/netmidid-advertise` | `bb2b735306` | `37915bd98f`; N8-AppleMIDI cut |
+| #1742 | `transports/netmidistat` | `0cb8338db0` | `37915bd98f`; `669a30346a` picked unchanged |
+
+#1679 takes a fast-forward push; the three drafts are replaced. Each cut
+was compiled and linked for hosted x86-64 and amiga-m68k against the real
+SDKs with `-Werror` (the harness of `build/review-publication-2026-10-20`),
+and the exact x86-64 binaries ran on hosted AROS: N4 node-rtpmidi suite 7
+checks (discovery skipped), N8-AppleMIDI 8 including Avahi, N7 AppleMIDI 7
+and Network MIDI 2.0 3.
+
+```sh
+cd build/upstream-pr-prep
+git push fork transports/netmidid-service:review/netmidid-service
+git push --force-with-lease=review/netmidid-midi2:6e71764ba2 \
+    fork transports/netmidid-midi2:review/netmidid-midi2
+git push --force-with-lease=review/netmidid-advertise:989227ceac \
+    fork transports/netmidid-advertise:review/netmidid-advertise
+git push --force-with-lease=review/netmidistat:669a30346a \
+    fork transports/netmidistat:review/netmidistat
+```
+
+Then the comment `docs/pr-drafts/netmidid-transports-comment.md` on #1679
+and the updated bodies in `docs/pr-drafts/` (`netmidid-service.md`,
+`netmidid-midi2.md`, `netmidid-advertise.md`, `netmidistat.md`); `gh pr
+edit` fails on this repository (Projects classic), so bodies go through
+`gh api -X PATCH repos/aros-development-team/AROS/pulls/N -F body=@file`.

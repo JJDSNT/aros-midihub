@@ -16,6 +16,18 @@ The service lives in `workbench/network/netmidid`, alongside the merged
 `rtpmidi/` library, and uses the adapter header in
 `workbench/devs/camd/networkmidi2`. Its mmakefile owns the network build dependency.
 
+### Core and transports (2026-10-21)
+
+A third commit, `37915bd98f`, separates the core (`main.c`: configuration,
+sockets, CAMD, counts and the loop) from the AppleMIDI transport
+(`transport_applemidi.c`) through the interface in `netmidid.h`.
+`network.c` no longer knows the AppleMIDI port pair, and AppleMIDI's
+configuration keys are read in `config_applemidi.c`. Behaviour, output and
+the `ENV:NetMIDI` format are unchanged. Later transports (#1693) are added
+as files of their own. The exact revision compiles and links for hosted
+x86-64 and amiga-m68k with `-Werror`, and passes the hosted node-rtpmidi
+suite (7 checks; discovery skipped).
+
 ### Prerequisites and base (2026-10-20)
 
 #1678 is now merged, as are the drivers, payload library and CAMD cleanup

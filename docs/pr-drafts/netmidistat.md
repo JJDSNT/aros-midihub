@@ -17,8 +17,8 @@ snapshot version produces a diagnostic and RETURN_WARN (5).
 ### Dependency and scope
 
 **Dependent draft: requires #1679**, which provides the service, status ABI
-and header. The branch contains its two commits followed by one command
-commit; rebase onto master after #1679 merges. This change adds only the
+and header. The branch contains its three commits followed by one command
+commit, unchanged, which reads the service only through that ABI; rebase onto master after #1679 merges. This change adds only the
 command source, build entry and README under
 `workbench/network/netmidid/netmidistat`.
 
