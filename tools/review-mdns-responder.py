@@ -70,6 +70,8 @@ def main():
                  "timeout", "network-reset", "refresh", "compressed", "wrong-class",
                  "pointer-cycle", "short-rdata", "wrong-port", "multiple-links",
                  "clock-wrap", "release-quiet", "missing-backoff")
+        if b"services_key" in (output / "mdns_discovery.c").read_bytes():
+            cases += ("enumerate-types",)
         if reap:
             cases += ("unrelated-not-cached", "evict-unwanted", "views-scoped",
                       "a-before-srv")

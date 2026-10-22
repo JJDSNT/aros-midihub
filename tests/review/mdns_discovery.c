@@ -447,6 +447,65 @@ static void notify_reset(void)
     mdnsDiscoveryReset(&md); returned(1, MDNS_OK); finish();
 }
 #endif
+/* RFC 6763 section 9: a browse of _services._dns-sd._udp is told the types
+ * on the link, each once, and their goodbyes; PTRs there that do not name a
+ * type are left out, and a browse of a type goes on as before. */
+static void feed_service_type(const char *type, ULONG ttl)
+{
+    size_t at = 12, len;
+
+    memset(packet, 0, sizeof(packet));
+    put16(packet + 2, 0x8400);
+    len = name(data, 0, type);
+    at = name(packet, at, "_services._dns-sd._udp.local");
+    put16(packet + at, DNS_TYPE_PTR); put16(packet + at + 2, 1);
+    put32(packet + at + 4, ttl); put16(packet + at + 8, len);
+    memcpy(packet + at + 10, data, len);
+    at += 10 + len;
+    put16(packet + 6, 1);
+    mdnsHandlePacket(&md, packet, at, 0xcb007101, 5353);
+    mdnsDiscoveryTick(&md);
+}
+static void enumerate_types(void)
+{
+    APTR types, browse; struct MDNSDiscoveryEvent e;
+
+    init();
+    types = begin_type(0, NULL, "_services._dns-sd._udp");
+    browse = begin(0, NULL);
+    feed_service_type("_http._tcp.local", 120);
+    CHECK(read_event(types, &e) == MDNS_OK && e.de_Code == MEVENT_ADD);
+    CHECK(!strcmp(e.de_Type, "_http._tcp") && e.de_Name[0] == 0);
+    CHECK(e.de_Address == 0 && e.de_Port == 0 && e.de_TXTLength == 0);
+    feed_service_type("_http._tcp.local", 120);
+    CHECK(read_event(types, &e) == MDNSERR_NOTREADY);
+    feed_service_type("_midi2._udp.local", 120);
+    CHECK(read_event(types, &e) == MDNS_OK && !strcmp(e.de_Type, "_midi2._udp"));
+    /* not types: an instance, a name without _tcp/_udp */
+    feed_service_type("Session._midi2._udp.local", 120);
+    feed_service_type("printer.local", 120);
+    CHECK(read_event(types, &e) == MDNSERR_NOTREADY);
+    /* the type browse sees no instance, the instance browse no type */
+    feed("Session", 15, 120, 9);
+    CHECK(read_event(types, &e) == MDNSERR_NOTREADY);
+    expect_add(browse, "Session", 9);
+    CHECK(read_event(browse, &e) == MDNSERR_NOTREADY);
+    /* a goodbye: gone a second later */
+    feed_service_type("_http._tcp.local", 0);
+    ticks += 50; mdnsDiscoveryTick(&md);
+    CHECK(read_event(types, &e) == MDNS_OK && e.de_Code == MEVENT_REMOVE);
+    CHECK(!strcmp(e.de_Type, "_http._tcp"));
+    CHECK(read_event(types, &e) == MDNSERR_NOTREADY);
+    /* a resolve of the enumeration name is not a thing */
+    {
+        struct MDNSIPCMsg msg = {0};
+        strcpy(msg.mi_ServiceType, "_services._dns-sd._udp");
+        strcpy(msg.mi_Name, "x");
+        CHECK(call(&msg, MDNS_IPC_RESOLVE, NULL, 1, 0) == MDNSERR_BADTYPE);
+    }
+    finish();
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -473,6 +532,7 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "clock-wrap")) wrap();
     else if (!strcmp(argv[1], "release-quiet")) release_no_queries();
     else if (!strcmp(argv[1], "missing-backoff")) missing_backoff();
+    else if (!strcmp(argv[1], "enumerate-types")) enumerate_types();
 #ifdef MDNS_DISCOVERY_REAP
     else if (!strcmp(argv[1], "unrelated-not-cached")) unrelated_not_cached();
     else if (!strcmp(argv[1], "evict-unwanted")) evict_unwanted();
