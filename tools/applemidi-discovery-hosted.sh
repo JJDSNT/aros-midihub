@@ -23,9 +23,18 @@
 #               the session and its advertisement away and brings both
 #               back: AROS has to see it go, see it return, and invite
 #               again.
+#   again       The host advertises "Host Session" with nobody behind it
+#               until AROS has invited it four times, so that its wait
+#               between invitations has grown to 40 s; then a peer answers,
+#               and 8 s into the session ends it with BY while the
+#               advertisement stays. AROS has to invite again from the
+#               first wait, not after the longest it had reached
+#               (AppleMIDI backlog AM29): a second peer, there for the 22 s
+#               after the first one left, has to be invited.
 #
-# The second case needs node and npm, and the network once, to fetch
-# node-rtpmidi into WORK_DIR.
+# The second and third cases need node and npm, and the network once, to
+# fetch node-rtpmidi into WORK_DIR. DISCOVERY_CASES, a list of the names
+# above, runs only those.
 # Exit status: 0 when all of it was seen.
 set -eu
 
@@ -50,6 +59,12 @@ sudo ethtool -K aroshost tx off > /dev/null
 sudo ethtool -K eth1 tx off > /dev/null
 
 mkdir -p "$work"
+cases=${DISCOVERY_CASES:-advertised found again}
+want() {
+    case " $cases " in *" $1 "*) return 0 ;; esac
+    return 1
+}
+status=0
 prepare() {
     sudo rm -rf "$sys"
     cp -a --reflink=auto "$aros" "$sys"
@@ -66,6 +81,7 @@ prepare() {
     sudo setcap cap_net_raw,cap_net_admin+ep "$sys/boot/linux/AROSBootstrap"
 }
 
+if want advertised; then
 prepare
 cat > "$sys/S/discovery-run" <<RUNEOF
 FailAt 21
@@ -93,7 +109,6 @@ printf 'Run >NIL: Execute S:discovery-run\n' > "$sys/S/User-Startup"
 wait || true
 cp "$sys/netmidid.log" "$work/hub.log" 2> /dev/null || true
 
-status=0
 if grep -q 'advertised by the system mDNS service' "$work/hub.log" 2> /dev/null &&
    grep -q '^=;aroshost;IPv4;arosbox;_apple-midi._udp;local;[^;]*;192\.168\.166\.2;5004;' "$work/browse.log"; then
     echo "ok: Avahi resolved \"arosbox\", the session named after the machine (_apple-midi._udp) to 192.168.166.2 port 5004, advertised by mdnsd"
@@ -115,6 +130,7 @@ else
     echo "FAIL: no goodbye for the session"
     status=1
 fi
+fi
 # found: the host's session, by its name
 mkdir -p "$work/node"
 if [ ! -d "$work/node/node_modules/rtpmidi" ]; then
@@ -126,6 +142,7 @@ fi
 export NODE_PATH="$work/node/node_modules"
 peer="$here/tests/interop/node_rtpmidi_peer.js"
 
+if want found; then
 prepare
 cat > "$sys/S/discovery-run" <<RUNEOF
 FailAt 21
@@ -180,6 +197,64 @@ if grep -q 'session "Host Session" is gone' "$work/hub-found.log" 2> /dev/null &
 else
     echo "FAIL: the session's return was not followed"
     status=1
+fi
+fi
+# again: the session ends, the advertisement stays. The host reads the
+# service's log as it is written (SYS: is a directory here) to know when
+# AROS has waited long enough, and when the session is up.
+if want again; then
+prepare
+cat > "$sys/S/discovery-run" <<RUNEOF
+FailAt 21
+CD SYS:System/Network/AROSTCP
+Path C S ADD QUIET
+Run >NIL: QUIET AROSTCP
+WaitForPort AROSTCP
+Wait 8
+Wait 150
+Break \`Status COMMAND=netmidi\` C
+Wait 4
+Shutdown
+RUNEOF
+printf 'Run >NIL: Execute S:discovery-run\n' > "$sys/S/User-Startup"
+printf 'peer_name = Host Session\n' > "$sys/Prefs/Env-Archive/NetMIDI"
+log="$sys/netmidid.log"
+count() { grep -c "$1" "$log" 2> /dev/null || true; }
+
+(
+    timeout 200 avahi-publish -s "Host Session" _apple-midi._udp 5104 \
+        > "$work/publish-again.log" 2>&1 &
+    # nobody answers four invitations: AROS now waits 40 s for the next
+    for attempt in $(seq 1 150); do
+        [ "$(count 'inviting "Host Session"')" -ge 4 ] && break
+        sleep 1
+    done
+    node "$peer" 5104 > "$work/again-peer-1.log" 2>&1 &
+    first=$!
+    for attempt in $(seq 1 70); do
+        [ "$(count 'session connected')" -ge 1 ] && break
+        sleep 1
+    done
+    sleep 8
+    # sent SIGTERM, the peer ends its session with BY
+    kill "$first" 2> /dev/null || true
+    wait "$first" 2> /dev/null || true
+    timeout 22 node "$peer" 5104 > "$work/again-peer-2.log" 2>&1 || true
+    wait
+) &
+(cd "$sys" && timeout 220 xvfb-run -a boot/linux/AROSBootstrap \
+    > "$work/serial-again.log" 2>&1) || true
+wait || true
+cp "$sys/netmidid.log" "$work/hub-again.log" 2> /dev/null || true
+
+if grep -q '^control invitation$' "$work/again-peer-1.log" 2> /dev/null &&
+   grep -q '^control invitation$' "$work/again-peer-2.log" &&
+   [ "$(grep -c 'session connected' "$work/hub-again.log")" -ge 2 ]; then
+    echo "ok: after a session with the peer wanted by name ended, AROS invited it again from the first wait"
+else
+    echo "FAIL: the peer wanted by name was not invited again in time (AM29)"
+    status=1
+fi
 fi
 echo "logs: $work"
 exit $status
