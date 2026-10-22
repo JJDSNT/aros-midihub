@@ -53,6 +53,16 @@ undefined-behaviour sanitizers) and the whole host suite passing.
 | NM21 | The Product Instance Id is the machine's own. The service makes one of sixty-four random bits the first time it needs it (`AROS-` and sixteen hexadecimal digits), writes it to `ENVARC:NetMIDI.id`, and uses what it finds there from then on; the same string is in the Invitation, the Invitation Reply, the Product Instance Id notification and the text record (section 4.4). On hosted AROS the id advertised, the one in the session and the one in the file are the same (`tools/netmidi2-hosted.sh`), and an id put in the file beforehand is the one used (`tools/netmidi2-client-hosted.sh`). Not shown: two machines, which would have two by the odds of sixty-four bits and no more than that. The Linux build of the program keeps the constant `aros-midihub`. |
 | NM17 | The appendix's examples are all in the tests: the four packets of A.1, and since 2026-10-12 figure 16 (five packets with two repeats, and nothing lost when the second and third are dropped) and figure 18 (going idle with a new Zero Length command in each packet), as sequences in `test_appendix_fec`. Our sender goes idle as figure 18 draws; figure 17's way, one Zero Length command repeated, is the other, and a receiver that goes by sequence numbers takes both. `tests/fuzz.c` has two tables talk, with a third of the packets changed on their way, stream messages and requests for retransmission among them: no finding (RTP-MIDI backlog R21). No captures: NetUMP's packets were looked at with tcpdump once and not kept. |
 
+**Host found by name with the queued discovery (2026-10-22).** Since
+`0f543fb` the service browses `_midi2._udp` through the queue that
+`bonami.library` 41.2 has (#1695) and reads `UMPEndpointName` from the
+text record as it is on the wire. `tools/netmidi2-client-hosted.sh` on
+hosted x86-64, with master's mdnsd and bonami.library: the Host Avahi
+advertises is found by its endpoint's name, invited, and the four messages
+and the scale with SysEx cross CAMD both ways. Not upstream: it is the
+browsing cut (N9), after #1743. Inviting again after a session ended
+(#1796) was not run here.
+
 ## P0 — wrong or unsafe as it is
 
 Nothing open.
