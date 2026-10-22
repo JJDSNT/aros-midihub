@@ -32,6 +32,14 @@ Priorities as in the other backlogs: **P0** wrong or unsafe as it is, **P1**
 before a first use with a real peer, **P2** before an upstream proposal,
 **P3** polish.
 
+## P0 — urgent upstream architectural correction (2026-10-22)
+
+| ID | Problem | Required correction | Acceptance criteria |
+|---|---|---|---|
+| AM-ARCH-01 | **AROS PR [#1678](https://github.com/aros-development-team/AROS/pull/1678) placed AppleMIDI protocol responsibilities inside the RTP-MIDI component** at `workbench/network/netmidid/rtpmidi/`: `applemidi.c`, `session.c`, `peers.c`, `clock.c`, their public headers under `include/rtpmidi/`, and build integration. This conflates two protocol layers and must not become the long-term upstream architecture. | **Split AppleMIDI into a distinct module/component that consumes the RTP-MIDI core.** Move AppleMIDI control packets, session state, peers, CK synchronization and Apple-specific feedback into its own namespace, headers and build unit. Keep RFC 6295 packet codec, sender/receiver, recovery journal and generic timing independent of AppleMIDI. Audit all includes, symbols and makefile dependencies; preserve behavior and compatibility during migration. Prepare a focused follow-up upstream PR, coordinated with maintainers, rather than rewriting the protocols. | RTP-MIDI core compiles and tests without AppleMIDI sources/headers; AppleMIDI depends on RTP-MIDI, never the reverse; separate build targets and explicit interfaces; existing RTP-MIDI and AppleMIDI host/interop tests pass; no regression in `netmidid` or CAMD integration. |
+
+**Priority:** P0 / fix promptly, before adding further AppleMIDI features or entrenching the layout. This is an architectural ownership defect, not evidence by itself that RTP packet functions directly call AppleMIDI functions. The distinction must be checked in code review. **Review rule:** reject future changes that merge independent protocol responsibilities merely because one protocol uses another. Link to the separate [RTP-MIDI backlog](rtp-midi-backlog.md).
+
 ## Done
 
 On 2026-10-12, with host tests in `tests/protocol.c`; the whole host suite,
