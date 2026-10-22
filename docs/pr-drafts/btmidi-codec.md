@@ -1,6 +1,6 @@
 Two corrections to btmidi.class's BLE-MIDI codec (`blemidi.c`), read
 against "Specification for MIDI over Bluetooth Low Energy (BLE-MIDI)" 1.0,
-MMA/AMEI RP-052. Follow-up to #1507; nothing else in the class changes.
+MMA/AMEI RP-052. Follow-up to #1507; nothing else in the class changes. Version 45.2.
 
 **The header's reserved bit.** The decoder refused any packet whose header
 had bit 6 set. The specification reserves that bit: sent as 0 and not
@@ -13,8 +13,10 @@ implements.
 ignore them. They are now taken off the stream in both directions instead of
 being handed to CAMD or sent to the peer.
 
-Validation: the host test of the codec (the packets drawn in the
-specification's figures, decoded and written back) fails on master at the
+Validation: the host test of the codec, `rom/bluetooth/stack/tests/btmidi`
+(the packets drawn in the specification's figures, decoded and written
+back, run by `make -f Makefile.host test`) fails on master at the
 reserved-bit case and passes with this change, under ASan/UBSan.
 btmidi.class, its CAMD driver and the embedded driver array build for
 x86-64 and amiga-m68k (full module targets, link included).
+

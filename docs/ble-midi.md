@@ -85,6 +85,9 @@ the codec vectors. The tests do not download source or modify that checkout.
 
 On 2026-10-22, host tests and 100,000 fuzz rounds with ASan/UBSan passed
 against #1735 revision `3918469bab111a3d633cc6261c654a2ebf6ae918`.
+After the review, #1735 (revision `a7fe624994`, rebased on master) carries
+the codec test itself as `rom/bluetooth/stack/tests/btmidi`, run by
+`Makefile.host`, and bumps the class to 45.2.
 The native class and embedded driver built for x64 and m68k using the
 existing SDKs. MIDIHub Preferences, router, self-test and network service
 also built for both architectures after removing the duplicate codec.
