@@ -19,8 +19,8 @@ checks dos outros sete permanecem documentados pela consulta inicial.
 
 ## Abertos
 
-Atualizado em **2026-10-22, 16:37 UTC**: **31 merged, 4 abertos, todos prontos
-para review (#1788 saiu do draft), 1 fechado sem merge**. #1679, #1693, #1695, #1742,
+Atualizado em **2026-10-22, 16:37 UTC**: **31 merged, 5 abertos (4 prontos
+para review e o draft #1801), 1 fechado sem merge**. #1679, #1693, #1695, #1742,
 #1792, #1793 e #1796 foram mergeados hoje.
 
 | PR | Proposta | Situação | O que falta agora |
@@ -29,6 +29,7 @@ para review (#1788 saiu do draft), 1 fechado sem merge**. #1679, #1693, #1695, #
 | [#1743](https://github.com/aros-development-team/AROS/pull/1743) | Anúncio AppleMIDI via mDNS | Pronto para review; review de Kalamatee respondida | Rebased após #1693 em `5666327816`, com o commit de mdnsd que não anuncia update sem mudança. Validação nativa com captura ainda não refeita (mDNS backlog MD22). Depois do merge: anúncio `_midi2._udp` (NM23). |
 | [#1788](https://github.com/aros-development-team/AROS/pull/1788) | Separar AppleMIDI, RTP-MIDI e helpers | Pronto para review (saiu do draft em 2026-10-22) | Atualizado em `357ee16146` com os consumidores já mergeados (#1679, #1693, #1742, #1793, #1796), cortado com `cut-netmidi-library.sh n3`, `cut-netmidi-service.sh n7` e `cut-netmidi-status.sh`; compila sozinho sobre master. Sugerido antes do #1743, que então precisa de um rebase pequeno. Teste nativo hosted não refeito após a atualização. |
 | [#1789](https://github.com/aros-development-team/AROS/pull/1789) | Expor a porta MIDI pela binding Bluetooth existente | Pronto para review | Revisão e teste com binding real. |
+| [#1801](https://github.com/aros-development-team/AROS/pull/1801) | Peers e Hosts por nome (AppleMIDI e MIDI 2.0) e anúncio `_midi2._udp` | Draft (aberto em 2026-10-22) | Contém #1788 e #1743 (rebased sobre #1788); só `255496d21f` é novo, cortado com `cut-netmidi-service.sh n9`. Hosted: os 6 casos AppleMIDI e os 5 MIDI 2.0 passaram. Rebase quando #1788 e #1743 entrarem. |
 
 ## Merged
 
