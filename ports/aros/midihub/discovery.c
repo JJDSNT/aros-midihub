@@ -169,10 +169,13 @@ int netmidi_discovery_txt_value(const uint8_t *txt, size_t length,
                                 const char *key, char *value, size_t size)
 {
     size_t at = 0, key_length;
+    const char *key_end;
 
-    if (!txt || !key || !value || !size)
+    /* a key is at most a string of the record, 255 bytes */
+    if (!txt || !key || !value || !size ||
+        !(key_end = memchr(key, 0, 256)))
         return -1;
-    key_length = strlen(key);
+    key_length = (size_t)(key_end - key);
     while (at < length) {
         size_t n = txt[at++];
         const uint8_t *item = txt + at;
