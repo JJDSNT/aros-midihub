@@ -1,9 +1,11 @@
 # System mDNS for AROS
 
-This directory holds what closes AROS's missing system-wide mDNS/DNS-SD
-service. Its intended home is the AROS tree, as a network service above
-`bsdsocket.library`, and Bonami upstream for what is useful to classic Amiga
-too; it stays here while that is prepared.
+This directory holds the proposed system-wide mDNS/DNS-SD service for AROS,
+currently derived from Bonami and running above `bsdsocket.library`. The
+priority is protocol conformance and functional AROS integration. The proposed
+Bonami API, name and architecture have no assumed maintainer acceptance;
+compatibility with original Bonami is not a requirement. Contributions to
+original Bonami can be considered separately.
 
 ## Contents
 
@@ -20,9 +22,14 @@ too; it stays here while that is prepared.
   git submodule update --init network/mdns/bonami
   ```
 
-- `embedded.c` is MIDIHub's own small `_apple-midi._udp` advertiser and
-  responder. MIDIHub still builds with it. It goes when Network MIDI
-  registers and browses through `bonami.library` instead.
+- Network MIDI uses the system service through
+  [`ports/aros/midihub/discovery.c`](../../ports/aros/midihub/discovery.c).
+  The former `embedded.c` responder has been removed.
+
+The [discovery contract audit](../../docs/network-midi-mdns-contract-audit.md)
+distinguishes RFC/MIDI protocol requirements from Bonami API choices, lists
+the calls MIDI actually uses, and records current reproducible defects.
+The dated status sections below describe the earlier integration snapshot.
 
 ## Where it stands
 
@@ -32,17 +39,19 @@ resolving in both directions over two links, name conflicts, clients that
 go away, the tools, and the Envoy bridge. It compiles for amiga-m68k and
 raspi-aarch64 and has not been run on either.
 
-Three things had to change in AROS first, all in `patches/net/series`: a
+Three things had to change in AROS first: a
 crash in AROSTCP's netdb parser, multicast in the hosted `eth.device`, and
-IPv4 multicast on SANA-II interfaces, which AROSTCP did not deliver.
+IPv4 multicast on SANA-II interfaces, which AROSTCP did not deliver. Those
+changes were merged in #1543/#1558; the old patch series is no longer needed.
 
 ## Why Bonami
 
 Bonami already had the Amiga shape of the service: a library with
 TagItem-based register, browse and resolve calls, opaque handles, Hook
 notifications, a private message-port protocol to one shared engine, and a
-license AROS can take. Porting it keeps one API for AROS and classic
-systems instead of adding an AROS-only one.
+license AROS can take. That was the initial rationale for trying the port.
+The current review judges the resulting code against the RFCs and AROS
+requirements; keeping the original API is optional.
 
 What the port changed, and why, in the order it mattered:
 
@@ -74,8 +83,9 @@ Around it:
 
 1. Run it on m68k and AArch64, against Apple's Bonjour, and between two AROS
    systems.
-2. Move Network MIDI to it: register and browse `_apple-midi._udp` and
-   `_midi2._udp` through `bonami.library`, and remove `embedded.c`.
+2. Finish upstream delivery and validation of Network MIDI's existing
+   system registration/browse integration (N8/N9), including the restart,
+   name and TXT findings in the contract audit.
 3. Join AROS's `nipc.library` to the Envoy bridge, if that is wanted; see
    [`docs/nipc-envoy-future.md`](../../docs/nipc-envoy-future.md).
 4. Send it upstream, in parts. The first part, the responder for the

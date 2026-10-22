@@ -1,5 +1,10 @@
 # mDNS backlog — from a service that runs here to one in the AROS tree
 
+**2026-10-18:** see the [#1591 fixes](bonami-review-followup-2026-10-18.md)
+and [browse/resolve draft](mdns-discovery-followup-2026-10-18.md). The owner
+authorized preparing a polling proposal in draft; the maintainer's event-API
+decision is still open. Full local Hook delivery and N9 remain separate.
+
 **Scope:** the system mDNS and DNS-SD service ported from Bonami:
 `mdnsd`, `bonami.library`, the tools and the commodity in
 `network/mdns/aros`, the cut of it that went to AROS as PR #1560 (worktree
@@ -9,6 +14,15 @@ original Bonami is not a constraint. Background:
 [the port](../network/mdns/aros/README.md), whose "Known limits" this file
 orders, [mDNS and AROSTCP](mdns-arostcp.md) and
 [upstream pull requests](upstream-prs.md).
+
+The [2026-10-17 discovery contract audit](network-midi-mdns-contract-audit.md)
+records the current MIDI integration and additional findings BA-007–009 and
+DI-001–003. The starting state below is historical; Network MIDI now uses
+the local system registration/browse API and its embedded responder is gone.
+
+The [#1591 RFC responder review](mdns-rfc6762-responder-review.md) adds
+BA-010–014 and packet-path reproductions of BA-005 and MD09. See the #1591
+follow-up for fixes; the historical runners below did not cover these cases.
 
 **State this starts from** (2026-10-12):
 

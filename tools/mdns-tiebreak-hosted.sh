@@ -142,9 +142,10 @@ while time.time() < end:
                 # a probe of our own for the same name, as a second host
                 port = 65535 if label == 'TieLose' else 1
                 rdata = struct.pack('>HHH', 0, 0, port) + wire('other.local')
-                packet = struct.pack('>HHHHHH', 0, 0, 1, 0, 1, 0) + wire(full) + \
+                packet = struct.pack('>HHHHHH', 0, 0, 1, 0, 2, 0) + wire(full) + \
                     struct.pack('>HH', 255, 1) + wire(full) + \
-                    struct.pack('>HHIH', 33, 1, 120, len(rdata)) + rdata
+                    struct.pack('>HHIH', 33, 1, 120, len(rdata)) + rdata + \
+                    wire(full) + struct.pack('>HHIH', 16, 1, 4500, 1) + b'\0'
                 tx.sendto(packet, (GROUP, PORT))
                 log.write('%f competed %s port %d\n' % (time.time(), label, port))
         if flags & 0x8000 and any(n == full and t == 33 and ttl for n, t, ttl in records):

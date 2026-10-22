@@ -1,0 +1,10 @@
+
+include $(SRCDIR)/config/aros.cfg
+
+#MM workbench-devs-camd-portwatch : includes linklibs
+
+%build_prog mmake=workbench-devs-camd-portwatch \
+    progname=portwatch targetdir=$(AROS_DEVS)/Midi \
+    files=portwatch
+
+%common

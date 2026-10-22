@@ -1,5 +1,38 @@
 # Pull requests from what there is, in an order that keeps upstream building
 
+**2026-10-20 publication update:** [#1742 adds NetMIDIStatus and #1743 adds
+AppleMIDI advertisement](network-midi-status-advertisement-2026-10-20.md).
+Both are drafts depending only on the open #1679 service; #1591 is merged.
+The advertisement slice excludes MIDI 2.0 and browse/resolve, so neither
+new PR depends on #1693 or #1695. Their GitHub checks pass.
+[Fresh Avahi discovery now passes](mdns-advertisement-avahi-2026-10-20.md),
+including late startup, daemon restart, rediscovery and withdrawal. The
+previous gap came from the test browser terminating after its initial list.
+
+**2026-10-20 service/review update:** [#1678 is merged, #1679 is ready for
+review, and the CAMD review fixes were published](camd-maintainer-review-2026-10-20.md).
+#1693 remains draft pending #1679; #1695 is ready for review. The dated
+entries below describe earlier publication stages.
+
+**2026-10-18 discovery update:** [#1695 is a dependent draft for browse and
+asynchronous resolve](mdns-discovery-followup-2026-10-18.md), proposing client
+polling. It depends on #1591 and event-API review in #1559. N9 consumer adoption,
+generic lookup/query and local-service reflection remain separate work.
+
+**2026-10-18 Network MIDI 2.0 update:** [#1692 corrects the library;
+#1693 is the dependent N7 service draft](network-midi2-publication-2026-10-18.md).
+The #1679 parent and generation templates also follow upstream's later
+move of the shared driver source/header into `camd/networkmidi2`.
+
+**2026-10-18 readiness update:** #1586, #1587 and #1588 are merged.
+[#1678 is rebased and ready for review; #1679 is rebased and remains
+a dependent draft](upstream-sessions-ready-2026-10-18.md).
+
+**2026-10-17 publication update:** [#1678 (N3) and #1679 (N4) are now
+dependent drafts](upstream-publication-2026-10-17.md). The same record covers
+the #1587 correction and separate #1676/#1677 cleanup fixes. The dated
+preparation history below remains useful for scope and dependencies.
+
 What of this repository could be sent to `aros-development-team/AROS`, cut
 into pull requests, and which has to be merged before which so that
 upstream `master` builds after every one of them. Written on 2026-10-12.
@@ -134,12 +167,12 @@ somewhat smaller.
 | **M3** | Browse, resolve, host lookup, queries; a client's own records answered (MD04). | about 3,000 | M2 | How clients get events: issue #1559, and MD01 here |
 | **M4** | `dnssd` and the other tools, the commodity, the Envoy bridge. | about 2,500 | M3 | Whether AROS wants them |
 | **C0** | One change to `OpenMidiDevice()`, seventeen lines: a driver's `MidiDeviceData` is looked for at aligned addresses. It is a defect of upstream's own and not about our drivers: on hosted x86-64, upstream's `camd.library` finds **no** driver in `DEVS:Midi`, its own `debugdriver` and `hostmidi` among them; a program listing the clusters sees none, and with the change sees all of them (seen in the clean tree on 2026-10-12, with CAMD built both ways). **Cut**: branch `camd-driver-scan-align` in `~/AROS-netmidi`, one commit on upstream `master` (it is `patches/aros-camd-driver-scan-align.patch` here). | 17 | Nothing | — |
-| **N1** | `netmididriver.c` built twice and the adapters' header: two `DEVS:Midi` drivers of sixteen ports and no network code. **Cut** on 2026-10-12: `tools/cut-netmidi-drivers.sh` writes it into an AROS tree as `workbench/devs/midi/netmidi`, and the branch `netmidi-drivers` in the worktree `~/AROS-netmidi` is upstream `master` with it and nothing else. Built by its own targets for hosted x86-64 and amiga-m68k; of the 126 headers it pulls in, none is one this repository changes. | 380 | Nothing to compile: it includes `proto/exec.h` and `midi/camddevices.h` only. **To be of any use, C0**: seen on 2026-10-12 | — |
-| **N2** | `rtpmidi.c`, `sender.c`, `receiver.c`, `timing.c` and their headers, as the link library `rtpmidi`. **Cut** on 2026-10-12: `tools/cut-netmidi-library.sh n2` writes it as `workbench/network/netmidi/rtpmidi`. It builds there by its own target for hosted x86-64, needs nothing but the C library's headers, and has no finding of the checker. | 3,600 | Nothing | Where upstream wants it; the tests stay here |
+| **N1** | `netmididriver.c` built twice and the adapters' header: two `DEVS:Midi` drivers of sixteen ports and no network code. **Cut** on 2026-10-12: `tools/cut-netmidi-drivers.sh` writes it into an AROS tree as `workbench/devs/camd/common`, and the branch `netmidi-drivers` in the worktree `~/AROS-netmidi` is upstream `master` with it and nothing else. Built by its own targets for hosted x86-64 and amiga-m68k; of the 126 headers it pulls in, none is one this repository changes. | 380 | Nothing to compile: it includes `proto/exec.h` and `midi/camddevices.h` only. **To be of any use, C0**: seen on 2026-10-12 | — |
+| **N2** | `rtpmidi.c`, `sender.c`, `receiver.c`, `timing.c` and their headers, as the link library `rtpmidi`. **Cut** on 2026-10-12: `tools/cut-netmidi-library.sh n2` writes it as `workbench/network/netmidid/rtpmidi`. It builds there by its own target for hosted x86-64, needs nothing but the C library's headers, and has no finding of the checker. | 3,600 | Nothing | Where upstream wants it; the tests stay here |
 | **N3** | `applemidi.c`, `session.c`, `peers.c`, `ports.c`, `clock.c`, into the same library. **Cut** the same day (`tools/cut-netmidi-library.sh n3`): built for hosted x86-64 and amiga-m68k. | 1,900 | N2 (they share headers and the library's build file) | — |
-| **N4** | The service: `main.c`, `adapters.c`, `network.c`, the configuration reader, the `services.d` file. AppleMIDI only, peers by address or by who invites; **no discovery**. **Cut** on 2026-10-13: `tools/cut-netmidi-service.sh n4` writes it as `workbench/network/netmidi/netmidid`, made from this repository's one source by `unifdef`; the service file is its own, `Enabled=no` as upstream's `sshd` has it. Built by its own target in the clean tree on N1 and N3, it passes the hosted test there on upstream's CAMD with C0: seven checks, the eighth (the advertisement) left out with discovery. No finding of the checker. | 2,200 | N1 for `netmidi_camd.h`, N2 and N3 for the library | — |
-| **N5** | `C:NetMIDIStatus`. **Cut** on 2026-10-13: `tools/cut-netmidi-status.sh` writes it as `workbench/network/netmidi/netmidistat`; it reads `netmidi_status.h` from the service's directory. | 80 | N4 for `netmidi_status.h`, unless the header goes with N1 | — |
-| **N6** | `ump.c` and `netmidi2.c` with their headers, as the link library `netmidi2`. **Cut** on 2026-10-13: `tools/cut-netmidi2-library.sh` writes it as `workbench/network/netmidi/netmidi2`. It needs nothing but the C library's headers and has no finding of the checker. | 2,100 | Nothing | PREP-2 |
+| **N4** | The service: `main.c`, `adapters.c`, `network.c`, the configuration reader, the `services.d` file. AppleMIDI only, peers by address or by who invites; **no discovery**. **Cut** on 2026-10-13: `tools/cut-netmidi-service.sh n4` writes it as `workbench/network/netmidid`, made from this repository's one source by `unifdef`; the service file is its own, `Enabled=no` as upstream's `sshd` has it. Built by its own target in the clean tree on N1 and N3, it passes the hosted test there on upstream's CAMD with C0: seven checks, the eighth (the advertisement) left out with discovery. No finding of the checker. | 2,200 | N1 for `netmidi_camd.h`, N2 and N3 for the library | — |
+| **N5** | `C:NetMIDIStatus`. **Cut** on 2026-10-13: `tools/cut-netmidi-status.sh` writes it as `workbench/network/netmidid/netmidistat`; it reads `netmidi_status.h` from the service's directory. | 80 | N4 for `netmidi_status.h`, unless the header goes with N1 | — |
+| **N6** | `ump.c` and `netmidi2.c` with their headers, as the link library `netmidi2`. **Cut** on 2026-10-13: `tools/cut-netmidi2-library.sh` writes it as `workbench/network/netmidid/netmidi2`. It needs nothing but the C library's headers and has no finding of the checker. | 2,100 | Nothing | PREP-2 |
 | **N7** | Network MIDI 2.0 in the service: the third socket, the translation, ports of the second driver, Host and Client by address. **Cut** on 2026-10-13: `tools/cut-netmidi-service.sh n7` writes the service again with `NETMIDI_MIDI2` left in, 580 lines more than N4's in seven files. No finding of the checker. | 580 over N4 | N4, N6 | — |
 | **N8** | `discovery.c`, registering half: `_apple-midi._udp` and `_midi2._udp`. **Cut** on 2026-10-13: `tools/cut-netmidi-service.sh n8`, the service with `NETMIDI_DISCOVERY` left in and `discovery.c` beside it. The checker has no finding. | 290 over N7 | N4, and **M2** for `proto/bonami.h` | — |
 | **N9** | `discovery.c`, browsing half: a peer or a Host wanted by name. **Cut** the same day: `tools/cut-netmidi-service.sh n9`, with `NETMIDI_BROWSE` left in too. The checker cannot read the hook the mDNS service calls, an AROS register-argument function, and so says nothing of `discovery.c` in this cut. | 290 over N8 | N8, and **M3** | — |
@@ -365,10 +398,10 @@ Waiting, with the reason:
 - **N3** needs N2 merged and **N4** needs N1 and N3: they are the
   branches `netmidi-sessions` and `netmidi-service` in `~/AROS-netmidi`,
   on top of the three sent, and go as each of those is in.
-- Upstream has since put a service of the stack in
-  `workbench/network/common/timesync`; N4 is cut into
-  `workbench/network/netmidi`. Which place is right is asked in N4's
-  pull request, not decided here.
+- The 2026-10-18 review requests `workbench/network/netmidid` for N4,
+  with its protocol link libraries in `rtpmidi/` and `netmidi2/` below
+  that directory. The service owns their network metatarget dependencies.
+  N6 should merge with its Network MIDI 2.0 consumer; N4 is AppleMIDI-only.
 
   Two things to know about such a tree: a new worktree has no translation
   catalogs until `git submodule update --init` is run in it, and the build

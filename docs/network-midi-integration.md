@@ -11,13 +11,19 @@ it inside MIDIHub.
 |---|---|---|
 | AppleMIDI session (IN, OK, NO, BY, CK, RS) | `network/rtpmidi/applemidi.c`, `network/rtpmidi/session.c`, `network/rtpmidi/peers.c` | up to eight peers, either role; host tests |
 | RTP-MIDI payload, recovery journal | `network/rtpmidi/rtpmidi.c`, `network/rtpmidi/sender.c`, `network/rtpmidi/timing.c` | chapters N, C, P, W, M, E, Q, F, X; host tests |
-| mDNS for `_apple-midi._udp` | `ports/aros/midihub/discovery.c` | registered through the system service (`bonami.library`, `mdnsd`); the embedded responder is gone; peers are not browsed for yet |
+| mDNS/DNS-SD for `_apple-midi._udp` and `_midi2._udp` | `ports/aros/midihub/discovery.c` | system registration and peer browsing exist locally; N8/N9 are cut for upstream; restart, names and metadata findings remain open |
 | Universal MIDI Packet, MIDI 1.0 translation | `src/ump.c` | host tests |
 | Network MIDI 2.0 (UDP), M2-124-UM | `src/netmidi2.c` | Host and Client sessions, FEC; host tests |
-| AROS program bridging to CAMD | `ports/aros/midihub/main.c` | AppleMIDI, one active peer, `MIDIHub In`/`Out` |
+| AROS CAMD transport runtime | `ports/aros/midihub/main.c`, `adapters.c` | `netmidid` serves the numbered network-driver ports; the package also retains its diagnostic bridge |
 
 The codecs and session state machines make no OS calls: the caller owns the
 sockets, the addresses and the clock. That is what lets them move.
+
+Current delivery uses `DEVS:Midi/applemidi` and `DEVS:Midi/networkmidi2`
+CAMD drivers with the separate `netmidid` runtime. The `.device` descriptions
+below are the earlier architectural proposal, not filenames delivered by the
+current upstream cuts. For the actual discovery dependencies and remaining
+defects, see the [mDNS/DNS-SD contract audit](network-midi-mdns-contract-audit.md).
 
 ## Network MIDI as a CAMD device interface
 
@@ -35,7 +41,7 @@ transport family and is exposed through `networkmidi2.device`.
 The devices should initially be packaged under AROS `contrib` while their
 interfaces, interoperability and peer lifecycle are validated. If they later
 graduate into the system tree, the native MIDI-device area under
-`workbench/devs/midi/` is the natural destination.
+`workbench/devs/camd/` is the destination requested in upstream review.
 
 ### Dynamic peers versus CAMD ports
 
@@ -87,9 +93,11 @@ responder, several processes would compete for UDP port 5353 and each keep
 its own cache, names and conflict state.
 
 AppleMIDI uses it since 2026-10-12: the session is registered as
-`_apple-midi._udp` through `bonami.library`, and the embedded responder,
-which could not run beside mdnsd, is gone. What remains is to browse for
-peers and to register `_midi2._udp`. See
+`_apple-midi._udp` through `bonami.library`, and the embedded responder
+is gone. The local runtime also registers `_midi2._udp` when enabled and
+browses for AppleMIDI peers and configured MIDI 2.0 Hosts. These are the
+N8/N9 cuts; the public AROS registration PR #1591 does not yet provide
+the browse API needed by N9. See
 [mDNS and AROSTCP](mdns-arostcp.md).
 
 The service is generic infrastructure: printers and file sharing can use it,
@@ -136,7 +144,7 @@ MIDI 2.0 Channel Voice message is 64. So, in two steps:
    [the CAMD integration design](camd-integration.md)).
 3. The AROS device runtime: validate AppleMIDI and Network MIDI 2.0 behind the CAMD device boundary, using the system mDNS registration and browse API.
 4. Upstream proposals: the system mDNS responder; the Network MIDI device under
-   `workbench/devs/midi`; then the UMP-aware CAMD.
+   `workbench/devs/camd`; then the UMP-aware CAMD.
 
 Interoperability targets for step 3: macOS and iOS Network MIDI (AppleMIDI);
 rtpMIDI on Windows; for Network MIDI 2.0, Windows MIDI Services and the MIDI

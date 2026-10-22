@@ -22,6 +22,35 @@ the patches held. Nothing of the Bluetooth or Raspberry Pi work is carried
 here any more; what the tree had before the update is kept outside the
 repository in `~/backups/aros-tree-2026-10-11-before-upstream-update`.
 
+## RTP-MIDI PR follow-up
+
+[`aros-rtpmidi-sysex-packet.patch`](aros-rtpmidi-sysex-packet.patch) applies
+to the published #1587 head `2ff4abfe52946f5c8df4bec2d4c0ab6dad15736b`,
+not the master base above. It adds per-packet sequence observation so
+intervening realtime/guard packets do not break SysEx assembly. The
+runtime must call the new helper as described in the
+[review and validation report](../docs/applemidi-review-2026-10-17.md).
+This patch is separate from both series below.
+
+[`aros-camd-expunge-result.patch`](aros-camd-expunge-result.patch) is a
+separate follow-up for legacy CAMD's `camd_init.c`: register the existing
+success-returning expunge wrapper instead of the void cleanup routine.
+See CAMD-001 in the same report for native evidence and validation scope.
+It replaces the callback handling also changed by
+`aros-camd-endpoint-expunge.patch`; do not stack these two patches.
+
+[`aros-netinfo-expunge-task.patch`](aros-netinfo-expunge-task.patch) keeps
+netinfo.device and its libraries loaded until its worker finishes cleanup.
+It was checked against the unchanged netinfo sources at #1586 head
+`2710bd6e56c831cc452117755c4bcac4a54f9b6a`. See NETINFO-001 in the report
+for the isolated native reproducer and the UP/SMP scope. It is a separate
+system fix, outside both patch series.
+
+The netinfo patch now includes all four commits through PR #1677 revision
+`a8684ee0f08bd9b294b5a35342cafdcaa2c2f1a7`, including reopen serialization
+and waiting-open expunge protection. It supersedes the initial snapshot
+described in the dated report; do not apply it over the existing PR branch.
+
 ## CAMD and USB MIDI
 
 The patches in [`camd-series`](camd-series), applied in that order to the base

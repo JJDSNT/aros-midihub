@@ -1,10 +1,82 @@
 # AROS upstream maintainer review — audit plan
 
-**Status:** Planned; read-only audit not yet completed.  
+**Status:** In progress; audit not yet completed. See the [first verified review pass](aros-upstream-review-2026-10-17.md) for pinned PR revisions, reproductions, and corrections to the initial hypotheses below.
+
+The [AppleMIDI maintainer-review correction](applemidi-maintainer-review-2026-10-18.md)
+records #1678's timeout/unit fixes and propagation to #1679/#1693, with exact
+regressions and x86-64/m68k library and service builds.
+
+The [browse/resolve draft follow-up](mdns-discovery-followup-2026-10-18.md)
+records the polled event proposal, validation and remaining MIDI consumer work.
+
+The [Bonami maintainer-review follow-up](bonami-review-followup-2026-10-18.md)
+records the #1591 ABI/header, task-ID and protocol fixes, 25 passing fixtures,
+native hosted checks and x86-64/m68k builds. Earlier #1591 findings below
+describe its original revision; remaining discovery/IPC work is listed there.
+
+The [Network MIDI 2.0 publication follow-up](network-midi2-publication-2026-10-18.md)
+records fixes for NM2-001/002 in #1692 and the dependent N7 service draft
+#1693, with updated-upstream builds, hosted AROS checks and independent
+NetUMP exchanges. The historical findings below describe the original heads.
+
+The [network MIDI discovery contract audit](network-midi-mdns-contract-audit.md)
+maps RFC/MIDI requirements to the actual Bonami calls and records BA-007–009
+and DI-001–003. It separates #1591's registration code from local M3/N9
+browse integration; those findings are additional unchecked review work.
+
+The [#1591 responder conformance pass](mdns-rfc6762-responder-review.md)
+records BA-010–014, executable evidence for BA-005/MD09, and 15 packet-path
+tests (6 pass, 9 fail). BA-013 is explicitly inherited from the parent.
+
+The [AppleMIDI correction and integration pass](applemidi-review-2026-10-17.md)
+records RTP-001, its local library/runtime fix, a patch for published #1587,
+regressions and independent peer testing. It also defines the N3/N4 PR
+scopes needed for a working address-based CAMD transport.
+It also records standalone CAMD/netinfo cleanup fixes and native validation
+of actual driver unload, service restart and two open/close/flush cycles.
+The [prepared branches and PR descriptions](upstream-preparation-2026-10-17.md)
+record the next reviewable changes, their exact parents and the current
+upstream base. The [publication follow-up](upstream-publication-2026-10-17.md)
+records the #1587 update and new #1676–1679, including the three drafts.
+
 **Scope:** [JJDSNT/aros-midihub](https://github.com/JJDSNT/aros-midihub) and open contributions to [aros-development-team/AROS](https://github.com/aros-development-team/AROS).  
 **Date recorded:** 2026-10-17.
 
-## Motivation
+## Review priority clarified by the project owner
+
+The objective is to improve the **currently open AROS PRs**, prioritizing
+correct, safe operation against their governing protocols. Bonami was the
+project owner's implementation proposal; its name, API, ABI and architecture
+have not been accepted by the AROS maintainer. Preserving them is not an
+acceptance criterion. Protocol requirements and established AROS interfaces
+are the review baseline.
+
+| Open PR | Governing contract | First review targets |
+|---|---|---|
+| #1591 mDNS/DNS-SD registration | RFC 6762 and RFC 6763, including referenced DNS encoding rules | Names/records, probing/conflicts, responses, TXT integrity, TTL/withdrawal; safe ownership and shutdown |
+| #1587 RTP-MIDI | RFC 6295 and its RTP requirements | Framing, bounds, timestamps/wrap, SysEx, journal encoding/recovery, packet loss |
+| #1588 UMP/Network MIDI 2.0 | MIDI Association M2-104-UM, M2-124-UM and applicable scaling specification | Packet validation, session transitions, UMP translation, identity, loss/reordering; NM2-001/002 |
+| #1507 BLE MIDI | BLE-MIDI and Bluetooth ATT/GATT specifications; established CAMD ABI | Both roles, fragmentation/SysEx, failure/backpressure, disconnect and callback lifetime |
+| #1586 network CAMD drivers | Established AROS CAMD ABI and Exec execution/lifetime contracts | Byte delivery, port ownership, backpressure, attach/detach, interrupts, portability |
+
+Use the applicable standard: AppleMIDI session/discovery behavior is specified
+by Apple; RTP-MIDI payload/recovery by RFC 6295; BLE, UMP and Network MIDI 2.0
+by their respective specifications.
+
+For each protocol finding record the **document/version, section, requirement
+strength, triggering input and observable consequence**. Distinguish mandatory
+MUST/shall requirements from SHOULD recommendations, optional features,
+implementation limits and API preferences. Link executed tests or mark
+reproduction pending. Tests against our own encoder alone do not establish
+independent interoperability.
+
+Prioritize functional conformance and memory safety, then AROS lifecycle/ABI
+compatibility, then maintainability. Local M3/N8/N9 findings remain integration
+work, not prerequisites for unrelated open PRs. Event delivery and public API
+choices remain proposals until decided. Renaming or replacing Bonami is not
+itself a requested fix.
+
+## Motivation for maintainer-style review
 
 The upstream CAMD fix [b1edfb9](https://github.com/aros-development-team/AROS/commit/b1edfb98664776c8d96f371bd030f16b6d7b6558) corrected a real x86-64 driver-discovery bug by aligning the scan for `MidiDeviceData`. The follow-up [1ce6fd9](https://github.com/aros-development-team/AROS/commit/1ce6fd9a984d9e9543b99e544a9a28cfdf7527a1) replaced hand-written alignment with `AROS_ROUNDUP2`, simplified the loop, and clarified the header layout. This was a maintainability refinement, **not evidence of another functional bug**. Future reviews should catch existing AROS idioms before submission.
 
@@ -191,21 +263,24 @@ This checklist tracks **review work still to do**, not implemented fixes. Mark a
 3. A checked item requires actual verification. Source inspection alone is not a test pass.
 4. Review first; do not push upstream changes or post PR review comments without explicit approval.
 
-## Permanent review scopes: Bonami, CAMD and Drivers (2026-10-17)
+## Review scopes: mDNS/DNS-SD, CAMD and Drivers (2026-10-17)
 
-The review is organized by **three enduring technical scopes**, rather than by PR number alone. A PR is a delivery vehicle; a scope owns the architectural contract and acceptance criteria. Existing findings and the prioritized checklist above remain authoritative until verified.
+The review uses three technical scopes, with open PRs as the current delivery
+priority. The discovery scope was initially called Bonami; it is named for
+the protocol here to reflect the owner's clarification. Existing BA finding
+identifiers are retained for traceability.
 
 | Scope | Ownership and boundaries | PRs / code | Current findings |
 |---|---|---|---|
-| **Bonami** | mDNS/DNS-SD discovery and announcement, registration lifecycle, Exec message-port IPC, daemon shutdown, ownership and resource safety | AROS #1591; Bonami/mdnsd sources | BA-001, BA-002, BA-003 |
+| **mDNS/DNS-SD** | Protocol conformance and safe registration, IPC and ownership | AROS #1591; current Bonami-derived sources | BA findings in linked reports; implementation identity is not fixed |
 | **CAMD** | Core CAMD library, ABI and compatibility, dynamic endpoints, identities, cluster projection, hot-plug notifications, driver loading and controlled unloading/replacement | AROS CAMD master/upstream changes; Midihub CAMD architecture and tests | Deferred driver unload/reload design; core ABI/lifecycle validation |
 | **Drivers** | MIDI transport protocols and libraries, CAMD transport adapters, BLE MIDI, AppleMIDI/RTP-MIDI, UMP/Network MIDI 2.0, data-path concurrency and interoperability | AROS #1507, #1586, #1587, #1588; Midihub network service and adapters | NM-001, NM2-001 |
 
 ### Scope interfaces and ownership
 
-- **Bonami ↔ Drivers:** Bonami owns discovery/registration and service identity; Drivers own MIDI transport session negotiation and data transfer. Review both sides of discovery-to-session handoff, with one cross-scope integration test.
+- **mDNS/DNS-SD ↔ Drivers:** discovery owns registration and resolved DNS-SD records; Drivers own MIDI session negotiation and data transfer. MIDI identity semantics come from the MIDI specifications. Test the discovery-to-session handoff.
 - **CAMD ↔ Drivers:** CAMD owns public legacy ABI, endpoint registry/lifecycle and driver-loading contract; Drivers own transport-specific `MidiDeviceData` implementations and runtime adapters. CAMD defines the safe unload contract; Drivers prove their shutdown and detach compliance.
-- **CAMD ↔ Bonami:** no direct protocol coupling expected. Cross-scope review is required only if lifecycle/notification behavior introduces a dependency.
+- **CAMD ↔ mDNS/DNS-SD:** no direct protocol coupling expected. Cross-scope review is required only if lifecycle/notification behavior introduces a dependency.
 
 ### Review deliverables for each scope
 
@@ -216,7 +291,7 @@ The review is organized by **three enduring technical scopes**, rather than by P
 
 ### Suggested execution order
 
-1. **Bonami:** resolve BA-001 first, then BA-002/BA-003 and full daemon/IPC review.
+1. **mDNS/DNS-SD:** review #1591 against the RFCs, including BA-007 name encoding, then verify ownership and IPC findings. Treat local M3 browse/event design separately.
 2. **CAMD:** independently audit core lifecycle, current no-unload policy and the feasibility of administrative unload/reload; preserve legacy behavior.
 3. **Drivers:** validate NM2-001 and NM-001; finish full reviews of #1507, #1586, #1587 and #1588, then exercise cross-scope integration.
 

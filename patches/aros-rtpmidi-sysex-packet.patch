@@ -1,0 +1,40 @@
+diff --git a/workbench/network/netmidi/rtpmidi/include/rtpmidi/rtpmidi.h b/workbench/network/netmidi/rtpmidi/include/rtpmidi/rtpmidi.h
+index 571fee2..0c788b7 100644
+--- a/workbench/network/netmidi/rtpmidi/include/rtpmidi/rtpmidi.h
++++ b/workbench/network/netmidi/rtpmidi/include/rtpmidi/rtpmidi.h
+@@ -272,6 +272,11 @@ struct rtpmidi_sysex_assembler {
+ void rtpmidi_sysex_buffer(struct rtpmidi_sysex_assembler *assembler,
+                           uint8_t *buffer, size_t capacity);
+ void rtpmidi_sysex_reset(struct rtpmidi_sysex_assembler *assembler);
++/* Observe every validated, fresh RTP packet before feeding its commands,
++ * including packets without SysEx. A sequence gap abandons partial SysEx.
++ * The caller must filter duplicate and older packets first. */
++void rtpmidi_sysex_packet(struct rtpmidi_sysex_assembler *assembler,
++                         uint16_t sequence);
+ int rtpmidi_sysex_feed(struct rtpmidi_sysex_assembler *assembler,
+                   const struct rtpmidi_event *event, uint16_t sequence,
+                   const uint8_t **message, size_t *length);
+diff --git a/workbench/network/netmidi/rtpmidi/rtpmidi.c b/workbench/network/netmidi/rtpmidi/rtpmidi.c
+index f526d73..3201f5f 100644
+--- a/workbench/network/netmidi/rtpmidi/rtpmidi.c
++++ b/workbench/network/netmidi/rtpmidi/rtpmidi.c
+@@ -1090,6 +1090,19 @@ void rtpmidi_sysex_reset(struct rtpmidi_sysex_assembler *assembler)
+     assembler->active = 0;
+ }
+ 
++void rtpmidi_sysex_packet(struct rtpmidi_sysex_assembler *assembler,
++                         uint16_t sequence)
++{
++    if (!assembler->active)
++        return;
++    if (sequence != assembler->last_sequence &&
++        sequence != (uint16_t)(assembler->last_sequence + 1)) {
++        rtpmidi_sysex_reset(assembler);
++        return;
++    }
++    assembler->last_sequence = sequence;
++}
++
+ int rtpmidi_sysex_feed(struct rtpmidi_sysex_assembler *assembler,
+                   const struct rtpmidi_event *event, uint16_t sequence,
+                   const uint8_t **message, size_t *length)

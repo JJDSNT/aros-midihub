@@ -1,0 +1,111 @@
+diff --git a/workbench/devs/netinfo/base.h b/workbench/devs/netinfo/base.h
+index cab672a277..3b01c04e63 100644
+--- a/workbench/devs/netinfo/base.h
++++ b/workbench/devs/netinfo/base.h
+@@ -76,6 +76,8 @@ struct NetInfoDevice {
+   struct NetInfoMap     *nid_Maps[NETINFO_UNITS];
+   const char            *nid_dbuser;
+   const char            *nid_dbgroup;
++  ULONG                  nid_WorkerID;	/* GetETaskID() of the last worker */
++  ULONG                  nid_OpenWaiters; /* DevOpen waiting with nid_Lock dropped */
+ };
+ 
+ #define nid_Task nid_Port->mp_SigTask
+diff --git a/workbench/devs/netinfo/netinfo.c b/workbench/devs/netinfo/netinfo.c
+index 43ae7b157d..53bbc29d12 100644
+--- a/workbench/devs/netinfo/netinfo.c
++++ b/workbench/devs/netinfo/netinfo.c
+@@ -142,6 +142,8 @@ static int NetInfo__DevInit(LIBBASETYPEPTR LIBBASE)
+     D(bug("[NetInfo] %s()\n", __func__));
+ 
+     LIBBASE->nid_Task = NULL;
++    LIBBASE->nid_WorkerID = 0;
++    LIBBASE->nid_OpenWaiters = 0;
+     InitSemaphore(LIBBASE->nid_Lock);
+     return TRUE;
+ }
+@@ -161,6 +163,19 @@ static int NetInfo__DevOpen(LIBBASETYPEPTR LIBBASE,
+     if (unit >= NETINFO_UNITS)
+         goto zap;
+ 
++    /* Expunge may already have asked this worker to exit. Do not attach
++     * a unit to maps it is about to free. Drop the lock while waiting,
++     * since the worker needs it to finish its cleanup. */
++    while (LIBBASE->nid_Task != NULL && LIBBASE->nid_Death != NULL &&
++           LIBBASE->nid_Death->mn_Node.ln_Type != NT_MESSAGE) {
++        /* The generated open count is not incremented until we return. */
++        LIBBASE->nid_OpenWaiters++;
++        ReleaseSemaphore(LIBBASE->nid_Lock);
++        Delay(1);
++        ObtainSemaphore(LIBBASE->nid_Lock);
++        LIBBASE->nid_OpenWaiters--;
++    }
++
+     /*
+      * Create device task if necessary
+      */
+@@ -173,6 +188,12 @@ static int NetInfo__DevOpen(LIBBASETYPEPTR LIBBASE,
+         if (LIBBASE->nid_DOSBase == NULL)
+             break;
+ 
++        /* A previous worker may still be leaving: expunge tracks one. */
++        while (LIBBASE->nid_WorkerID != 0 &&
++               FindTaskByPID(LIBBASE->nid_WorkerID) != NULL)
++            Delay(1);
++        LIBBASE->nid_WorkerID = 0;
++
+         mp = CreateMsgPort();
+         if (mp == NULL)
+             break;
+@@ -243,16 +264,27 @@ static int NetInfo__DevClose(LIBBASETYPEPTR LIBBASE,
+  */
+ static int NetInfo__DevExpunge(LIBBASETYPEPTR LIBBASE)
+ {
++    int ready = FALSE;
++
+     D(bug("[NetInfo] %s()\n", __func__));
+ 
+     if (AttemptSemaphore(LIBBASE->nid_Lock)) {
+         if (LIBBASE->nid_Task) {
+             if (LIBBASE->nid_Death && LIBBASE->nid_Death->mn_Node.ln_Type == NT_MESSAGE)
+                 ReplyMsg(LIBBASE->nid_Death);
++        } else if (LIBBASE->nid_OpenWaiters == 0 &&
++                   (LIBBASE->nid_WorkerID == 0 ||
++                    FindTaskByPID(LIBBASE->nid_WorkerID) == NULL)) {
++            /* Exec removes the worker only after it has left this module
++             * for DOS's exit code. Forbid() alone would not stop it on
++             * another CPU. */
++            LIBBASE->nid_WorkerID = 0;
++            ready = TRUE;
+         }
+         ReleaseSemaphore(LIBBASE->nid_Lock);
+     }
+-    return TRUE;
++    /* The worker still needs this module and its auto-opened libraries. */
++    return ready;
+ }
+ 
+ ADD2OPENDEV(NetInfo__DevOpen, 0)
+diff --git a/workbench/devs/netinfo/server.c b/workbench/devs/netinfo/server.c
+index 6abae7dff3..d8e4dd71d8 100644
+--- a/workbench/devs/netinfo/server.c
++++ b/workbench/devs/netinfo/server.c
+@@ -41,6 +41,9 @@ SAVEDS ASM LONG NetInfoStartup(void)
+         LONG len;
+ 
+         dev = (struct NetInfoDevice *) ok_message->mn_Node.ln_Name;
++        /* Before anything else: until this task is gone it may run code of
++         * this module, so expunge waits for this ID to disappear. */
++        dev->nid_WorkerID = GetETaskID(FindTask(NULL));
+         D(bug("[NetInfo:Server] %s: device @ 0x%p\n", __func__, dev));
+ 
+         len = GetVar("SYS/userdb", buf, sizeof(buf), GVF_GLOBAL_ONLY);
+@@ -204,6 +207,8 @@ static void NetInfoPoll(struct NetInfoDevice *nid)
+         if (nid->nid_Death)
+             DeleteIORequest(nid->nid_Death), nid->nid_Death = NULL;
+ 
++        /* Still running code of this module: expunge also waits for this
++         * task to be gone (nid_WorkerID), on any CPU. */
+         nid->nid_Task = NULL;
+ 
+         ReleaseSemaphore(nid->nid_Lock);

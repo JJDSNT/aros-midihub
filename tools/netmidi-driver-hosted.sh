@@ -69,6 +69,8 @@ prepare() {
     printf 'HOST 192.168.166.2 arosbox.arosnet arosbox\nDOMAIN arosnet 192.168.166.\n' \
         > "$db/netdb-myhost"
     sed -i 's/OPENGUI=.*/OPENGUI=NO/' "$db/general.config"
+    # Upstream's N4 cut installs the service disabled by default.
+    sed -i 's/^Enabled=.*/Enabled=yes/' "$db/services.d/netmidi"
     # have the service write what it would print to a file
     printf 'SYS:netmidid.log' > "$sys/Prefs/Env-Archive/netmidid.log"
     sudo setcap cap_net_raw,cap_net_admin+ep "$sys/boot/linux/AROSBootstrap"
@@ -187,5 +189,11 @@ else
     echo "FAIL: after the service was started again"
     status=1
 fi
+for phase in layout comings; do
+    if grep -Eq 'Trap signal|free-list corruption' "$work/serial-$phase.log"; then
+        echo "FAIL: native fault during $phase (see serial-$phase.log)"
+        status=1
+    fi
+done
 echo "logs: $work"
 exit $status

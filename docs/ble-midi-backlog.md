@@ -1,5 +1,11 @@
 # BLE MIDI backlog — what the driver cost and what is owed
 
+**2026-10-17 review:** [current improvement priorities and validation](ble-midi-review-2026-10-17.md)
+identify ignored TX error handling as a reliability target. The local
+codec passes ASan/UBSan, but radio/lifecycle evidence is still missing.
+Reserved-header-bit acceptance is receiver tolerance, not an explicit
+RP-052 requirement. C0 is now upstream through merged #1585.
+
 **Scope:** `btmidi.class` as sent to AROS in PR #1507 (worktree
 `~/AROS-btmidi`, branch `btmidi-class-v2`), the packet codec in
 `src/ble_midi.c`, the older copy of the class in `ports/aros/btmidi`, and
