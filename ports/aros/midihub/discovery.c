@@ -227,8 +227,9 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
         if (!discovery->browse[i].reference)
             ++pending;
 #endif
-    if (!pending ||
-        (discovery->last_attempt && now - discovery->last_attempt < 100000))
+    if (!discovery->count && !pending)
+        return 0;
+    if (discovery->last_attempt && now - discovery->last_attempt < 100000)
         return registered;
     discovery->last_attempt = now ? now : 1;
 
@@ -242,6 +243,24 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
         if (OpenMDNSEngine() != MDNS_OK)
             return registered;      /* mdnsd is not running, yet */
         discovery->engine = 1;
+    }
+    /* A successful registration is not proof that mdnsd is still the same
+       process. A harmless update validates its handle even if the daemon
+       stopped and restarted between polls. On success mdnsd also refreshes
+       the announcement; the check is bounded to once per ten seconds.
+       No private daemon data or callback API is needed. */
+    for (i = 0; i < discovery->count; ++i) {
+        struct TagItem unchanged[] = { { TAG_DONE, 0 } };
+        LONG result;
+
+        if (!discovery->service[i].reference)
+            continue;
+        result = UpdateServiceA(discovery->service[i].reference, unchanged);
+        if (result == MDNSERR_NOENGINE || result == MDNSERR_NOTFOUND ||
+            result == MDNSERR_BADPARAM) {
+            forget(discovery);
+            return 0;
+        }
     }
     for (i = 0; i < discovery->count; ++i) {
         /* the service writes the registration where the tag says */

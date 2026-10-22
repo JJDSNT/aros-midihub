@@ -1,0 +1,10 @@
+# AppleMIDI service. Publishes _apple-midi._udp through system mdnsd.
+# Configure the session in ENV:NetMIDI. Remains usable by IPv4 without mDNS.
+# Order=10 starts it after mdnsd; late availability is retried.
+# Disabled by default because enabling the service opens its UDP pair.
+Name=Network MIDI
+Path=SYS:System/Network/Services/netmidid
+Order=10
+StopSig=12
+Policy=restart
+Enabled=no

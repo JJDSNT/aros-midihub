@@ -1,6 +1,6 @@
 #!/bin/sh
 # Writes the pull request N5 of docs/upstream-pr-graph.md into an AROS
-# source tree: C:NetMIDIStatus, in workbench/network/netmidi/netmidistat.
+# source tree: C:NetMIDIStatus, in workbench/network/netmidid/netmidistat.
 # The source is this repository's own, copied as it is; only the build
 # file is the cut's.
 #
@@ -13,11 +13,12 @@ set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 tree=$(realpath "$1")
-test -f "$tree/workbench/network/netmidi/netmidid/netmidi_status.h"
-cut="$tree/workbench/network/netmidi/netmidistat"
+test -f "$tree/workbench/network/netmidid/netmidi_status.h"
+cut="$tree/workbench/network/netmidid/netmidistat"
 rm -rf "$cut"
 mkdir -p "$cut"
 cp "$here/ports/aros/netmidi/netmidistat.c" "$cut/"
 # kept under another name here, where mmake would otherwise read it too
 cp "$here/upstream/n5-status/mmakefile.src.cut" "$cut/mmakefile.src"
+cp "$here/upstream/n5-status/README.md" "$cut/README.md"
 echo "$cut"

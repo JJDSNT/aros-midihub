@@ -4,9 +4,9 @@ include $(SRCDIR)/config/aros.cfg
 # C:NetMIDIStatus prints what the network MIDI service says about itself:
 # the peer behind each port of its drivers, and what has passed.
 
-USER_INCLUDES := -I$(SRCDIR)/$(CURDIR)/../netmidid
+USER_INCLUDES := -I$(SRCDIR)/$(CURDIR)/..
 
-#MM- workbench-network-netmidi : workbench-network-netmidistat
+#MM- workbench-network-netmidid : workbench-network-netmidistat
 #MM workbench-network-netmidistat : includes linklibs
 
 %build_prog mmake=workbench-network-netmidistat \

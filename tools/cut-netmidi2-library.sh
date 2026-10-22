@@ -1,7 +1,7 @@
 #!/bin/sh
 # Writes the pull request N6 of docs/upstream-pr-graph.md into an AROS
 # source tree: the Universal MIDI Packet and Network MIDI 2.0 code as the
-# link library netmidi2, in workbench/network/netmidi/netmidi2. The
+# link library netmidi2, in workbench/network/netmidid/netmidi2. The
 # sources are this repository's own, copied as they are; only the build
 # file is the cut's.
 #
@@ -14,7 +14,7 @@ set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 tree=$(realpath "$1")
 test -d "$tree/workbench/network"
-cut="$tree/workbench/network/netmidi/netmidi2"
+cut="$tree/workbench/network/netmidid/netmidi2"
 rm -rf "$cut"
 mkdir -p "$cut/include/ump" "$cut/include/netmidi2"
 cp "$here/src/ump.c" "$here/src/netmidi2.c" "$cut/"

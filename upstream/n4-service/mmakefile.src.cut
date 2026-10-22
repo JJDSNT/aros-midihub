@@ -12,11 +12,11 @@ include $(SRCDIR)/config/aros.cfg
 FILES := main adapters network config
 
 USER_INCLUDES := -I$(SRCDIR)/$(CURDIR)/include \
-    -I$(SRCDIR)/$(CURDIR)/../rtpmidi/include \
-    -I$(SRCDIR)/workbench/devs/midi/netmidi
+    -I$(SRCDIR)/$(CURDIR)/rtpmidi/include \
+    -I$(SRCDIR)/workbench/devs/camd/networkmidi2
 USER_CPPFLAGS := -DNETMIDI_SERVICE
 
-#MM- workbench-network-netmidi : workbench-network-netmidid
+#MM- workbench-network : workbench-network-netmidid
 #MM- workbench-network-netmidid : workbench-network-netmidid-svccfg
 #MM workbench-network-netmidid : includes linklibs linklibs-rtpmidi \
 #MM      network-includes-copy
