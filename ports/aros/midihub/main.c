@@ -224,7 +224,7 @@ static int periodic(struct netmidid *d, uint64_t now)
         if (registered >= 0)
             discovered = registered;
 #ifdef NETMIDI_BROWSE
-        while (netmidi_discovery_next(d->discovery, &seen)) {
+        while (netmidi_discovery_next(d->discovery, now, &seen)) {
             const struct netmidid_transport *owner;
 
             if (strcmp(seen.name, d->session_name) == 0)

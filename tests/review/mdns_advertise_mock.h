@@ -61,3 +61,75 @@ static void DeregisterService(void *reference)
     ++withdrawals;
     active = 0;
 }
+
+#ifdef NETMIDI_BROWSE
+/* The queued browse of mdnsd's DISCOVERY.md: one queue per search, read
+   in the caller's task. */
+typedef unsigned char UBYTE;
+typedef unsigned short UWORD;
+typedef unsigned long ULONG;
+typedef char *STRPTR;
+enum { MDNS_EventMode = 100, MDNS_BrowseRef, MDNS_EVENT_QUEUE = 1 };
+enum { MDNSERR_NOTREADY = 20, MDNSERR_BUSY, MDNSERR_CANCELLED };
+enum { MEVENT_ADD = 1, MEVENT_REMOVE, MEVENT_RESOLVED };
+#define MDNS_DISCOVERY_TXT_MAX 512
+struct MDNSDiscoveryEvent {
+    ULONG de_Code;
+    ULONG de_Address;
+    ULONG de_Interface;
+    UWORD de_Port;
+    UWORD de_TXTLength;
+    char de_Name[64];
+    char de_Type[32];
+    UBYTE de_TXT[MDNS_DISCOVERY_TXT_MAX];
+};
+static struct MDNSDiscoveryEvent queued[8];
+static int queued_count, browses_started, browses_stopped, reads;
+static LONG forced_read;
+static uintptr_t next_browse = 100;
+static LONG BrowseServiceTypeA(STRPTR type, void *hook, struct TagItem *tags)
+{
+    void **result = NULL;
+    int queue_mode = 0;
+
+    assert(type && !hook);
+    if (!available) return MDNSERR_NOENGINE;
+    for (; tags->ti_Tag; ++tags) {
+        if (tags->ti_Tag == MDNS_EventMode)
+            queue_mode = tags->ti_Data == MDNS_EVENT_QUEUE;
+        if (tags->ti_Tag == MDNS_BrowseRef) result = (void **)tags->ti_Data;
+    }
+    assert(queue_mode && result);
+    *result = (void *)++next_browse;
+    ++browses_started;
+    return MDNS_OK;
+}
+static void StopBrowse(void *reference) { assert(reference); ++browses_stopped; }
+static LONG ReadMDNSEvent(void *reference, struct MDNSDiscoveryEvent *event)
+{
+    int i;
+
+    assert(reference && event);
+    ++reads;
+    if (forced_read) return forced_read;
+    if (!queued_count) return MDNSERR_NOTREADY;
+    *event = queued[0];
+    for (i = 1; i < queued_count; ++i)
+        queued[i - 1] = queued[i];
+    --queued_count;
+    return MDNS_OK;
+}
+static void queue_event(ULONG code, const char *name, const UBYTE *address,
+                        UWORD port, const UBYTE *txt, UWORD txt_length)
+{
+    struct MDNSDiscoveryEvent *e = &queued[queued_count++];
+
+    memset(e, 0, sizeof(*e));
+    e->de_Code = code;
+    memcpy(&e->de_Address, address, 4);
+    e->de_Port = port;
+    strcpy(e->de_Name, name);
+    memcpy(e->de_TXT, txt, txt_length);
+    e->de_TXTLength = txt_length;
+}
+#endif

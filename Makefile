@@ -33,12 +33,16 @@ HEADERS = include/netmidi/limits.h include/netmidi/ports.h include/netmidi/text.
           ports/aros/midihub/netmidid.h \
           ports/aros/camd_bridge.h
 
-.PHONY: fuzz test test-blemidi-class test-components check-patches test-network test-synth test-synth-fluid demo m68k synth-m68k clean
+.PHONY: fuzz test test-blemidi-class test-components test-discovery check-patches test-network test-synth test-synth-fluid demo m68k synth-m68k clean
 
 test-components:
 	CC='$(CC)' CFLAGS='$(CFLAGS)' python3 tools/check-netmidi-components.py
 
-test: test-components build/config-test build/protocol-test build/applemidi-test build/blemidi-class-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test build/camd-identity-file-test build/camd-identity-store-recovery-test build/camd-legacy-identity-set-test build/camd-app-endpoint-test
+# discovery.c's AROS half against mocked bonami.library calls
+test-discovery:
+	CC='$(CC)' tools/test-discovery-fixtures.sh
+
+test: test-components test-discovery build/config-test build/protocol-test build/applemidi-test build/blemidi-class-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test build/camd-identity-file-test build/camd-identity-store-recovery-test build/camd-legacy-identity-set-test build/camd-app-endpoint-test
 	./build/protocol-test
 	./build/applemidi-test
 	./build/config-test

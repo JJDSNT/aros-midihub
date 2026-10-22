@@ -980,7 +980,17 @@ static int applemidi_periodic(struct netmidid *d, void *self, uint64_t now)
     (void)d;
 #ifdef NETMIDI_BROWSE
     /* The peer we want is advertised and we have no session with it:
-       invite it, and again more slowly while it does not answer. */
+       invite it, and again more slowly while it does not answer, up to
+       once a minute, and from the start again after a session. */
+    if (rt->wanted_present) {
+        int wanted = configured_index(rt);
+
+        if (wanted >= 0 && rt->peers.peer[wanted].session.phase ==
+                               APPLEMIDI_SESSION_CONNECTED) {
+            rt->wanted_tried = now ? now : 1;
+            rt->wanted_wait = NETMIDID_WANTED_FIRST_WAIT;
+        }
+    }
     if (rt->wanted_present && configured_index(rt) < 0 &&
         (!rt->wanted_tried ||
          netmidid_elapsed(now, rt->wanted_tried) >= rt->wanted_wait)) {

@@ -9,15 +9,9 @@
 #include <string.h>
 
 #ifdef __AROS__
-#ifdef NETMIDI_BROWSE
-#include <aros/asmcall.h>
-#endif
 #include <exec/libraries.h>
 #include <exec/memory.h>
 #include <proto/exec.h>
-#ifdef NETMIDI_BROWSE
-#include <utility/hooks.h>
-#endif
 #include <proto/bonami.h>
 #include <bonami/mdns.h>
 
@@ -46,7 +40,7 @@ void netmidi_discovery_begin(struct netmidi_discovery *discovery)
     /* a search is asked for anew by the transport that wants it */
     stop_browses(discovery);
     discovery->browses = 0;
-    discovery->read = discovery->written;
+    discovery->reading = 0;
 #endif
     /* what changed is seen to at once */
     discovery->last_attempt = 0;
@@ -154,99 +148,53 @@ int netmidi_discovery_browse(struct netmidi_discovery *discovery,
     return discovery->browses++;
 }
 
-int netmidi_discovery_next(struct netmidi_discovery *discovery,
-                           struct netmidi_discovered *event)
+static int same_letters(const uint8_t *text, const char *key, size_t length)
 {
-    if (!discovery || !event || discovery->read == discovery->written)
-        return 0;
-    /* overtaken: the oldest ones are lost, the newest kept */
-    if (discovery->written - discovery->read > NETMIDI_DISCOVERY_EVENTS)
-        discovery->read = discovery->written - NETMIDI_DISCOVERY_EVENTS;
-    *event = discovery->event[discovery->read % NETMIDI_DISCOVERY_EVENTS];
-    ++discovery->read;
+    size_t i;
+
+    for (i = 0; i < length; ++i) {
+        unsigned a = text[i], b = (unsigned char)key[i];
+
+        if (a >= 'A' && a <= 'Z')
+            a += 'a' - 'A';
+        if (b >= 'A' && b <= 'Z')
+            b += 'a' - 'A';
+        if (a != b)
+            return 0;
+    }
     return 1;
+}
+
+int netmidi_discovery_txt_value(const uint8_t *txt, size_t length,
+                                const char *key, char *value, size_t size)
+{
+    size_t at = 0, key_length;
+
+    if (!txt || !key || !value || !size)
+        return -1;
+    key_length = strlen(key);
+    while (at < length) {
+        size_t n = txt[at++];
+        const uint8_t *item = txt + at;
+
+        if (n > length - at)
+            return -1;              /* a string longer than the record */
+        at += n;
+        if (n > key_length && item[key_length] == '=' &&
+            same_letters(item, key, key_length)) {
+            size_t i, out = 0;
+
+            for (i = key_length + 1; i < n && item[i] && out + 1 < size; ++i)
+                value[out++] = (char)item[i];
+            value[out] = 0;
+            return 0;
+        }
+    }
+    return -1;
 }
 #endif
 
 #ifdef __AROS__
-
-#ifdef NETMIDI_BROWSE
-/* Called in mdnsd's process, not ours: it may only copy what it is given.
- * The program looks at the ring from its own loop. */
-AROS_UFH3(static IPTR, browse_hook,
-    AROS_UFHA(struct Hook *, hook, A0),
-    AROS_UFHA(APTR, object, A2),
-    AROS_UFHA(struct MDNSBrowseMsg *, message, A1))
-{
-    AROS_USERFUNC_INIT
-
-    struct netmidi_discovery *discovery = hook->h_Data;
-    struct netmidi_discovered *event;
-    unsigned int i;
-
-    (void)object;
-    if (message->bm_Code == MEVENT_ADD &&
-        (!message->bm_Instance.si_HostAddr || !message->bm_Instance.si_Port))
-        return 0;                   /* not resolved yet: it will come again */
-    if (message->bm_Code != MEVENT_ADD && message->bm_Code != MEVENT_REMOVE)
-        return 0;
-    Forbid();
-    event = &discovery->event[discovery->written % NETMIDI_DISCOVERY_EVENTS];
-    for (i = 0; i + 1 < sizeof(event->name) &&
-                message->bm_Instance.si_Name[i]; ++i)
-        event->name[i] = message->bm_Instance.si_Name[i];
-    event->name[i] = 0;
-    /* the address arrives in network order */
-    {
-        const UBYTE *b = (const UBYTE *)&message->bm_Instance.si_HostAddr;
-        event->address = ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) |
-                         ((uint32_t)b[2] << 8) | b[3];
-    }
-    event->port = message->bm_Instance.si_Port;
-    event->present = message->bm_Code == MEVENT_ADD;
-    event->browse = (int)(IPTR)hook->h_SubEntry;
-    /* The text record comes as its items with a space between, a space
-       inside an item with a backslash before it. */
-    event->endpoint[0] = 0;
-    {
-        static const char key[] = "UMPEndpointName=";
-        const char *text = (const char *)message->bm_Instance.si_TXT;
-        unsigned int length = message->bm_Instance.si_TXTLength;
-        unsigned int at = 0, out;
-
-        while (at < length) {
-            unsigned int k = 0;
-
-            while (k < sizeof(key) - 1 && at + k < length &&
-                   text[at + k] == key[k])
-                ++k;
-            if (k == sizeof(key) - 1) {
-                at += k;
-                for (out = 0; at < length && text[at] != ' ' &&
-                              out + 1 < sizeof(event->endpoint); ++at) {
-                    if (text[at] == '\\' && at + 1 < length)
-                        ++at;
-                    event->endpoint[out++] = text[at];
-                }
-                event->endpoint[out] = 0;
-                break;
-            }
-            /* to the next item: past the next space that is not escaped */
-            while (at < length && text[at] != ' ') {
-                if (text[at] == '\\' && at + 1 < length)
-                    ++at;
-                ++at;
-            }
-            ++at;
-        }
-    }
-    ++discovery->written;
-    Permit();
-    return 0;
-
-    AROS_USERFUNC_EXIT
-}
-#endif
 
 /* The service went away: what it held for us went with it. */
 static void forget(struct netmidi_discovery *discovery)
@@ -260,6 +208,7 @@ static void forget(struct netmidi_discovery *discovery)
 #ifdef NETMIDI_BROWSE
     for (i = 0; i < discovery->browses; ++i)
         discovery->browse[i].reference = NULL;
+    discovery->reading = 0;
 #endif
 }
 
@@ -395,35 +344,33 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery, uint64_t now)
         }
     }
 #ifdef NETMIDI_BROWSE
+    /* Each search has a queue of its own, read in our task: no hook, and
+       nothing of ours runs in mdnsd (DISCOVERY.md of mdnsd). */
     for (i = 0; i < discovery->browses; ++i) {
         struct TagItem tags[] = {
+            { MDNS_EventMode, MDNS_EVENT_QUEUE },
             { MDNS_BrowseRef, (IPTR)&discovery->browse[i].reference },
             { TAG_DONE, 0 }
         };
-        struct Hook *hook = discovery->browse[i].hook;
+        LONG result;
 
         if (discovery->browse[i].reference)
             continue;
-        if (!hook) {
-            hook = AllocMem(sizeof(*hook), MEMF_PUBLIC | MEMF_CLEAR);
-            if (!hook)
-                return registered;
-            hook->h_Entry = (HOOKFUNC)(APTR)AROS_ASMSYMNAME(browse_hook);
-            hook->h_Data = discovery;
-            hook->h_SubEntry = (APTR)(IPTR)i;       /* which search */
-            discovery->browse[i].hook = hook;
-        }
-        if (BrowseServiceTypeA((STRPTR)discovery->browse[i].type, hook,
-                               tags) != MDNS_OK)
+        result = BrowseServiceTypeA((STRPTR)discovery->browse[i].type, NULL,
+                                    tags);
+        if (result != MDNS_OK)
             discovery->browse[i].reference = NULL;
+        if (result == MDNSERR_NOENGINE) {
+            forget(discovery);
+            return 0;
+        }
     }
 #endif
     return registered;
 }
 
 #ifdef NETMIDI_BROWSE
-/* The searches end: after StopBrowse the service calls the hook no more,
-   and the hooks are freed. */
+/* The searches end, and what their queues held with them. */
 static void stop_browses(struct netmidi_discovery *discovery)
 {
     int i;
@@ -434,12 +381,80 @@ static void stop_browses(struct netmidi_discovery *discovery)
             if (discovery->browse[i].reference)
                 StopBrowse(discovery->browse[i].reference);
     }
-    for (i = 0; i < discovery->browses; ++i) {
+    for (i = 0; i < discovery->browses; ++i)
         discovery->browse[i].reference = NULL;
-        if (discovery->browse[i].hook)
-            FreeMem(discovery->browse[i].hook, sizeof(struct Hook));
-        discovery->browse[i].hook = NULL;
+    discovery->reading = 0;
+}
+
+/* What the event says, as the transports are told it. */
+static void take(struct netmidi_discovered *seen,
+                 const struct MDNSDiscoveryEvent *event, int browse)
+{
+    const UBYTE *b = (const UBYTE *)&event->de_Address;
+    size_t length = event->de_TXTLength;
+
+    memset(seen, 0, sizeof(*seen));
+    memcpy(seen->name, event->de_Name, sizeof(seen->name) - 1);
+    /* the address arrives in network order, the port in ours */
+    seen->address = ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) |
+                    ((uint32_t)b[2] << 8) | b[3];
+    seen->port = event->de_Port;
+    seen->present = event->de_Code == MEVENT_ADD;
+    seen->browse = browse;
+    if (length > sizeof(event->de_TXT))
+        length = sizeof(event->de_TXT);
+    netmidi_discovery_txt_value(event->de_TXT, length, "UMPEndpointName",
+                                seen->endpoint, sizeof(seen->endpoint));
+}
+
+int netmidi_discovery_next(struct netmidi_discovery *discovery, uint64_t now,
+                           struct netmidi_discovered *seen)
+{
+    if (!discovery || !seen || !discovery->library || !discovery->engine)
+        return 0;
+    if (!discovery->reading) {
+        if (discovery->last_read && now - discovery->last_read < 10000)
+            return 0;
+        discovery->last_read = now ? now : 1;
+        discovery->reading = 1;
+        discovery->cursor = 0;
     }
+    BonamiBase = discovery->library;
+    while (discovery->cursor < discovery->browses) {
+        int i = discovery->cursor;
+        struct MDNSDiscoveryEvent event;
+        LONG result;
+
+        if (!discovery->browse[i].reference) {
+            ++discovery->cursor;
+            continue;
+        }
+        result = ReadMDNSEvent(discovery->browse[i].reference, &event);
+        if (result == MDNS_OK) {
+            if (event.de_Code != MEVENT_ADD && event.de_Code != MEVENT_REMOVE)
+                continue;
+            take(seen, &event, i);
+            return 1;
+        }
+        if (result == MDNSERR_NOENGINE) {
+            /* mdnsd ended: what it held for us is gone, and is asked
+               for again when it is back */
+            forget(discovery);
+            return 0;
+        }
+        if (result != MDNSERR_NOTREADY) {
+            /* MDNSERR_BUSY, the queue overflowed, is the end of the
+               search; MDNSERR_BADPARAM, it is no longer ours. Either way
+               it is begun again at the next poll, which then reports
+               what is there anew. */
+            StopBrowse(discovery->browse[i].reference);
+            discovery->browse[i].reference = NULL;
+            discovery->last_attempt = 0;
+        }
+        ++discovery->cursor;
+    }
+    discovery->reading = 0;
+    return 0;
 }
 #endif
 
@@ -471,6 +486,15 @@ void netmidi_discovery_close(struct netmidi_discovery *discovery)
 static void stop_browses(struct netmidi_discovery *discovery)
 {
     (void)discovery;
+}
+
+int netmidi_discovery_next(struct netmidi_discovery *discovery, uint64_t now,
+                           struct netmidi_discovered *seen)
+{
+    (void)discovery;
+    (void)now;
+    (void)seen;
+    return 0;
 }
 #endif
 

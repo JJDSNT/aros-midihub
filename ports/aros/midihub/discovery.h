@@ -5,6 +5,7 @@
 #ifndef NETMIDI_DISCOVERY_H
 #define NETMIDI_DISCOVERY_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* Our name on the network, through the system's mDNS service:
@@ -18,8 +19,9 @@
 #define NETMIDI_DISCOVERY_TYPE 32
 #define NETMIDI_DISCOVERY_TEXT 256
 #ifdef NETMIDI_BROWSE
-#define NETMIDI_DISCOVERY_EVENTS 16
 #define NETMIDI_DISCOVERY_BROWSES 2
+#define NETMIDI_DISCOVERY_ENDPOINT 99   /* a UMP Endpoint Name, 98 bytes,
+                                           and its end (M2-124-UM 4.4) */
 
 /* A service instance someone else advertises, as it came or went. */
 struct netmidi_discovered {
@@ -29,8 +31,9 @@ struct netmidi_discovered {
     int present;                    /* 1 it is there, 0 it left */
     int browse;                     /* which search found it: what
                                        netmidi_discovery_browse returned */
-    char endpoint[64];              /* the UMPEndpointName of its text
-                                       record, or empty */
+    char endpoint[NETMIDI_DISCOVERY_ENDPOINT];  /* the UMPEndpointName of
+                                                   its text record, or
+                                                   empty */
 };
 #endif
 
@@ -54,13 +57,13 @@ struct netmidi_discovery {
     struct {
         const char *type;           /* what to look for, or NULL */
         void *reference;            /* the search, or NULL */
-        void *hook;
     } browse[NETMIDI_DISCOVERY_BROWSES];
     int browses;
-    /* written by the service's process, read by ours */
-    struct netmidi_discovered event[NETMIDI_DISCOVERY_EVENTS];
-    volatile unsigned long written;
-    unsigned long read;
+    /* The searches' queues are read in our own task, at most once a
+       second: each read is a round trip to the service. */
+    uint64_t last_read;
+    int reading;                    /* in a pass over the queues */
+    int cursor;                     /* the search being read */
 #endif
 };
 
@@ -103,11 +106,20 @@ int netmidi_discovery_poll(struct netmidi_discovery *discovery,
 int netmidi_discovery_browse(struct netmidi_discovery *discovery,
                              const char *type);
 /* The next instance that appeared or left, 1, or 0 when there is none
- * waiting. An instance is reported as present only once its address and
- * port are known, and may be reported so more than once. Our own
- * registrations come back here too; the caller knows its own name. */
-int netmidi_discovery_next(struct netmidi_discovery *discovery,
+ * waiting. Called until it returns 0; the queues are looked at at most once
+ * a second (now as for poll). An instance is reported as present only once
+ * its address and port are known, and again when what it advertises
+ * changes: an instance is known by its name, not counted. A search whose
+ * queue overflowed is begun again, and its instances reported anew. Our
+ * own registrations come back here too; the caller knows its own name. */
+int netmidi_discovery_next(struct netmidi_discovery *discovery, uint64_t now,
                            struct netmidi_discovered *event);
+/* The value of key in a text record as it is on the wire: strings each
+ * after its length (RFC 6763 section 6). Keys match without regard to
+ * ASCII case. The value is copied as a string, cut at size - 1 bytes or at
+ * a NUL. 0 when the key has a value, -1 when not. */
+int netmidi_discovery_txt_value(const uint8_t *txt, size_t length,
+                                const char *key, char *value, size_t size);
 #endif
 /* Withdraws everything, with the goodbye the service sends for it. */
 void netmidi_discovery_close(struct netmidi_discovery *discovery);
