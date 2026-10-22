@@ -28,8 +28,8 @@ label, at most 63 bytes, without literal dots.
 **Dependent draft: requires #1679**, the netmidid service and its AppleMIDI
 transport. #1591, which
 provides registration and the responder, is already merged. The branch
-contains the two #1679 commits (the netmidid core and its AppleMIDI
-transport) and one advertisement commit, `c1d710e74e`; rebase onto master
+contains the #1679 commits (the netmidid core, its AppleMIDI transport and
+the review fix) and one advertisement commit, `17e4bdc37a`; rebase onto master
 when the parent merges. `discovery.c` and `discovery.h` are unchanged from
 the earlier revision.
 
