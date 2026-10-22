@@ -60,12 +60,11 @@ void netmidi_network_close_socket(int fd)
 
 void netmidi_network_init(struct netmidi_network_runtime *runtime)
 {
+    int i;
+
     memset(runtime, 0, sizeof(*runtime));
-    runtime->control = -1;
-    runtime->data = -1;
-#ifdef NETMIDI_MIDI2
-    runtime->midi2 = -1;
-#endif
+    for (i = 0; i < NETMIDI_NETWORK_SOCKETS; ++i)
+        runtime->socket[i] = -1;
 }
 
 int netmidi_network_platform_open(struct netmidi_network_runtime *runtime)
@@ -98,68 +97,31 @@ static int open_udp(uint16_t port)
     return fd;
 }
 
-int netmidi_network_open_pair(struct netmidi_network_runtime *runtime,
-                              uint16_t control_port)
+int netmidi_network_open(struct netmidi_network_runtime *runtime,
+                         uint16_t port)
 {
-    if (!runtime || !runtime->platform_opened || control_port == 65535)
-        return -1;
-    runtime->control = open_udp(control_port);
-    runtime->data = open_udp((uint16_t)(control_port + 1));
-    if (runtime->control < 0 || runtime->data < 0) {
-        netmidi_network_close_socket(runtime->data);
-        netmidi_network_close_socket(runtime->control);
-        runtime->control = -1;
-        runtime->data = -1;
-        return -1;
-    }
-    return 0;
-}
+    int i;
 
-#ifdef NETMIDI_MIDI2
-int netmidi_network_open_midi2(struct netmidi_network_runtime *runtime,
-                               uint16_t port)
-{
     if (!runtime || !runtime->platform_opened || !port)
         return -1;
-    runtime->midi2 = open_udp(port);
-    return runtime->midi2 < 0 ? -1 : 0;
+    for (i = 0; i < NETMIDI_NETWORK_SOCKETS; ++i)
+        if (runtime->socket[i] < 0) {
+            runtime->socket[i] = open_udp(port);
+            return runtime->socket[i] < 0 ? -1 : i;
+        }
+    return -1;
 }
-
-int netmidi_network_midi2_send(const struct netmidi_network_runtime *runtime,
-                               const void *bytes, size_t length,
-                               const struct sockaddr_in *destination)
-{
-    if (!runtime || !bytes || !destination || runtime->midi2 < 0)
-        return -1;
-    return sendto(runtime->midi2, bytes, (int)length, 0,
-                  (const struct sockaddr *)destination,
-                  sizeof(*destination)) == (int)length ? 0 : -1;
-}
-
-int netmidi_network_midi2_receive(
-    const struct netmidi_network_runtime *runtime, void *bytes,
-    size_t capacity, struct sockaddr_in *source, socklen_t *source_length)
-{
-    if (!runtime || !bytes || !source || !source_length ||
-        runtime->midi2 < 0)
-        return -1;
-    return recvfrom(runtime->midi2, bytes, (int)capacity, 0,
-                    (struct sockaddr *)source, source_length);
-}
-#endif
 
 void netmidi_network_close(struct netmidi_network_runtime *runtime)
 {
+    int i;
+
     if (!runtime)
         return;
-#ifdef NETMIDI_MIDI2
-    netmidi_network_close_socket(runtime->midi2);
-    runtime->midi2 = -1;
-#endif
-    netmidi_network_close_socket(runtime->data);
-    netmidi_network_close_socket(runtime->control);
-    runtime->data = -1;
-    runtime->control = -1;
+    for (i = NETMIDI_NETWORK_SOCKETS - 1; i >= 0; --i) {
+        netmidi_network_close_socket(runtime->socket[i]);
+        runtime->socket[i] = -1;
+    }
 #ifdef __AROS__
     if (runtime->platform_opened && SocketBase) {
         CloseLibrary(SocketBase);
@@ -169,15 +131,20 @@ void netmidi_network_close(struct netmidi_network_runtime *runtime)
     runtime->platform_opened = 0;
 }
 
+static int socket_fd(const struct netmidi_network_runtime *runtime,
+                     int number)
+{
+    if (!runtime || number < 0 || number >= NETMIDI_NETWORK_SOCKETS)
+        return -1;
+    return runtime->socket[number];
+}
+
 int netmidi_network_send(const struct netmidi_network_runtime *runtime,
-                         int data_port, const void *bytes, size_t length,
+                         int number, const void *bytes, size_t length,
                          const struct sockaddr_in *destination)
 {
-    int fd;
-    if (!runtime || !bytes || !destination)
-        return -1;
-    fd = data_port ? runtime->data : runtime->control;
-    if (fd < 0)
+    int fd = socket_fd(runtime, number);
+    if (fd < 0 || !bytes || !destination)
         return -1;
     return sendto(fd, bytes, (int)length, 0,
                   (const struct sockaddr *)destination,
@@ -185,54 +152,42 @@ int netmidi_network_send(const struct netmidi_network_runtime *runtime,
 }
 
 int netmidi_network_receive(const struct netmidi_network_runtime *runtime,
-                            int data_port, void *bytes, size_t capacity,
+                            int number, void *bytes, size_t capacity,
                             struct sockaddr_in *source,
                             socklen_t *source_length)
 {
-    int fd;
-    if (!runtime || !bytes || !source || !source_length)
-        return -1;
-    fd = data_port ? runtime->data : runtime->control;
-    if (fd < 0)
+    int fd = socket_fd(runtime, number);
+    if (fd < 0 || !bytes || !source || !source_length)
         return -1;
     return recvfrom(fd, bytes, (int)capacity, 0,
                     (struct sockaddr *)source, source_length);
 }
 
 int netmidi_network_wait(const struct netmidi_network_runtime *runtime,
-                         int auxiliary_fd, long timeout_us,
-                         int wake_signal_bit, unsigned int *events)
+                         long timeout_us, int wake_signal_bit,
+                         unsigned int *events)
 {
     struct timeval timeout;
     fd_set read_set;
-    int maximum;
+    int maximum = -1;
     int ready;
+    int i;
 #ifdef __AROS__
     ULONG signal_mask = SIGBREAKF_CTRL_C;
 #else
     (void)wake_signal_bit;
 #endif
 
-    if (!runtime || !events || runtime->control < 0 || runtime->data < 0)
+    if (!runtime || !events)
         return -1;
     *events = 0;
     FD_ZERO(&read_set);
-    FD_SET(runtime->control, &read_set);
-    FD_SET(runtime->data, &read_set);
-    maximum = runtime->control > runtime->data ? runtime->control :
-                                                 runtime->data;
-    if (auxiliary_fd >= 0) {
-        FD_SET(auxiliary_fd, &read_set);
-        if (auxiliary_fd > maximum)
-            maximum = auxiliary_fd;
-    }
-#ifdef NETMIDI_MIDI2
-    if (runtime->midi2 >= 0) {
-        FD_SET(runtime->midi2, &read_set);
-        if (runtime->midi2 > maximum)
-            maximum = runtime->midi2;
-    }
-#endif
+    for (i = 0; i < NETMIDI_NETWORK_SOCKETS; ++i)
+        if (runtime->socket[i] >= 0) {
+            FD_SET(runtime->socket[i], &read_set);
+            if (runtime->socket[i] > maximum)
+                maximum = runtime->socket[i];
+        }
     timeout.tv_sec = timeout_us / 1000000;
     timeout.tv_usec = timeout_us % 1000000;
 #ifdef __AROS__
@@ -241,22 +196,15 @@ int netmidi_network_wait(const struct netmidi_network_runtime *runtime,
     ready = WaitSelect(maximum + 1, &read_set, NULL, NULL, &timeout,
                        &signal_mask);
     if (signal_mask & SIGBREAKF_CTRL_C)
-        *events |= NETMIDI_NETWORK_EVENT_STOP;
+        *events |= NETMIDI_NETWORK_STOP;
 #else
     ready = select(maximum + 1, &read_set, NULL, NULL, &timeout);
 #endif
-    if (ready > 0) {
-        if (FD_ISSET(runtime->control, &read_set))
-            *events |= NETMIDI_NETWORK_EVENT_CONTROL;
-        if (FD_ISSET(runtime->data, &read_set))
-            *events |= NETMIDI_NETWORK_EVENT_DATA;
-#ifdef NETMIDI_MIDI2
-        if (runtime->midi2 >= 0 && FD_ISSET(runtime->midi2, &read_set))
-            *events |= NETMIDI_NETWORK_EVENT_MIDI2;
-#endif
-        if (auxiliary_fd >= 0 && FD_ISSET(auxiliary_fd, &read_set))
-            *events |= NETMIDI_NETWORK_EVENT_AUXILIARY;
-    }
+    if (ready > 0)
+        for (i = 0; i < NETMIDI_NETWORK_SOCKETS; ++i)
+            if (runtime->socket[i] >= 0 &&
+                FD_ISSET(runtime->socket[i], &read_set))
+                *events |= 1u << i;
     return ready < 0 ? -1 : 0;
 }
 

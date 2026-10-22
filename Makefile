@@ -2,7 +2,7 @@ CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -Werror -std=c99
 # The program has everything the runtime can do; the cuts sent upstream are
 # the same source with some of these left out (docs/upstream-pr-graph.md).
-CPPFLAGS ?= -Iinclude -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -DNETMIDI_BROWSE
+CPPFLAGS ?= -Iinclude -DNETMIDI_APPLEMIDI -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -DNETMIDI_BROWSE
 M68K_CC ?= m68k-aros-gcc
 M68K_CFLAGS ?= -O2 -Wall -Wextra -Werror -Wno-volatile-register-var -std=gnu99
 FLUIDSYNTH_CFLAGS ?= $(shell pkg-config --cflags fluidsynth 2>/dev/null)
@@ -10,6 +10,8 @@ FLUIDSYNTH_LIBS ?= $(shell pkg-config --libs fluidsynth 2>/dev/null)
 
 SOURCES = network/rtpmidi/applemidi.c network/rtpmidi/rtpmidi.c network/rtpmidi/session.c network/rtpmidi/peers.c network/rtpmidi/ports.c src/config.c network/rtpmidi/timing.c network/rtpmidi/clock.c network/rtpmidi/sender.c network/rtpmidi/receiver.c src/routes.c
 PROGRAM_SOURCES = ports/aros/midihub/main.c ports/aros/midihub/camd.c \
+                  ports/aros/midihub/transport_applemidi.c \
+                  ports/aros/midihub/transport_midi2.c \
                   ports/aros/midihub/network.c \
                   ports/aros/midihub/discovery.c \
                   ports/aros/camd_bridge.c \
@@ -18,6 +20,7 @@ HEADERS = include/rtpmidi/applemidi.h include/rtpmidi/rtpmidi.h \
           include/rtpmidi/session.h include/rtpmidi/peers.h include/rtpmidi/ports.h include/netmidi/config.h include/rtpmidi/timing.h include/rtpmidi/clock.h include/rtpmidi/receiver.h \
           include/rtpmidi/sender.h include/midihub/routes.h \
           ports/aros/midihub/camd.h ports/aros/midihub/network.h \
+          ports/aros/midihub/netmidid.h \
           ports/aros/camd_bridge.h
 
 .PHONY: fuzz test check-patches test-network test-synth test-synth-fluid demo m68k synth-m68k clean

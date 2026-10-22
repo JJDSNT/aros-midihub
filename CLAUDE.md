@@ -51,9 +51,9 @@ make m68k                 # cross build with m68k-aros-gcc (M68K_CC=...)
 Test suites are plain C programs whose `main` calls every case; there is no
 per-case selection, so run one suite binary.
 
-`CPPFLAGS` sets `-DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -DNETMIDI_BROWSE`. These
-markers change `struct netmidi_network_config`, so everything that shares it
-must be built with the same set.
+`CPPFLAGS` sets `-DNETMIDI_APPLEMIDI -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY
+-DNETMIDI_BROWSE`. All but the first change `struct netmidi_network_config`,
+so everything that shares it must be built with the same set.
 
 Inside AROS the repository builds as a MetaMake package (`mmakefile.src`,
 placed at `contrib/aros-midihub`, target `contrib-aros-midihub` and the
@@ -70,10 +70,14 @@ Avahi). `build-aros-linux/` is the hosted AROS build they use.
 - `src/ump.c`, `src/netmidi2.c`: MIDI 2.0 UMP and Network MIDI 2.0 (UDP)
   sessions. `src/ble_midi.c`: BLE-MIDI packet codec. `src/routes.c`,
   `src/config.c`, `src/synth.c` (TinySoundFont, optional FluidSynth).
-- `ports/aros/midihub/`: the `MIDIHub`/`netmidid` program. `main.c` is the
-  event loop joining the portable sessions to sockets (`network.c`), CAMD
-  (`camd.c`, `adapters.c`) and mDNS discovery (`discovery.c`). The same
-  source builds on Linux for tests (`make demo` gives `build/MIDIHub`).
+- `ports/aros/midihub/`: the `MIDIHub`/`netmidid` program, a core and
+  transports (`netmidid.h`). `main.c` is the core: configuration, sockets
+  (`network.c`, protocol-free), CAMD driver ports (`camd.h`, `adapters.c`),
+  counts, mDNS (`discovery.c`) and the loop. `transport_applemidi.c` and
+  `transport_midi2.c` are the protocols, selected by `NETMIDI_APPLEMIDI` and
+  `NETMIDI_MIDI2`; neither knows of the other. The same source builds on
+  Linux for tests (`make demo` gives `build/MIDIHub`). On AROS `send` and
+  `close` are bsdsocket macros: do not use them as member names.
 - `ports/aros/*.c`: other AROS programs (Preferences class, router, CAMD
   probe and compatibility tests, synth service). `ports/aros/btmidi/` is the
   older client-cluster btmidi; upstream (#1507) replaces it with a CAMD driver.

@@ -12,7 +12,7 @@ include $(SRCDIR)/config/aros.cfg
 # rtpmidi's and netmidi2's; here are the sockets, the clock and the
 # configuration, ENV:NetMIDI.
 
-FILES := main adapters network config
+FILES := main transport_applemidi transport_midi2 adapters network config
 
 USER_INCLUDES := -I$(SRCDIR)/$(CURDIR)/include \
     -I$(SRCDIR)/$(CURDIR)/rtpmidi/include \

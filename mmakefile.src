@@ -192,11 +192,13 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
 %build_prog mmake=contrib-aros-midihub-netmidid \
     progname=netmidid \
     files="$(MIDIHUB_ROOT)/ports/aros/midihub/main \
+           $(MIDIHUB_ROOT)/ports/aros/midihub/transport_applemidi \
+           $(MIDIHUB_ROOT)/ports/aros/midihub/transport_midi2 \
            $(MIDIHUB_ROOT)/ports/aros/midihub/adapters \
            $(MIDIHUB_ROOT)/ports/aros/midihub/network \
            $(MIDIHUB_ROOT)/ports/aros/midihub/discovery" \
     objdir=$(GENDIR)/$(CURDIR)/netmidid \
-    cppflags="-DNETMIDI_SERVICE -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -DNETMIDI_BROWSE -I$(MIDIHUB_ROOT)/ports/aros/netmidi" \
+    cppflags="-DNETMIDI_SERVICE -DNETMIDI_APPLEMIDI -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -DNETMIDI_BROWSE -I$(MIDIHUB_ROOT)/ports/aros/netmidi" \
     uselibs=arosmidihub \
     targetdir=$(AROS_SYSTEM)/Network/Services
 

@@ -2,33 +2,17 @@
     Copyright (C) 2026, The AROS Development Team. All rights reserved.
 */
 
+/* netmidid's core: the configuration, the sockets, the ports of the CAMD
+ * drivers, the counts it publishes, the system's mDNS service and the
+ * loop that runs the transports (netmidid.h). */
+
 #ifndef __AROS__
 #define _DEFAULT_SOURCE 1
 #endif
 
-#include <rtpmidi/applemidi.h>
-#include <netmidi/config.h>
-#ifdef NETMIDI_MIDI2
-#include <netmidi2/netmidi2.h>
-#include <ump/ump.h>
-#endif
-#include <rtpmidi/clock.h>
-#include <sys/stat.h>
-#include <rtpmidi/peers.h>
-#include <rtpmidi/ports.h>
-#include <rtpmidi/receiver.h>
-#include <rtpmidi/rtpmidi.h>
-#include <rtpmidi/session.h>
-#include <rtpmidi/sender.h>
-#include <rtpmidi/timing.h>
-#include "camd.h"
-#ifdef NETMIDI_DISCOVERY
-#include "discovery.h"
-#elif defined(NETMIDI_BROWSE)
-#error "NETMIDI_BROWSE is a part of NETMIDI_DISCOVERY"
-#endif
-#include "network.h"
+#include "netmidid.h"
 
+#include <sys/stat.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -51,207 +35,32 @@ static void stop_signal(int signal_number)
 }
 #endif
 
-#ifdef NETMIDI_MIDI2
-#define PRODUCT_ID_MAX 42   /* M2-124-UM section 4.4 */
+/* The transports, in the order they are asked. */
+static const struct netmidid_transport *const transports[] = {
+#ifdef NETMIDI_APPLEMIDI
+    &netmidid_applemidi,
 #endif
-
-/* What is kept for one peer's stream, beside its session in the peer
- * table at the same index. */
-struct stream {
-    int initiating;             /* we sent the invitation */
-    struct applemidi_clock clock;
-    int have_received_sequence;
-    uint16_t sequence;          /* of the next packet to this peer */
-    uint32_t received_sequence;
-    uint64_t last_invite;
-    uint64_t last_rtp_send;
-    uint64_t last_activity;
-    unsigned int retries;
-    struct rtpmidi_sysex_assembler sysex;
-    struct rtpmidi_event_queue queue;
-    struct rtpmidi_sender sender;
-    struct rtpmidi_receiver receiver;
-    unsigned long timed;        /* events that came with a time to keep */
-    unsigned long late;         /* of those, the ones already past it */
-    struct runtime *rt;
-    int port;                   /* the port its peer was given, or -1 */
-    unsigned long sysex_dropped;    /* SysEx messages too long, or broken */
-    uint64_t feedback_sent;     /* when the peer was last told how far we are */
-    int feedback_owed;          /* packets came since */
-    /* what has passed since the session began, for whoever asks */
-    struct netmidi_port_counts count;
+#ifdef NETMIDI_MIDI2
+    &netmidid_midi2,
+#endif
+    NULL
 };
+#define TRANSPORT_COUNT \
+    ((int)(sizeof(transports) / sizeof(transports[0])) - 1)
 
-struct runtime {
-    struct netmidi_network_runtime network;
-#ifdef NETMIDI_DISCOVERY
-    struct netmidi_discovery discovery;
-    int discovered;             /* services the system advertises for us */
-#endif
-    int configured;             /* a peer was named to invite */
-    uint32_t configured_address;
-    uint16_t configured_port;
-#ifdef NETMIDI_SERVICE
-    /* when it was last invited, and how long until it is again */
-    uint64_t again_tried;
-    uint64_t again_wait;
-#endif
-    /* Added to the time every received event is due, in ten-thousandths of
-       a second: room for the network's unevenness, paid for in delay. */
-    uint32_t latency;
-#ifndef NETMIDI_SERVICE
-    int trace;                  /* print each message as it is delivered */
-#endif
-#ifdef NETMIDI_BROWSE
-    /* a peer to invite wherever it is advertised, by its session's name */
-    char wanted[64];
-    int wanted_present;
-    uint64_t wanted_tried;
-    uint64_t wanted_wait;
-#endif
-#ifndef NETMIDI_SERVICE
-    int probe_note;
-    int probe_sysex;
-    int probe_state;
-    uint64_t note_time;
-#endif
-    char session_name[64];
-    struct applemidi_peers peers;
-    struct stream stream[APPLEMIDI_PEERS_MAX];
-#ifdef NETMIDI_MIDI2
-    /* Network MIDI 2.0, on a port of its own when one is given */
-    int midi2_enabled;
-    struct netmidi2_table midi2;
-    struct ump_to_midi1 midi2_in[NETMIDI2_SESSIONS_MAX];
-    /* where each session's SysEx messages are gathered: there while the
-       session is, since it is 32 KiB a session */
-    uint8_t *midi2_sysex[NETMIDI2_SESSIONS_MAX];
-    int midi2_known[NETMIDI2_SESSIONS_MAX];
-    unsigned long midi2_gaps[NETMIDI2_SESSIONS_MAX];
-    unsigned long midi2_resets[NETMIDI2_SESSIONS_MAX];
-    /* Each peer's clock against ours, from its JR Clock messages, and what
-       its timestamps have us hold until its time (M2-104-UM 7.2.2) */
-    struct ump_jr_clock midi2_clock[NETMIDI2_SESSIONS_MAX];
-    struct rtpmidi_event_queue midi2_queue[NETMIDI2_SESSIONS_MAX];
-    int midi2_current;              /* the session whose UMP is passing */
-    /* the port each session's peer has, of the second driver's, counted
-       through with the first's; -1 for none */
-    struct applemidi_ports midi2_ports;
-    int midi2_port[NETMIDI2_SESSIONS_MAX];
-    /* A Host to invite, as its Client */
-    int midi2_host;                 /* its address and port are known */
-    uint64_t midi2_host_key;
-#ifdef NETMIDI_BROWSE
-    char midi2_wanted[64];          /* or one advertised under this name */
-#endif
-    uint64_t midi2_tried;
-    uint64_t midi2_wait;
-    struct netmidi_port_counts midi2_count[NETMIDI2_SESSIONS_MAX];
-#endif
-    uint64_t published;             /* when the counts were last told */
-#ifndef NETMIDI_SERVICE
-    int chatty;                     /* a line of text to every packet */
-#endif
-    unsigned long unknown_commands; /* AppleMIDI commands not used */
-#ifdef NETMIDI_BROWSE
-    int browse_apple;               /* which of discovery's searches */
-#endif
-#ifdef NETMIDI_MIDI2
-    char product_id[PRODUCT_ID_MAX + 1];
-#ifdef NETMIDI_BROWSE
-    int browse_midi2;
-#endif
-    unsigned long midi2_timed;
-    unsigned long midi2_late;
-#endif
-    struct netmidi_camd_runtime camd;
-    /* What CAMD handed over in one turn of the loop and has not gone out
-       yet: it leaves together, one packet to a peer where it fits. */
-    struct rtpmidi_timed_message outgoing[64];
-    uint8_t outgoing_port[64];  /* the port each was sent to */
-    size_t outgoing_count;
-    /* which port each peer has; where they share one, all have port 0 */
-    struct applemidi_ports ports;
-    int shared_port;
-};
-
-/* What each report begins with: the name of what is running. */
-#ifdef NETMIDI_SERVICE
-#define TAG "netmidid: "
-#else
-#define TAG "MIDIHub: "
-#endif
-
-#if defined(NETMIDI_MIDI2) && !defined(NETMIDI_SERVICE)
-/* What the program answers when asked which device this is. The
-   service's is this machine's own: see product_instance_id(). */
-#define MIDI2_PRODUCT_ID "aros-midihub"
-#endif
-
-static uint64_t now_ticks(void)
+uint64_t netmidid_now(void)
 {
     struct timeval time;
     gettimeofday(&time, NULL);
     return (uint64_t)time.tv_sec * 10000 + (uint64_t)time.tv_usec / 100;
 }
 
-static uint64_t elapsed_ticks(uint64_t now, uint64_t then)
+uint64_t netmidid_elapsed(uint64_t now, uint64_t then)
 {
     return now >= then ? now - then : 0;
 }
 
-#ifndef NETMIDI_SERVICE
-static int parse_port(const char *text, uint16_t *port)
-{
-    char *end;
-    unsigned long number = strtoul(text, &end, 10);
-    if (!*text || *text == '-' || *end || number == 0 || number >= 65535)
-        return -1;
-    *port = (uint16_t)number;
-    return 0;
-}
-#endif
-
-static void peer_address(const struct applemidi_peer *peer, int data_port,
-                         struct sockaddr_in *address)
-{
-    memset(address, 0, sizeof(*address));
-    address->sin_family = AF_INET;
-    address->sin_addr.s_addr = htonl(peer->address);
-    address->sin_port = htons((uint16_t)(peer->control_port +
-                                         (data_port ? 1 : 0)));
-}
-
-static int send_apple_to(struct runtime *rt, int data_port,
-                         const struct sockaddr_in *address,
-                         const struct applemidi_packet *packet)
-{
-    uint8_t bytes[128];
-    size_t length;
-    if (applemidi_encode(packet, bytes, sizeof(bytes), &length) != 0)
-        return -1;
-    return netmidi_network_send(&rt->network, data_port, bytes, length,
-                                address);
-}
-
-static int send_apple(struct runtime *rt, int index, int data_port,
-                      const struct applemidi_packet *packet)
-{
-    struct sockaddr_in address;
-    peer_address(&rt->peers.peer[index], data_port, &address);
-    return send_apple_to(rt, data_port, &address, packet);
-}
-
-static void send_sync(struct runtime *rt, int index, uint64_t now)
-{
-    struct applemidi_packet sync;
-    if (applemidi_clock_poll(&rt->stream[index].clock, rt->peers.local_ssrc,
-                             now, &sync))
-        send_apple(rt, index, 1, &sync);
-}
-
-/* A value nobody can guess, for an SSRC or a token. */
-static uint32_t random32(uint64_t now)
+uint32_t netmidid_random(uint64_t now)
 {
     uint32_t value;
     if (netmidi_network_random(&value, sizeof(value)) != 0) {
@@ -266,1352 +75,164 @@ static uint32_t random32(uint64_t now)
     return value;
 }
 
-static void drop_peer(struct runtime *rt, int index, uint64_t now);
-
-static void output_message(void *context, const uint8_t *bytes,
-                           size_t length)
+int netmidid_ipv4(const char *text, uint32_t *address)
 {
-    struct stream *stream = context;
-    struct runtime *rt = stream->rt;
-#ifndef NETMIDI_SERVICE
-    if (rt->trace) {
-        size_t i;
-        printf(TAG "delivered at=%lu bytes=",
-               (unsigned long)(now_ticks() & 0xffffffffu));
-        for (i = 0; i < length; ++i)
-            printf("%02x", (unsigned int)bytes[i]);
-        putchar('\n');
-    }
-#endif
-    ++stream->count.messages_in;
-    if (stream->port >= 0)
-        netmidi_camd_deliver_port(&rt->camd, stream->port, bytes, length);
-}
+    struct in_addr bytes;
 
-static void output_sysex(void *context, const uint8_t *message, size_t length)
-{
-    struct stream *stream = context;
-    ++stream->count.messages_in;
-    if (stream->port >= 0)
-        netmidi_camd_deliver_port(&stream->rt->camd, stream->port, message,
-                                  length);
-}
-
-static void output_report(void *context, const char *text)
-{
-    (void)context;
-    fputs(TAG "", stdout);
-    fputs(text, stdout);
-}
-
-static const struct rtpmidi_receiver_output receiver_output = {
-    output_message, output_sysex, output_report
-};
-
-/* A slot of the peer table has a new occupant: nothing of the last one's
- * stream may be left in it. */
-static void stream_begin(struct runtime *rt, int index, int initiating,
-                         uint64_t now)
-{
-    struct stream *stream = &rt->stream[index];
-    /* where its SysEx messages are gathered: lent from the first peer the
-       slot has, and kept for the next */
-    uint8_t *sysex_buffer = stream->sysex.bytes;
-
-    rtpmidi_queue_reset(&stream->queue);
-    memset(stream, 0, sizeof(*stream));
-    if (!sysex_buffer)
-        sysex_buffer = malloc(RTPMIDI_SYSEX_MAX);
-    rtpmidi_sysex_buffer(&stream->sysex, sysex_buffer, RTPMIDI_SYSEX_MAX);
-    stream->rt = rt;
-    stream->port = -1;
-    stream->initiating = initiating;
-    stream->last_invite = now;
-    stream->last_activity = now;
-    stream->sequence = (uint16_t)random32(now);
-    applemidi_clock_init(&stream->clock, initiating, now);
-    rtpmidi_sysex_reset(&stream->sysex);
-    rtpmidi_queue_reset(&stream->queue);
-    rtpmidi_sender_reset(&stream->sender);
-    rtpmidi_receiver_init(&stream->receiver, &receiver_output, stream,
-                          &stream->queue);
-}
-
-/* The session is over, or began again: what the peer left sounding is
- * released and what was kept for its stream goes. */
-static void stream_forget(struct runtime *rt, int index, uint64_t now)
-{
-    struct stream *stream = &rt->stream[index];
-    if (stream->timed) {
-        printf(TAG "%lu of %lu timed events came after their time\n",
-               stream->late, stream->timed);
-        stream->timed = stream->late = 0;
-    }
-    if (stream->sysex_dropped) {
-        printf(TAG "%lu SysEx messages were dropped, too long or broken\n",
-               stream->sysex_dropped);
-        stream->sysex_dropped = 0;
-    }
-    applemidi_clock_init(&stream->clock, stream->initiating, now);
-    stream->have_received_sequence = 0;
-    rtpmidi_sysex_reset(&stream->sysex);
-    rtpmidi_queue_reset(&stream->queue);
-    if (stream->receiver.output) {
-        rtpmidi_receiver_release_notes(&stream->receiver);
-        rtpmidi_receiver_reset_channels(&stream->receiver);
-        rtpmidi_receiver_reset_system(&stream->receiver);
-    }
-    rtpmidi_sender_reset(&stream->sender);
-    /* after the notes were released on it */
-    applemidi_ports_release(&rt->ports, index + 1);
-    stream->port = -1;
-}
-
-static int invite_configured(struct runtime *rt, uint64_t now)
-{
-    struct applemidi_packet invite;
-    int index = applemidi_peers_invite(&rt->peers, rt->configured_address,
-                                       rt->configured_port, random32(now),
-                                       (uint32_t)(now / 10), &invite);
-    if (index < 0)
+#ifdef __AROS__
+    bytes.s_addr = inet_addr(text);
+    if (bytes.s_addr == INADDR_NONE)
         return -1;
-    stream_begin(rt, index, 1, now);
-    return send_apple(rt, index, 0, &invite);
-}
-
-static int configured_index(const struct runtime *rt)
-{
-    return rt->configured ?
-           applemidi_peers_find_control(&rt->peers, rt->configured_address,
-                                        rt->configured_port) : -1;
-}
-
-/* Tells the peer how far we have received: what it may drop from its
-   journal's history. */
-static void feedback_now(struct runtime *rt, int index, uint64_t now)
-{
-    struct stream *stream = &rt->stream[index];
-    struct applemidi_packet feedback;
-
-    memset(&feedback, 0, sizeof(feedback));
-    feedback.command = APPLEMIDI_RS;
-    feedback.ssrc = rt->peers.local_ssrc;
-    feedback.feedback_sequence =
-        applemidi_feedback_field((uint16_t)stream->received_sequence);
-    send_apple(rt, index, 0, &feedback);
-    stream->feedback_sent = now ? now : 1;
-    stream->feedback_owed = 0;
-}
-
-/* A packet came. The peer is told at once after a gap, since its journal
-   was just used, and when one that came before comes again, since it may
-   be asking; otherwise once in RTPMIDI_FEEDBACK_INTERVAL while packets
-   arrive, not for each of them. Returns 0 for a packet already had. */
-static int send_feedback(struct runtime *rt, int index, uint16_t sequence)
-{
-    struct stream *stream = &rt->stream[index];
-    uint64_t now = now_ticks();
-    int16_t advance = 1;
-    int fresh = 1;
-
-    if (!stream->have_received_sequence) {
-        stream->received_sequence = sequence;
-        stream->have_received_sequence = 1;
-    } else {
-        advance = (int16_t)(sequence - (uint16_t)stream->received_sequence);
-        if (advance <= 0)
-            fresh = 0;
-        else
-            stream->received_sequence += (uint16_t)advance;
-    }
-    if (!fresh || advance > 1 || !stream->feedback_sent ||
-        elapsed_ticks(now, stream->feedback_sent) >= RTPMIDI_FEEDBACK_INTERVAL)
-        feedback_now(rt, index, now);
-    else
-        stream->feedback_owed = 1;
-    return fresh;
-}
-
-/* An event's time in our clock is known: adds the latency and says
- * whether that moment is still ahead. One that is not is played at once,
- * and counted, since it means the latency is too short for this path. */
-static int stream_due(const struct runtime *rt, struct stream *stream,
-                      uint64_t now,
-                      uint64_t *due)
-{
-    *due += rt->latency;
-    ++stream->timed;
-    ++stream->count.timed;
-    if (*due > now)
-        return 1;
-    ++stream->late;
-    ++stream->count.late;
+#else
+    if (inet_pton(AF_INET, text, &bytes) != 1)
+        return -1;
+#endif
+    *address = ntohl(bytes.s_addr);
     return 0;
 }
 
-static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
-                        size_t count)
+int netmidid_socket(struct netmidid *d, const struct netmidid_transport *t,
+                    uint16_t port)
 {
-    struct stream *stream = &rt->stream[index];
-    struct rtpmidi_packet midi;
-    struct rtpmidi_journal journal;
-    struct rtpmidi_journal_system_state system_state;
-    struct rtpmidi_journal_sysex sysex_state;
-    struct rtpmidi_reader reader;
-    struct rtpmidi_event event;
-    const uint8_t *sysex_message;
-    size_t sysex_length;
-    int action;
-    int system_decoded = 0;
-    int16_t sequence_advance = 0;
-    uint16_t previous_sequence = 0;
-    uint64_t now;
+    int number = netmidi_network_open(&d->network, port);
 
-    if (rtpmidi_decode(bytes, count, &midi) != 0 ||
-        midi.ssrc != rt->peers.peer[index].session.peer_ssrc)
-        return;
-    if (midi.journal &&
-        rtpmidi_journal_decode(midi.journal, midi.journal_length,
-                          &journal) != 0) {
-        puts(TAG "malformed recovery journal discarded");
-        return;
-    }
-    if (midi.journal && journal.system) {
-        system_decoded = rtpmidi_journal_decode_system(&journal, &system_state);
-        if (system_decoded < 0) {
-            puts(TAG "malformed system recovery journal discarded");
-            return;
-        }
-        if (system_state.sysex &&
-            rtpmidi_journal_decode_sysex(&system_state, &sysex_state) < 0) {
-            puts(TAG "malformed SysEx recovery journal discarded");
-            return;
-        }
-    }
-    rtpmidi_reader_init(&reader, &midi);
-    while ((action = rtpmidi_reader_next(&reader, &event)) == 1) {}
-    if (action < 0) {
-        puts(TAG "unsupported or malformed MIDI command");
-        return;
-    }
-    if (stream->have_received_sequence) {
-        previous_sequence = (uint16_t)stream->received_sequence;
-        sequence_advance = (int16_t)(midi.sequence -
-                                     previous_sequence);
-        if (sequence_advance > 1) {
-            stream->count.packets_lost += (unsigned long)(sequence_advance - 1);
-            printf(TAG "%u RTP packet(s) lost; journal %s\n",
-                   (unsigned int)(sequence_advance - 1),
-                   !midi.journal ? "unavailable" :
-                   rtpmidi_journal_covers_gap(
-                       previous_sequence, midi.sequence, journal.checkpoint) ?
-                                             "covers gap" :
-                                             "does not cover gap");
-        }
-    }
-    if (!send_feedback(rt, index, midi.sequence))
-        return; /* A duplicate or older packet must not replay MIDI events. */
-    rtpmidi_sysex_packet(&stream->sysex, midi.sequence);
-    if (sequence_advance > 1 && midi.journal &&
-        rtpmidi_journal_covers_gap(previous_sequence, midi.sequence,
-                              journal.checkpoint)) {
-        struct rtpmidi_receiver_clock clock;
-        clock.synchronized = stream->clock.synchronized;
-        clock.peer_to_local = stream->clock.peer_to_local;
-        clock.now = now_ticks();
-        rtpmidi_receiver_recover(&stream->receiver, &journal,
-                            system_decoded > 0 ? &system_state : NULL,
-                            sequence_advance == 2, midi.timestamp, &clock);
-    }
-    else if (sequence_advance > 1) {
-        /* Packets are gone and no journal says what was in them: among
-           them may be the end of a note that is sounding, and it would
-           sound for ever. The notes this peer has on are ended. Its
-           controllers are left as they are: nothing is known to be wrong
-           with them, and peers that send no journal lose a packet now and
-           then. */
-        puts(TAG "ending the notes this peer left on");
-        rtpmidi_receiver_release_notes(&stream->receiver);
-    }
-    if (!midi.midi_length)
-        return; /* Guard packet: acknowledge its journal without MIDI output. */
-    ++stream->count.packets_in;
-#ifndef NETMIDI_SERVICE
-    if (rt->chatty) {
-        size_t i;
-
-        printf(TAG "RTP-MIDI seq=%u timestamp=%lu length=%lu bytes=",
-               (unsigned int)midi.sequence, (unsigned long)midi.timestamp,
-               (unsigned long)midi.midi_length);
-        for (i = 0; i < midi.midi_length && i < 16; ++i)
-            printf("%02x", (unsigned int)midi.midi[i]);
-        if (i < midi.midi_length)
-            fputs("...", stdout);
-        putchar('\n');
-    }
-#endif
-    rtpmidi_reader_init(&reader, &midi);
-    while ((action = rtpmidi_reader_next(&reader, &event)) == 1) {
-        if (event.sysex) {
-            int sysex_result = rtpmidi_sysex_feed(&stream->sysex, &event,
-                                          midi.sequence,
-                                          &sysex_message, &sysex_length);
-            if (sysex_result == 1) {
-                uint64_t due;
-#ifndef NETMIDI_SERVICE
-                if (rt->chatty)
-                    printf(TAG "SysEx complete bytes=%lu\n",
-                           (unsigned long)sysex_length);
-#endif
-                now = now_ticks();
-                if (stream->clock.synchronized &&
-                    rtpmidi_clock_due(stream->sysex.timestamp, now,
-                                 stream->clock.peer_to_local, &due) == 0 &&
-                    stream_due(rt, stream, now, &due)) {
-                    if (due - now > RTPMIDI_QUEUE_HORIZON ||
-                        rtpmidi_queue_push_sysex(&stream->queue, due,
-                                            sysex_message,
-                                            sysex_length) != 0)
-                        puts(TAG "future SysEx event discarded");
-                    continue;
-                }
-                rtpmidi_receiver_deliver_sysex(&stream->receiver,
-                                               sysex_message, sysex_length);
-            } else if (sysex_result < 0) {
-                ++stream->sysex_dropped;
-                ++stream->count.sysex_dropped;
-                puts(TAG "SysEx segment discarded");
-            }
-        } else {
-            uint64_t due;
-            now = now_ticks();
-            if (stream->clock.synchronized &&
-                rtpmidi_clock_due(event.timestamp, now,
-                             stream->clock.peer_to_local, &due) == 0 &&
-                stream_due(rt, stream, now, &due)) {
-                if (due - now > RTPMIDI_QUEUE_HORIZON ||
-                    rtpmidi_queue_push(&stream->queue, due, event.bytes,
-                                  event.length) != 0)
-                    puts(TAG "future MIDI event discarded");
-                continue;
-            }
-            rtpmidi_receiver_deliver(&stream->receiver, event.bytes,
-                                     event.length);
-        }
-    }
-    stream->count.undefined += reader.undefined;
-    if (action < 0)
-        puts(TAG "unsupported or malformed MIDI command");
+    if (number >= 0)
+        d->socket_owner[number] = t;
+    return number;
 }
 
-static void receive_packet(struct runtime *rt, int data_port)
+int netmidid_port_keep(struct netmidid *d, int driver, int index,
+                       const char *name)
 {
-    struct sockaddr_in source;
-    socklen_t source_length = sizeof(source);
-    uint8_t bytes[1500];
-    int count = netmidi_network_receive(&rt->network, data_port, bytes,
-                                        sizeof(bytes), &source,
-                                        &source_length);
-    struct applemidi_packet packet;
-    struct applemidi_packet response;
-    enum applemidi_peer_event event;
-    uint32_t address;
-    uint16_t port;
-    int decoded;
-    unsigned int collisions;
-    int response_port;
-    int index;
-    int action;
-    uint64_t now;
-
-    if (count <= 0 || source_length < sizeof(source) ||
-        source.sin_family != AF_INET)
-        return;
-    address = ntohl(source.sin_addr.s_addr);
-    port = ntohs(source.sin_port);
-    if (port == 65535 || (data_port && port == 0))
-        return;
-    now = now_ticks();
-    decoded = applemidi_decode(bytes, (size_t)count, &packet);
-    if (decoded == APPLEMIDI_UNKNOWN_COMMAND) {
-        /* AppleMIDI, and a command we have no use for (the bit-rate
-           limit, RL, is one): not RTP, and not an error */
-        ++rt->unknown_commands;
-        return;
-    }
-    if (decoded != 0) {
-        index = data_port ?
-                applemidi_peers_find_data(&rt->peers, address, port) : -1;
-        if (index >= 0) {
-            rt->stream[index].last_activity = now;
-            applemidi_peers_seen(&rt->peers, index, (uint32_t)(now / 10));
-            receive_rtp(rt, index, bytes, (size_t)count);
-        }
-        return;
-    }
-    if (packet.command == APPLEMIDI_CK) {
-        index = data_port ?
-                applemidi_peers_find_data(&rt->peers, address, port) : -1;
-        if (index < 0 ||
-            packet.ssrc != rt->peers.peer[index].session.peer_ssrc)
-            return;
-        rt->stream[index].last_activity = now;
-        applemidi_peers_seen(&rt->peers, index, (uint32_t)(now / 10));
-        {
-            unsigned int completed = rt->stream[index].clock.completed;
-
-            if (applemidi_clock_receive(&rt->stream[index].clock,
-                                        rt->peers.local_ssrc, &packet, now,
-                                        &response))
-                send_apple(rt, index, 1, &response);
-            if (rt->stream[index].clock.completed != completed)
-                puts(TAG "clock exchange completed");
-        }
-        return;
-    }
-    if (packet.command == APPLEMIDI_RS) {
-        index = data_port ? -1 :
-                applemidi_peers_find_control(&rt->peers, address, port);
-        if (index >= 0 &&
-            rt->peers.peer[index].session.phase ==
-                APPLEMIDI_SESSION_CONNECTED &&
-            packet.ssrc == rt->peers.peer[index].session.peer_ssrc)
-            rtpmidi_sender_ack(&rt->stream[index].sender,
-                applemidi_feedback_acked(packet.feedback_sequence,
-                    (uint16_t)(rt->stream[index].sequence - 1)));
-        return;
-    }
-
-    /* IN, OK, NO, BY: the peer table's business. Whether the packet made a
-     * new peer is seen from the slot it comes back with. */
-    index = applemidi_peers_find_control(&rt->peers, address,
-                (uint16_t)(data_port ? port - 1 : port));
-    collisions = rt->peers.ssrc_collisions;
-    {
-        int known = index;
-        action = applemidi_peers_receive(&rt->peers, address, port, data_port,
-                                         &packet, (uint32_t)(now / 10),
-                                         &response, &response_port, &index,
-                                         &event);
-        if (action < 0)
-            return;
-        if (known < 0 && index >= 0)
-            stream_begin(rt, index, 0, now);
-    }
-    if (action == 1) {
-        /* a refusal goes to someone who has no place in the table */
-        source.sin_port = htons((uint16_t)(data_port == response_port ?
-            port : response_port ? port + 1 : port - 1));
-        send_apple_to(rt, response_port, &source, &response);
-    }
-    if (rt->peers.ssrc_collisions != collisions) {
-        puts(TAG "peer has our SSRC");
-        if (applemidi_peers_renew(&rt->peers, random32(now)) == 0) {
-            puts(TAG "taking another SSRC");
-            if (rt->configured)
-                invite_configured(rt, now);
-        }
-        return;
-    }
-    if (index < 0)
-        return;
-    rt->stream[index].last_activity = now;
-    if (packet.command == APPLEMIDI_OK && action == 1 &&
-        response.command == APPLEMIDI_IN) {
-        rt->stream[index].last_invite = now;
-        rt->stream[index].retries = 0;
-    }
-    if (event == APPLEMIDI_PEER_RESTARTED) {
-        puts(TAG "peer began again");
-        stream_forget(rt, index, now);
-    } else if (event == APPLEMIDI_PEER_CONNECTED) {
-        /* The peer gets a port: the one kept for its name, or the first
-           that is free and kept for no one. Where every peer shares the
-           one pair of clusters there is nothing to give out. */
-        rt->stream[index].port = rt->shared_port ? 0 :
-            applemidi_ports_take(&rt->ports, packet.name, packet.name_length,
-                                 index + 1);
-        if (rt->stream[index].port < 0) {
-            puts(TAG "no port for this peer");
-            drop_peer(rt, index, now);
-            return;
-        }
-        printf(TAG "session connected port=%d\n",
-               rt->stream[index].port);
-        {
-            size_t n = applemidi_name_fit(
-                packet.name, packet.name_length,
-                sizeof(rt->stream[index].count.name) - 1);
-
-            memcpy(rt->stream[index].count.name, packet.name, n);
-            rt->stream[index].count.name[n] = 0;
-        }
-        applemidi_clock_init(&rt->stream[index].clock,
-                             rt->stream[index].initiating, now);
-        send_sync(rt, index, now);
-    } else if (event == APPLEMIDI_PEER_LEFT) {
-        puts(packet.command == APPLEMIDI_NO ?
-             TAG "invitation refused" : TAG "peer disconnected");
-        stream_forget(rt, index, now);
-    }
+    return applemidi_ports_keep(&d->ports[driver], index, name);
 }
 
-#ifdef NETMIDI_MIDI2
-/* Network MIDI 2.0. A peer's UMPs become MIDI 1.0 for CAMD by the default
- * translation, and what CAMD sends becomes UMPs with the MIDI 1.0 protocol:
- * this endpoint declares no other. Each session has a translator of its
- * own; all of them, like the AppleMIDI peers, meet in the one pair of
- * clusters. */
-
-static uint64_t midi2_key(const struct sockaddr_in *address)
+int netmidid_port_take(struct netmidid *d, int driver, const uint8_t *name,
+                       size_t name_length, int owner)
 {
-    return ((uint64_t)ntohl(address->sin_addr.s_addr) << 16) |
-           ntohs(address->sin_port);
-}
+    int port;
 
-static void midi2_send(struct runtime *rt, uint64_t key,
-                       const struct netmidi2_writer *packet)
-{
-    struct sockaddr_in address;
-    if (packet->length <= 4)
-        return;
-    memset(&address, 0, sizeof(address));
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl((uint32_t)(key >> 16));
-    address.sin_port = htons((uint16_t)key);
-    netmidi_network_midi2_send(&rt->network, packet->data, packet->length,
-                               &address);
-}
-
-static uint64_t now_us(void)
-{
-    struct timeval time;
-    gettimeofday(&time, NULL);
-    return (uint64_t)time.tv_sec * 1000000 + (uint64_t)time.tv_usec;
-}
-
-static void midi2_deliver(struct runtime *rt, int index, const uint8_t *bytes,
-                          size_t length)
-{
-#ifndef NETMIDI_SERVICE
-    if (rt->trace) {
-        size_t i;
-        printf(TAG "MIDI 2.0 delivered at=%llu bytes=",
-               (unsigned long long)now_ticks());
-        for (i = 0; i < length && i < 16; ++i)
-            printf("%02x", (unsigned int)bytes[i]);
-        putchar('\n');
-    }
-#endif
-    if (rt->midi2_port[index] >= 0)
-        netmidi_camd_deliver_port(&rt->camd, rt->midi2_port[index], bytes,
-                                  length);
-}
-
-/* A message translated from a peer's UMPs. One that came with a JR
- * Timestamp, from a peer whose clock is known, waits for its time and the
- * latency asked for; any other is for at once (7.2.2.3). */
-static void midi2_to_camd(void *context, const uint8_t *bytes, size_t length)
-{
-    struct runtime *rt = context;
-    int index = rt->midi2_current;
-    const struct ump_jr *jr = &rt->midi2_in[index].jr;
-    uint64_t due_us;
-
-    ++rt->midi2_count[index].messages_in;
-#ifndef NETMIDI_SERVICE
-    if (rt->chatty) {
-        size_t i;
-
-        printf(TAG "MIDI 2.0 bytes=");
-        for (i = 0; i < length && i < 16; ++i)
-            printf("%02x", (unsigned int)bytes[i]);
-        puts(i < length ? "..." : "");
-    }
-#endif
-    if (jr->have_timestamp &&
-        ump_jr_clock_due(&rt->midi2_clock[index], jr->timestamp, &due_us)) {
-        uint64_t now = now_ticks();
-        uint64_t due = due_us / 100 + rt->latency;
-
-        ++rt->midi2_timed;
-        ++rt->midi2_count[index].timed;
-        if (due > now && due - now <= RTPMIDI_QUEUE_HORIZON &&
-            (bytes[0] == 0xf0 ?
-                 rtpmidi_queue_push_sysex(&rt->midi2_queue[index], due, bytes,
-                                          length) :
-                 rtpmidi_queue_push(&rt->midi2_queue[index], due, bytes,
-                                    length)) == 0)
-            return;
-        if (due <= now) {
-            ++rt->midi2_late;
-            ++rt->midi2_count[index].late;
-        }
-    }
-    midi2_deliver(rt, index, bytes, length);
-}
-
-/* What was held and is now due. */
-static void midi2_release(struct runtime *rt, uint64_t now)
-{
-    struct rtpmidi_queued_event event;
-    int index;
-
-    for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index)
-        while (rtpmidi_queue_pop_due(&rt->midi2_queue[index], now, &event)) {
-            if (event.sysex)
-                midi2_deliver(rt, index, event.sysex, event.sysex_length);
-            else
-                midi2_deliver(rt, index, event.bytes, event.length);
-            rtpmidi_queue_event_release(&event);
-        }
-}
-
-static void midi2_sink(void *context, int index, const uint32_t *words,
-                       size_t count)
-{
-    struct runtime *rt = context;
-    size_t i = 0;
-    ++rt->midi2_count[index].packets_in;
-    while (i < count) {
-        unsigned n = ump_words(words[i]);
-        if (i + n > count)
-            break;
-        {
-            unsigned long clocks = rt->midi2_in[index].jr.clocks;
-
-            rt->midi2_current = index;
-            ump_to_midi1(&rt->midi2_in[index], words + i, n, midi2_to_camd,
-                         rt);
-            if (rt->midi2_in[index].jr.clocks != clocks)
-                ump_jr_clock_seen(&rt->midi2_clock[index],
-                                  rt->midi2_in[index].jr.clock, now_us());
-        }
-        i += n;
-    }
-}
-
-/* A session ended, was reset or lost data for good: nothing here knows
- * which notes its peer left sounding, so every channel of its port is told
- * to stop. */
-static void midi2_all_notes_off(struct runtime *rt, int index)
-{
-    uint8_t message[3] = {0xb0, 123, 0};
-    unsigned int channel;
-    if (rt->midi2_port[index] < 0)
-        return;
-    for (channel = 0; channel < 16; ++channel) {
-        message[0] = (uint8_t)(0xb0 | channel);
-        netmidi_camd_deliver_port(&rt->camd, rt->midi2_port[index], message,
-                                  sizeof(message));
-    }
-}
-
-static void midi2_receive(struct runtime *rt)
-{
-    static uint8_t in[2048], out[NETMIDI2_MAX_PACKET];
-    struct sockaddr_in source;
-    socklen_t source_length = sizeof(source);
-    struct netmidi2_writer packet;
-    int index;
-    int count = netmidi_network_midi2_receive(&rt->network, in, sizeof(in),
-                                              &source, &source_length);
-    if (count <= 0 || source_length < sizeof(source) ||
-        source.sin_family != AF_INET)
-        return;
-    netmidi2_writer_init(&packet, out, sizeof(out));
-    if (netmidi2_table_receive(&rt->midi2, midi2_key(&source), in,
-                               (size_t)count, (uint32_t)(now_ticks() / 10),
-                               &packet, &index) == 0)
-        midi2_send(rt, midi2_key(&source), &packet);
-}
-
-static void midi2_periodic(struct runtime *rt, uint64_t now)
-{
-    static uint8_t out[NETMIDI2_MAX_PACKET];
-    struct netmidi2_writer packet;
-    int index;
-
-    for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index) {
-        const struct netmidi2_session *session =
-            netmidi2_table_session(&rt->midi2, index);
-        uint64_t peer;
-        if (!session) {
-            if (rt->midi2_known[index]) {
-                puts(TAG "MIDI 2.0 session closed");
-                if (rt->midi2_timed) {
-                    printf(TAG "%lu of %lu timed MIDI 2.0 events came after their time\n",
-                           rt->midi2_late, rt->midi2_timed);
-                    rt->midi2_timed = rt->midi2_late = 0;
-                }
-                /* what was still held would sound after the notes off */
-                rtpmidi_queue_reset(&rt->midi2_queue[index]);
-                midi2_all_notes_off(rt, index);
-                applemidi_ports_release(&rt->midi2_ports, index + 1);
-                rt->midi2_port[index] = -1;
-                ump_to_midi1_buffer(&rt->midi2_in[index], NULL, 0);
-                free(rt->midi2_sysex[index]);
-                rt->midi2_sysex[index] = NULL;
-                rt->midi2_known[index] = 0;
-            }
-            continue;
-        }
-        peer = session->peer;
-        if (session->state == NETMIDI2_ESTABLISHED &&
-            !rt->midi2_known[index]) {
-            /* a port of the second driver, by the same rule as an
-               AppleMIDI peer's: kept for its endpoint's name, or the
-               first free. Where all share the clusters, port 0. */
-            if (rt->shared_port) {
-                rt->midi2_port[index] = 0;
-            } else {
-                int port = applemidi_ports_take(
-                    &rt->midi2_ports, (const uint8_t *)session->peer_name,
-                    applemidi_text_length(session->peer_name,
-                        sizeof(session->peer_name) - 1), index + 1);
-                rt->midi2_port[index] = port < 0 ? -1 :
-                                        NETMIDI_CAMD_MIDI2 + port;
-            }
-            printf(TAG "MIDI 2.0 session established peer=\"%s\" port=%d\n",
-                   session->peer_name,
-                   rt->midi2_port[index] < 0 ? -1 :
-                   rt->shared_port ? 0 :
-                   rt->midi2_port[index] - NETMIDI_CAMD_MIDI2);
-            memset(&rt->midi2_count[index], 0, sizeof(rt->midi2_count[index]));
-            {
-                size_t n = applemidi_name_fit(
-                    (const uint8_t *)session->peer_name,
-                    applemidi_text_length(session->peer_name,
-                        sizeof(session->peer_name) - 1),
-                    sizeof(rt->midi2_count[index].name) - 1);
-
-                memcpy(rt->midi2_count[index].name, session->peer_name, n);
-            }
-            rt->midi2_known[index] = 1;
-            rt->midi2_gaps[index] = session->gaps;
-            rt->midi2_resets[index] = session->resets;
-            ump_to_midi1_init(&rt->midi2_in[index], 0);
-            if (!rt->midi2_sysex[index])
-                rt->midi2_sysex[index] = malloc(RTPMIDI_SYSEX_MAX);
-            ump_to_midi1_buffer(&rt->midi2_in[index], rt->midi2_sysex[index],
-                                RTPMIDI_SYSEX_MAX);
-            ump_jr_clock_init(&rt->midi2_clock[index]);
-        }
-        if (rt->midi2_known[index] &&
-            (session->gaps != rt->midi2_gaps[index] ||
-             session->resets != rt->midi2_resets[index])) {
-            rt->midi2_count[index].packets_lost +=
-                session->gaps - rt->midi2_gaps[index];
-            puts(TAG "MIDI 2.0 data lost or session reset");
-            rt->midi2_gaps[index] = session->gaps;
-            rt->midi2_resets[index] = session->resets;
-            ump_to_midi1_buffer(&rt->midi2_in[index], rt->midi2_sysex[index],
-                                RTPMIDI_SYSEX_MAX);
-            midi2_all_notes_off(rt, index);
-        }
-        netmidi2_writer_init(&packet, out, sizeof(out));
-        if (netmidi2_table_tick(&rt->midi2, index, (uint32_t)(now / 10),
-                                &packet))
-            midi2_send(rt, peer, &packet);
-    }
-}
-
-struct midi2_outgoing {
-    struct runtime *rt;
-    unsigned long messages;     /* MIDI messages in what is gathered */
-    int port;                   /* the port it was sent to; -1 for all */
-    uint32_t words[NETMIDI2_MAX_UMP_WORDS];
-    size_t count;
-};
-
-/* One UMP Data command to the session of the port, or to every
- * established session where all share. */
-static void midi2_flush(struct midi2_outgoing *outgoing)
-{
-    static uint8_t out[NETMIDI2_MAX_PACKET];
-    struct runtime *rt = outgoing->rt;
-    struct netmidi2_writer packet;
-    int index;
-
-    if (!outgoing->count)
-        return;
-    for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index) {
-        struct netmidi2_session *session =
-            netmidi2_table_session(&rt->midi2, index);
-        if (!session || session->state != NETMIDI2_ESTABLISHED ||
-            (outgoing->port >= 0 && rt->midi2_port[index] != outgoing->port))
-            continue;
-        netmidi2_writer_init(&packet, out, sizeof(out));
-        if (netmidi2_send_ump(session, outgoing->words, outgoing->count,
-                              (uint32_t)(now_ticks() / 10), &packet) == 0) {
-            midi2_send(rt, session->peer, &packet);
-            ++rt->midi2_count[index].packets_out;
-            rt->midi2_count[index].messages_out += outgoing->messages;
-        }
-    }
-    outgoing->count = 0;
-}
-
-/* A UMP is never split between two commands (section 7.1). */
-static void midi2_collect(void *context, const uint32_t *words,
-                          unsigned count)
-{
-    struct midi2_outgoing *outgoing = context;
-    if (outgoing->count + count > NETMIDI2_MAX_UMP_WORDS)
-        midi2_flush(outgoing);
-    memcpy(outgoing->words + outgoing->count, words,
-           count * sizeof(*words));
-    outgoing->count += count;
-}
-
-static void midi2_send_midi(struct runtime *rt, int port,
-                            const uint8_t *message,
-                            size_t length)
-{
-    static struct midi2_outgoing outgoing;
-    struct ump_from_midi1 from;
-    size_t i;
-
-    outgoing.rt = rt;
-    outgoing.port = port;
-    outgoing.count = 0;
-    outgoing.messages = 1;
-    ump_from_midi1_init(&from, 0);
-    for (i = 0; i < length; ++i)
-        ump_from_midi1_byte(&from, message[i], midi2_collect, &outgoing);
-    midi2_flush(&outgoing);
-}
-
-#endif /* NETMIDI_MIDI2 */
-
-/* One message from CAMD to one peer. */
-static int send_midi_to(struct runtime *rt, int index, const uint8_t *message,
-                        size_t length)
-{
-    struct stream *stream = &rt->stream[index];
-    struct sockaddr_in data;
-    uint8_t wire[1100];
-    uint8_t segment[1002];
-    size_t wire_length;
-    size_t data_length;
-    size_t offset;
-    uint32_t timestamp = (uint32_t)now_ticks();
-    uint16_t first_sequence;
-
-    peer_address(&rt->peers.peer[index], 1, &data);
-    if (message[0] != 0xf0) {
-        if (rtpmidi_sender_packet(&stream->sender, stream->sequence, timestamp,
-                                  rt->peers.local_ssrc, message, length,
-                                  wire, sizeof(wire), &wire_length) != 0 ||
-            netmidi_network_send(&rt->network, 1, wire, wire_length,
-                                 &data) != 0)
-            return -1;
-        ++stream->sequence;
-        ++stream->count.packets_out;
-        stream->last_rtp_send = now_ticks();
+    if (d->shared_port)
         return 0;
-    }
-    first_sequence = stream->sequence;
-    if (length <= 1002) {
-        if (rtpmidi_encode_list(stream->sequence, timestamp,
-                               rt->peers.local_ssrc, message, length,
-                               wire, sizeof(wire), &wire_length) != 0 ||
-            netmidi_network_send(&rt->network, 1, wire, wire_length,
-                                 &data) != 0)
-            return -1;
-        ++stream->sequence;
-        ++stream->count.packets_out;
-        stream->last_rtp_send = now_ticks();
-        rtpmidi_sender_record_sysex(&stream->sender, first_sequence, timestamp,
-                                    message, length);
-        return 0;
-    }
-    data_length = length - 2;
-    offset = 0;
-    while (offset < data_length) {
-        size_t chunk = data_length - offset;
-
-        if (chunk > 1000)
-            chunk = 1000;
-        /* F0 begins the message and F7 ends it; between segments it is
-           the other way round (RFC 6295 section 3.2) */
-        segment[0] = offset == 0 ? 0xf0 : 0xf7;
-        memcpy(segment + 1, message + 1 + offset, chunk);
-        segment[chunk + 1] = offset + chunk == data_length ? 0xf7 : 0xf0;
-        if (rtpmidi_encode_list(stream->sequence, timestamp,
-                               rt->peers.local_ssrc, segment,
-                               chunk + 2, wire, sizeof(wire),
-                               &wire_length) != 0 ||
-            netmidi_network_send(&rt->network, 1, wire, wire_length,
-                                 &data) != 0)
-            return -1;
-        ++stream->sequence;
-        ++stream->count.packets_out;
-        stream->last_rtp_send = now_ticks();
-        offset += chunk;
-    }
-    rtpmidi_sender_record_sysex(&stream->sender, first_sequence, timestamp,
-                                message, length);
-    return 0;
+    port = applemidi_ports_take(&d->ports[driver], name, name_length, owner);
+    return port < 0 ? -1 : driver * NETMIDI_CAMD_PORTS + port;
 }
 
-/* Sends what was gathered to every connected peer: to each as few
- * packets as hold it, each message with the time it was taken at. */
-static void flush_midi(struct runtime *rt)
+void netmidid_port_release(struct netmidid *d, int driver, int owner)
 {
-    int index;
-
-    for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index) {
-        struct stream *stream = &rt->stream[index];
-        struct sockaddr_in data;
-        uint8_t wire[1100];
-        size_t wire_length;
-        size_t taken;
-        size_t done = 0;
-        size_t count = 0;
-        size_t i;
-        struct rtpmidi_timed_message mine[64];
-
-        if (!rt->peers.peer[index].used ||
-            rt->peers.peer[index].session.phase != APPLEMIDI_SESSION_CONNECTED)
-            continue;
-        /* what was sent to this peer's port */
-        for (i = 0; i < rt->outgoing_count; ++i)
-            if (rt->shared_port || rt->outgoing_port[i] == stream->port)
-                mine[count++] = rt->outgoing[i];
-        peer_address(&rt->peers.peer[index], 1, &data);
-        while (done < count) {
-            if (rtpmidi_sender_packet_list(&stream->sender, stream->sequence,
-                                           rt->peers.local_ssrc,
-                                           mine + done, count - done,
-                                           wire, sizeof(wire), &wire_length,
-                                           &taken) != 0) {
-                ++done;         /* not a message we can send */
-                continue;
-            }
-            done += taken;
-            stream->count.messages_out += taken;
-            if (netmidi_network_send(&rt->network, 1, wire, wire_length,
-                                     &data) != 0)
-                break;
-            ++stream->sequence;
-        ++stream->count.packets_out;
-            stream->last_rtp_send = now_ticks();
-        }
-    }
-    rt->outgoing_count = 0;
+    applemidi_ports_release(&d->ports[driver], owner);
 }
 
-/* What a CAMD program sends goes to every connected peer, each with its
- * own sequence numbers and its own journal. */
+#ifdef NETMIDI_BROWSE
+int netmidid_browse(struct netmidid *d, const struct netmidid_transport *t,
+                    const char *type)
+{
+    int browse = netmidi_discovery_browse(&d->discovery, type);
+
+    if (browse >= 0)
+        d->browse_owner[browse] = t;
+    return browse;
+}
+#endif
+
+/* Which transports run, of those in transports[]. */
+static int running[NETMIDID_TRANSPORTS + 1];
+
+/* What a CAMD program sends goes to every transport: each takes what was
+ * sent to a port of its own. */
 static int send_midi(void *context, const uint8_t *message, size_t length)
 {
-    struct runtime *rt = context;
-    int index;
+    struct netmidid *d = context;
     int result = -1;
+    int i;
 
     if (!message || !length)
         return -1;
     if (message[0] == 0xf0) {
-        size_t i;
+        size_t j;
 
-        if (length < 2 || length > RTPMIDI_SYSEX_MAX ||
+        if (length < 2 || length > NETMIDID_SYSEX_MAX ||
             message[length - 1] != 0xf7)
             return -1;
-        for (i = 1; i + 1 < length; ++i)
-            if (message[i] & 0x80)
+        for (j = 1; j + 1 < length; ++j)
+            if (message[j] & 0x80)
                 return -1;
     }
-    if (message[0] != 0xf0 && length <= 3) {
-        /* gathered, and sent when CAMD has nothing more this turn */
-        struct rtpmidi_timed_message *m;
-
-        if (rt->outgoing_count ==
-            sizeof(rt->outgoing) / sizeof(rt->outgoing[0]))
-            flush_midi(rt);
-        rt->outgoing_port[rt->outgoing_count] = (uint8_t)rt->camd.port_now;
-        m = &rt->outgoing[rt->outgoing_count++];
-        m->timestamp = (uint32_t)now_ticks();
-        m->length = (uint8_t)length;
-        memcpy(m->bytes, message, length);
-        for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
-            if (rt->peers.peer[index].used &&
-                rt->peers.peer[index].session.phase ==
-                    APPLEMIDI_SESSION_CONNECTED &&
-                (rt->shared_port ||
-                 rt->stream[index].port == rt->camd.port_now))
-                result = 0;
-    } else {
-        /* a SysEx message has packets of its own, after what came first */
-        flush_midi(rt);
-        for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
-            if (rt->peers.peer[index].used &&
-                rt->peers.peer[index].session.phase ==
-                    APPLEMIDI_SESSION_CONNECTED &&
-                (rt->shared_port ||
-                 rt->stream[index].port == rt->camd.port_now) &&
-                send_midi_to(rt, index, message, length) == 0) {
-                ++rt->stream[index].count.messages_out;
-                result = 0;
-            }
-    }
-#ifdef NETMIDI_MIDI2
-    if (rt->midi2_enabled &&
-        (rt->shared_port || rt->camd.port_now >= NETMIDI_CAMD_MIDI2)) {
-        midi2_send_midi(rt, rt->shared_port ? -1 : rt->camd.port_now,
-                        message, length);
-        result = 0;
-    }
-#endif
+    for (i = 0; i < TRANSPORT_COUNT; ++i)
+        if (running[i] && transports[i]->send_midi &&
+            transports[i]->send_midi(d, d->camd.port_now, message, length) == 0)
+            result = 0;
     return result;
 }
 
-static void send_guard(struct runtime *rt, int index, uint64_t now)
+static void flush_midi(struct netmidid *d)
 {
-    struct stream *stream = &rt->stream[index];
-    struct sockaddr_in data;
-    uint8_t wire[1100];
-    size_t wire_length;
-    size_t journal_length;
-    uint32_t timestamp = (uint32_t)now;
-    if (rtpmidi_encode_list(stream->sequence, timestamp, rt->peers.local_ssrc,
-                           NULL, 0, wire, sizeof(wire), &wire_length) != 0 ||
-        rtpmidi_sender_journal(&stream->sender, stream->sequence, timestamp,
-                          wire + wire_length, sizeof(wire) - wire_length,
-                          &journal_length) != 0)
-        return;
-    wire[12] |= 0x40;
-    wire_length += journal_length;
-    peer_address(&rt->peers.peer[index], 1, &data);
-    if (netmidi_network_send(&rt->network, 1, wire, wire_length,
-                             &data) == 0) {
-        ++stream->sequence;
-        /* a guard packet carries no message and is not counted as one that does */
-        stream->last_rtp_send = now;
-    }
+    int i;
+
+    for (i = 0; i < TRANSPORT_COUNT; ++i)
+        if (running[i] && transports[i]->flush)
+            transports[i]->flush(d);
 }
-
-#ifndef NETMIDI_SERVICE
-/* What the host tests have the program send, once its peer is there. */
-static void send_note(struct runtime *rt, int index, uint8_t velocity)
-{
-    uint8_t message[3] = {0x90, 60, velocity};
-    send_midi_to(rt, index, message, sizeof(message));
-}
-
-static void send_probe_sysex(struct runtime *rt, int index)
-{
-    static uint8_t large[2004];
-    static uint8_t dump[16384];     /* a bulk dump's size */
-    static const uint8_t small[] = {0xf0, 0x7d, 0x01, 0xf7};
-    size_t i;
-    dump[0] = 0xf0;
-    dump[1] = 0x7d;
-    for (i = 2; i + 1 < sizeof(dump); ++i)
-        dump[i] = (uint8_t)((i * 7) & 0x7f);
-    dump[sizeof(dump) - 1] = 0xf7;
-    large[0] = 0xf0;
-    large[1] = 0x7d;
-    for (i = 2; i + 1 < sizeof(large); ++i)
-        large[i] = (uint8_t)(i & 0x7f);
-    large[sizeof(large) - 1] = 0xf7;
-    send_midi_to(rt, index, small, sizeof(small));
-    send_midi_to(rt, index, large, sizeof(large));
-    send_midi_to(rt, index, dump, sizeof(dump));
-}
-#endif
-
-/* Ends a peer from our side, with BY when a session had been reached. */
-static void drop_peer(struct runtime *rt, int index, uint64_t now)
-{
-    struct applemidi_packet goodbye;
-    struct sockaddr_in control;
-    peer_address(&rt->peers.peer[index], 0, &control);
-    stream_forget(rt, index, now);
-    if (applemidi_peers_end(&rt->peers, index, &goodbye) == 0)
-        send_apple_to(rt, 0, &control, &goodbye);
-}
-
-static void periodic_peer(struct runtime *rt, int index, uint64_t now)
-{
-    struct stream *stream = &rt->stream[index];
-    const struct applemidi_session *session =
-        &rt->peers.peer[index].session;
-    struct applemidi_packet packet;
-    struct rtpmidi_queued_event event;
-    int data_port;
-
-    while (rtpmidi_queue_pop_due(&stream->queue, now, &event)) {
-        if (event.sysex)
-            rtpmidi_receiver_deliver_sysex(&stream->receiver, event.sysex,
-                                           event.sysex_length);
-        else
-            rtpmidi_receiver_deliver(&stream->receiver, event.bytes,
-                                     event.length);
-        rtpmidi_queue_event_release(&event);
-    }
-
-    if (session->phase == APPLEMIDI_SESSION_INVITING_CONTROL ||
-        session->phase == APPLEMIDI_SESSION_INVITING_DATA) {
-        if (elapsed_ticks(now, stream->last_invite) >=
-                APPLEMIDI_INVITE_INTERVAL) {
-            if (++stream->retries > APPLEMIDI_INVITE_TRIES) {
-                puts(TAG "invitation timed out");
-                drop_peer(rt, index, now);
-            } else if (applemidi_peers_retry(&rt->peers, index, &packet,
-                                             &data_port) == 0) {
-                send_apple(rt, index, data_port, &packet);
-                stream->last_invite = now;
-            }
-        }
-    } else if (session->phase == APPLEMIDI_SESSION_CONNECTED) {
-#ifndef NETMIDI_SERVICE
-        int probing = index == configured_index(rt);
-#endif
-        if (applemidi_clock_expired(&stream->clock, now)) {
-            puts(TAG "peer synchronization timed out");
-            drop_peer(rt, index, now);
-            return;
-        }
-        send_sync(rt, index, now);
-        if (stream->feedback_owed &&
-            elapsed_ticks(now, stream->feedback_sent) >=
-                RTPMIDI_FEEDBACK_INTERVAL)
-            feedback_now(rt, index, now);
-        if (stream->sender.count &&
-            elapsed_ticks(now, stream->last_rtp_send) >=
-                RTPMIDI_GUARD_INTERVAL)
-            send_guard(rt, index, now);
-#ifndef NETMIDI_SERVICE
-        if (!probing)
-            return;
-        if (rt->probe_sysex && stream->clock.synchronized &&
-            rt->probe_state == 0) {
-            send_probe_sysex(rt, index);
-            rt->probe_state = 2;
-        }
-        if (rt->probe_note && stream->clock.synchronized &&
-            rt->probe_state == 0) {
-            send_note(rt, index, 100);
-            rt->note_time = now;
-            rt->probe_state = 1;
-        } else if (rt->probe_state == 1 &&
-                   elapsed_ticks(now, rt->note_time) >= 2500) {
-            send_note(rt, index, 0);
-            rt->probe_state = 2;
-        }
-#endif
-    } else if (session->phase == APPLEMIDI_SESSION_WAITING_DATA &&
-               elapsed_ticks(now, stream->last_activity) >=
-                   APPLEMIDI_DATA_INVITE_TIMEOUT) {
-        puts(TAG "data invitation timed out");
-        drop_peer(rt, index, now);
-    }
-}
-
-#ifdef NETMIDI_MIDI2
-/* The Product Instance Id tells one device from another and is how a
-   system knows a device again (M2-124-UM section 4.4): it has to differ
-   between machines and stay the same on one. It is made once, of random
-   bits, and kept in a file; the Linux build, which the tests run, has the
-   one name always. */
-static void product_instance_id(char *id, uint64_t now)
-{
-#ifdef NETMIDI_SERVICE
-    static const char *const path[2] = {"ENVARC:NetMIDI.id", "ENV:NetMIDI.id"};
-    int which;
-    size_t i;
-
-    for (which = 0; which < 2; ++which) {
-        FILE *file = fopen(path[which], "r");
-        size_t length = 0;
-
-        if (!file)
-            continue;
-        length = fread(id, 1, PRODUCT_ID_MAX, file);
-        fclose(file);
-        while (length && (id[length - 1] == '\n' || id[length - 1] == '\r'))
-            --length;
-        id[length] = 0;
-        /* ASCII 32 to 126, and not empty */
-        for (i = 0; i < length; ++i)
-            if (id[i] < 32 || id[i] > 126)
-                break;
-        if (length && i == length)
-            return;
-    }
-    snprintf(id, PRODUCT_ID_MAX + 1, "AROS-%08lx%08lx",
-             (unsigned long)random32(now), (unsigned long)random32(now + 1));
-    for (which = 0; which < 2; ++which) {
-        FILE *file = fopen(path[which], "w");
-
-        if (file) {
-            fputs(id, file);
-            fclose(file);
-        }
-    }
-#else
-    (void)now;
-    strcpy(id, MIDI2_PRODUCT_ID);
-#endif
-}
-
-#endif
 
 /* Tells whoever asks what has passed on each port: about once a second. */
-static void publish_counts(struct runtime *rt, uint64_t now)
+static void publish_counts(struct netmidid *d, uint64_t now)
 {
     static struct netmidi_port_counts counts[NETMIDI_CAMD_PORTS *
                                              NETMIDI_CAMD_DRIVERS];
-    int index;
+    unsigned long refused = 0;
+    int i;
 
-    if (rt->shared_port || elapsed_ticks(now, rt->published) < 10000)
+    if (d->shared_port || netmidid_elapsed(now, d->published) < 10000)
         return;
-    rt->published = now;
+    d->published = now;
     memset(counts, 0, sizeof(counts));
-    for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index) {
-        struct stream *stream = &rt->stream[index];
-
-        if (!rt->peers.peer[index].used || stream->port < 0 ||
-            stream->port >= NETMIDI_CAMD_PORTS)
-            continue;
-        stream->count.journals_omitted = stream->sender.journals_omitted;
-        counts[stream->port] = stream->count;
-        counts[stream->port].present = 1;
-    }
-#ifdef NETMIDI_MIDI2
-    for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index) {
-        int port = rt->midi2_port[index];
-
-        if (!rt->midi2_enabled || !rt->midi2_known[index] || port < 0)
-            continue;
-        counts[port] = rt->midi2_count[index];
-        counts[port].present = 1;
-    }
-#endif
-    netmidi_camd_publish(&rt->camd, rt->session_name, rt->peers.refused,
+    for (i = 0; i < TRANSPORT_COUNT; ++i)
+        if (running[i] && transports[i]->counts)
+            refused += transports[i]->counts(d, counts);
+    netmidi_camd_publish(&d->camd, d->session_name, refused,
                          counts, NETMIDI_CAMD_PORTS * NETMIDI_CAMD_DRIVERS);
 }
 
-static void periodic(struct runtime *rt, uint64_t now)
+/* A turn of the loop for everything but the sockets. Returns 1 when a
+ * transport says the program is done. */
+static int periodic(struct netmidid *d, uint64_t now)
 {
-    publish_counts(rt, now);
-    int index;
+    int done = 0;
+    int i;
 
+    publish_counts(d, now);
 #ifdef NETMIDI_DISCOVERY
     /* The system's mDNS service may come up after us, or again. */
     {
-        int registered = netmidi_discovery_poll(&rt->discovery, now);
+        int registered = netmidi_discovery_poll(&d->discovery, now);
 #ifdef NETMIDI_BROWSE
         struct netmidi_discovered seen;
 #endif
 
-        if (registered > rt->discovered)
+        if (registered > d->discovered)
             puts(TAG "advertised by the system mDNS service");
         if (registered >= 0)
-            rt->discovered = registered;
+            d->discovered = registered;
 #ifdef NETMIDI_BROWSE
-        while (netmidi_discovery_next(&rt->discovery, &seen)) {
-            int ours = strcmp(seen.name, rt->session_name) == 0;
-            int wanted = rt->wanted[0] && strcmp(seen.name, rt->wanted) == 0;
-            if (ours)
-                continue;           /* our own registration, come back */
-#ifdef NETMIDI_MIDI2
-            if (seen.browse == rt->browse_midi2) {
-                /* a Network MIDI 2.0 Host: known to its user by its
-                   endpoint's name, to the network by its instance's */
-                if (seen.present)
-                    printf(TAG "MIDI 2.0 host \"%s\" (\"%s\") found at %u.%u.%u.%u port %u\n",
-                           seen.endpoint, seen.name,
-                           (unsigned int)(seen.address >> 24),
-                           (unsigned int)((seen.address >> 16) & 255),
-                           (unsigned int)((seen.address >> 8) & 255),
-                           (unsigned int)(seen.address & 255),
-                           (unsigned int)seen.port);
-                else
-                    printf(TAG "MIDI 2.0 host \"%s\" is gone\n", seen.name);
-                if (rt->midi2_wanted[0] &&
-                    (strcmp(seen.endpoint, rt->midi2_wanted) == 0 ||
-                     strcmp(seen.name, rt->midi2_wanted) == 0)) {
-                    if (seen.present) {
-                        rt->midi2_host_key =
-                            ((uint64_t)seen.address << 16) | seen.port;
-                        if (!rt->midi2_host)
-                            rt->midi2_tried = rt->midi2_wait = 0;
-                    }
-                    rt->midi2_host = seen.present;
-                }
-                continue;
-            }
-#endif
-            if (seen.present)
-                printf(TAG "session \"%s\" found at %u.%u.%u.%u port %u\n",
-                       seen.name, (unsigned int)(seen.address >> 24),
-                       (unsigned int)((seen.address >> 16) & 255),
-                       (unsigned int)((seen.address >> 8) & 255),
-                       (unsigned int)(seen.address & 255),
-                       (unsigned int)seen.port);
-            else
-                printf(TAG "session \"%s\" is gone\n", seen.name);
-            if (!wanted)
-                continue;
-            if (seen.present) {
-                rt->configured = 1;
-                rt->configured_address = seen.address;
-                rt->configured_port = seen.port;
-                if (!rt->wanted_present) {
-                    rt->wanted_wait = 0;        /* newly there: at once */
-                    rt->wanted_tried = 0;
-                }
-            }
-            rt->wanted_present = seen.present;
-        }
-        /* The peer we want is advertised and we have no session with it:
-           invite it, and again more slowly while it does not answer. */
-        if (rt->wanted_present && configured_index(rt) < 0 &&
-            (!rt->wanted_tried ||
-             elapsed_ticks(now, rt->wanted_tried) >= rt->wanted_wait)) {
-            printf(TAG "inviting \"%s\"\n", rt->wanted);
-            invite_configured(rt, now);
-            rt->wanted_tried = now ? now : 1;
-            rt->wanted_wait = rt->wanted_wait ? rt->wanted_wait * 2 :
-                              APPLEMIDI_WANTED_FIRST_WAIT;
-            if (rt->wanted_wait > APPLEMIDI_WANTED_LONGEST_WAIT)
-                rt->wanted_wait = APPLEMIDI_WANTED_LONGEST_WAIT;
-        }
-#endif
-    }
-#endif
-#ifdef NETMIDI_MIDI2
-    /* The Host we are to be a Client of is known and we have no session
-       with it: invite it, and again more slowly while it does not answer. */
-    if (rt->midi2_enabled && rt->midi2_host &&
-        netmidi2_table_find(&rt->midi2, rt->midi2_host_key) < 0 &&
-        (!rt->midi2_tried ||
-         elapsed_ticks(now, rt->midi2_tried) >= rt->midi2_wait)) {
-        static uint8_t out[NETMIDI2_MAX_PACKET];
-        struct netmidi2_writer packet;
+        while (netmidi_discovery_next(&d->discovery, &seen)) {
+            const struct netmidid_transport *owner;
 
-        netmidi2_writer_init(&packet, out, sizeof(out));
-        if (netmidi2_table_invite(&rt->midi2, rt->midi2_host_key,
-                                  (uint32_t)(now / 10), &packet) >= 0) {
-            puts(TAG "inviting a MIDI 2.0 host");
-            midi2_send(rt, rt->midi2_host_key, &packet);
+            if (strcmp(seen.name, d->session_name) == 0)
+                continue;           /* our own registration, come back */
+            owner = seen.browse >= 0 &&
+                    seen.browse < NETMIDI_DISCOVERY_BROWSES ?
+                    d->browse_owner[seen.browse] : NULL;
+            if (owner && owner->discovered)
+                owner->discovered(d, &seen);
         }
-        rt->midi2_tried = now ? now : 1;
-        rt->midi2_wait = rt->midi2_wait ? rt->midi2_wait * 2 :
-                         APPLEMIDI_WANTED_FIRST_WAIT;
-        if (rt->midi2_wait > APPLEMIDI_WANTED_LONGEST_WAIT)
-            rt->midi2_wait = APPLEMIDI_WANTED_LONGEST_WAIT;
+#endif
     }
 #endif
-    for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
-        if (rt->peers.peer[index].used)
-            periodic_peer(rt, index, now);
-#ifdef NETMIDI_MIDI2
-    if (rt->midi2_enabled)
-        midi2_periodic(rt, now);
-#endif
+    for (i = 0; i < TRANSPORT_COUNT; ++i)
+        if (running[i] && transports[i]->periodic &&
+            transports[i]->periodic(d, now))
+            done = 1;
+    return done;
 }
 
 /* What a configuration file looked like when it was read, to know when it
@@ -1649,98 +270,64 @@ static int config_changed(const struct config_watch *watch)
 
 #define RUN_AGAIN 100       /* the configuration changed: begin anew */
 
-#ifdef NETMIDI_SERVICE
-/* All the service is told comes from its configuration. */
-static int run(void)
-#else
-/* The program takes arguments, for the host tests. */
-static int run(int argc, char **argv)
-#endif
-{
-    static struct runtime rt;
-    struct config_watch watch = {NULL, 0, 0, 0};
-    uint64_t watched = 0;
-    struct in_addr peer_address_bytes;
-    uint16_t local_port;
-    uint16_t peer_port;
-#if defined(NETMIDI_MIDI2) || !defined(NETMIDI_SERVICE)
-    uint16_t midi2_port = 0;
-#endif
-#if defined(NETMIDI_BROWSE) || !defined(NETMIDI_SERVICE)
-    const char *peer_name = NULL;
-#endif
-    const char *accept_rule = NULL;
-    int latency_ms = 0;
 #ifndef NETMIDI_SERVICE
-    int trace = 0;
+static int parse_port(const char *text, uint16_t *port)
+{
+    char *end;
+    unsigned long number = strtoul(text, &end, 10);
+    if (!*text || *text == '-' || *end || number == 0 || number >= 65535)
+        return -1;
+    *port = (uint16_t)number;
+    return 0;
+}
+
+/* The program takes arguments, for the host tests: they say otherwise
+ * than the configuration. Returns 0, or -1 having said what is wrong. */
+static int parse_arguments(struct netmidid *d, int argc, char **argv,
+                           struct config_watch *watch)
+{
+    struct netmidi_network_config *config = &d->config;
     int argi = 1;
     int remaining;
-#endif
-    struct netmidi_network_config config;
-    const char *peer_ip;
-    uint64_t now;
-    uint64_t next_due;
-    uint64_t wait_ticks;
-    int index;
-#ifdef __AROS__
-    int config_result;
-#endif
-    unsigned int network_events;
-    long wait_us;
-    int result = 20;
+    int latency_ms;
 
-    memset(&rt, 0, sizeof(rt));
-
-    netmidi_config_defaults(&config);
-#ifndef NETMIDI_SERVICE
     if (argc > 1 && strcmp(argv[1], "--config") == 0) {
-        if (argc < 3 || netmidi_config_load(argv[2], &config) != 0) {
+        if (argc < 3 || netmidi_config_load(argv[2], config) != 0) {
             fputs(TAG "cannot read configuration\n", stderr);
-            return 20;
+            return -1;
         }
         argi = 3;
-        watch.path = argv[2];
+        watch->path = argv[2];
     } else {
-#endif
 #ifdef __AROS__
-#ifdef NETMIDI_SERVICE
-        /* ENV: is where a change is made to be seen at once; the copy in
-           ENVARC: is read when there is none, and not watched */
-        watch.path = "ENV:NetMIDI";
-        config_result = netmidi_config_load("ENV:NetMIDI", &config);
+        int config_result =
+            netmidi_config_load("ENV:MidiHub/Network", config);
         if (config_result == 1)
-            config_result = netmidi_config_load("ENVARC:NetMIDI", &config);
-#else
-        config_result = netmidi_config_load("ENV:MidiHub/Network", &config);
-        if (config_result == 1)
-            config_result = netmidi_config_load("ENVARC:MidiHub/Network", &config);
-#endif
+            config_result = netmidi_config_load("ENVARC:MidiHub/Network",
+                                                config);
         if (config_result < 0) {
             fputs(TAG "invalid network preferences\n", stderr);
-            return 20;
+            return -1;
         }
 #endif
-#ifndef NETMIDI_SERVICE
     }
-#endif
-    /* what the configuration says */
-#ifdef NETMIDI_MIDI2
-    midi2_port = config.midi2_port;
-#endif
-    latency_ms = config.latency_ms;
-    if (config.accept[0])
-        accept_rule = config.accept;
+    if (config->accept[0])
+        d->options.accept = config->accept;
 #ifdef NETMIDI_BROWSE
-    if (config.peer_name[0])
-        peer_name = config.peer_name;
+    if (config->peer_name[0])
+        d->options.peer_name = config->peer_name;
 #endif
-#ifndef NETMIDI_SERVICE
-    /* The arguments say otherwise. Network MIDI 2.0 is off unless a port
-       is given for it. */
+    /* Network MIDI 2.0 is off unless a port is given for it. */
     if (argc - argi >= 2 && strcmp(argv[argi], "--midi2") == 0) {
+#ifdef NETMIDI_MIDI2
+        if (parse_port(argv[argi + 1], &config->midi2_port) != 0) {
+#else
+        uint16_t midi2_port;
+
         if (parse_port(argv[argi + 1], &midi2_port) != 0) {
+#endif
             fputs(TAG "--midi2 takes a UDP port\n", stderr);
-            return 20;
+            return -1;
         }
         argi += 2;
     }
@@ -1749,255 +336,164 @@ static int run(int argc, char **argv)
         latency_ms = atoi(argv[argi + 1]);
         if (latency_ms < 0 || latency_ms > 2000) {
             fputs(TAG "--latency takes 0 to 2000 milliseconds\n", stderr);
-            return 20;
+            return -1;
         }
+        config->latency_ms = latency_ms;
         argi += 2;
     }
     if (argc - argi >= 1 && strcmp(argv[argi], "--trace") == 0) {
-        trace = 1;
+        d->options.trace = 1;
         argi += 1;
     }
     /* Who may connect: anyone (the default), nobody, or those listed, each
        an IPv4 address or a session name, with commas between. */
     if (argc - argi >= 2 && strcmp(argv[argi], "--accept") == 0) {
-        accept_rule = argv[argi + 1];
+        d->options.accept = argv[argi + 1];
         argi += 2;
     }
-    /* A peer to invite by the name its session is advertised under. */
+    /* A peer to invite by the name its session is advertised under; built
+       without the search, a peer is given by its address, or invites. */
     if (argc - argi >= 2 && strcmp(argv[argi], "--peer-name") == 0) {
-        peer_name = argv[argi + 1];
+#ifdef NETMIDI_BROWSE
+        d->options.peer_name = argv[argi + 1];
+#endif
         argi += 2;
     }
     remaining = argc - argi;
-#endif
-    local_port = config.local_port;
-    peer_port = config.peer_port;
-    peer_ip = config.peer_ip;
-#ifndef NETMIDI_SERVICE
     if ((remaining != 0 && remaining != 1 && remaining != 3 &&
          remaining != 4) ||
-        (remaining >= 1 && parse_port(argv[argi], &local_port) != 0) ||
+        (remaining >= 1 && parse_port(argv[argi], &config->local_port) != 0) ||
         (remaining >= 3 &&
-         parse_port(argv[argi + 2], &peer_port) != 0) ||
+         parse_port(argv[argi + 2], &config->peer_port) != 0) ||
         (remaining == 4 && strcmp(argv[argi + 3], "--probe-note") != 0 &&
          strcmp(argv[argi + 3], "--probe-sysex") != 0)) {
         fputs("Usage: MIDIHub [--config file] [--midi2 port] [--latency ms] [--trace] [--accept anyone|nobody|list] [--peer-name session] [local-control-port [peer-ip peer-control-port [--probe-note|--probe-sysex]]]\n", stderr);
-        return 20;
+        return -1;
     }
     if (remaining >= 3)
-        peer_ip = argv[argi + 1];
-#endif
-    memset(&rt, 0, sizeof(rt));
-    netmidi_network_init(&rt.network);
-    rt.latency = (uint32_t)latency_ms * 10;
-#ifndef NETMIDI_SERVICE
-    rt.trace = trace;
-    rt.chatty = 1;      /* the program the host tests read */
-#endif
-#ifdef NETMIDI_DISCOVERY
-    netmidi_discovery_init(&rt.discovery);
-#endif
-    rt.configured = *peer_ip != 0;
-#ifndef NETMIDI_SERVICE
-    rt.probe_note = remaining == 4 &&
-                    strcmp(argv[argi + 3], "--probe-note") == 0;
-    rt.probe_sysex = remaining == 4 &&
-                     strcmp(argv[argi + 3], "--probe-sysex") == 0;
+        snprintf(config->peer_ip, sizeof(config->peer_ip), "%s",
+                 argv[argi + 1]);
+    d->options.chatty = 1;      /* the program the host tests read */
+    d->options.probe_note = remaining == 4 &&
+                            strcmp(argv[argi + 3], "--probe-note") == 0;
+    d->options.probe_sysex = remaining == 4 &&
+                             strcmp(argv[argi + 3], "--probe-sysex") == 0;
+    return 0;
+}
 #endif
 
-    if (netmidi_network_platform_open(&rt.network) != 0) {
+#ifdef NETMIDI_SERVICE
+/* All the service is told comes from its configuration. */
+static int run(void)
+#else
+static int run(int argc, char **argv)
+#endif
+{
+    static struct netmidid rt;
+    struct netmidid *d = &rt;
+    struct config_watch watch = {NULL, 0, 0, 0};
+    uint64_t watched = 0;
+    uint64_t now;
+    uint64_t next_due;
+    uint64_t wait_ticks;
+    unsigned int network_events;
+    long wait_us;
+    int opened[NETMIDID_TRANSPORTS + 1];
+    int any = 0;
+    int result = 20;
+    int done;
+    int i;
+
+    memset(d, 0, sizeof(*d));
+    memset(running, 0, sizeof(running));
+    memset(opened, 0, sizeof(opened));
+    netmidi_config_defaults(&d->config);
+#ifdef NETMIDI_SERVICE
+#ifdef __AROS__
+    {
+        /* ENV: is where a change is made to be seen at once; the copy in
+           ENVARC: is read when there is none, and not watched */
+        int config_result;
+
+        watch.path = "ENV:NetMIDI";
+        config_result = netmidi_config_load("ENV:NetMIDI", &d->config);
+        if (config_result == 1)
+            config_result = netmidi_config_load("ENVARC:NetMIDI", &d->config);
+        if (config_result < 0) {
+            fputs(TAG "invalid network preferences\n", stderr);
+            return 20;
+        }
+    }
+#endif
+    if (d->config.accept[0])
+        d->options.accept = d->config.accept;
+#ifdef NETMIDI_BROWSE
+    if (d->config.peer_name[0])
+        d->options.peer_name = d->config.peer_name;
+#endif
+#else
+    if (parse_arguments(d, argc, argv, &watch) != 0)
+        return 20;
+#endif
+    netmidi_network_init(&d->network);
+    d->latency = (uint32_t)d->config.latency_ms * 10;
+#ifdef NETMIDI_DISCOVERY
+    netmidi_discovery_init(&d->discovery);
+#endif
+
+    if (netmidi_network_platform_open(&d->network) != 0) {
         fputs(TAG "bsdsocket.library unavailable\n", stderr);
         return 20;
     }
 #ifdef NETMIDI_SERVICE
     /* A session nobody named is called as the machine is, so that two
        machines on a network are told apart. */
-    if (!config.session_name_given) {
-        char host[sizeof(config.session_name)];
+    if (!d->config.session_name_given) {
+        char host[sizeof(d->config.session_name)];
 
         if (netmidi_network_hostname(host, sizeof(host)) == 0)
-            snprintf(config.session_name, sizeof(config.session_name),
+            snprintf(d->config.session_name, sizeof(d->config.session_name),
                      "%s", host);
     }
 #endif
-    snprintf(rt.session_name, sizeof(rt.session_name), "%s",
-             config.session_name);
+    /* the two are of one size */
+    memcpy(d->session_name, d->config.session_name, sizeof(d->session_name));
+    d->session_name[sizeof(d->session_name) - 1] = 0;
     config_look(&watch);
 #ifndef __AROS__
     signal(SIGINT, stop_signal);
     signal(SIGTERM, stop_signal);
 #endif
-    if (rt.configured) {
-#ifdef __AROS__
-        peer_address_bytes.s_addr = inet_addr(peer_ip);
-        if (peer_address_bytes.s_addr == INADDR_NONE) {
-#else
-        if (inet_pton(AF_INET, peer_ip, &peer_address_bytes) != 1) {
-#endif
-            fputs(TAG "peer must be an IPv4 address\n", stderr);
-            goto cleanup;
-        }
-        rt.configured_address = ntohl(peer_address_bytes.s_addr);
-        rt.configured_port = peer_port;
-    }
-    if (netmidi_network_open_pair(&rt.network, local_port) != 0) {
-        fputs(TAG "cannot bind UDP port pair\n", stderr);
-        goto cleanup;
-    }
-#ifdef NETMIDI_MIDI2
-    if (midi2_port) {
-        if (netmidi_network_open_midi2(&rt.network, midi2_port) != 0) {
-            fputs(TAG "cannot bind the Network MIDI 2.0 port\n", stderr);
-            goto cleanup;
-        }
-        product_instance_id(rt.product_id, now_ticks());
-        netmidi2_table_init(&rt.midi2, config.session_name, rt.product_id,
-                            midi2_sink, &rt);
-        /* a peer may send its timestamps: they are used */
-        rt.midi2.jr_offered = UMP_JR_RECEIVE;
-        for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index) {
-            rtpmidi_queue_reset(&rt.midi2_queue[index]);
-            rt.midi2_port[index] = -1;
-        }
-        rt.midi2_enabled = 1;
-    }
-#endif
-    if (netmidi_camd_open(&rt.camd) != 0) {
+    if (netmidi_camd_open(&d->camd) != 0) {
         fputs(TAG "camd.library unavailable\n", stderr);
         goto cleanup;
     }
-    rt.shared_port = netmidi_camd_ports(&rt.camd) == 1;
-    applemidi_ports_init(&rt.ports, rt.shared_port ? 0 :
-                                    netmidi_camd_ports(&rt.camd));
-#ifdef NETMIDI_MIDI2
-    applemidi_ports_init(&rt.midi2_ports, rt.shared_port ? 0 :
-                                          netmidi_camd_ports(&rt.camd));
-#endif
-    for (index = 0; index < 16; ++index) {
-        if (config.port_name[index][0] &&
-            applemidi_ports_keep(&rt.ports, index,
-                                 config.port_name[index]) != 0)
-            printf(TAG "applemidi port %d cannot be kept for \"%s\"\n",
-                   index, config.port_name[index]);
-#ifdef NETMIDI_MIDI2
-        if (config.midi2_port_name[index][0] &&
-            applemidi_ports_keep(&rt.midi2_ports, index,
-                                 config.midi2_port_name[index]) != 0)
-            printf(TAG "networkmidi2 port %d cannot be kept for \"%s\"\n",
-                   index, config.midi2_port_name[index]);
-#endif
+    d->shared_port = netmidi_camd_ports(&d->camd) == 1;
+    for (i = 0; i < NETMIDI_CAMD_DRIVERS; ++i)
+        applemidi_ports_init(&d->ports[i], d->shared_port ? 0 :
+                                           netmidi_camd_ports(&d->camd));
+    for (i = 0; i < TRANSPORT_COUNT; ++i) {
+        int status = transports[i]->open(d);
+
+        opened[i] = 1;
+        if (status < 0)
+            goto cleanup;
+        running[i] = status == 0;
+        any |= running[i];
     }
-    now = now_ticks();
-    if (applemidi_peers_init(&rt.peers, random32(now),
-                        (const uint8_t *)config.session_name,
-                        applemidi_text_length(config.session_name,
-                            sizeof(config.session_name) - 1)) != 0)
+    if (!any) {
+        fputs(TAG "the configuration asks for no transport\n", stderr);
         goto cleanup;
-    if (config.max_peers)
-        rt.peers.limit = config.max_peers;
-    if (accept_rule && strcmp(accept_rule, "anyone") != 0) {
-        static char list[512];
-        char *entry;
-        rt.peers.accept = APPLEMIDI_ACCEPT_NOBODY;
-        if (strcmp(accept_rule, "nobody") != 0) {
-            rt.peers.accept = APPLEMIDI_ACCEPT_LISTED;
-            snprintf(list, sizeof(list), "%s", accept_rule);
-            for (entry = strtok(list, ","); entry; entry = strtok(NULL, ",")) {
-                struct in_addr address;
-                int allowed;
-#ifdef __AROS__
-                address.s_addr = inet_addr(entry);
-                allowed = address.s_addr != INADDR_NONE ?
-                    applemidi_peers_allow(&rt.peers, ntohl(address.s_addr),
-                                          NULL) :
-                    applemidi_peers_allow(&rt.peers, 0, entry);
-#else
-                allowed = inet_pton(AF_INET, entry, &address) == 1 ?
-                    applemidi_peers_allow(&rt.peers, ntohl(address.s_addr),
-                                          NULL) :
-                    applemidi_peers_allow(&rt.peers, 0, entry);
-#endif
-                if (allowed != 0) {
-                    fputs(TAG "too many or bad entries in accept\n",
-                          stderr);
-                    goto cleanup;
-                }
-            }
-        }
     }
+    now = netmidid_now();
 #ifdef NETMIDI_DISCOVERY
-    /* An AppleMIDI session is found under its control port. */
-    netmidi_discovery_add(&rt.discovery, rt.session_name, "_apple-midi._udp",
-                          local_port);
-#ifdef NETMIDI_BROWSE
-    rt.browse_apple = netmidi_discovery_browse(&rt.discovery,
-                                               "_apple-midi._udp");
-#endif
-#endif
-#ifdef NETMIDI_MIDI2
-#ifdef NETMIDI_BROWSE
-    rt.browse_midi2 = -1;
-#endif
-    if (rt.midi2_enabled && config.midi2_peer_ip[0]) {
-        struct in_addr address;
-#ifdef __AROS__
-        address.s_addr = inet_addr(config.midi2_peer_ip);
-        if (address.s_addr != INADDR_NONE) {
-#else
-        if (inet_pton(AF_INET, config.midi2_peer_ip, &address) == 1) {
-#endif
-            rt.midi2_host_key = ((uint64_t)ntohl(address.s_addr) << 16) |
-                                config.midi2_peer_port;
-            rt.midi2_host = 1;
-        }
-    }
-#ifdef NETMIDI_BROWSE
-    if (rt.midi2_enabled && config.midi2_peer_name[0]) {
-        snprintf(rt.midi2_wanted, sizeof(rt.midi2_wanted), "%s",
-                 config.midi2_peer_name);
-        rt.browse_midi2 = netmidi_discovery_browse(&rt.discovery,
-                                                   "_midi2._udp");
-    }
-#endif
-#ifdef NETMIDI_DISCOVERY
-    if (rt.midi2_enabled) {
-        /* A Network MIDI 2.0 Host is found as _midi2._udp, with the two
-           strings it also gives in its Invitation Reply, and its records
-           live a minute at most, so that one that vanished is forgotten
-           (M2-124-UM sections 4.4 and 4.6). */
-        static char midi2_text[256];
-
-        midi2_text[0] = 0;
-
-        netmidi_discovery_item(midi2_text, sizeof(midi2_text),
-                               "UMPEndpointName", rt.session_name);
-        netmidi_discovery_item(midi2_text, sizeof(midi2_text),
-                               "ProductInstanceId", rt.product_id);
-        netmidi_discovery_add_text(&rt.discovery, rt.session_name,
-                                   "_midi2._udp", midi2_port, midi2_text, 60);
-    }
-#endif
-#endif
-#ifdef NETMIDI_BROWSE
-    if (peer_name)
-        snprintf(rt.wanted, sizeof(rt.wanted), "%s", peer_name);
-#elif !defined(NETMIDI_SERVICE)
-    /* built without the search: a peer is given by its address, or invites */
-    (void)peer_name;
-#endif
-#ifdef NETMIDI_DISCOVERY
-    if (netmidi_discovery_poll(&rt.discovery, now) < 0)
+    if (netmidi_discovery_poll(&d->discovery, now) < 0)
         puts(TAG "no system mDNS service: not advertised");
 #endif
-    if (rt.configured && invite_configured(&rt, now) != 0)
-        goto cleanup;
-#ifdef NETMIDI_SERVICE
-    rt.again_tried = now;
-    rt.again_wait = APPLEMIDI_WANTED_FIRST_WAIT;
-#endif
-    printf(TAG "listening on UDP %u/%u\n", (unsigned int)local_port,
-           (unsigned int)local_port + 1);
-    fflush(stdout);
+    for (i = 0; i < TRANSPORT_COUNT; ++i)
+        if (running[i] && transports[i]->start &&
+            transports[i]->start(d, now) != 0)
+            goto cleanup;
 
     for (;;) {
 #ifndef __AROS__
@@ -2005,125 +501,56 @@ static int run(int argc, char **argv)
             break;
 #endif
         wait_us = 100000;
-        for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index) {
-            if (!rt.peers.peer[index].used ||
-                !rtpmidi_queue_next_due(&rt.stream[index].queue, &next_due))
+        for (i = 0; i < TRANSPORT_COUNT; ++i) {
+            if (!running[i] || !transports[i]->next_due ||
+                !transports[i]->next_due(d, &next_due))
                 continue;
-            now = now_ticks();
+            now = netmidid_now();
             wait_ticks = next_due > now ? next_due - now : 0;
             if (wait_ticks < 1000 && (long)(wait_ticks * 100) < wait_us)
                 wait_us = (long)(wait_ticks * 100);
         }
-#ifdef NETMIDI_MIDI2
-        for (index = 0; rt.midi2_enabled && index < NETMIDI2_SESSIONS_MAX;
-             ++index) {
-            if (!rtpmidi_queue_next_due(&rt.midi2_queue[index], &next_due))
-                continue;
-            now = now_ticks();
-            wait_ticks = next_due > now ? next_due - now : 0;
-            if (wait_ticks < 1000 && (long)(wait_ticks * 100) < wait_us)
-                wait_us = (long)(wait_ticks * 100);
-        }
-#endif
-        netmidi_network_wait(&rt.network, -1, wait_us,
-                             netmidi_camd_signal_bit(&rt.camd),
+        netmidi_network_wait(&d->network, wait_us,
+                             netmidi_camd_signal_bit(&d->camd),
                              &network_events);
-        if (network_events & NETMIDI_NETWORK_EVENT_STOP)
+        if (network_events & NETMIDI_NETWORK_STOP)
             break;
-        if (network_events & NETMIDI_NETWORK_EVENT_CONTROL)
-            receive_packet(&rt, 0);
-        if (network_events & NETMIDI_NETWORK_EVENT_DATA)
-            receive_packet(&rt, 1);
-#ifdef NETMIDI_MIDI2
-        if (network_events & NETMIDI_NETWORK_EVENT_MIDI2)
-            midi2_receive(&rt);
-#endif
-        periodic(&rt, now_ticks());
+        for (i = 0; i < NETMIDI_NETWORK_SOCKETS; ++i)
+            if ((network_events & (1u << i)) && d->socket_owner[i] &&
+                d->socket_owner[i]->receive)
+                d->socket_owner[i]->receive(d, i);
+        done = periodic(d, netmidid_now());
         /* A changed configuration is taken by beginning anew: sessions
            end with a goodbye and are made again under what it says now.
            Looked at every two seconds. */
-        if (watch.path && elapsed_ticks(now_ticks(), watched) >= 20000) {
-            watched = now_ticks();
+        if (watch.path && netmidid_elapsed(netmidid_now(), watched) >= 20000) {
+            watched = netmidid_now();
             if (config_changed(&watch)) {
                 puts(TAG "the configuration changed: beginning anew");
                 result = RUN_AGAIN;
                 goto cleanup;
             }
         }
-#ifdef NETMIDI_MIDI2
-        if (rt.midi2_enabled)
-            midi2_release(&rt, now_ticks());
-#endif
-        netmidi_camd_poll(&rt.camd, send_midi, &rt);
-        flush_midi(&rt);
-#ifdef NETMIDI_BROWSE
-        /* one wanted by name is invited when it is advertised */
-        if (rt.wanted[0])
-            continue;
-#endif
-#ifdef NETMIDI_SERVICE
-        /* The peer given by its address is invited again when there is no
-           session with it, be it that it never answered or that it left:
-           more slowly each time, up to once a minute, and from the start
-           again after a session. */
-        if (rt.configured) {
-            now = now_ticks();
-            index = configured_index(&rt);
-            if (index >= 0) {
-                if (rt.peers.peer[index].session.phase ==
-                        APPLEMIDI_SESSION_CONNECTED) {
-                    rt.again_tried = now;
-                    rt.again_wait = APPLEMIDI_WANTED_FIRST_WAIT;
-                }
-            } else if (elapsed_ticks(now, rt.again_tried) >= rt.again_wait) {
-                invite_configured(&rt, now);
-                rt.again_tried = now;
-                rt.again_wait *= 2;
-                if (rt.again_wait > APPLEMIDI_WANTED_LONGEST_WAIT)
-                    rt.again_wait = APPLEMIDI_WANTED_LONGEST_WAIT;
-            }
-        }
-#else
-        /* asked to invite one peer by its address: with that session
-           over, so are we */
-        if (rt.configured && configured_index(&rt) < 0)
+        netmidi_camd_poll(&d->camd, send_midi, d);
+        flush_midi(d);
+        if (done)
             break;
-#endif
     }
     result = 0;
 
 cleanup:
 #ifdef NETMIDI_DISCOVERY
-    netmidi_discovery_close(&rt.discovery);
+    netmidi_discovery_close(&d->discovery);
 #endif
-    for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
-        if (rt.peers.peer[index].used)
-            drop_peer(&rt, index, now_ticks());
-#ifdef NETMIDI_MIDI2
-    for (index = 0; rt.midi2_enabled && index < NETMIDI2_SESSIONS_MAX; ++index) {
-        static uint8_t out[NETMIDI2_MAX_PACKET];
-        struct netmidi2_writer packet;
-        struct netmidi2_session *session =
-            netmidi2_table_session(&rt.midi2, index);
-        netmidi2_writer_init(&packet, out, sizeof(out));
-        if (session && netmidi2_bye(session, NETMIDI2_BYE_USER_TERMINATED,
-                                    (uint32_t)(now_ticks() / 10),
-                                    &packet) == 0)
-            midi2_send(&rt, session->peer, &packet);
-    }
-#endif
-    netmidi_camd_close(&rt.camd);
-    netmidi_network_close(&rt.network);
-    for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index) {
-        free(rt.stream[index].sysex.bytes);
-        rt.stream[index].sysex.bytes = NULL;
-    }
-#ifdef NETMIDI_MIDI2
-    for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index) {
-        free(rt.midi2_sysex[index]);
-        rt.midi2_sysex[index] = NULL;
-    }
-#endif
+    for (i = 0; i < TRANSPORT_COUNT; ++i)
+        if (running[i] && transports[i]->stop)
+            transports[i]->stop(d);
+    netmidi_camd_close(&d->camd);
+    netmidi_network_close(&d->network);
+    for (i = 0; i < TRANSPORT_COUNT; ++i)
+        if (opened[i] && transports[i]->release)
+            transports[i]->release(d);
+    memset(running, 0, sizeof(running));
     return result;
 }
 

@@ -1,5 +1,9 @@
 # Network MIDI refactor handoff — 2026-10-21
 
+**Done the same day:** see [netmidid: a core and its
+transports](netmidid-transports-2026-10-21.md). The clean-tree builds of the
+cuts and the published branches remain.
+
 The review work left local companion sources, cut scripts, fixtures and
 reports uncommitted even though the corresponding AROS changes had been
 published. This consolidation preserves that work before another session

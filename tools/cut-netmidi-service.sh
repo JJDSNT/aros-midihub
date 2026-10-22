@@ -27,15 +27,15 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 stage=$1
 tree=$(realpath "$2")
 case "$stage" in
-n4) marks="-UNETMIDI_MIDI2 -UNETMIDI_DISCOVERY -UNETMIDI_BROWSE"
+n4) marks="-DNETMIDI_APPLEMIDI -UNETMIDI_MIDI2 -UNETMIDI_DISCOVERY -UNETMIDI_BROWSE"
     build="$here/upstream/n4-service"; service=$build ;;
-n7) marks="-DNETMIDI_MIDI2 -UNETMIDI_DISCOVERY -UNETMIDI_BROWSE"
+n7) marks="-DNETMIDI_APPLEMIDI -DNETMIDI_MIDI2 -UNETMIDI_DISCOVERY -UNETMIDI_BROWSE"
     build="$here/upstream/n7-service-midi2"; service=$build ;;
-n8-applemidi) marks="-UNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -UNETMIDI_BROWSE"
+n8-applemidi) marks="-DNETMIDI_APPLEMIDI -UNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -UNETMIDI_BROWSE"
     build="$here/upstream/n8-applemidi"; service=$build ;;
-n8) marks="-DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -UNETMIDI_BROWSE"
+n8) marks="-DNETMIDI_APPLEMIDI -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -UNETMIDI_BROWSE"
     build="$here/upstream/n8-discovery"; service=$build ;;
-n9) marks="-DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -DNETMIDI_BROWSE"
+n9) marks="-DNETMIDI_APPLEMIDI -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -DNETMIDI_BROWSE"
     build="$here/upstream/n8-discovery"
     service="$here/upstream/n9-browse" ;;
 *) echo "n4, n7, n8-applemidi, n8 or n9" >&2; exit 2 ;;
@@ -47,7 +47,7 @@ test -d "$tree/workbench/network/netmidid/rtpmidi/include/rtpmidi"
 cut="$tree/workbench/network/netmidid"
 from="$here/ports/aros/midihub"
 # Protocol libraries live below the service now; do not remove them.
-rm -f "$cut/discovery.c" "$cut/discovery.h"
+rm -f "$cut/discovery.c" "$cut/discovery.h" "$cut/transport_midi2.c"
 mkdir -p "$cut/include/netmidi" "$cut/services.d"
 
 # unifdef answers 1 when it took something off, 0 when not: both are well
@@ -56,12 +56,17 @@ strip() {
     unifdef -D__AROS__ -DNETMIDI_SERVICE $marks "$1" > "$2" || test $? -eq 1
 }
 strip "$from/main.c" "$cut/main.c"
+strip "$from/netmidid.h" "$cut/netmidid.h"
+strip "$from/transport_applemidi.c" "$cut/transport_applemidi.c"
 strip "$from/adapters.c" "$cut/adapters.c"
 strip "$from/camd.h" "$cut/camd.h"
 strip "$from/network.c" "$cut/network.c"
 strip "$from/network.h" "$cut/network.h"
 strip "$here/src/config.c" "$cut/config.c"
 strip "$here/include/netmidi/config.h" "$cut/include/netmidi/config.h"
+case "$stage" in n7|n8|n9)
+    strip "$from/transport_midi2.c" "$cut/transport_midi2.c" ;;
+esac
 case "$stage" in n8-applemidi|n8|n9)
     strip "$from/discovery.c" "$cut/discovery.c"
     strip "$from/discovery.h" "$cut/discovery.h" ;;
