@@ -138,7 +138,15 @@ Not done yet (after both steps): a full build of each cut in the clean upstream 
 replacing the published branches. Both wait for the owner, since #1679 is
 under review (see the handoff).
 
-## Prepared for publication (not pushed)
+## Published (2026-10-22)
+
+Pushed with the commands below; the #1679 title, the comment
+(`issuecomment-6330787013`) and the four bodies were updated. All six open
+PRs merge cleanly with master `43e2e698c4` (master since `a1b8aa6fd8`
+touched only `camd.library`), carry no attribution, and pass their checks;
+Codacy reports no new issue on #1679, #1693, #1742 or #1743.
+
+### As prepared
 
 #1679 is restructured so that it is about netmidid, with AppleMIDI as its
 first transport; it had no review yet. Local branches in

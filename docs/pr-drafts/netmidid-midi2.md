@@ -1,5 +1,5 @@
-Extend the AppleMIDI service proposed in #1679 with Network MIDI 2.0 over
-UDP, using the merged `netmidi2`/UMP library and `DEVS:Midi/networkmidi2`.
+Add Network MIDI 2.0 over UDP as a second transport of the netmidid
+service proposed in #1679, using the merged `netmidi2`/UMP library and `DEVS:Midi/networkmidi2`.
 Accept Clients as a Host, or invite a configured Host by IPv4 address,
 assign sessions to CAMD driver ports, translate UMP/MIDI traffic, and
 handle peer departure and the existing session recovery mechanisms.
