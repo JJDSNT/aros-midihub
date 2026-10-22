@@ -17,7 +17,7 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-router \
 #MM      contrib-aros-midihub-prefs \
 #MM      contrib-aros-midihub-drawer-icons \
-#MM      contrib-aros-midihub-btmidi \
+#MM      kernel-bluetooth-classes-btmidi \
 #MM      contrib-aros-midihub-bonami \
 #MM      contrib-aros-midihub-mdnsd \
 #MM      contrib-aros-midihub-mdnstools \
@@ -25,7 +25,6 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-mdnsprobe \
 #MM      contrib-aros-midihub-netmidid
 #MM contrib-aros-midihub-selftest : linklibs-arosmidihub
-#MM contrib-aros-midihub-ble : linklibs-arosmidihub kernel-bluetooth-library-includes
 #MM- contrib-aros-midihub-prefs : contrib-aros-midihub-prefs-icon
 #MM contrib-aros-midihub-prefs : linklibs-arosmidihub \
 #MM      kernel-bluetooth-library-includes kernel-bluetooth-btclass
@@ -78,8 +77,6 @@ MIDIHUB_LIBS := arosmidihub arosmidihub-applemidi arosmidihub-rtpmidi arosmidihu
     files="$(MIDIHUB_ROOT)/src/config $(MIDIHUB_ROOT)/src/config_applemidi \
            $(MIDIHUB_ROOT)/src/config_midi2 \
            $(MIDIHUB_ROOT)/src/routes \
-           $(MIDIHUB_ROOT)/src/ble_midi \
-           $(MIDIHUB_ROOT)/src/ble_peripheral \
            $(MIDIHUB_ROOT)/src/ump $(MIDIHUB_ROOT)/src/netmidi2"
 
 BONAMI_AROS := $(MIDIHUB_ROOT)/network/mdns/aros
@@ -320,14 +317,6 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
 %copy_files_q mmake=contrib-aros-midihub-prefs-drawer-icon \
     src="$(MIDIHUB_ROOT)/ports/aros/package/icons" files="Prefs.info" \
     dst="$(MIDIHUB_PACKAGE)"
-
-# Optional: requires the AROS bluetooth.library and the GATT prerequisite patch.
-%build_prog mmake=contrib-aros-midihub-ble \
-    progname=MIDIHubBLE \
-    files="$(MIDIHUB_ROOT)/ports/aros/ble_bridge \
-           $(MIDIHUB_ROOT)/ports/aros/camd_bridge" \
-    uselibs="$(MIDIHUB_LIBS)" \
-    targetdir=$(MIDIHUB_PACKAGE)/C
 
 # The live synthesizer plays a user-selected SoundFont; the bank is not
 # part of the package.

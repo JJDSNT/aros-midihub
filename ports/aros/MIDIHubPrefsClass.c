@@ -1,9 +1,7 @@
-#include <blemidi/ble_midi.h>
 #include <netmidi/config.h>
 #include <midihub/routes.h>
 #include "MIDIHubPrefsClass.h"
 #include "router_control.h"
-#include "btmidi/btmidi_cfg.h"
 
 #include <dos/dostags.h>
 #include <dos/dos.h>
@@ -71,11 +69,7 @@ static CONST_STRPTR endpoint_transport(CONST_STRPTR name)
     if (!strncmp(name, "applemidi.", 10)) return "AppleMIDI";
     if (!strncmp(name, "networkmidi2.", 13)) return "Network MIDI 2.0";
     if (!strncmp(name, "btmidi.", 7)) return "BLE MIDI";
-    /* btmidi.class's own ports are known from bluetooth.library; these
-       catch its defaults without it, and MIDIHubBLE's diagnostic ports */
-    if (!strncmp(name, BTMIDI_DEFAULT_NODE " ", sizeof(BTMIDI_DEFAULT_NODE)) ||
-        !strncmp(name, "MIDIHub BLE ", 12) ||
-        contains_ci(name, "bluetooth")) return "BLE MIDI";
+    if (contains_ci(name, "bluetooth")) return "BLE MIDI";
     if (contains_ci(name, "usb")) return "USB";
     if (contains_ci(name, "rtp") || contains_ci(name, "apple") ||
         contains_ci(name, "midihub")) return "Network";
@@ -407,13 +401,10 @@ static APTR find_btmidi_class(void)
 
 static void collect_ble(struct MHPrefsData *data)
 {
-    struct BTMidiCfg cfg, *chunk;
     struct List *records = NULL;
     struct Node *node;
-    struct BtDevice *device;
-    char node_name[BTMIDI_NAME_SIZE], in[BTMIDI_NAME_SIZE], out[BTMIDI_NAME_SIZE];
     CONST_STRPTR service = "Stopped";
-    APTR cls, pic;
+    APTR cls;
 
     data->ble_count = 0;
     if (!BluetoothBase)
@@ -434,52 +425,12 @@ static void collect_ble(struct MHPrefsData *data)
         if (owner && !strcmp((char *)owner, "btmidi.class"))
             service = enabled ? "Offered" : "Not offered";
     }
-    /* AROS as the central: the devices btmidi.class is bound to */
-    for (device = btFindDevice(NULL, TAG_END); device;
-         device = btFindDevice(device, TAG_END)) {
-        struct List *services = NULL;
-        STRPTR device_name = NULL;
-        IPTR connected = FALSE;
-        BOOL bound = FALSE;
-
-        btLockReadDevice(device);
-        btGetAttrs(BGA_DEVICE, device, BDA_ServiceList, &services,
-                   BDA_Name, &device_name, BDA_IsConnected, &connected, TAG_END);
-        for (node = services ? services->lh_Head : NULL; node && node->ln_Succ;
-             node = node->ln_Succ) {
-            APTR binding_class = NULL;
-            btGetAttrs(BGA_SERVICE, node, BSVA_BindingClass, &binding_class, TAG_END);
-            if (binding_class == cls)
-                bound = TRUE;
-        }
-        if (bound)
-            blemidi_midi_port_names((const char *)device_name, node_name, in, out,
-                                   sizeof(node_name));
-        btUnlockDevice(device);
-        if (bound) {
-            add_ble(data, in, connected ? "Connected" : "Not connected");
-            add_ble(data, out, connected ? "Connected" : "Not connected");
-        }
-    }
     btUnlockBase();
-
-    /* the peripheral role's names, from the class configuration */
-    Forbid();
-    strcpy(cfg.mc_InName, BTMIDI_DEFAULT_IN);
-    strcpy(cfg.mc_OutName, BTMIDI_DEFAULT_OUT);
-    if ((pic = btGetClsCfg((STRPTR)"btmidi.class")) &&
-        (chunk = btGetCfgChunk(pic, MAKE_ID('B','M','I','D')))) {
-        ULONG len = AROS_LONG2BE(chunk->mc_Length);
-        if (len > sizeof(cfg) - 8)
-            len = sizeof(cfg) - 8;
-        CopyMem(((UBYTE *)chunk) + 8, ((UBYTE *)&cfg) + 8, len);
-        btFreeVec(chunk);
-        cfg.mc_InName[BTMIDI_NAME_SIZE - 1] = 0;
-        cfg.mc_OutName[BTMIDI_NAME_SIZE - 1] = 0;
-    }
-    Permit();
-    add_ble(data, cfg.mc_InName, service);
-    add_ble(data, cfg.mc_OutName, service);
+    /* The upstream driver's peripheral role is port 0. Device-to-port
+       mapping for bound peripherals is not a public class API: do not
+       invent clusters from Bluetooth device names. */
+    add_ble(data, "btmidi.in.0", service);
+    add_ble(data, "btmidi.out.0", service);
 }
 
 static const struct MHPrefsBle *find_ble(struct MHPrefsData *data, CONST_STRPTR name)
@@ -897,7 +848,9 @@ static void refresh(struct MHPrefsData *data)
                  senders && receivers ? "In / Out" : senders ? "Source" :
                  receivers ? "Destination" : "Idle");
         snprintf(entry->state, sizeof(entry->state), "%s",
-                 ble ? ble->state : senders || receivers ? "Online" : "Idle");
+                 ble ? ble->state :
+                 !strncmp(entry->name, "btmidi.", 7) ? "Driver port" :
+                 senders || receivers ? "Online" : "Idle");
         if (CamdBase->lib_Version >= 42) {
             /* What CAMD dropped for this endpoint since it was created */
             IPTR overflows = 0, sysex = 0, errors = 0;

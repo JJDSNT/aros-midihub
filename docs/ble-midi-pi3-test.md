@@ -8,27 +8,18 @@ keyboard) needs such a keyboard and is described in [BLE MIDI](ble-midi.md).
 
 ## Which class is under test
 
-The steps below were written for the copy of `btmidi.class` in this
-repository, whose ports are `BLE MIDI In` and `BLE MIDI Out`. To test the
-upstream class of AROS PR #1507, which is a CAMD driver:
+These steps use the native AROS class merged in #1507. Build
+`kernel-bluetooth-classes-btmidi` from an AROS checkout containing that
+merge. This repository no longer installs a separate class.
 
-- Build `kernel-bluetooth-classes-btmidi` from the PR branch and do not
-  install this repository's class over it; both are `btmidi.class`.
-- After the first boot check that `DEVS:Midi/btmidi` exists. The class
-  writes it when it starts, and an unpatched `camd.library` only scans
-  `DEVS:Midi` when it is loaded: if a CAMD program was already running,
-  reboot once.
-- Use `btmidi.in.0` wherever a step says `BLE MIDI In` and `btmidi.out.0`
-  for `BLE MIDI Out`, for example
-  `MIDIHUB:C/MIDIHubCAMDProbe --monitor btmidi.in.0 300`.
-- MIDIHub.prefs does not know these ports as BLE MIDI yet, so the
-  `BLE MIDI`, `Offered` line of the preparation step does not apply. The class's own window, from the Classes
-  page of Bluetooth Preferences, shows the port list, the driver's state
-  and the counters.
-- Extra checks for this version: the window says "Installed as
-  DEVS:Midi/btmidi"; `btmidi.0` is marked in use while the probe runs and
-  not after it ends; a link to `btmidi.out.5` fails while no device is
-  bound.
+After boot check that `DEVS:Midi/btmidi` exists. If CAMD loaded before the
+class installed its driver and no rescan is available, restart CAMD or
+reboot. The class window should say "Installed as DEVS:Midi/btmidi";
+`btmidi.0` is in use while the probe runs. An unbound device port such as
+`btmidi.out.5` should refuse an open.
+
+The earlier October 6 hardware result used the retired client class.
+Repeat these tests for the driver version; that result does not cover it.
 
 ## What the Pi 3 radio can and cannot do
 
@@ -43,9 +34,8 @@ empty reads.
 ## Prepare the SD card
 
 1. Build the image as in [the patch guide](../patches/README.md): AROS
-   `raspi-aarch64` from upstream `a7102948cd` or later, which has the BLE MIDI
-   and Bluetooth firmware work that used to be patches here, plus the `contrib-aros-midihub`
-   target.
+   `raspi-aarch64` from an upstream revision containing merged #1507 and
+   the Bluetooth firmware support, plus the `contrib-aros-midihub` target.
 2. Check that the card has the Bluetooth patchram in `DEVS:Firmware/brcm/`
    (`BCM43430A1.hcd` for a Pi 3 or Zero W, `BCM4345C0.hcd` for a Pi 3B+).
    The firmware patch downloads both with the boot image.
@@ -62,8 +52,8 @@ empty reads.
    loaded. Open the `btgatt.class` settings: tick "Let Bluetooth LE devices
    find and connect to this machine" and keep `BLE MIDI` offered. Use or
    Save.
-4. Open MIDIHub.prefs. The Overview should list `BLE MIDI In` and
-   `BLE MIDI Out` as `BLE MIDI`, `Offered`.
+4. Open MIDIHub.prefs. The Overview should list `btmidi.in.0` and
+   `btmidi.out.0` as `BLE MIDI`, `Offered`.
 
 Keep the Bluetooth Preferences log window open during the tests; most checks
 below read it.
@@ -85,7 +75,7 @@ log), switch it off, reconnect, and compare.
 
 ## Test 1: MIDI Wrench connects, iPhone to AROS
 
-1. On AROS, in a Shell: `MIDIHUB:C/MIDIHubCAMDProbe --monitor "BLE MIDI In" 300`.
+1. On AROS, in a Shell: `MIDIHUB:C/MIDIHubCAMDProbe --monitor "btmidi.in.0" 300`.
 2. In MIDI Wrench, open its Bluetooth MIDI devices panel, find the name of
    the AROS radio and connect.
 3. In the log, expect in this order:
@@ -103,7 +93,7 @@ log), switch it off, reconnect, and compare.
 ## Test 2: AROS to MIDI Wrench
 
 1. With MIDI Wrench still connected and showing its incoming MIDI, run
-   `MIDIHUB:C/MIDIHubCAMDProbe --send "BLE MIDI Out"`.
+   `MIDIHUB:C/MIDIHubCAMDProbe --send "btmidi.out.0"`.
 2. MIDI Wrench shows eight Note On/Off pairs (C4 to C5) and a 6-byte SysEx
    `F0 7E 7F 06 01 F7`. A whole SysEx in one piece shows that a larger
    packet or correct multi-packet reassembly went through.
@@ -114,7 +104,7 @@ log), switch it off, reconnect, and compare.
 1. Disconnect MIDI Wrench. In GarageBand open an instrument (for example the
    keyboard), then connect the AROS radio from GarageBand's Bluetooth MIDI
    devices setting (Settings, Advanced).
-2. Run `MIDIHUB:C/MIDIHubCAMDProbe --send "BLE MIDI Out"` again. GarageBand
+2. Run `MIDIHUB:C/MIDIHubCAMDProbe --send "btmidi.out.0"` again. GarageBand
    plays the scale. Timing should sound even; an uneven scale suggests the
    connection interval stayed long (see the log from test 1).
 
@@ -122,11 +112,12 @@ log), switch it off, reconnect, and compare.
 
 1. MIDIHub's Synthesizer page: the SoundFont is set (the test package
    brings `MIDIHUB:SoundFonts/TimGM6mb.sf2`); **Start**.
-2. Routing page: `BLE MIDI In` in the From list, `MIDIHub Synth` in the To
+2. Routing page: `btmidi.in.0` in the From list, `MIDIHub Synth` in the To
    list, **Add Route**, **Save**. The route shows `Active`.
 3. Play in MIDI Wrench or GarageBand: the Pi plays the notes through AHI.
 
-Passed on a Raspberry Pi 3 with an iPhone on October 6, 2026.
+The equivalent route passed with the old client class on October 6, 2026.
+The native driver version still needs this hardware check.
 
 ## Test 4: reconnection and the read
 
@@ -136,15 +127,17 @@ Passed on a Raspberry Pi 3 with an iPhone on October 6, 2026.
    the log shows the stored key being used.
 3. Some iOS versions read the BLE MIDI characteristic on connection. A read
    now returns no data, as the specification requires; nothing should be
-   received on `BLE MIDI In` at connection time.
+   received on `btmidi.in.0` at connection time.
 
-## Test 5: port names
+## Test 5: port identity and saved routes
 
-1. In the class settings, rename the ports (for example `Pi In` and `Pi Out`)
-   and Use. MIDIHub.prefs' overview shows the new names as `BLE MIDI`.
-2. Run the probe's `--send` and `--monitor` with the new names; both work
-   without reconnecting the iPhone.
-3. Set the names back with Defaults.
+1. Confirm port 0 remains `btmidi.in.0` / `btmidi.out.0`; the upstream class
+   does not offer editable cluster names.
+2. Load a saved peripheral route using the old names `BLE MIDI In` or
+   `BLE MIDI Out`. MIDIHub should migrate it to port 0.
+3. For a bound peripheral on ports 1–15, check the class window's mapping.
+   Preferences identifies the endpoint as BLE MIDI but must not infer a
+   device name or connection state from the port number alone.
 
 ## Test 6: the radio comes back after a reboot
 

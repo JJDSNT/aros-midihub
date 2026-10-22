@@ -68,7 +68,8 @@ Avahi). `build-aros-linux/` is the hosted AROS build they use.
   AppleMIDI: packet codecs, recovery journal sender/receiver, sessions,
   multi-peer state, clock sync. No OS calls; tested by `tests/protocol.c`.
 - `src/ump.c`, `src/netmidi2.c`: MIDI 2.0 UMP and Network MIDI 2.0 (UDP)
-  sessions. `src/ble_midi.c`: BLE-MIDI packet codec. `src/routes.c`,
+  sessions. BLE codec tests compile AROS's native `btmidi.class` source
+  (`BTMIDI_CLASS`), including the active #1735 proposal. `src/routes.c`,
   `src/config.c`, `src/synth.c` (TinySoundFont, optional FluidSynth).
 - `ports/aros/midihub/`: the `MIDIHub`/`netmidid` program, a core and
   transports (`netmidid.h`). `main.c` is the core: configuration, sockets
@@ -81,8 +82,8 @@ Avahi). `build-aros-linux/` is the hosted AROS build they use.
   Linux for tests (`make demo` gives `build/MIDIHub`). On AROS `send` and
   `close` are bsdsocket macros: do not use them as member names.
 - `ports/aros/*.c`: other AROS programs (Preferences class, router, CAMD
-  probe and compatibility tests, synth service). `ports/aros/btmidi/` is the
-  older client-cluster btmidi; upstream (#1507) replaces it with a CAMD driver.
+  probe and compatibility tests, synth service). BLE uses the native AROS
+  class and CAMD driver from merged #1507; the obsolete local class is removed.
 - `network/mdns/`: mDNS responder/`bonami.library` work and its reference.
 - `prototypes/camd/`: host-tested model of a proposed CAMD endpoint registry,
   not part of `camd.library`.

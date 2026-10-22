@@ -5,7 +5,10 @@
 It records seven open PRs, merged prerequisites, the proposed #1788
 consumer migration and what still blocks the unsubmitted backlog work.
 The graph below is the historical 2026-10-12 snapshot; several PRs shown
-as prerequisites there have since merged.
+as prerequisites there have since merged. L11 was completed on 2026-10-22:
+the obsolete BLE class, manual bridge and duplicate codec are removed.
+The historical L10 → L11 arrow no longer applies; a device-to-port query
+is a separate enhancement, not a blocker for upstream ownership.
 
 One graph over the seven lists of work owed:
 [CAMD](camd-backlog.md) (B), [RTP-MIDI](rtp-midi-backlog.md) (R),

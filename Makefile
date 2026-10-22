@@ -33,16 +33,16 @@ HEADERS = include/netmidi/limits.h include/netmidi/ports.h include/netmidi/text.
           ports/aros/midihub/netmidid.h \
           ports/aros/camd_bridge.h
 
-.PHONY: fuzz test test-components check-patches test-network test-synth test-synth-fluid demo m68k synth-m68k clean
+.PHONY: fuzz test test-blemidi-class test-components check-patches test-network test-synth test-synth-fluid demo m68k synth-m68k clean
 
 test-components:
 	CC='$(CC)' CFLAGS='$(CFLAGS)' python3 tools/check-netmidi-components.py
 
-test: test-components build/config-test build/protocol-test build/applemidi-test build/ble-midi-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test build/camd-identity-file-test build/camd-identity-store-recovery-test build/camd-legacy-identity-set-test build/camd-app-endpoint-test
+test: test-components build/config-test build/protocol-test build/applemidi-test build/blemidi-class-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test build/camd-identity-file-test build/camd-identity-store-recovery-test build/camd-legacy-identity-set-test build/camd-app-endpoint-test
 	./build/protocol-test
 	./build/applemidi-test
 	./build/config-test
-	./build/ble-midi-test
+	./build/blemidi-class-test
 	./build/routes-test
 	./build/ump-test
 	./build/netmidi2-test
@@ -261,14 +261,9 @@ build/routes-test: tests/routes.c src/routes.c include/midihub/routes.h
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/routes.c src/routes.c
 
-build/ble-midi-test: tests/ble_midi.c src/ble_midi.c src/ble_peripheral.c \
-                     include/blemidi/ble_midi.h include/blemidi/ble_peripheral.h
-	mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/ble_midi.c src/ble_midi.c src/ble_peripheral.c
-
-# The codec of btmidi.class lives in the AROS tree; its test is run where
-# a checkout of the class is at hand.
-BTMIDI_CLASS ?= $(HOME)/AROS-btmidi/rom/bluetooth/classes/btmidi
+# Test the actual AROS class, including the pending codec follow-up #1735,
+# rather than maintaining a second codec here. Override for another tree.
+BTMIDI_CLASS ?= $(firstword $(wildcard build/btmidi-codec/rom/bluetooth/classes/btmidi $(HOME)/AROS-btmidi/rom/bluetooth/classes/btmidi) $(HOME)/AROS/rom/bluetooth/classes/btmidi)
 
 build/blemidi-class-test: tests/blemidi_class.c $(BTMIDI_CLASS)/blemidi.c \
                           $(BTMIDI_CLASS)/blemidi.h
@@ -282,12 +277,12 @@ test-blemidi-class: build/blemidi-class-test
 # make fuzz FUZZ_ROUNDS=1000000 FUZZ_SEED=7
 FUZZ_ROUNDS ?= 100000
 FUZZ_SEED ?= 0
-build/fuzz: tests/fuzz.c $(SOURCES) src/netmidi2.c src/ump.c src/ble_midi.c
+build/fuzz: tests/fuzz.c $(SOURCES) src/netmidi2.c src/ump.c $(BTMIDI_CLASS)/blemidi.c $(BTMIDI_CLASS)/blemidi.h
 	mkdir -p build
 	$(CC) -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -g -O1 \
 	    -fsanitize=address,undefined -fno-sanitize-recover=undefined \
-	    -Iinclude -o $@ tests/fuzz.c $(RTPMIDI_SOURCES) $(APPLEMIDI_SOURCES) $(COMMON_SOURCES) src/netmidi2.c \
-	    src/ump.c src/ble_midi.c
+	    -Iinclude -I$(BTMIDI_CLASS) -o $@ tests/fuzz.c $(RTPMIDI_SOURCES) $(APPLEMIDI_SOURCES) $(COMMON_SOURCES) src/netmidi2.c \
+	    src/ump.c $(BTMIDI_CLASS)/blemidi.c
 
 fuzz: build/fuzz
 	./build/fuzz $(FUZZ_ROUNDS) $(FUZZ_SEED)

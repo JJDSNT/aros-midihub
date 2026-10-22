@@ -11,9 +11,8 @@
 #include <proto/camd.h>
 #include <proto/exec.h>
 
-/* Several bridges may live in one program, each in its own task (the
-   btmidi.class service and one per bound device): none may close the
-   library under another, so the base is per bridge. */
+/* Each client bridge owns its library reference. The upstream BLE class
+   is a CAMD driver and does not use this application-side bridge. */
 #define CamdBase ((struct Library *)bridge->camd_base)
 
 int aros_camd_bridge_open_named(struct aros_camd_bridge *bridge,

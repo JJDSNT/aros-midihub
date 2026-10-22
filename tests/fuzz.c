@@ -19,7 +19,7 @@
 #include "rtpmidi/timing.h"
 #include "netmidi2/netmidi2.h"
 #include "ump/ump.h"
-#include <blemidi/ble_midi.h>
+#include "blemidi.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -460,17 +460,17 @@ static int no_byte(void *context, uint16_t time, uint8_t byte)
 
 static void ble_take(void)
 {
-    static struct blemidi_midi_decoder decoder;
+    static struct blemidi_decoder decoder;
     static const uint8_t valid[] = {0x80, 0x80, 0x90, 60, 100, 0x81, 64, 90,
                                     0x82, 0xf0, 1, 2, 0x83, 0xf8, 3};
     uint8_t packet[40];
     size_t length = sizeof(valid);
 
     if (rnd() % 50 == 0)
-        blemidi_midi_decoder_init(&decoder);
+        blemidi_decoder_init(&decoder);
     memcpy(packet, valid, sizeof(valid));
     length = mutate(packet, length, sizeof(packet));
-    (void)blemidi_midi_decode(&decoder, packet, length, no_byte, NULL);
+    (void)blemidi_decode(&decoder, packet, length, no_byte, NULL);
 }
 
 int main(int argc, char **argv)

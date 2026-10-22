@@ -162,18 +162,18 @@ For example:
 
 Bluetooth Low Energy MIDI is widely used by modern wireless MIDI controllers and instruments.
 
-The optional [BLE MIDI transport](docs/ble-midi.md) connects a
-registered BLE MIDI peripheral to CAMD through `bluetooth.library`. Its
-portable packet codec supports running status, timestamps and multi-packet
-SysEx. Upstream AROS now supplies its GATT server, service-record API,
-notifications, advertising, the `btgatt.class` Preferences UI, and the LE
-peripheral work that used to be a patch here (AROS PR #1506).
-`btmidi.class` registers the standard service. Upstream (AROS PR #1507, in
-review) it is a CAMD driver, `DEVS:Midi/btmidi`, with one port for the
-peripheral role and one per bound device; the copy in this repository is
-the earlier version that makes CAMD clusters as a client, and is to be
-replaced by it. See [BLE MIDI](docs/ble-midi.md). Physical validation of the
-driver version remains.
+The [BLE MIDI transport](docs/ble-midi.md) uses the native AROS
+`btmidi.class`, merged in PR #1507. It supplies `DEVS:Midi/btmidi`, with
+`btmidi.in.0` / `btmidi.out.0` for the peripheral role and ports 1–15 for
+bound devices. This repository no longer ships a second class, manual BLE
+bridge or packet codec. Preferences uses the upstream driver ports; saved
+routes using the old peripheral names are migrated.
+
+`make test` and `make fuzz` compile the codec from an AROS checkout. Set
+`BTMIDI_CLASS` to its `rom/bluetooth/classes/btmidi` directory; the pending
+codec follow-up #1735 contains the fixes covered by the regression tests.
+See [BLE MIDI](docs/ble-midi.md) for checkout defaults and validation limits.
+Physical validation of the driver version remains.
 
 ### MIDI 2.0 / UMP
 
@@ -281,7 +281,8 @@ AROS MIDI applications <-> camd.library / CAMD clusters
 ```
 
 Poseidon writes a driver to `DEVS:Midi` for USB devices; CAMD loads it and
-creates its ports. During incubation, MIDIHub's network, BLE, and synth
+creates its ports. BLE uses the native AROS Bluetooth class and CAMD driver.
+During incubation, MIDIHub's network and synth
 components create CAMD-visible endpoints directly; mature transport components
 should move to their natural AROS subsystems. MIDIHub can then enumerate those
 endpoints and preserve simple source-to-destination routes between them. The

@@ -6,10 +6,14 @@ codec passes ASan/UBSan, but radio/lifecycle evidence is still missing.
 Reserved-header-bit acceptance is receiver tolerance, not an explicit
 RP-052 requirement. C0 is now upstream through merged #1585.
 
-**Scope:** `btmidi.class` as sent to AROS in PR #1507 (worktree
-`~/AROS-btmidi`, branch `btmidi-class-v2`), the packet codec in
-`src/ble_midi.c`, the older copy of the class in `ports/aros/btmidi`, and
-what MIDIHub's own programs have to change for the driver. This file was
+**2026-10-22 update:** #1507 is merged and **L11 is complete**. The old
+class, manual bridge and duplicate codec have been removed. Host tests and
+fuzz now compile the actual AROS class codec, including active #1735.
+The class and embedded driver build for x64 and m68k; radio/runtime checks
+remain open. The dated notes below retain the earlier audit history.
+
+**Scope:** the native AROS `btmidi.class`, the active codec follow-up
+#1735 and MIDIHub's consumers of the driver. This file was
 `ble-midi-driver-limitations.md`, written on 2026-10-11 after the class was
 rewritten from a CAMD client into a CAMD driver; the entries keep their
 numbers (L lost against the client version, W weak in the code sent, T not
@@ -31,14 +35,13 @@ it matters. The detail of each entry is in the three parts below.
 | P1 | L01 | A device's port number depends on which other devices are bound | Nothing in the class; B29 for the real answer |
 | P1 | L06 | A sixteenth device is refused without a word | Nothing; with L01 |
 | P1 | L10 | MIDIHub.prefs does not show a port's device; the rest was done on 2026-10-12 and not seen in the window | A query in the class for a port's device |
-| P1 | L11 | This repository still builds the old client copy of the class | L10, and the PR merged |
 | P1 | T04 | Never run with an unpatched `camd.library`; the network drivers, built the same way, are not found by it without the driver-scan fix ([pull requests](upstream-pr-graph.md), C0) | Nothing: a clean tree exists now |
 | P1 | T06 | A port that outlives its binding was read, never run | Nothing |
 | P1 | T03 | The decoder has run on the host only | T01 |
 | P2 | L05 | A class cannot make CAMD look at `DEVS:Midi` again | Nothing; with W03 |
 | P2 | W03 | The patched USB class opens `camd.library`, which the review forbids | Nothing; with L05 |
 | P2 | W05 | Closing a port was not examined for SMP | Someone who knows AROS's SMP rules |
-| P2 | W06, T05 | Never built or run for m68k | Nothing |
+| P2 | W06, T05 | Class and driver built for m68k on 2026-10-22; runtime remains untested | An m68k runtime |
 | P2 | T02 | The central role has never met a real peripheral | A BLE MIDI device |
 | P2 | L09 | The driver has to be written to disk | A build decision |
 | P2 | L15 | The class's codec is tested from this repository, not in the AROS tree | Where the maintainers want a class's host test |
@@ -55,11 +58,12 @@ it matters. The detail of each entry is in the three parts below.
 
 Entries new on 2026-10-12, with no row in the parts below:
 
-- **L11.** `ports/aros/btmidi` is the client version of the class, and
-  `contrib-aros-midihub` builds it under the same name as the upstream
-  class. Remove it and the `camd_bridge` it shares once MIDIHub works with
-  the upstream class (L10) and the pull request is merged. Done when the
-  hosted tree has one `btmidi.class`, built from the AROS tree.
+- **L11, done on 2026-10-22.** Removed `ports/aros/btmidi`, the manual
+  `MIDIHubBLE` program and the duplicate local codec. The package depends
+  on `kernel-bluetooth-classes-btmidi`. Preferences no longer reads the
+  retired BMID configuration or invents device-named clusters; it uses
+  upstream driver ports. Shared `camd_bridge.c` remains for other programs.
+  L10's missing public device-to-port query does not block retirement.
 - **L12.** A BLE MIDI packet carries a 13-bit millisecond timestamp per
   message. The decoder parses it and the class drops it: a driver hands
   CAMD bytes, and bytes have no time. Messages reach clients when the
@@ -74,8 +78,9 @@ Entries new on 2026-10-12, with no row in the parts below:
   end a SysEx. Done, if a device is seen doing it, when such a status
   ends the SysEx and is taken.
 - **L15.** `tests/blemidi_class.c` here builds the class's `blemidi.c`
-  from a checkout of the AROS tree (`make test-blemidi-class`) and is not
-  part of `make test`. The pull request carries no test of the codec.
+  from a checkout of the AROS tree (`make test-blemidi-class`). Since
+  2026-10-22 it is included in `make test`, and fuzz uses that same codec.
+  Where to place these tests upstream remains undecided.
   Done when the test is where the maintainers want it, or they say a
   class has none.
 - **L16.** Section 3 recommends encryption for all three properties of
@@ -154,7 +159,7 @@ device. These are things it did that the driver version does not.
 | L06 | **More than 15 devices.** `NPorts` is 16; a 16th bound device gets no port. | The binding is refused without a word to the user. | Say so in the class's window and the Bluetooth log; raise `NPorts` if it ever matters. `NPorts` is a `UBYTE`. | class | read |
 | L07 | **Several centrals sending SysEx at once.** Each central had its own reassembly, up to four. CAMD parses one byte stream per port, so only one SysEx at a time reaches it: a second is left out and counted as an error, and a message from another central that interrupts a SysEx ends it. | Rare: two phones dumping patches to AROS at the same moment. Channel messages from several centrals still interleave correctly. | Reassemble a second central's SysEx in the class and feed it when the first has ended. That brings a SysEx buffer back, which the review asked to drop, so only if it turns out to matter. | class | read |
 | L09 | **No disk needed.** The class has to write `DEVS:Midi/btmidi`, and once CAMD has loaded the driver the class stays in memory, since CAMD never unloads a driver. | No BLE MIDI through CAMD on a read-only `DEVS:`. The class cannot be expunged or replaced without a reboot once CAMD has run. | Ship the driver in the system image as well, so writing is only an update. Unloading is CAMD's decision (`camd-improvements.md`, section 1.3). | build, camd | read |
-| L10 | **MIDIHub.prefs knows the ports.** It read the peripheral role's names from the class's configuration chunk and derived a bound device's from its name. There is no chunk now. | The Overview does not mark the ports as BLE MIDI, and saved routes that name `BLE MIDI In` no longer resolve. | Recognise `btmidi.in.<n>`/`btmidi.out.<n>`; get device and port from the class (it has no public query for that yet: a `btcGetAttrsA` tag on a binding would do); migrate saved routes. | midihub, class | read |
+| L10 | **MIDIHub.prefs knows the ports.** It read the peripheral role's names from the class's configuration chunk and derived a bound device's from its name. There is no chunk now. | Numeric ports are recognised and old peripheral routes migrate. The device behind a port remains unknown to Preferences. | Add a public device-to-port query in the class; use the class window for mapping meanwhile. | midihub, class | build and host routes test; UI not exercised |
 
 What the driver version gained, so the balance is on record: BLE MIDI is a
 device to anything that enumerates CAMD drivers; CAMD does the parsing; the
@@ -172,7 +177,7 @@ Not losses: things the driver version does that should be better.
 | W03 | **`camdusbmidi.class`, as patched here, opens `camd.library`** to call `RethinkCAMD()` after writing a driver (`aros-usb-midi-lifecycle.patch`). The review of `btmidi.class` says a class must not open CAMD: the dependency runs the other way. | That patch would meet the same objection upstream. | The same trigger as L05, used by both classes. Settle it before sending the USB patches. | camd | read |
 | W04 | **Two ways to name a device's port.** The patched USB class writes one driver file per device, with the device's ID as the driver's name, so path-bound identity follows the device. `btmidi` is one driver with a pool of ports, as the review asked. | The same question answered twice; the registry's identity for a USB device is stable and for a BLE device is not. | Decide once, in the sketch of the extension: per-port identity evidence makes the per-device files unnecessary. | extension | read |
 | W05 | **Soft interrupt and `Disable()`.** Closing a port relies on a soft interrupt not running while interrupts are off, and on its having finished before the task goes on. The USB class relies on the same. | Fine on one CPU. Not examined for SMP x86-64. | Review with someone who knows AROS's SMP rules; a per-port spinlock if needed. | class | read |
-| W06 | **Register arguments on m68k.** The stub declares CAMD's entry points with the registers of `midi/camddevices.h` and calls CAMD's functions through `AROS_UFC`, which the USB stub does not. | Never built or run for m68k. | Build for `amiga-m68k` and run the hosted test's equivalent there. | test | not checked |
+| W06 | **Register arguments on m68k.** The stub declares CAMD's entry points with the registers of `midi/camddevices.h` and calls CAMD's functions through `AROS_UFC`, which the USB stub does not. | Built for m68k on 2026-10-22; execution remains untested. | Run the hosted test's equivalent on m68k. | test | build only |
 
 ## Part 3: not yet tested
 
@@ -182,7 +187,7 @@ Not losses: things the driver version does that should be better.
 | T02 | The central role with a real BLE MIDI peripheral | Needs such a device. Never done, for either version. |
 | T03 | The decoder inside AROS | The hosted run fed the driver's receive hook directly; the packet decoder and the per-central rules ran on the host only. T01 covers it. |
 | T04 | An unpatched `camd.library` | The hosted tree has this repository's CAMD patches. Build upstream's `workbench-libs-camd` into a copy and rerun the test. |
-| T05 | m68k | See W06. |
+| T05 | m68k runtime | The class and driver cross-build passed on 2026-10-22. See W06 for the remaining runtime check. |
 | T06 | A port that outlives its binding, and a binding that comes back | Bind, open the port, release the binding while a client sends, bind again: the client's data is dropped meanwhile and flows again. Read, never run. |
 
 ## Suggested order
@@ -191,7 +196,7 @@ Not losses: things the driver version does that should be better.
 2. Done: W01 and L08.
 3. L01, the address-to-port map, with L06's message. Ask in the PR first
    whether he wants it there or afterwards.
-4. L10, so MIDIHub works with the upstream class, then L11.
+4. L11 is done. Finish L10 when a public device-to-port query exists.
 5. L05 and W03 together: one rescan trigger for both classes.
 6. L02, L03, W02, W04 and L12 with the driver-side block, if upstream is
    open to it.
