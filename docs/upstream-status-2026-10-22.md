@@ -1,12 +1,12 @@
 # PRs, dependências e propostas — 2026-10-22
 
-Consulta ao GitHub: **2026-10-22, 07:51 UTC / 04:51 BRT**.
+Consulta inicial ao GitHub: **2026-10-22, 07:51 UTC / 04:51 BRT**.
 Escopo: PRs de `JJDSNT` contra `aros-development-team/AROS` e as propostas
 relacionadas ao driver MIDI de rede e à separação dos componentes.
 
-O [inventário completo](upstream-prs.md) registra **24 PRs merged,
-7 abertos e 1 fechado sem merge**. Três abertos estão prontos para
-review; quatro são drafts. Todos os sete têm os checks de Codacy, finais
+Na consulta inicial, o [inventário completo](upstream-prs.md) registrava
+**24 PRs merged, 7 abertos e 1 fechado sem merge**. Três abertos estavam
+prontos para review; quatro eram drafts. Todos os sete tinham os checks de Codacy, finais
 de linha, nomes Windows e mergefreeze aprovados, e estão `MERGEABLE`.
 Nenhum dos sete tem review formal ou thread inline nesta consulta.
 O comentário recente em #1679 é nosso aviso da refatoração, não um pedido
@@ -16,6 +16,12 @@ nesses PRs neste momento.
 Evidência local da consulta: `build/pr-status-2026-10-22/snapshot.json`
 e a consulta de threads no mesmo diretório, ambos ignorados pelo Git.
 Upstream consultado: `43e2e698c4`.
+
+**Atualização posterior no mesmo dia:** o #1789 foi aberto para a lacuna
+Bluetooth confirmada. O estado atual é **24 merged, 8 abertos (4 prontos
+para review e 4 drafts) e 1 fechado sem merge**. Os oito aparecem
+`MERGEABLE` e `REVIEW_REQUIRED`. Os quatro checks do #1789 passaram; esta
+atualização não refaz nem generaliza a verificação de checks dos outros sete.
 
 ## Abertos: situação e bloqueio real
 
@@ -28,6 +34,7 @@ Upstream consultado: `43e2e698c4`.
 | [#1742](https://github.com/aros-development-team/AROS/pull/1742) — NetMIDIStatus | Draft; `ad4ce857f2` | Depende de #1679, que fornece o serviço e o ABI do snapshot. Depois, rebase, checks e saída de draft. Não depende de #1693 ou #1743. |
 | [#1743](https://github.com/aros-development-team/AROS/pull/1743) — anúncio AppleMIDI | Draft; `c1d710e74e` | Depende de #1679. O registro mDNS de #1591 já merged e a validação Avahi passou. Não depende de #1693, #1695 ou #1742. |
 | [#1788](https://github.com/aros-development-team/AROS/pull/1788) — separar payload, controle e helpers | Draft; `1687a2173b` | Revisão da divisão e migração coordenada dos consumidores. A biblioteca é baseada em master e não depende de #1679 para compilar; o draft evita publicar a mudança de interfaces sem alinhar o serviço e seus filhos. |
+| [#1789](https://github.com/aros-development-team/AROS/pull/1789) — porta MIDI da binding Bluetooth | Pronto para review; `45a49bd269` | Aguarda revisão e validação com uma binding real. Reutiliza `BCBA_Device`, `BDA_Name` e `BDA_IsConnected`; acrescenta somente `BCBA_MidiPort`. Independente de #1735 e de extensões CAMD. |
 
 ### Dependências publicadas e migração proposta são coisas diferentes
 
@@ -97,7 +104,7 @@ significa que uma mudança de API já foi aceita pelos mantenedores.
 | UP16 — dar um local próprio aos fontes UMP | Depende da decisão de propriedade de UP12. | Preparar um plano de movimento e consumidores; não colocar UMP em `network/` apenas porque a rede o utiliza. |
 | NM19 — mover Network MIDI 2.0 de `src/` para `network/netmidi2/` | Nenhum PR aberto é pré-requisito técnico para o movimento no companion repository; evitar misturar a reorganização com a migração #1788 ainda em review. | Pode avançar isoladamente, com atualização de builds/cortes e testes. É organização dos fontes; namespace público já é próprio. |
 | L11 — concluída em 2026-10-22 | Removidos a classe BLE antiga, o programa manual e o codec duplicado. O pacote depende da classe AROS; Preferences usa suas portas e os testes compilam seu codec. | L10 continua apenas para a consulta dispositivo/porta. Builds x64/m68k e testes host passaram; rádio e build integral em upstream limpo ainda precisam de validação. Ver [BLE](ble-midi.md) e [política de fontes](upstream-source-policy.md). |
-| L10 e capacidades próprias da classe Bluetooth | A consulta pública segura dispositivo/porta ainda precisa ser definida e implementada; não depende de B29/B30/B31 nem do consumidor Preferences. | Expor associação, nome e estados distintos na classe; adoção no Preferences e publicação CAMD são entregas separadas. Ver [plano corrigido](ble-l10-plan.md) e [auditoria de dependências BT](ble-dependencies-audit-2026-10-22.md). |
+| L10 e capacidades próprias da classe Bluetooth | A parte faltante da interface da classe, a porta da binding, está proposta no #1789; nome e conexão já usam atributos Bluetooth públicos. | Revisar #1789 e validar uma binding real; depois adotar a consulta no Preferences com fallback para classe antiga. Publicação CAMD continua sendo entrega separada. Ver [levantamento de código](ble-l10-plan.md) e [auditoria de dependências BT](ble-dependencies-audit-2026-10-22.md). |
 | B29/B30/B31 — identidade, presença e nomes por porta CAMD | Ainda dependem de desenho/contrato de extensão acordado com mantenedores. O merge da classe #1507 não é aceite automático desse bloco opcional. | Preparar proposta ABI e comportamento com drivers legados; comprovar identidade estável sem alterar nomes de clusters ou `MidiDeviceData` existente. |
 | B32 — UMP e timestamps pela fronteira do driver | Depende da extensão acima e dos gates de especificação/compatibilidade CAMD. | Pode haver desenho e testes preparatórios; não é requisito para o primeiro driver de rede funcional em MIDI 1.0. Essa limitação já foi aceita para a primeira etapa. |
 | Drivers residentes em memória — [issue #1736](https://github.com/aros-development-team/AROS/issues/1736) | Issue aberta, sem comentário de mantenedor. Contrato de retenção da classe, remoção com portas em uso e fallback por arquivo ainda precisa ser definido. | Proposta de desenho antes de implementar nova API pública. #1732/#1744 melhoram o scan por arquivo; não implementam registro residente. Não confundir esta proposta com o bloco de metadados B29–B32. |

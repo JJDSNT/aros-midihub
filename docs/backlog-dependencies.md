@@ -2,8 +2,12 @@
 
 **Current status, 2026-10-22:** see the
 [verified PR and proposal dependency register](upstream-status-2026-10-22.md).
-It records seven open PRs, merged prerequisites, the proposed #1788
-consumer migration and what still blocks the unsubmitted backlog work.
+Its initial snapshot records seven open PRs, merged prerequisites, the
+proposed #1788 consumer migration and what still blocks the unsubmitted
+backlog work. A later update records #1789 as the eighth open PR: it proposes
+only the missing Bluetooth binding-port attribute after examining the
+existing interfaces. It does not turn the remaining Bluetooth rows into
+implementation-ready work.
 The graph below is the historical 2026-10-12 snapshot; several PRs shown
 as prerequisites there have since merged. L11 was completed on 2026-10-22:
 the obsolete BLE class, manual bridge and duplicate codec are removed.
@@ -12,8 +16,9 @@ is a separate enhancement, not a blocker for upstream ownership.
 
 The [Bluetooth dependency audit](ble-dependencies-audit-2026-10-22.md)
 also separates L10 and Bluetooth-side name/state queries from later CAMD
-publication. B31 → L02 and B30 → L03 below apply only to their generic
-CAMD behavior, not to exposing data owned by the Bluetooth class. CAMD
+publication. Name and connection state already exist as public device
+attributes; #1789 proposes the missing binding-port association. B31 → L02
+and B30 → L03 below apply only to their generic CAMD behavior. CAMD
 receive-loss feedback (W02) need not wait for UMP/timestamps in B32.
 
 One graph over the seven lists of work owed:

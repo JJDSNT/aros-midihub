@@ -1,16 +1,21 @@
 # Upstream pull requests
 
-Estado consultado no GitHub em **2026-10-22, 07:51 UTC (04:51 BRT)**,
+Estado inicial consultado no GitHub em **2026-10-22, 07:51 UTC (04:51 BRT)**,
 para PRs de `JJDSNT` contra `aros-development-team/AROS`.
-São **24 merged, 7 abertos (3 prontos para review e 4 drafts), 1 fechado sem merge**.
+Naquele momento eram **24 merged, 7 abertos (3 prontos para review e 4 drafts), 1 fechado sem merge**.
 “Accepted” neste inventário significa efetivamente merged; checks aprovados
 não equivalem a aprovação de review.
 
 O [registro de situação, dependências e propostas bloqueadas](upstream-status-2026-10-22.md)
 distingue pré-requisitos publicados, decisões dos mantenedores e nossa
-coordenação da migração #1788. Todos os sete PRs abertos estão mergeable e
-com os quatro checks aprovados; nenhuma revisão formal ou thread inline
-aparece neles nesta consulta.
+coordenação da migração #1788. Na consulta inicial, todos os sete PRs abertos
+estavam mergeable e com os quatro checks aprovados; nenhuma revisão formal
+ou thread inline aparecia neles.
+
+Após a abertura do #1789 no mesmo dia, são **24 merged, 8 abertos
+(4 prontos para review e 4 drafts) e 1 fechado sem merge**. Os oito estão
+`MERGEABLE` e `REVIEW_REQUIRED`. Os quatro checks do #1789 passaram; os
+checks dos outros sete permanecem documentados pela consulta inicial.
 
 ## Abertos
 
@@ -23,6 +28,7 @@ aparece neles nesta consulta.
 | [#1742](https://github.com/aros-development-team/AROS/pull/1742) | NetMIDIStatus | Draft | Merge de #1679, que fornece o serviço e o ABI do snapshot. |
 | [#1743](https://github.com/aros-development-team/AROS/pull/1743) | Anúncio AppleMIDI via mDNS | Draft | Merge de #1679. Registro mDNS #1591 já merged; não depende de #1693/#1695. |
 | [#1788](https://github.com/aros-development-team/AROS/pull/1788) | Separar AppleMIDI, RTP-MIDI e helpers | Draft | Revisar a divisão e coordenar a migração dos consumidores de #1679 e dependentes. |
+| [#1789](https://github.com/aros-development-team/AROS/pull/1789) | Expor a porta MIDI pela binding Bluetooth existente | Pronto para review | Revisão e teste com binding real. Nome e conexão já usam atributos Bluetooth comuns; não depende do codec #1735 nem de extensão CAMD. |
 
 ## Merged
 

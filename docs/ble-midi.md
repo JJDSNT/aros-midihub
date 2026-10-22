@@ -43,9 +43,12 @@ transfers have limitations recorded in the backlog.
 
 MIDIHub Preferences recognises `btmidi.in.N` and `btmidi.out.N`. It shows
 the offered/stopped service for port 0 and labels other registered ports
-`Driver port`: the class exposes no public device-to-port query, so this
-does not claim that a particular device is connected. Bluetooth diagnostics
-still list devices separately. Use the class window for their port mapping.
+`Driver port`: the merged class exposes `BCBA_Device`, and that device
+already exposes `BDA_Name` and `BDA_IsConnected`, but it does not expose the
+binding's MIDI port. [AROS #1789](https://github.com/aros-development-team/AROS/pull/1789)
+proposes `BCBA_MidiPort` through the same binding-attribute mechanism.
+Until it merges and Preferences adopts it, this UI does not claim that a
+particular device is connected. Use the class window for the port mapping.
 Saved `BLE MIDI In` / `BLE MIDI Out` routes migrate to port 0; old
 `<device> In` / `<device> Out` routes require manual selection of the new
 port. There is no private BMID configuration chunk or editable cluster name.
@@ -95,6 +98,7 @@ not validate the driver's lifecycle or current Preferences integration.
 
 Follow [the Pi 3 test procedure](ble-midi-pi3-test.md) for hardware testing.
 Remaining improvements and their dependencies are in the
-[BLE backlog](ble-midi-backlog.md). L10's public device-to-port query and
-the CAMD metadata proposals are future improvements, not prerequisites for
-using the upstream class or for retiring the obsolete copy.
+[BLE backlog](ble-midi-backlog.md). L10's class-side port attribute is now
+proposed in #1789; testing a real binding and adopting it in Preferences
+remain open. The CAMD metadata proposals are separate future improvements,
+not prerequisites for using the upstream class or retiring the obsolete copy.
