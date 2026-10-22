@@ -584,15 +584,28 @@ int main(int argc, char **argv)
        names, for whoever wants to see it. */
     {
         const char *log = getenv("netmidid.log");
+        FILE *file = NULL;
 
         /* with nowhere to print to, what is printed is lost: no reason
-           not to run */
-        if (!log || !*log || !freopen(log, "w", stdout))
+           not to run. Errors go to the log as well, after what was
+           printed before them: the file is emptied once, then both
+           streams append to it. */
+        if (log && *log)
+            file = fopen(log, "w");
+        if (!file) {
             (void)freopen("NIL:", "w", stdout);
-        (void)freopen("NIL:", "w", stderr);
+            (void)freopen("NIL:", "w", stderr);
+        } else {
+            fclose(file);
+            if (!freopen(log, "a", stdout))
+                (void)freopen("NIL:", "w", stdout);
+            if (!freopen(log, "a", stderr))
+                (void)freopen("NIL:", "w", stderr);
+        }
     }
 #endif
     setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
     do
 #ifdef NETMIDI_SERVICE
         result = run();

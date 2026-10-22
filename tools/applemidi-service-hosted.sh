@@ -215,9 +215,9 @@ else
 fi
 # A service does not end with its peer. The peer its configuration names
 # is not there when it starts: the first invitation runs out. It is there
-# later, for twelve seconds, says goodbye, and comes back: the service has
-# to have a session with it both times.
-prepare "Wait 75"
+# later, then vanishes without BY, and comes back after the silence timeout:
+# the service has to expire it and have a session with it both times.
+prepare "Wait 140"
 printf 'peer_ip = 192.168.166.1\npeer_port = 5104\n' > "$sys/Prefs/Env-Archive/NetMIDI"
 (
     for attempt in $(seq 1 60); do
@@ -225,21 +225,40 @@ printf 'peer_ip = 192.168.166.1\npeer_port = 5104\n' > "$sys/Prefs/Env-Archive/N
         sleep 1
     done
     sleep 22
-    timeout 12 node "$peer" 5104 > "$work/again-peer-1.log" 2>&1 || true
-    sleep 2
+    node "$peer" 5104 > "$work/again-peer-1.log" 2>&1 &
+    peer_pid=$!
+    sleep 12
+    kill -9 "$peer_pid" 2> /dev/null || true
+    wait "$peer_pid" 2> /dev/null || true
+    sleep 68
     timeout 25 node "$peer" 5104 > "$work/again-peer-2.log" 2>&1 || true
 ) &
-boot 110 again
+boot 155 again
 wait || true
 cp "$sys/netmidid.log" "$work/netmidid-again.log" 2> /dev/null || true
 sessions=$(grep -c 'session connected' "$work/netmidid-again.log" 2> /dev/null) || true
 if grep -q 'invitation timed out' "$work/netmidid-again.log" 2> /dev/null &&
+   grep -q 'peer timed out' "$work/netmidid-again.log" &&
    [ "${sessions:-0}" -ge 2 ] &&
    grep -q '^stream ' "$work/again-peer-1.log" &&
    grep -q '^stream ' "$work/again-peer-2.log"; then
-    echo "ok: its peer absent, then there, gone and back: the service invited it again each time ($sessions sessions)"
+    echo "ok: its peer absent, then there, vanished without BY and back: the service expired it and invited it again ($sessions sessions)"
 else
     echo "FAIL: inviting the configured peer again: ${sessions:-0} sessions"
+    status=1
+fi
+
+# Diagnostics written to stderr have to reach the configured service log.
+prepare "Wait 5"
+# a file that reads well, with an address that is none: the AppleMIDI
+# transport refuses it on stderr when it opens
+printf 'peer_ip = invalid-address\npeer_port = 5104\n' > "$sys/Prefs/Env-Archive/NetMIDI"
+boot 35 stderr
+cp "$sys/netmidid.log" "$work/netmidid-stderr.log" 2> /dev/null || true
+if grep -q 'peer must be an IPv4 address' "$work/netmidid-stderr.log" 2> /dev/null; then
+    echo "ok: a configuration error written to stderr reached netmidid.log"
+else
+    echo "FAIL: stderr was not written to netmidid.log"
     status=1
 fi
 echo "logs: $work"
