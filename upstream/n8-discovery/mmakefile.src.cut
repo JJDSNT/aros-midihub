@@ -1,4 +1,3 @@
-
 include $(SRCDIR)/config/aros.cfg
 
 # netmidid: MIDI over the network as a service of the network stack. Its
