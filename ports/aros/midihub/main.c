@@ -135,8 +135,10 @@ int netmidid_browse(struct netmidid *d, const struct netmidid_transport *t,
 }
 #endif
 
-/* Which transports run, of those in transports[]. */
+/* Which transports run, of those in transports[], and the state each is
+   given for a run. */
 static int running[NETMIDID_TRANSPORTS + 1];
+static void *state[NETMIDID_TRANSPORTS + 1];
 
 /* What a CAMD program sends goes to every transport: each takes what was
  * sent to a port of its own. */
@@ -160,7 +162,8 @@ static int send_midi(void *context, const uint8_t *message, size_t length)
     }
     for (i = 0; i < TRANSPORT_COUNT; ++i)
         if (running[i] && transports[i]->send_midi &&
-            transports[i]->send_midi(d, d->camd.port_now, message, length) == 0)
+            transports[i]->send_midi(d, state[i], d->camd.port_now, message,
+                                    length) == 0)
             result = 0;
     return result;
 }
@@ -171,7 +174,7 @@ static void flush_midi(struct netmidid *d)
 
     for (i = 0; i < TRANSPORT_COUNT; ++i)
         if (running[i] && transports[i]->flush)
-            transports[i]->flush(d);
+            transports[i]->flush(d, state[i]);
 }
 
 /* Tells whoever asks what has passed on each port: about once a second. */
@@ -188,7 +191,7 @@ static void publish_counts(struct netmidid *d, uint64_t now)
     memset(counts, 0, sizeof(counts));
     for (i = 0; i < TRANSPORT_COUNT; ++i)
         if (running[i] && transports[i]->counts)
-            refused += transports[i]->counts(d, counts);
+            refused += transports[i]->counts(d, state[i], counts);
     netmidi_camd_publish(&d->camd, d->session_name, refused,
                          counts, NETMIDI_CAMD_PORTS * NETMIDI_CAMD_DRIVERS);
 }
@@ -222,15 +225,17 @@ static int periodic(struct netmidid *d, uint64_t now)
             owner = seen.browse >= 0 &&
                     seen.browse < NETMIDI_DISCOVERY_BROWSES ?
                     d->browse_owner[seen.browse] : NULL;
-            if (owner && owner->discovered)
-                owner->discovered(d, &seen);
+            for (i = 0; i < TRANSPORT_COUNT; ++i)
+                if (running[i] && transports[i] == owner &&
+                    owner->discovered)
+                    owner->discovered(d, state[i], &seen);
         }
 #endif
     }
 #endif
     for (i = 0; i < TRANSPORT_COUNT; ++i)
         if (running[i] && transports[i]->periodic &&
-            transports[i]->periodic(d, now))
+            transports[i]->periodic(d, state[i], now))
             done = 1;
     return done;
 }
@@ -311,16 +316,10 @@ static int parse_arguments(struct netmidid *d, int argc, char **argv,
         }
 #endif
     }
-    if (config->accept[0])
-        d->options.accept = config->accept;
-#ifdef NETMIDI_BROWSE
-    if (config->peer_name[0])
-        d->options.peer_name = config->peer_name;
-#endif
     /* Network MIDI 2.0 is off unless a port is given for it. */
     if (argc - argi >= 2 && strcmp(argv[argi], "--midi2") == 0) {
 #ifdef NETMIDI_MIDI2
-        if (parse_port(argv[argi + 1], &config->midi2_port) != 0) {
+        if (parse_port(argv[argi + 1], &config->midi2.port) != 0) {
 #else
         uint16_t midi2_port;
 
@@ -362,17 +361,24 @@ static int parse_arguments(struct netmidid *d, int argc, char **argv,
     remaining = argc - argi;
     if ((remaining != 0 && remaining != 1 && remaining != 3 &&
          remaining != 4) ||
-        (remaining >= 1 && parse_port(argv[argi], &config->local_port) != 0) ||
+#ifdef NETMIDI_APPLEMIDI
+        (remaining >= 1 &&
+         parse_port(argv[argi], &config->applemidi.local_port) != 0) ||
         (remaining >= 3 &&
-         parse_port(argv[argi + 2], &config->peer_port) != 0) ||
+         parse_port(argv[argi + 2], &config->applemidi.peer_port) != 0) ||
+#else
+        remaining != 0 ||
+#endif
         (remaining == 4 && strcmp(argv[argi + 3], "--probe-note") != 0 &&
          strcmp(argv[argi + 3], "--probe-sysex") != 0)) {
         fputs("Usage: MIDIHub [--config file] [--midi2 port] [--latency ms] [--trace] [--accept anyone|nobody|list] [--peer-name session] [local-control-port [peer-ip peer-control-port [--probe-note|--probe-sysex]]]\n", stderr);
         return -1;
     }
+#ifdef NETMIDI_APPLEMIDI
     if (remaining >= 3)
-        snprintf(config->peer_ip, sizeof(config->peer_ip), "%s",
-                 argv[argi + 1]);
+        snprintf(config->applemidi.peer_ip, sizeof(config->applemidi.peer_ip),
+                 "%s", argv[argi + 1]);
+#endif
     d->options.chatty = 1;      /* the program the host tests read */
     d->options.probe_note = remaining == 4 &&
                             strcmp(argv[argi + 3], "--probe-note") == 0;
@@ -425,12 +431,6 @@ static int run(int argc, char **argv)
         }
     }
 #endif
-    if (d->config.accept[0])
-        d->options.accept = d->config.accept;
-#ifdef NETMIDI_BROWSE
-    if (d->config.peer_name[0])
-        d->options.peer_name = d->config.peer_name;
-#endif
 #else
     if (parse_arguments(d, argc, argv, &watch) != 0)
         return 20;
@@ -473,7 +473,14 @@ static int run(int argc, char **argv)
         applemidi_ports_init(&d->ports[i], d->shared_port ? 0 :
                                            netmidi_camd_ports(&d->camd));
     for (i = 0; i < TRANSPORT_COUNT; ++i) {
-        int status = transports[i]->open(d);
+        int status;
+
+        state[i] = calloc(1, transports[i]->state_size);
+        if (!state[i]) {
+            fputs(TAG "not enough memory\n", stderr);
+            goto cleanup;
+        }
+        status = transports[i]->open(d, state[i]);
 
         opened[i] = 1;
         if (status < 0)
@@ -492,7 +499,7 @@ static int run(int argc, char **argv)
 #endif
     for (i = 0; i < TRANSPORT_COUNT; ++i)
         if (running[i] && transports[i]->start &&
-            transports[i]->start(d, now) != 0)
+            transports[i]->start(d, state[i], now) != 0)
             goto cleanup;
 
     for (;;) {
@@ -503,7 +510,7 @@ static int run(int argc, char **argv)
         wait_us = 100000;
         for (i = 0; i < TRANSPORT_COUNT; ++i) {
             if (!running[i] || !transports[i]->next_due ||
-                !transports[i]->next_due(d, &next_due))
+                !transports[i]->next_due(d, state[i], &next_due))
                 continue;
             now = netmidid_now();
             wait_ticks = next_due > now ? next_due - now : 0;
@@ -515,10 +522,16 @@ static int run(int argc, char **argv)
                              &network_events);
         if (network_events & NETMIDI_NETWORK_STOP)
             break;
-        for (i = 0; i < NETMIDI_NETWORK_SOCKETS; ++i)
-            if ((network_events & (1u << i)) && d->socket_owner[i] &&
-                d->socket_owner[i]->receive)
-                d->socket_owner[i]->receive(d, i);
+        for (i = 0; i < NETMIDI_NETWORK_SOCKETS; ++i) {
+            int t;
+
+            if (!(network_events & (1u << i)) || !d->socket_owner[i])
+                continue;
+            for (t = 0; t < TRANSPORT_COUNT; ++t)
+                if (running[t] && transports[t] == d->socket_owner[i] &&
+                    transports[t]->receive)
+                    transports[t]->receive(d, state[t], i);
+        }
         done = periodic(d, netmidid_now());
         /* A changed configuration is taken by beginning anew: sessions
            end with a goodbye and are made again under what it says now.
@@ -544,12 +557,15 @@ cleanup:
 #endif
     for (i = 0; i < TRANSPORT_COUNT; ++i)
         if (running[i] && transports[i]->stop)
-            transports[i]->stop(d);
+            transports[i]->stop(d, state[i]);
     netmidi_camd_close(&d->camd);
     netmidi_network_close(&d->network);
-    for (i = 0; i < TRANSPORT_COUNT; ++i)
+    for (i = 0; i < TRANSPORT_COUNT; ++i) {
         if (opened[i] && transports[i]->release)
-            transports[i]->release(d);
+            transports[i]->release(d, state[i]);
+        free(state[i]);
+        state[i] = NULL;
+    }
     memset(running, 0, sizeof(running));
     return result;
 }

@@ -14,7 +14,8 @@ include $(SRCDIR)/config/aros.cfg
 # service, which it asks through bonami.library: it holds no socket on
 # port 5353 itself.
 
-FILES := main transport_applemidi transport_midi2 adapters network config discovery
+FILES := main transport_applemidi transport_midi2 adapters network config \
+    config_applemidi config_midi2 discovery
 
 USER_INCLUDES := -I$(SRCDIR)/$(CURDIR)/include \
     -I$(SRCDIR)/$(CURDIR)/rtpmidi/include \

@@ -10,9 +10,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Copies text into a field of size bytes, its zero byte with it. Returns
-   -1, with nothing copied, when it does not fit. */
-static int take(char *field, size_t size, const char *text)
+/* The keys every transport shares are read here; each other key is
+   offered to the transports' own readers (config_applemidi.c,
+   config_midi2.c), and one that none takes makes the file invalid. */
+
+int netmidi_config_take(char *field, size_t size, const char *text)
 {
     size_t length = 0;
 
@@ -36,7 +38,7 @@ static char *trim(char *text)
     return text;
 }
 
-static int port_value(const char *text, uint16_t *port)
+int netmidi_config_port(const char *text, uint16_t *port)
 {
     char *end;
     unsigned long value;
@@ -50,9 +52,8 @@ static int port_value(const char *text, uint16_t *port)
     return 0;
 }
 
-/* "<driver>.port.<n> = <name>": number is the text after the last dot. */
-static int port_name(const char *number, const char *value,
-                     char (*names)[64])
+int netmidi_config_port_name(const char *number, const char *value,
+                             char (*names)[64])
 {
     char *end;
     unsigned long port;
@@ -61,20 +62,26 @@ static int port_name(const char *number, const char *value,
     port = strtoul(number, &end, 10);
     if (errno || end == number || *end || port >= 16 || !*value)
         return -1;
-    return take(names[port], sizeof(names[0]), value);
+    return netmidi_config_take(names[port], sizeof(names[0]), value);
 }
 
 void netmidi_config_defaults(struct netmidi_network_config *config)
 {
     memset(config, 0, sizeof(*config));
-    config->local_port = 5004;
 #ifdef __AROS__
     /* the service's name on the network, until a user gives it one */
-    take(config->session_name, sizeof(config->session_name), "AROS");
+    netmidi_config_take(config->session_name, sizeof(config->session_name),
+                        "AROS");
 #else
     /* the Linux build is the program the host tests run */
-    take(config->session_name, sizeof(config->session_name),
-         "AROS MIDIHub");
+    netmidi_config_take(config->session_name, sizeof(config->session_name),
+                        "AROS MIDIHub");
+#endif
+#ifdef NETMIDI_APPLEMIDI
+    netmidi_applemidi_config_defaults(&config->applemidi);
+#endif
+#ifdef NETMIDI_MIDI2
+    netmidi_midi2_config_defaults(&config->midi2);
 #endif
 }
 
@@ -82,7 +89,6 @@ int netmidi_config_save(const char *path,
                         const struct netmidi_network_config *config)
 {
     FILE *file;
-    int port;
     int failed;
 
     if (!path || !config)
@@ -90,44 +96,43 @@ int netmidi_config_save(const char *path,
     file = fopen(path, "w");
     if (!file)
         return -1;
-    fprintf(file, "local_port=%u\nsession_name=%s\n",
-            (unsigned)config->local_port, config->session_name);
-    if (config->peer_ip[0])
-        fprintf(file, "peer_ip=%s\npeer_port=%u\n", config->peer_ip,
-                (unsigned)config->peer_port);
-#ifdef NETMIDI_BROWSE
-    if (config->peer_name[0])
-        fprintf(file, "peer_name=%s\n", config->peer_name);
-#endif
-    if (config->max_peers)
-        fprintf(file, "max_peers=%d\n", config->max_peers);
+    fprintf(file, "session_name=%s\n", config->session_name);
     if (config->latency_ms)
         fprintf(file, "latency_ms=%d\n", config->latency_ms);
-    if (config->accept[0])
-        fprintf(file, "accept=%s\n", config->accept);
+#ifdef NETMIDI_APPLEMIDI
+    netmidi_applemidi_config_save(file, &config->applemidi);
+#endif
 #ifdef NETMIDI_MIDI2
-    if (config->midi2_port)
-        fprintf(file, "midi2_port=%u\n", (unsigned)config->midi2_port);
-    if (config->midi2_peer_ip[0])
-        fprintf(file, "midi2_peer_ip=%s\nmidi2_peer_port=%u\n",
-                config->midi2_peer_ip, (unsigned)config->midi2_peer_port);
-#ifdef NETMIDI_BROWSE
-    if (config->midi2_peer_name[0])
-        fprintf(file, "midi2_peer_name=%s\n", config->midi2_peer_name);
+    netmidi_midi2_config_save(file, &config->midi2);
 #endif
-#endif
-    for (port = 0; port < 16; ++port) {
-        if (config->port_name[port][0])
-            fprintf(file, "applemidi.port.%d=%s\n", port,
-                    config->port_name[port]);
-#ifdef NETMIDI_MIDI2
-        if (config->midi2_port_name[port][0])
-            fprintf(file, "networkmidi2.port.%d=%s\n", port,
-                    config->midi2_port_name[port]);
-#endif
-    }
     failed = ferror(file);
     return fclose(file) || failed ? -1 : 0;
+}
+
+/* A key every transport shares: 1 taken, 0 not one of them, -1 bad. */
+static int common_key(struct netmidi_network_config *config, const char *key,
+                      const char *value)
+{
+    if (strcmp(key, "session_name") == 0) {
+        if (!*value || netmidi_config_take(config->session_name,
+                                           sizeof(config->session_name),
+                                           value))
+            return -1;
+        config->session_name_given = 1;
+        return 1;
+    }
+    if (strcmp(key, "latency_ms") == 0) {
+        char *end;
+        unsigned long ms;
+
+        errno = 0;
+        ms = strtoul(value, &end, 10);
+        if (errno || end == value || *end || ms > 2000)
+            return -1;
+        config->latency_ms = (int)ms;
+        return 1;
+    }
+    return 0;
 }
 
 int netmidi_config_load(const char *path, struct netmidi_network_config *config)
@@ -140,6 +145,7 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
     char *equal;
     size_t length;
     int result = -1;
+    int taken;
 
     if (!path || !config)
         return -1;
@@ -162,81 +168,27 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
         *equal = 0;
         key = trim(key);
         value = trim(equal + 1);
-        if (strcmp(key, "local_port") == 0) {
-            if (port_value(value, &next.local_port))
-                goto done;
-        } else if (strcmp(key, "peer_port") == 0) {
-            if (port_value(value, &next.peer_port))
-                goto done;
-        } else if (strcmp(key, "peer_ip") == 0) {
-            if (take(next.peer_ip, sizeof(next.peer_ip), value))
-                goto done;
-        } else if (strcmp(key, "session_name") == 0) {
-            if (!*value || take(next.session_name, sizeof(next.session_name), value))
-                goto done;
-            next.session_name_given = 1;
-#ifdef NETMIDI_BROWSE
-        } else if (strcmp(key, "peer_name") == 0) {
-            if (!*value || take(next.peer_name, sizeof(next.peer_name), value))
-                goto done;
+        taken = common_key(&next, key, value);
+#ifdef NETMIDI_APPLEMIDI
+        if (!taken)
+            taken = netmidi_applemidi_config_key(&next.applemidi, key, value);
 #endif
-        } else if (strcmp(key, "max_peers") == 0) {
-            char *end;
-            unsigned long peers;
-
-            errno = 0;
-            peers = strtoul(value, &end, 10);
-            if (errno || end == value || *end || peers < 1 || peers > 8)
-                goto done;
-            next.max_peers = (int)peers;
-        } else if (strcmp(key, "latency_ms") == 0) {
-            char *end;
-            unsigned long ms;
-
-            errno = 0;
-            ms = strtoul(value, &end, 10);
-            if (errno || end == value || *end || ms > 2000)
-                goto done;
-            next.latency_ms = (int)ms;
-        } else if (strcmp(key, "accept") == 0) {
-            if (!*value || take(next.accept, sizeof(next.accept), value))
-                goto done;
 #ifdef NETMIDI_MIDI2
-        } else if (strcmp(key, "midi2_port") == 0) {
-            if (port_value(value, &next.midi2_port))
-                goto done;
-        } else if (strcmp(key, "midi2_peer_port") == 0) {
-            if (port_value(value, &next.midi2_peer_port))
-                goto done;
-        } else if (strcmp(key, "midi2_peer_ip") == 0) {
-            if (!*value || take(next.midi2_peer_ip, sizeof(next.midi2_peer_ip), value))
-                goto done;
-#ifdef NETMIDI_BROWSE
-        } else if (strcmp(key, "midi2_peer_name") == 0) {
-            if (!*value || take(next.midi2_peer_name,
-                                sizeof(next.midi2_peer_name), value))
-                goto done;
+        if (!taken)
+            taken = netmidi_midi2_config_key(&next.midi2, key, value);
 #endif
-        } else if (strncmp(key, "networkmidi2.port.", 18) == 0) {
-            if (port_name(key + 18, value, next.midi2_port_name))
-                goto done;
-#endif
-        } else if (strncmp(key, "applemidi.port.", 15) == 0) {
-            if (port_name(key + 15, value, next.port_name))
-                goto done;
-        } else
+        if (taken != 1)
             goto done;
     }
-    if (ferror(file) || (!!next.peer_ip[0] != !!next.peer_port))
+    if (ferror(file))
         goto done;
-#ifdef NETMIDI_MIDI2
-    if ((!!next.midi2_peer_ip[0] != !!next.midi2_peer_port) ||
-        (next.midi2_peer_ip[0] && !next.midi2_port))
-        goto done;
-#ifdef NETMIDI_BROWSE
-    if (next.midi2_peer_name[0] && !next.midi2_port)
+#ifdef NETMIDI_APPLEMIDI
+    if (netmidi_applemidi_config_check(&next.applemidi) != 0)
         goto done;
 #endif
+#ifdef NETMIDI_MIDI2
+    if (netmidi_midi2_config_check(&next.midi2) != 0)
+        goto done;
 #endif
     *config = next;
     result = 0;

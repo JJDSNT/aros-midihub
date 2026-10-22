@@ -75,7 +75,9 @@ Avahi). `build-aros-linux/` is the hosted AROS build they use.
   (`network.c`, protocol-free), CAMD driver ports (`camd.h`, `adapters.c`),
   counts, mDNS (`discovery.c`) and the loop. `transport_applemidi.c` and
   `transport_midi2.c` are the protocols, selected by `NETMIDI_APPLEMIDI` and
-  `NETMIDI_MIDI2`; neither knows of the other. The same source builds on
+  `NETMIDI_MIDI2`; neither knows of the other. Each gets its state as
+  `self` from the core and its keys from its own configuration module
+  (`src/config_applemidi.c`, `src/config_midi2.c`). The same source builds on
   Linux for tests (`make demo` gives `build/MIDIHub`). On AROS `send` and
   `close` are bsdsocket macros: do not use them as member names.
 - `ports/aros/*.c`: other AROS programs (Preferences class, router, CAMD

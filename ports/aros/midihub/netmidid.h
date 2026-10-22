@@ -47,11 +47,13 @@
 #define NETMIDID_SYSEX_MAX 32768
 
 /* What the program is told on its command line beside the configuration;
- * the service has its configuration alone. */
+ * the service has its configuration alone. Where one is given it is taken
+ * instead of what the configuration says. */
 struct netmidid_options {
-    const char *accept;         /* who may connect; NULL for anyone */
+    const char *accept;         /* who may connect; NULL: as configured */
     const char *peer_name;      /* a peer to invite where it is
-                                   advertised under this name, or NULL */
+                                   advertised under this name; NULL: as
+                                   configured */
 #ifndef NETMIDI_SERVICE
     int trace;                  /* print each message as it is delivered */
     int chatty;                 /* a line of text to every packet */
@@ -89,43 +91,46 @@ struct netmidid {
     uint64_t published;         /* when the counts were last told */
 };
 
-/* A transport. Times are in ten-thousandths of a second, as
- * netmidid_now() gives them. Each call may be NULL where the transport has
- * nothing to do there. */
+/* A transport. Its state is state_size bytes the core gives it, zeroed,
+ * for a run, and self in each call; it keeps nothing of its own between
+ * runs. Times are in ten-thousandths of a second, as netmidid_now() gives
+ * them. Each call but open may be NULL where the transport has nothing to
+ * do there. */
 struct netmidid_transport {
+    size_t state_size;
     /* Begins from d->config and d->options: sockets, ports kept by name,
      * what it advertises and looks for. 0 when it runs, 1 when the
      * configuration does not ask for it, -1 when it cannot (said why). */
-    int (*open)(struct netmidid *d);
+    int (*open)(struct netmidid *d, void *self);
     /* Every transport is open and the mDNS service asked: what it does
      * first. -1 ends the run. */
-    int (*start)(struct netmidid *d, uint64_t now);
+    int (*start)(struct netmidid *d, void *self, uint64_t now);
     /* A datagram waits on a socket it asked for. */
-    void (*receive)(struct netmidid *d, int number);
+    void (*receive)(struct netmidid *d, void *self, int number);
     /* When the next event it holds is due; 0 when it holds none. */
-    int (*next_due)(struct netmidid *d, uint64_t *due);
+    int (*next_due)(struct netmidid *d, void *self, uint64_t *due);
     /* A turn of the loop: timers, retries and what is due. 1 when the
      * program has done what it was asked (never in the service). */
-    int (*periodic)(struct netmidid *d, uint64_t now);
+    int (*periodic)(struct netmidid *d, void *self, uint64_t now);
 #ifdef NETMIDI_BROWSE
     /* What one of its searches found or lost. */
-    void (*discovered)(struct netmidid *d,
+    void (*discovered)(struct netmidid *d, void *self,
                        const struct netmidi_discovered *seen);
 #endif
     /* A message a CAMD client sent to port (whole, SysEx checked): 0 when
      * it went to someone, or will at flush. */
-    int (*send_midi)(struct netmidid *d, int port, const uint8_t *message,
+    int (*send_midi)(struct netmidid *d, void *self, int port, const uint8_t *message,
                      size_t length);
     /* CAMD has nothing more this turn: what was gathered goes out. */
-    void (*flush)(struct netmidid *d);
+    void (*flush)(struct netmidid *d, void *self);
     /* Writes the counts of the ports its peers have, counts being indexed
      * by port; returns the peers it refused. */
-    unsigned long (*counts)(struct netmidid *d,
+    unsigned long (*counts)(struct netmidid *d, void *self,
                             struct netmidi_port_counts *counts);
     /* The run is over: goodbyes, while the sockets are still open. */
-    void (*stop)(struct netmidid *d);
+    void (*stop)(struct netmidid *d, void *self);
     /* After the sockets closed: what it holds goes. */
-    void (*release)(struct netmidid *d);
+    void (*release)(struct netmidid *d, void *self);
 };
 
 #ifdef NETMIDI_APPLEMIDI

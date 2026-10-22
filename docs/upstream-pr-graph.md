@@ -3,7 +3,8 @@
 **2026-10-21 transport refactor:** [netmidid is now a core and
 transports](netmidid-transports-2026-10-21.md). Over N4, N7 adds a new
 `transport_midi2.c` and one line to the core instead of 476 lines in
-`main.c`. The local cuts changed; the published #1679, #1693, #1742 and
+`main.c`; each transport also has its own configuration keys and
+state, so N7 only adds files and one-line hooks. The local cuts changed; the published #1679, #1693, #1742 and
 #1743 branches did not, and wait for the owner's decision.
 
 **2026-10-20 publication update:** [#1742 adds NetMIDIStatus and #1743 adds

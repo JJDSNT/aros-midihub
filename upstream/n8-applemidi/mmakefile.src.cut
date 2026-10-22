@@ -3,7 +3,8 @@ include $(SRCDIR)/config/aros.cfg
 # AppleMIDI service with DNS-SD registration through bonami.library.
 # The system mdnsd owns the multicast socket and the DNS-SD responder.
 
-FILES := main transport_applemidi adapters network config discovery
+FILES := main transport_applemidi adapters network config config_applemidi \
+    discovery
 
 USER_INCLUDES := -I$(SRCDIR)/$(CURDIR)/include \
     -I$(SRCDIR)/$(CURDIR)/rtpmidi/include \

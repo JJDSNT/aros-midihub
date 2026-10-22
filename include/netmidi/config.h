@@ -5,49 +5,30 @@
 #ifndef NETMIDI_CONFIG_H
 #define NETMIDI_CONFIG_H
 
+#include <stddef.h>
 #include <stdint.h>
 
-/* What the service is told, a text file of "key = value" lines. Ports are
- * control ports; the data socket uses the following port. */
+#ifdef NETMIDI_APPLEMIDI
+#include <netmidi/config_applemidi.h>
+#endif
+#ifdef NETMIDI_MIDI2
+#include <netmidi/config_midi2.h>
+#endif
+
+/* What the service is told, a text file of "key = value" lines: the keys
+ * every transport shares, and each transport's own. */
 struct netmidi_network_config {
-    uint16_t local_port;
-    uint16_t peer_port;
-    char peer_ip[64];
     char session_name[64];
     int session_name_given;     /* the file says it: not the default */
-    /* "applemidi.port.<n> = <name>": port n of the driver applemidi is
-     * kept for the peer whose session has that name. */
-    char port_name[16][64];
-#ifdef NETMIDI_MIDI2
-    /* "networkmidi2.port.<n> = <name>": the same of the driver
-     * networkmidi2, by the peer's endpoint name. */
-    char midi2_port_name[16][64];
-    /* "midi2_port": the UDP port Network MIDI 2.0 is answered on; without
-     * it there is none */
-    uint16_t midi2_port;
-    /* A Network MIDI 2.0 Host to invite, as a Client: at "midi2_peer_ip"
-     * and "midi2_peer_port". It needs midi2_port. */
-    char midi2_peer_ip[64];
-    uint16_t midi2_peer_port;
-#ifdef NETMIDI_BROWSE
-    /* "midi2_peer_name": the Host to invite is the one advertised whose
-     * endpoint is called that, wherever it is. It needs midi2_port. */
-    char midi2_peer_name[64];
-#endif
-#endif
-#ifdef NETMIDI_BROWSE
-    /* "peer_name": a peer to invite wherever it is advertised under that
-     * session name. */
-    char peer_name[64];
-#endif
     /* "latency_ms": added to the time each received event is due, 0 to
-     * 2000. "accept": anyone, nobody, or a list of addresses and session
-     * names with commas between. */
-    /* "max_peers": AppleMIDI peers at once, 1 to 8; 0 for all there is
-     * room for */
-    int max_peers;
+     * 2000. */
     int latency_ms;
-    char accept[256];
+#ifdef NETMIDI_APPLEMIDI
+    struct netmidi_applemidi_config applemidi;
+#endif
+#ifdef NETMIDI_MIDI2
+    struct netmidi_midi2_config midi2;
+#endif
 };
 
 void netmidi_config_defaults(struct netmidi_network_config *config);
@@ -60,5 +41,14 @@ int netmidi_config_load(const char *path, struct netmidi_network_config *config)
  * Returns 0, or -1 when the file could not be written whole. */
 int netmidi_config_save(const char *path,
                         const struct netmidi_network_config *config);
+
+/* For the transports' keys. Each returns 0, or -1 with nothing changed. */
+/* text into a field of size bytes, its zero byte with it */
+int netmidi_config_take(char *field, size_t size, const char *text);
+/* a UDP port, 1 to 65534 */
+int netmidi_config_port(const char *text, uint16_t *port);
+/* "<driver>.port.<n> = <name>": number is the text after the last dot */
+int netmidi_config_port_name(const char *number, const char *value,
+                             char (*names)[64]);
 
 #endif

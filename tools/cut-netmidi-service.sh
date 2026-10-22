@@ -47,7 +47,8 @@ test -d "$tree/workbench/network/netmidid/rtpmidi/include/rtpmidi"
 cut="$tree/workbench/network/netmidid"
 from="$here/ports/aros/midihub"
 # Protocol libraries live below the service now; do not remove them.
-rm -f "$cut/discovery.c" "$cut/discovery.h" "$cut/transport_midi2.c"
+rm -f "$cut/discovery.c" "$cut/discovery.h" "$cut/transport_midi2.c" \
+    "$cut/config_midi2.c" "$cut/include/netmidi/config_midi2.h"
 mkdir -p "$cut/include/netmidi" "$cut/services.d"
 
 # unifdef answers 1 when it took something off, 0 when not: both are well
@@ -64,8 +65,14 @@ strip "$from/network.c" "$cut/network.c"
 strip "$from/network.h" "$cut/network.h"
 strip "$here/src/config.c" "$cut/config.c"
 strip "$here/include/netmidi/config.h" "$cut/include/netmidi/config.h"
+strip "$here/src/config_applemidi.c" "$cut/config_applemidi.c"
+strip "$here/include/netmidi/config_applemidi.h" \
+      "$cut/include/netmidi/config_applemidi.h"
 case "$stage" in n7|n8|n9)
-    strip "$from/transport_midi2.c" "$cut/transport_midi2.c" ;;
+    strip "$from/transport_midi2.c" "$cut/transport_midi2.c"
+    strip "$here/src/config_midi2.c" "$cut/config_midi2.c"
+    strip "$here/include/netmidi/config_midi2.h" \
+          "$cut/include/netmidi/config_midi2.h" ;;
 esac
 case "$stage" in n8-applemidi|n8|n9)
     strip "$from/discovery.c" "$cut/discovery.c"

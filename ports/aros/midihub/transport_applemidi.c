@@ -99,8 +99,6 @@ struct applemidi_runtime {
     size_t outgoing_count;
 };
 
-static struct applemidi_runtime runtime;
-
 static void peer_address(const struct applemidi_peer *peer, int data_port,
                          struct sockaddr_in *address)
 {
@@ -711,9 +709,9 @@ static int send_midi_to(struct applemidi_runtime *rt, int index,
 
 /* Sends what was gathered to every connected peer: to each as few
  * packets as hold it, each message with the time it was taken at. */
-static void applemidi_flush(struct netmidid *d)
+static void applemidi_flush(struct netmidid *d, void *self)
 {
-    struct applemidi_runtime *rt = &runtime;
+    struct applemidi_runtime *rt = self;
     int index;
 
     (void)d;
@@ -759,10 +757,10 @@ static void applemidi_flush(struct netmidid *d)
 
 /* What a CAMD program sends goes to every connected peer of the port,
  * each with its own sequence numbers and its own journal. */
-static int applemidi_send(struct netmidid *d, int port,
+static int applemidi_send(struct netmidid *d, void *self, int port,
                           const uint8_t *message, size_t length)
 {
-    struct applemidi_runtime *rt = &runtime;
+    struct applemidi_runtime *rt = self;
     int index;
     int result = -1;
 
@@ -772,7 +770,7 @@ static int applemidi_send(struct netmidid *d, int port,
 
         if (rt->outgoing_count ==
             sizeof(rt->outgoing) / sizeof(rt->outgoing[0]))
-            applemidi_flush(d);
+            applemidi_flush(d, self);
         rt->outgoing_port[rt->outgoing_count] = (uint8_t)port;
         m = &rt->outgoing[rt->outgoing_count++];
         m->timestamp = (uint32_t)netmidid_now();
@@ -786,7 +784,7 @@ static int applemidi_send(struct netmidid *d, int port,
                 result = 0;
     } else {
         /* a SysEx message has packets of its own, after what came first */
-        applemidi_flush(d);
+        applemidi_flush(d, self);
         for (index = 0; index < APPLEMIDI_PEERS_MAX; ++index)
             if (rt->peers.peer[index].used &&
                 rt->peers.peer[index].session.phase ==
@@ -946,10 +944,10 @@ static void periodic_peer(struct applemidi_runtime *rt, int index,
 }
 
 #ifdef NETMIDI_BROWSE
-static void applemidi_discovered(struct netmidid *d,
+static void applemidi_discovered(struct netmidid *d, void *self,
                                  const struct netmidi_discovered *seen)
 {
-    struct applemidi_runtime *rt = &runtime;
+    struct applemidi_runtime *rt = self;
     int wanted = rt->wanted[0] && strcmp(seen->name, rt->wanted) == 0;
 
     (void)d;
@@ -977,9 +975,9 @@ static void applemidi_discovered(struct netmidid *d,
 }
 #endif
 
-static int applemidi_periodic(struct netmidid *d, uint64_t now)
+static int applemidi_periodic(struct netmidid *d, void *self, uint64_t now)
 {
-    struct applemidi_runtime *rt = &runtime;
+    struct applemidi_runtime *rt = self;
     int index;
 
     (void)d;
@@ -1037,15 +1035,17 @@ static int applemidi_periodic(struct netmidid *d, uint64_t now)
 #endif
 }
 
-static void applemidi_receive(struct netmidid *d, int number)
+static void applemidi_receive(struct netmidid *d, void *self, int number)
 {
+    struct applemidi_runtime *rt = self;
+
     (void)d;
-    receive_packet(&runtime, number == runtime.socket[1]);
+    receive_packet(rt, number == rt->socket[1]);
 }
 
-static int applemidi_next_due(struct netmidid *d, uint64_t *due)
+static int applemidi_next_due(struct netmidid *d, void *self, uint64_t *due)
 {
-    struct applemidi_runtime *rt = &runtime;
+    struct applemidi_runtime *rt = self;
     uint64_t next;
     int found = 0;
     int index;
@@ -1061,10 +1061,10 @@ static int applemidi_next_due(struct netmidid *d, uint64_t *due)
     return found;
 }
 
-static unsigned long applemidi_counts(struct netmidid *d,
+static unsigned long applemidi_counts(struct netmidid *d, void *self,
                                       struct netmidi_port_counts *counts)
 {
-    struct applemidi_runtime *rt = &runtime;
+    struct applemidi_runtime *rt = self;
     int index;
 
     (void)d;
@@ -1109,14 +1109,14 @@ static int accept_peers(struct applemidi_runtime *rt, const char *rule)
     return 0;
 }
 
-static int applemidi_open(struct netmidid *d)
+static int applemidi_open(struct netmidid *d, void *self)
 {
-    struct applemidi_runtime *rt = &runtime;
-    const struct netmidi_network_config *config = &d->config;
+    struct applemidi_runtime *rt = self;
+    const struct netmidi_applemidi_config *config = &d->config.applemidi;
     uint64_t now;
     int index;
 
-    memset(rt, 0, sizeof(*rt));
+    /* the core gave it zeroed */
     rt->d = d;
     rt->socket[0] = rt->socket[1] = -1;
     rt->local_port = config->local_port;
@@ -1151,7 +1151,8 @@ static int applemidi_open(struct netmidid *d)
         return -1;
     if (config->max_peers)
         rt->peers.limit = config->max_peers;
-    if (accept_peers(rt, d->options.accept) != 0)
+    if (accept_peers(rt, d->options.accept ? d->options.accept :
+                         config->accept[0] ? config->accept : NULL) != 0)
         return -1;
 #ifdef NETMIDI_DISCOVERY
     /* An AppleMIDI session is found under its control port. */
@@ -1159,16 +1160,16 @@ static int applemidi_open(struct netmidid *d)
                           rt->local_port);
 #ifdef NETMIDI_BROWSE
     netmidid_browse(d, &netmidid_applemidi, "_apple-midi._udp");
-    if (d->options.peer_name)
-        snprintf(rt->wanted, sizeof(rt->wanted), "%s", d->options.peer_name);
+    snprintf(rt->wanted, sizeof(rt->wanted), "%s",
+             d->options.peer_name ? d->options.peer_name : config->peer_name);
 #endif
 #endif
     return 0;
 }
 
-static int applemidi_start(struct netmidid *d, uint64_t now)
+static int applemidi_start(struct netmidid *d, void *self, uint64_t now)
 {
-    struct applemidi_runtime *rt = &runtime;
+    struct applemidi_runtime *rt = self;
 
     (void)d;
     if (rt->configured && invite_configured(rt, now) != 0)
@@ -1183,9 +1184,9 @@ static int applemidi_start(struct netmidid *d, uint64_t now)
     return 0;
 }
 
-static void applemidi_close(struct netmidid *d)
+static void applemidi_close(struct netmidid *d, void *self)
 {
-    struct applemidi_runtime *rt = &runtime;
+    struct applemidi_runtime *rt = self;
     int index;
 
     (void)d;
@@ -1194,9 +1195,9 @@ static void applemidi_close(struct netmidid *d)
             drop_peer(rt, index, netmidid_now());
 }
 
-static void applemidi_release(struct netmidid *d)
+static void applemidi_release(struct netmidid *d, void *self)
 {
-    struct applemidi_runtime *rt = &runtime;
+    struct applemidi_runtime *rt = self;
     int index;
 
     (void)d;
@@ -1207,6 +1208,7 @@ static void applemidi_release(struct netmidid *d)
 }
 
 const struct netmidid_transport netmidid_applemidi = {
+    sizeof(struct applemidi_runtime),
     applemidi_open,
     applemidi_start,
     applemidi_receive,

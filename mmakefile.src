@@ -39,17 +39,18 @@ USER_INCLUDES := -I$(MIDIHUB_ROOT)/include \
     -I$(MIDIHUB_ROOT)/network/mdns/aros/src
 # Older m68k AROS inline stubs intentionally use volatile register variables.
 USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
-# What the package builds has all of it: Network MIDI 2.0 and discovery.
+# What the package builds has all of it: both transports and discovery.
 # Everything that shares struct netmidi_network_config has to be built
-# with the same two, since they decide which fields it has.
-USER_CPPFLAGS := -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -DNETMIDI_BROWSE
+# with the same markers, since they decide which fields it has.
+USER_CPPFLAGS := -DNETMIDI_APPLEMIDI -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -DNETMIDI_BROWSE
 
 %build_linklib mmake=linklibs-arosmidihub \
     libname=arosmidihub \
     files="$(MIDIHUB_ROOT)/network/rtpmidi/applemidi $(MIDIHUB_ROOT)/network/rtpmidi/rtpmidi \
            $(MIDIHUB_ROOT)/network/rtpmidi/session $(MIDIHUB_ROOT)/network/rtpmidi/peers \
            $(MIDIHUB_ROOT)/network/rtpmidi/ports \
-           $(MIDIHUB_ROOT)/src/config \
+           $(MIDIHUB_ROOT)/src/config $(MIDIHUB_ROOT)/src/config_applemidi \
+           $(MIDIHUB_ROOT)/src/config_midi2 \
            $(MIDIHUB_ROOT)/network/rtpmidi/timing $(MIDIHUB_ROOT)/network/rtpmidi/sender \
            $(MIDIHUB_ROOT)/network/rtpmidi/receiver \
            $(MIDIHUB_ROOT)/network/rtpmidi/clock \

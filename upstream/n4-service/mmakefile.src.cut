@@ -9,7 +9,7 @@ include $(SRCDIR)/config/aros.cfg
 # port. The protocol is the link library rtpmidi's; here are the sockets,
 # the clock and the configuration, ENV:NetMIDI.
 
-FILES := main transport_applemidi adapters network config
+FILES := main transport_applemidi adapters network config config_applemidi
 
 USER_INCLUDES := -I$(SRCDIR)/$(CURDIR)/include \
     -I$(SRCDIR)/$(CURDIR)/rtpmidi/include \

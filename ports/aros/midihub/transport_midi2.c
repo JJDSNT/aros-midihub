@@ -81,8 +81,6 @@ struct midi2_runtime {
     unsigned long midi2_late;
 };
 
-static struct midi2_runtime runtime;
-
 static uint64_t midi2_key(const struct sockaddr_in *address)
 {
     return ((uint64_t)ntohl(address->sin_addr.s_addr) << 16) |
@@ -227,10 +225,10 @@ static void midi2_all_notes_off(struct midi2_runtime *rt, int index)
     }
 }
 
-static void midi2_receive(struct netmidid *d, int number)
+static void midi2_receive(struct netmidid *d, void *self, int number)
 {
     static uint8_t in[2048], out[NETMIDI2_MAX_PACKET];
-    struct midi2_runtime *rt = &runtime;
+    struct midi2_runtime *rt = self;
     struct sockaddr_in source;
     socklen_t source_length = sizeof(source);
     struct netmidi2_writer packet;
@@ -334,9 +332,9 @@ static void midi2_sessions(struct midi2_runtime *rt, uint64_t now)
     }
 }
 
-static int midi2_periodic(struct netmidid *d, uint64_t now)
+static int midi2_periodic(struct netmidid *d, void *self, uint64_t now)
 {
-    struct midi2_runtime *rt = &runtime;
+    struct midi2_runtime *rt = self;
 
     (void)d;
     /* The Host we are to be a Client of is known and we have no session
@@ -414,7 +412,7 @@ static void midi2_collect(void *context, const uint32_t *words,
     outgoing->count += count;
 }
 
-static int midi2_send_midi(struct netmidid *d, int port,
+static int midi2_send_midi(struct netmidid *d, void *self, int port,
                            const uint8_t *message, size_t length)
 {
     static struct midi2_outgoing outgoing;
@@ -425,7 +423,7 @@ static int midi2_send_midi(struct netmidid *d, int port,
        share */
     if (!d->shared_port && port < NETMIDI_CAMD_MIDI2)
         return -1;
-    outgoing.rt = &runtime;
+    outgoing.rt = self;
     outgoing.port = d->shared_port ? -1 : port;
     outgoing.count = 0;
     outgoing.messages = 1;
@@ -436,9 +434,9 @@ static int midi2_send_midi(struct netmidid *d, int port,
     return 0;
 }
 
-static int midi2_next_due(struct netmidid *d, uint64_t *due)
+static int midi2_next_due(struct netmidid *d, void *self, uint64_t *due)
 {
-    struct midi2_runtime *rt = &runtime;
+    struct midi2_runtime *rt = self;
     uint64_t next;
     int found = 0;
     int index;
@@ -453,10 +451,10 @@ static int midi2_next_due(struct netmidid *d, uint64_t *due)
     return found;
 }
 
-static unsigned long midi2_counts(struct netmidid *d,
+static unsigned long midi2_counts(struct netmidid *d, void *self,
                                   struct netmidi_port_counts *counts)
 {
-    struct midi2_runtime *rt = &runtime;
+    struct midi2_runtime *rt = self;
     int index;
 
     (void)d;
@@ -472,10 +470,10 @@ static unsigned long midi2_counts(struct netmidid *d,
 }
 
 #ifdef NETMIDI_BROWSE
-static void midi2_discovered(struct netmidid *d,
+static void midi2_discovered(struct netmidid *d, void *self,
                              const struct netmidi_discovered *seen)
 {
-    struct midi2_runtime *rt = &runtime;
+    struct midi2_runtime *rt = self;
 
     (void)d;
     /* a Network MIDI 2.0 Host: known to its user by its endpoint's name,
@@ -550,19 +548,19 @@ static void product_instance_id(char *id, uint64_t now)
 #endif
 }
 
-static int midi2_open(struct netmidid *d)
+static int midi2_open(struct netmidid *d, void *self)
 {
-    struct midi2_runtime *rt = &runtime;
-    const struct netmidi_network_config *config = &d->config;
+    struct midi2_runtime *rt = self;
+    const struct netmidi_midi2_config *config = &d->config.midi2;
     int index;
 
-    memset(rt, 0, sizeof(*rt));
+    /* the core gave it zeroed */
     rt->d = d;
     rt->socket = -1;
     for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index)
         rt->midi2_port[index] = -1;
     /* Network MIDI 2.0 is off unless a port is given for it. */
-    rt->port = config->midi2_port;
+    rt->port = config->port;
     if (!rt->port)
         return 1;
     rt->socket = netmidid_socket(d, &netmidid_midi2, rt->port);
@@ -578,24 +576,24 @@ static int midi2_open(struct netmidid *d)
     for (index = 0; index < NETMIDI2_SESSIONS_MAX; ++index)
         rtpmidi_queue_reset(&rt->midi2_queue[index]);
     for (index = 0; index < 16; ++index)
-        if (config->midi2_port_name[index][0] &&
+        if (config->port_name[index][0] &&
             netmidid_port_keep(d, NETMIDID_NETWORKMIDI2, index,
-                               config->midi2_port_name[index]) != 0)
+                               config->port_name[index]) != 0)
             printf(TAG "networkmidi2 port %d cannot be kept for \"%s\"\n",
-                   index, config->midi2_port_name[index]);
-    if (config->midi2_peer_ip[0]) {
+                   index, config->port_name[index]);
+    if (config->peer_ip[0]) {
         uint32_t address;
 
-        if (netmidid_ipv4(config->midi2_peer_ip, &address) == 0) {
+        if (netmidid_ipv4(config->peer_ip, &address) == 0) {
             rt->midi2_host_key = ((uint64_t)address << 16) |
-                                 config->midi2_peer_port;
+                                 config->peer_port;
             rt->midi2_host = 1;
         }
     }
 #ifdef NETMIDI_BROWSE
-    if (config->midi2_peer_name[0]) {
+    if (config->peer_name[0]) {
         snprintf(rt->midi2_wanted, sizeof(rt->midi2_wanted), "%s",
-                 config->midi2_peer_name);
+                 config->peer_name);
         netmidid_browse(d, &netmidid_midi2, "_midi2._udp");
     }
 #endif
@@ -620,9 +618,9 @@ static int midi2_open(struct netmidid *d)
     return 0;
 }
 
-static void midi2_close(struct netmidid *d)
+static void midi2_close(struct netmidid *d, void *self)
 {
-    struct midi2_runtime *rt = &runtime;
+    struct midi2_runtime *rt = self;
     int index;
 
     (void)d;
@@ -639,9 +637,9 @@ static void midi2_close(struct netmidid *d)
     }
 }
 
-static void midi2_free(struct netmidid *d)
+static void midi2_free(struct netmidid *d, void *self)
 {
-    struct midi2_runtime *rt = &runtime;
+    struct midi2_runtime *rt = self;
     int index;
 
     (void)d;
@@ -652,6 +650,7 @@ static void midi2_free(struct netmidid *d)
 }
 
 const struct netmidid_transport netmidid_midi2 = {
+    sizeof(struct midi2_runtime),
     midi2_open,
     NULL,
     midi2_receive,

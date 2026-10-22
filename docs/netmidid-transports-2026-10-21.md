@@ -64,6 +64,50 @@ of after; Network MIDI 2.0 releases its held events at the end of its
 periodic turn; CAMD is opened before the sockets, so with several faults at
 once a different one is reported first.
 
+## Second step: each transport's configuration and state
+
+The same day the two couplings the first step left were taken out.
+
+**Configuration.** `struct netmidi_network_config` had every transport's
+keys as fields of its own, under markers, and one parser for all. It now
+has the keys all transports share (`session_name`, `latency_ms`) and
+embeds `struct netmidi_applemidi_config` and `struct netmidi_midi2_config`,
+each in a header of its own (`include/netmidi/config_applemidi.h`,
+`config_midi2.h`) with its reader, check and writer (`src/config_applemidi.c`,
+`config_midi2.c`). `src/config.c` reads the file and offers every key it
+does not know to each transport's reader; a key none takes still makes the
+file invalid, and each key is validated as before. The keys and the file
+format are unchanged; only the order in which `netmidi_config_save` writes
+them changed (shared keys first, then each transport's). The MIDIHub
+Preferences use `network.applemidi.local_port` and so on.
+`NETMIDI_APPLEMIDI` now decides fields of the structure, so the package's
+`USER_CPPFLAGS`, with which the link library is built, define it too.
+
+**State.** A transport no longer keeps its state in a variable of its
+module. `struct netmidid_transport` begins with `state_size`; the core gives
+each transport that many zeroed bytes for a run and passes them as `self`
+to every call, and frees them at the run's end. The two states are about
+290 KiB and 86 KiB (they were in BSS before; the memory used is the same).
+
+What N7 adds over N4 is now additive only:
+
+| N7 over N4 | first step | now |
+|---|---|---|
+| `config.c` | +23 inside the parser | 6 lines, a call in each hook |
+| `config.h` | +10 fields | 2 lines, the include and the member |
+| keys | — | `config_midi2.c` and `config_midi2.h`, new files |
+| `main.c`, `netmidid.h` | 1 + 1 | 1 + 1 |
+| transport | `transport_midi2.c` | `transport_midi2.c` |
+
+Validated again after this step: `make test` (configuration round trip
+included), the marker builds, hosted AROS AppleMIDI 8/8 and MIDI 2.0 3/3,
+the hosted and amiga-m68k builds of netmidid and of the MIDIHub
+Preferences, and the three cuts compiled against their published trees.
+`make test-network` was compared with the binary from before the refactor,
+alternating the two: 6 of 8 against 1 of 8 in one series, 0 of 5 against 4
+of 5 in another, every failure in either a timeout waiting for feedback or
+a timing assertion, with the same signatures in both binaries.
+
 ## Remaining dependency on the rtpmidi library
 
 The core uses `applemidi_ports` (ports kept by name) and the MIDI 2.0
@@ -90,6 +134,6 @@ would change a merged library and is left as its own proposal.
 - The N4, N7 and N8-AppleMIDI cuts compile with the hosted cross compiler
   and `-Werror` against the headers of their published trees.
 
-Not done yet: a full build of each cut in the clean upstream tree, and
+Not done yet (after both steps): a full build of each cut in the clean upstream tree, and
 replacing the published branches. Both wait for the owner, since #1679 is
 under review (see the handoff).

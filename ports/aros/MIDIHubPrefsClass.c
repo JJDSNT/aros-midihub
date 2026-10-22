@@ -1003,13 +1003,13 @@ static int collect_settings(struct MHPrefsData *data)
     strcpy(data->network.session_name, text);
     get(data->network_local_port, MUIA_String_Integer, &number);
     if (number < 1 || number >= 65535) return -1;
-    data->network.local_port = (uint16_t)number;
+    data->network.applemidi.local_port = (uint16_t)number;
     get(data->network_peer_ip, MUIA_String_Contents, &text);
-    if (!text || strlen(text) >= sizeof(data->network.peer_ip)) return -1;
-    strcpy(data->network.peer_ip, text);
+    if (!text || strlen(text) >= sizeof(data->network.applemidi.peer_ip)) return -1;
+    strcpy(data->network.applemidi.peer_ip, text);
     get(data->network_peer_port, MUIA_String_Integer, &number);
-    if (data->network.peer_ip[0] && (number < 1 || number >= 65535)) return -1;
-    data->network.peer_port = data->network.peer_ip[0] ? (uint16_t)number : 0;
+    if (data->network.applemidi.peer_ip[0] && (number < 1 || number >= 65535)) return -1;
+    data->network.applemidi.peer_port = data->network.applemidi.peer_ip[0] ? (uint16_t)number : 0;
     return 0;
 }
 
@@ -1176,9 +1176,9 @@ static void load_profile(struct MHPrefsData *data)
         set_status(data, "The profile network configuration is invalid."); return;
     }
     set(data->network_session, MUIA_String_Contents, data->network.session_name);
-    set(data->network_local_port, MUIA_String_Integer, data->network.local_port);
-    set(data->network_peer_ip, MUIA_String_Contents, data->network.peer_ip);
-    set(data->network_peer_port, MUIA_String_Integer, data->network.peer_port);
+    set(data->network_local_port, MUIA_String_Integer, data->network.applemidi.local_port);
+    set(data->network_peer_ip, MUIA_String_Contents, data->network.applemidi.peer_ip);
+    set(data->network_peer_port, MUIA_String_Integer, data->network.applemidi.peer_port);
     profile_path(path, sizeof(path), name, "Backend");
     strcpy(value, "tiny");
     (void)read_value(path, value, sizeof(value));
@@ -1770,9 +1770,9 @@ AROS_UFH3(IPTR, MHPrefsDispatcher,
                 netmidi_config_load("ENV:MidiHub/Network", &data->network) != 0)
                 (void)netmidi_config_load("ENVARC:MidiHub/Network", &data->network);
             set(data->network_session, MUIA_String_Contents, data->network.session_name);
-            set(data->network_local_port, MUIA_String_Integer, data->network.local_port);
-            set(data->network_peer_ip, MUIA_String_Contents, data->network.peer_ip);
-            set(data->network_peer_port, MUIA_String_Integer, data->network.peer_port);
+            set(data->network_local_port, MUIA_String_Integer, data->network.applemidi.local_port);
+            set(data->network_peer_ip, MUIA_String_Contents, data->network.applemidi.peer_ip);
+            set(data->network_peer_port, MUIA_String_Integer, data->network.applemidi.peer_port);
             {
                 char value[1024];
                 if (read_value("ENV:MidiHub/SoundFont", value, sizeof(value)) &&
