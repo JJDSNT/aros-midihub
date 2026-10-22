@@ -1,5 +1,11 @@
 # Pull requests from what there is, in an order that keeps upstream building
 
+**Verified status, 2026-10-22:** the
+[current PR and proposal register](upstream-status-2026-10-22.md) lists
+the actual open/merged states and their blockers. It distinguishes the
+existing #1679 dependency chain from the proposed #1788 migration;
+the dated layout and publication notes below remain historical.
+
 ## Architectural correction — 2026-10-22
 
 The historical N3 cut below combined AppleMIDI and RTP-MIDI into one

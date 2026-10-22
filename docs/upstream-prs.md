@@ -1,24 +1,71 @@
 # Upstream pull requests
 
-What could be sent next, and in which order, is in
-[the graph of pull requests](upstream-pr-graph.md).
+Estado consultado no GitHub em **2026-10-22, 07:51 UTC (04:51 BRT)**,
+para PRs de `JJDSNT` contra `aros-development-team/AROS`.
+São **24 merged, 7 abertos (3 prontos para review e 4 drafts), 1 fechado sem merge**.
+“Accepted” neste inventário significa efetivamente merged; checks aprovados
+não equivalem a aprovação de review.
 
-Branches of `JJDSNT/AROS` opened against `aros-development-team/AROS`
-`master`. State on 2026-10-11:
+O [registro de situação, dependências e propostas bloqueadas](upstream-status-2026-10-22.md)
+distingue pré-requisitos publicados, decisões dos mantenedores e nossa
+coordenação da migração #1788. Todos os sete PRs abertos estão mergeable e
+com os quatro checks aprovados; nenhuma revisão formal ou thread inline
+aparece neles nesta consulta.
 
-| PR | branch | title | state |
-|---|---|---|---|
-| #1112 | `bluetooth-pi-transport` | bluetooth: Raspberry Pi onboard controller | merged |
-| #1482 | `bluetooth-le-midi` | bluetooth: BLE MIDI (stack and class in one) | closed, split into #1506 and #1507 |
-| #1483 | `camd-64bit-fixes` | camd: cluster names on 64-bit targets, and driver scan of arena-loaded modules | merged |
-| #1484 | `raspi-bt-console-firmware` | raspi-aarch64: keep the debug console off the Bluetooth radio, fetch its patchram | merged |
-| #1485 | `llvmpipe-link` | llvmpipe: link the target-side LLVM archives by path | merged |
-| #1506 | `bluetooth-le-stack-v2` | bluetooth: add remaining LE peripheral and GATT support | merged |
-| #1507 | `btmidi-class-v2` | bluetooth: add BLE MIDI class | open, reworked after review |
-| #1543 | `arostcp-ipv4-multicast` | AROSTCP: IPv4 multicast on SANA-II interfaces, with a netdb crash and hosted eth.device multicast | merged, after two reviews |
-| #1558 | `arostcp-close-leaves-groups` | AROSTCP: a closing socket takes its group memberships with it | merged |
-| #1560 | `mdnsd-hostname` | mdnsd: answer for the host's name over multicast DNS | merged 2026-10-13 |
-| #1591 | `mdns-register` | mdnsd, bonami.library: register a service over multicast DNS | open, sent 2026-10-13 |
+## Abertos
+
+| PR | Proposta | Situação | O que falta agora |
+| --- | --- | --- | --- |
+| [#1679](https://github.com/aros-development-team/AROS/pull/1679) | netmidid + transporte AppleMIDI | Pronto para review | Aguardar revisão. Para adotar #1788, atualizar consumidor e dependentes em conjunto; isso é coordenação nossa, não review recebido. |
+| [#1693](https://github.com/aros-development-team/AROS/pull/1693) | Transporte Network MIDI 2.0 | Draft | Merge de #1679; depois rebase. Bibliotecas #1588/#1692 já estão merged. |
+| [#1695](https://github.com/aros-development-team/AROS/pull/1695) | mDNS browse/resolve por filas | Pronto para review | Revisão do contrato de eventos proposto em #1559. Sem outro PR aberto como pré-requisito. |
+| [#1735](https://github.com/aros-development-team/AROS/pull/1735) | Correções do codec BLE-MIDI | Pronto para review | Aguardar revisão; #1507 já está merged. Independente do serviço de rede. |
+| [#1742](https://github.com/aros-development-team/AROS/pull/1742) | NetMIDIStatus | Draft | Merge de #1679, que fornece o serviço e o ABI do snapshot. |
+| [#1743](https://github.com/aros-development-team/AROS/pull/1743) | Anúncio AppleMIDI via mDNS | Draft | Merge de #1679. Registro mDNS #1591 já merged; não depende de #1693/#1695. |
+| [#1788](https://github.com/aros-development-team/AROS/pull/1788) | Separar AppleMIDI, RTP-MIDI e helpers | Draft | Revisar a divisão e coordenar a migração dos consumidores de #1679 e dependentes. |
+
+## Merged
+
+Datas em UTC. O campo `state=MERGED`, e não o `reviewDecision`
+histórico, determina esta classificação.
+
+| PR | Mudança | Merge |
+| --- | --- | --- |
+| [#1677](https://github.com/aros-development-team/AROS/pull/1677) | netinfo: defer expunge until the worker finishes | 2026-10-20 |
+| [#1744](https://github.com/aros-development-team/AROS/pull/1744) | camd: ignore icon and debug files during driver scans | 2026-10-20 |
+| [#1734](https://github.com/aros-development-team/AROS/pull/1734) | camd: report oversized SysEx and honour MIDI_ErrFilter | 2026-10-20 |
+| [#1733](https://github.com/aros-development-team/AROS/pull/1733) | camdusbmidi: make USB MIDI devices usable through CAMD | 2026-10-20 |
+| [#1732](https://github.com/aros-development-team/AROS/pull/1732) | camd: lock cluster notification, find new drivers, tell nodes of participants | 2026-10-20 |
+| [#1731](https://github.com/aros-development-team/AROS/pull/1731) | debugdriver: store port 0's user data in UserData[0] | 2026-10-20 |
+| [#1730](https://github.com/aros-development-team/AROS/pull/1730) | camd: keep a driver port open while a receiver is linked to it | 2026-10-20 |
+| [#1678](https://github.com/aros-development-team/AROS/pull/1678) | rtpmidi: add AppleMIDI sessions, peers and clock sync | 2026-10-20 |
+| [#1591](https://github.com/aros-development-team/AROS/pull/1591) | mdnsd, bonami.library: register a service over multicast DNS | 2026-10-19 |
+| [#1692](https://github.com/aros-development-team/AROS/pull/1692) | netmidi2: reject invalid identity outputs and malformed acceptances | 2026-10-18 |
+| [#1588](https://github.com/aros-development-team/AROS/pull/1588) | network: the Universal MIDI Packet and Network MIDI 2.0 as a link library | 2026-10-18 |
+| [#1587](https://github.com/aros-development-team/AROS/pull/1587) | network: RTP-MIDI as a link library | 2026-10-18 |
+| [#1586](https://github.com/aros-development-team/AROS/pull/1586) | midi: CAMD drivers for MIDI over the network | 2026-10-18 |
+| [#1676](https://github.com/aros-development-team/AROS/pull/1676) | camd: return success after expunge cleanup | 2026-10-18 |
+| [#1507](https://github.com/aros-development-team/AROS/pull/1507) | bluetooth: add BLE MIDI class | 2026-10-18 |
+| [#1585](https://github.com/aros-development-team/AROS/pull/1585) | camd: look for a driver's MidiDeviceData at aligned addresses | 2026-10-17 |
+| [#1560](https://github.com/aros-development-team/AROS/pull/1560) | mdnsd: answer for the host's name over multicast DNS | 2026-10-13 |
+| [#1558](https://github.com/aros-development-team/AROS/pull/1558) | AROSTCP: a closing socket takes its group memberships with it | 2026-10-11 |
+| [#1543](https://github.com/aros-development-team/AROS/pull/1543) | AROSTCP: IPv4 multicast on SANA-II interfaces, with a netdb crash and hosted eth.device multicast | 2026-10-11 |
+| [#1485](https://github.com/aros-development-team/AROS/pull/1485) | llvmpipe: link the target-side LLVM archives by path | 2026-10-08 |
+| [#1483](https://github.com/aros-development-team/AROS/pull/1483) | camd: cluster names on 64-bit targets, and driver scan of arena-loaded modules | 2026-10-08 |
+| [#1506](https://github.com/aros-development-team/AROS/pull/1506) | bluetooth: add remaining LE peripheral and GATT support | 2026-10-07 |
+| [#1484](https://github.com/aros-development-team/AROS/pull/1484) | raspi-aarch64: keep the debug console off the Bluetooth radio, fetch its patchram | 2026-10-07 |
+| [#1112](https://github.com/aros-development-team/AROS/pull/1112) | bluetooth: Raspberry Pi onboard controller (PL011 transport, H:4 device, Broadcom patchram loader) | 2026-09-01 |
+
+## Fechado sem merge
+
+[#1482](https://github.com/aros-development-team/AROS/pull/1482) foi dividido em [#1506](https://github.com/aros-development-team/AROS/pull/1506) e [#1507](https://github.com/aros-development-team/AROS/pull/1507), ambos merged.
+Não é uma proposta ainda aguardando revisão.
+
+## Contexto histórico — registros de 2026-10-11 a 2026-10-13
+
+O texto abaixo conserva o relato da publicação inicial. Suas referências a
+PRs ainda abertos e a decisões aguardadas pertencem àquela data; para os
+bloqueios atuais, use o registro acima.
 
 Issue #1559 asks the maintainer where the mDNS service should live, how to
 split it, how clients should get events, which protocol limits block it,
