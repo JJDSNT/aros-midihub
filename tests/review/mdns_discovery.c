@@ -31,7 +31,8 @@ static size_t rr(size_t at, const char *instance, UWORD type, UWORD cls,
     memcpy(packet + at + 10, rdata, len);
     return at + 10 + len;
 }
-static void feed(const char *instance, unsigned mask, ULONG ttl, UBYTE ip)
+static void feed_records(const char *instance, unsigned mask, ULONG ttl,
+                         UBYTE ip, int tick)
 {
     size_t at = 12, len;
     unsigned count = 0;
@@ -55,7 +56,11 @@ static void feed(const char *instance, unsigned mask, ULONG ttl, UBYTE ip)
     }
     put16(packet + 6, count);
     mdnsHandlePacket(&md, packet, at, 0xcb007101, 5353);
-    mdnsDiscoveryTick(&md);
+    if (tick) mdnsDiscoveryTick(&md);
+}
+static void feed(const char *instance, unsigned mask, ULONG ttl, UBYTE ip)
+{
+    feed_records(instance, mask, ttl, ip, 1);
 }
 static LONG call(struct MDNSIPCMsg *msg, UWORD command, APTR ref, ULONG ownerID, ULONG epoch)
 {
@@ -287,13 +292,19 @@ static void views_scoped(void)
 {
     APTR sessions, printers; unsigned i; struct MDNSDiscoveryEvent e;
     init(); sessions = begin(0, NULL); printers = begin_type(0, NULL, "_printer._tcp");
-    for (i = 0; i < 33; i++) {
+    for (i = 0; i < 32; i++) {
         char inst[16]; snprintf(inst, sizeof(inst), "Session%u", i);
-        feed(inst, 15, 120, 9);
-        if (i < 32) expect_add(sessions, inst, 9);
+        feed(inst, 1, 120, 9);
     }
+    /* Both PTRs are present before one rebuild. The overflowing type comes
+     * first in the cache; its 32 views must be returned during this pass so
+     * the later, small type can acquire one. */
+    feed_records("Session32", 1, 120, 9, 0);
+    feed_type = "_printer._tcp.local";
+    feed_records("Printer", 1, 120, 9, 0);
+    mdnsDiscoveryTick(&md);
     CHECK(read_event(sessions, &e) == MDNSERR_BUSY);
-    feed_type = "_printer._tcp.local"; feed("Printer", 15, 120, 9);
+    feed("Printer", 14, 120, 9);
     CHECK(read_event(printers, &e) == MDNS_OK); CHECK(e.de_Code == MEVENT_ADD);
     CHECK(!strcmp(e.de_Name, "Printer"));
     finish();
