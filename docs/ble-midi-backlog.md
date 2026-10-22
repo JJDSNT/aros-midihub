@@ -23,6 +23,12 @@ Background: [BLE MIDI](ble-midi.md), [the review](upstream-prs.md),
 [what the driver model cannot say](camd-integration.md), and the amendment to
 [the architecture decision](camd-endpoint-architecture-decision.md).
 
+**L10 decision plan, 2026-10-22:** [options, sequence and reopening criteria](ble-l10-plan.md).
+The recommendation is to defer a BLE-specific public query while preparing
+the minimum B29/B30/B31 metadata contract and validating current behavior.
+CAMD changes are not a technical prerequisite for a direct Bluetooth query;
+this is a proposed sequencing choice to avoid unnecessary public API overlap.
+
 ## Priorities
 
 As in the other backlogs: **P0** wrong or unsafe as it is, **P1** before a
