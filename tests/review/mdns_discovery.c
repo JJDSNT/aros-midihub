@@ -7,6 +7,8 @@
 #define CHECK(expr) do { if (!(expr)) { fprintf(stderr, "FAIL %s:%d: %s\n", __func__, __LINE__, #expr); exit(1); } } while (0)
 static struct MDNSDaemon md;
 static UBYTE packet[MDNS_MAX_PACKET], data[512];
+/* the service type records are fed for */
+static const char *feed_type = "_midi2._udp.local";
 static const UBYTE txt[] = { 5, 'a','=','b',0,'c', 4,'X','=',' ','\\' };
 
 static size_t key(UBYTE *out, size_t at, const char *instance, int host)
@@ -18,7 +20,7 @@ static size_t key(UBYTE *out, size_t at, const char *instance, int host)
         memcpy(out + at, instance, n);
         at += n;
     }
-    return name(out, at, host ? "peer.local" : "_midi2._udp.local");
+    return name(out, at, host ? "peer.local" : feed_type);
 }
 static size_t rr(size_t at, const char *instance, UWORD type, UWORD cls,
                  ULONG ttl, const UBYTE *rdata, size_t len)
@@ -63,14 +65,18 @@ static LONG call(struct MDNSIPCMsg *msg, UWORD command, APTR ref, ULONG ownerID,
     mdnsClientMessage(&md, msg);
     return msg->mi_Result;
 }
-static APTR begin(int resolve, const char *instance)
+static APTR begin_type(int resolve, const char *instance, const char *type)
 {
     struct MDNSIPCMsg msg = {0};
-    strcpy(msg.mi_ServiceType, "_midi2._udp");
+    strcpy(msg.mi_ServiceType, type);
     if (instance) strcpy(msg.mi_Name, instance);
     CHECK(call(&msg, resolve ? MDNS_IPC_RESOLVE : MDNS_IPC_BROWSE, NULL, 1, 0) == MDNS_OK);
     CHECK(msg.mi_DaemonID == 77);
     return msg.mi_Handle;
+}
+static APTR begin(int resolve, const char *instance)
+{
+    return begin_type(resolve, instance, "_midi2._udp");
 }
 static LONG read_event(APTR ref, struct MDNSDiscoveryEvent *out)
 {
@@ -81,7 +87,7 @@ static LONG read_event(APTR ref, struct MDNSDiscoveryEvent *out)
 }
 static void init(void)
 {
-    ticks = 5000; live_task_id = 1; packets = 0;
+    ticks = 5000; live_task_id = 1; packets = 0; feed_type = "_midi2._udp.local";
     setup(&md, 0); md.md_DaemonID = 77;
 }
 static void finish(void)
@@ -148,6 +154,11 @@ static void lifecycle(void)
     CHECK(call(&msg, MDNS_IPC_STOPBROWSE, ref, 1, 77) == MDNS_OK);
     CHECK(read_event(ref, &e) == MDNSERR_BADPARAM);
     ref = begin(0, NULL); live_task_id = 2; mdnsDiscoveryTick(&md);
+#ifdef MDNS_DISCOVERY_REAP
+    /* ended owners go on the reap timer, not on every turn */
+    live_task_id = 1; CHECK(read_event(ref, &e) != MDNSERR_BADPARAM);
+    live_task_id = 2; mdnsDiscoveryReap(&md); live_task_id = 1;
+#endif
     CHECK(read_event(ref, &e) == MDNSERR_BADPARAM);
     finish();
 }
@@ -241,6 +252,69 @@ static void missing_backoff(void)
     CHECK(packets == before + 1); /* browse retry, no missing SRV/TXT flood */
     finish();
 }
+#ifdef MDNS_DISCOVERY_REAP
+/* Review of #1695: what nobody browses is not cached, a full cache gives
+ * way, and running out of views fails only that type's browses. */
+static void unrelated_not_cached(void)
+{
+    APTR ref; unsigned i; struct MDNSDiscoveryEvent e;
+    init(); ref = begin(0, NULL);
+    feed_type = "_printer._tcp.local";
+    for (i = 0; i < 200; i++) { char inst[16]; snprintf(inst, sizeof(inst), "Printer%u", i); feed(inst, 15, 4500, 9); }
+    CHECK(read_event(ref, &e) == MDNSERR_NOTREADY);
+    feed_type = "_midi2._udp.local"; feed("Session", 15, 120, 9); expect_add(ref, "Session", 9);
+    finish();
+}
+static void evict_unwanted(void)
+{
+    APTR printers, sessions; unsigned i; struct MDNSIPCMsg msg = {0};
+    init(); printers = begin_type(0, NULL, "_printer._tcp");
+    feed_type = "_printer._tcp.local";
+    for (i = 0; i < 30; i++) {
+        char inst[16]; snprintf(inst, sizeof(inst), "Printer%u", i);
+        feed(inst, 15, 4500, 9);
+        { struct MDNSDiscoveryEvent e; CHECK(read_event(printers, &e) == MDNS_OK); }
+    }
+    CHECK(call(&msg, MDNS_IPC_STOPBROWSE, printers, 1, 77) == MDNS_OK);
+    sessions = begin(0, NULL); feed_type = "_midi2._udp.local";
+    for (i = 0; i < 15; i++) {   /* more than the room the printers left */
+        char inst[16]; snprintf(inst, sizeof(inst), "Session%u", i);
+        feed(inst, 15, 120, 9); expect_add(sessions, inst, 9);
+    }
+    finish();
+}
+static void views_scoped(void)
+{
+    APTR sessions, printers; unsigned i; struct MDNSDiscoveryEvent e;
+    init(); sessions = begin(0, NULL); printers = begin_type(0, NULL, "_printer._tcp");
+    for (i = 0; i < 33; i++) {
+        char inst[16]; snprintf(inst, sizeof(inst), "Session%u", i);
+        feed(inst, 15, 120, 9);
+        if (i < 32) expect_add(sessions, inst, 9);
+    }
+    CHECK(read_event(sessions, &e) == MDNSERR_BUSY);
+    feed_type = "_printer._tcp.local"; feed("Printer", 15, 120, 9);
+    CHECK(read_event(printers, &e) == MDNS_OK); CHECK(e.de_Code == MEVENT_ADD);
+    CHECK(!strcmp(e.de_Name, "Printer"));
+    finish();
+}
+/* An A that came within a second before the SRV naming its host is kept
+ * for it; an older one is asked for again. */
+static void a_before_srv(void)
+{
+    APTR ref; unsigned before; struct MDNSDiscoveryEvent e;
+    init(); ref = begin(0, NULL);
+    feed("Session", 8, 120, 9); ticks += 49; feed("Session", 7, 120, 9);
+    expect_add(ref, "Session", 9); finish();
+    init(); ref = begin(0, NULL);
+    feed("Session", 8, 120, 9); ticks += 51; feed("Session", 7, 120, 9);
+    CHECK(read_event(ref, &e) == MDNSERR_NOTREADY);
+    before = packets; ticks += 50; mdnsDiscoveryTick(&md);
+    CHECK(packets > before);     /* the A is asked for */
+    feed("Session", 8, 120, 9); expect_add(ref, "Session", 9);
+    finish();
+}
+#endif
 #ifdef MDNS_IPC_NOTIFY
 /* Lent requests: the device I/O contract of RequestMDNSEvent(). */
 static struct MDNSEventRequest lent;
@@ -388,6 +462,12 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "clock-wrap")) wrap();
     else if (!strcmp(argv[1], "release-quiet")) release_no_queries();
     else if (!strcmp(argv[1], "missing-backoff")) missing_backoff();
+#ifdef MDNS_DISCOVERY_REAP
+    else if (!strcmp(argv[1], "unrelated-not-cached")) unrelated_not_cached();
+    else if (!strcmp(argv[1], "evict-unwanted")) evict_unwanted();
+    else if (!strcmp(argv[1], "views-scoped")) views_scoped();
+    else if (!strcmp(argv[1], "a-before-srv")) a_before_srv();
+#endif
 #ifdef MDNS_IPC_NOTIFY
     else if (!strcmp(argv[1], "notify-pending")) notify_pending();
     else if (!strcmp(argv[1], "notify-stop")) notify_stop(0);

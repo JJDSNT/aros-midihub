@@ -45,11 +45,14 @@ def main():
              revision + ":workbench/network/mdns/" + name]
         ))
     binary = output / ("discovery" if args.discovery else "responder-rfc")
+    reap = b"mdnsDiscoveryReap" in (output / "mdnsd.h").read_bytes()
     flags = [os.environ.get("CC", "cc"), "-std=c99", "-O1", "-g", "-Wall", "-Wextra",
              "-Werror", "-Wno-unused-parameter", "-fno-strict-aliasing",
              "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
              "-fno-omit-frame-pointer", "-I" + str(shim), "-I" + str(repo / "tests/review"),
              "-I" + str(output / "include"), "-I" + str(output)]
+    if reap:
+        flags.append("-DMDNS_DISCOVERY_REAP")
     subprocess.run(flags + [str(repo / ("tests/review/mdns_discovery.c" if args.discovery else "tests/review/mdns_responder_rfc.c")),
                            *(str(output / source) for source in sources),
                            "-o", str(binary)], check=True)
@@ -67,6 +70,9 @@ def main():
                  "timeout", "network-reset", "refresh", "compressed", "wrong-class",
                  "pointer-cycle", "short-rdata", "wrong-port", "multiple-links",
                  "clock-wrap", "release-quiet", "missing-backoff")
+        if reap:
+            cases += ("unrelated-not-cached", "evict-unwanted", "views-scoped",
+                      "a-before-srv")
         if "MDNS_IPC_NOTIFY" in ipc:
             cases += ("notify-pending", "notify-stop", "notify-event-then-stop",
                       "notify-refused", "notify-overflow", "notify-shutdown",

@@ -50,12 +50,22 @@ components together. Generic lookup/query and Envoy remain outside this slice.
 The queue and its reading are the first five commits. The sixth only renames
 the mode tag from `MDNS_EVENT_POLL`, since the queue no longer implies
 polling. The seventh adds `RequestMDNSEvent()`; it can be dropped on its own
-if maintainers prefer reading alone or a different wakeup.
+if maintainers prefer reading alone or a different wakeup. The eighth,
+`e04efca130`, is the review's cache fix described below.
 
 ### Cache and querying
 
 The bounded per-link cache keeps counted labels and expands compression with
-bounded traversal. PTR, SRV, TXT and A expire/refresh independently. Browse
+bounded traversal. It holds only what an active operation can reach: the PTRs
+of a browsed type, the SRV and TXT of an instance of a browsed type or of an
+instance being resolved, and the A of a host such an SRV names. An A that
+arrives up to a second before its SRV is held for it. Only those records are
+refreshed and queried for. When the cache is full, the oldest record nothing
+reaches gives way. Only if every record is still reached are the operations
+wanting the new one failed. More than 32 instances of a type fail only that
+type's browses, once. The views are rebuilt only when the cache or the
+operations change or a record expires, and ended owners are reaped on the
+daemon's five-second timer. PTR, SRV, TXT and A expire/refresh independently. Browse
 queries missing components; resolve works asynchronously without a prior PTR.
 Query retries back off and include known answers; goodbye/cache-flush handling
 allows a one-second rescue period. Network changes remove old views and
@@ -105,3 +115,4 @@ N9 must adopt the queue and raw TXT, recover subscriptions and retain full
 endpoint names before claiming reliable discovery by name. Whether a queue
 with an optional lent request is the right AROS answer remains a maintainer
 decision in #1559, not an assumed approval.
+
