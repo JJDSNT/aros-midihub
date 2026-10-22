@@ -52,6 +52,7 @@
 #define NETMIDID_WANTED_FIRST_WAIT 50000u
 #define NETMIDID_WANTED_LONGEST_WAIT 600000u
 #define NETMIDID_QUEUE_HORIZON 100000u
+#ifndef NETMIDI_SERVICE
 
 /* What the program is told on its command line beside the configuration;
  * the service has its configuration alone. Where one is given it is taken
@@ -61,19 +62,20 @@ struct netmidid_options {
     const char *peer_name;      /* a peer to invite where it is
                                    advertised under this name; NULL: as
                                    configured */
-#ifndef NETMIDI_SERVICE
     int trace;                  /* print each message as it is delivered */
     int chatty;                 /* a line of text to every packet */
     int probe_note;             /* what the host tests have it send */
     int probe_sysex;
-#endif
 };
+#endif
 
 struct netmidid_transport;
 
 struct netmidid {
     struct netmidi_network_config config;
+#ifndef NETMIDI_SERVICE
     struct netmidid_options options;
+#endif
     char session_name[64];      /* the name all transports go by */
     /* Added to the time every received event is due, in ten-thousandths of
        a second: room for the network's unevenness, paid for in delay. */

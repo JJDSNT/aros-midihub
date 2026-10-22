@@ -201,8 +201,8 @@ static void publish_counts(struct netmidid *d, uint64_t now)
    it was leaves its advertisement alone. */
 static struct netmidi_discovery discovery;
 static int discovered;              /* services advertised, as last seen */
-#endif
 
+#endif
 /* A turn of the loop for everything but the sockets. Returns 1 when a
  * transport says the program is done. */
 static int periodic(struct netmidid *d, uint64_t now)
@@ -479,7 +479,7 @@ static int run(int argc, char **argv)
     d->shared_port = netmidi_camd_ports(&d->camd) == 1;
     for (i = 0; i < NETMIDI_CAMD_DRIVERS; ++i)
         netmidi_ports_init(&d->ports[i], d->shared_port ? 0 :
-                                           netmidi_camd_ports(&d->camd));
+                                         netmidi_camd_ports(&d->camd));
     for (i = 0; i < TRANSPORT_COUNT; ++i) {
         int status;
 

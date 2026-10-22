@@ -1158,8 +1158,12 @@ static int applemidi_open(struct netmidid *d, void *self)
         return -1;
     if (config->max_peers)
         rt->peers.limit = config->max_peers;
+#ifdef NETMIDI_SERVICE
+    if (accept_peers(rt, config->accept[0] ? config->accept : NULL) != 0)
+#else
     if (accept_peers(rt, d->options.accept ? d->options.accept :
                          config->accept[0] ? config->accept : NULL) != 0)
+#endif
         return -1;
 #ifdef NETMIDI_DISCOVERY
     /* An AppleMIDI session is found under its control port. */
@@ -1167,8 +1171,12 @@ static int applemidi_open(struct netmidid *d, void *self)
                           rt->local_port);
 #ifdef NETMIDI_BROWSE
     netmidid_browse(d, &netmidid_applemidi, "_apple-midi._udp");
+#ifdef NETMIDI_SERVICE
+    snprintf(rt->wanted, sizeof(rt->wanted), "%s", config->peer_name);
+#else
     snprintf(rt->wanted, sizeof(rt->wanted), "%s",
              d->options.peer_name ? d->options.peer_name : config->peer_name);
+#endif
 #endif
 #endif
     return 0;
