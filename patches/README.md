@@ -50,6 +50,10 @@ The netinfo patch now includes all four commits through PR #1677 revision
 `a8684ee0f08bd9b294b5a35342cafdcaa2c2f1a7`, including reopen serialization
 and waiting-open expunge protection. It supersedes the initial snapshot
 described in the dated report; do not apply it over the existing PR branch.
+PR [#1677](https://github.com/aros-development-team/AROS/pull/1677) was
+merged on 2026-10-20 as `bdec29f19a028664da818bf63fc3a12dacff2e04`.
+This patch is retained as a historical snapshot; do not apply it to an
+upstream tree that already contains that merge.
 
 ## CAMD and USB MIDI
 

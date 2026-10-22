@@ -35,8 +35,13 @@ byte for byte with these already published local AROS branch revisions:
 This is a comparison to pinned revisions, not a fresh GitHub review-status
 query. No AROS branches were changed during the consolidation.
 
-The netinfo patch snapshot is updated through #1677 revision
-`a8684ee0f08bd9b294b5a35342cafdcaa2c2f1a7`. The old top-level
+PR [#1677](https://github.com/aros-development-team/AROS/pull/1677) was
+merged on 2026-10-20 at 14:28:26 UTC as
+`bdec29f19a028664da818bf63fc3a12dacff2e04` (verified on 2026-10-21).
+The netinfo patch snapshot records its final source revision
+`a8684ee0f08bd9b294b5a35342cafdcaa2c2f1a7`; it is historical evidence,
+not pending upstream work. Do not apply it to a tree containing the merge.
+The old top-level
 `.camd-v42-reject-fix.patch` was already present before this review work;
 it is preserved under `build/handoff-2026-10-21/` as an unclassified local
 experiment, not applied or published. Do not discard it based on this handoff.
