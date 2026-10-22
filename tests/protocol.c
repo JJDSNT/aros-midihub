@@ -1837,6 +1837,18 @@ static void sender_journal_limits(void)
     assert(rtpmidi_sender_packet(&sender, sequence, 3, 1, volume,
                                  sizeof(volume), wire, 15, &length) == -1);
 
+    /* A guard packet is the sender's journal with an empty command list;
+     * callers do not have to reach into the RTP-MIDI header to mark it. */
+    assert(rtpmidi_sender_guard(&sender, (uint16_t)(sequence + 1), 4, 1,
+                                wire, sizeof(wire), &length) == 0);
+    assert(rtpmidi_decode(wire, length, &packet) == 0 &&
+           packet.midi_length == 0 && packet.journal != NULL);
+    assert(rtpmidi_journal_decode(packet.journal, packet.journal_length,
+                                  &journal) == 0);
+    assert(journal.channel_count == 2);
+    assert(rtpmidi_sender_guard(&sender, (uint16_t)(sequence + 1), 4, 1,
+                                wire, 12, &length) != 0);
+
     /* A SysEx too long for chapter X leaves the note's protection alone. */
     rtpmidi_sender_reset(&sender);
     rtpmidi_sender_record(&sender, 10, 1, on, sizeof(on));
