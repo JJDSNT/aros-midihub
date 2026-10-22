@@ -73,6 +73,15 @@ int netmidi_camd_ports(const struct netmidi_camd_runtime *runtime)
     return 1;
 }
 
+/* the host bridge drops no SysEx */
+unsigned long netmidi_camd_sysex_dropped(
+    const struct netmidi_camd_runtime *runtime, int number)
+{
+    (void)runtime;
+    (void)number;
+    return 0;
+}
+
 void netmidi_camd_publish(struct netmidi_camd_runtime *runtime,
                           const char *session, unsigned long refused,
                           const struct netmidi_port_counts *counts,
