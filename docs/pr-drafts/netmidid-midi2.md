@@ -9,13 +9,12 @@ prerequisite is #1679, the base netmidid service. #1678 (AppleMIDI sessions)
 and #1692 (MIDI 2.0 library corrections) are now merged into master.
 
 Rebased on upstream master `a1b8aa6fd8b7ed6e0cae1ecbe83c82ecb905c343`
-plus the three #1679 commits, the last of which separates the service's
-core from its AppleMIDI transport. GitHub's aggregate diff includes #1679;
-the separate MIDI 2.0 commit is
-[`f861f995d3`](https://github.com/JJDSNT/AROS/commit/f861f995d3f6a12638260d69acfdcceaf4bfa3ab).
+plus the two #1679 commits: the netmidid core and its AppleMIDI transport.
+GitHub's aggregate diff includes #1679; the separate MIDI 2.0 commit is
+[`4776ebc8f4`](https://github.com/JJDSNT/AROS/commit/4776ebc8f42c6aa00e0cc44b596c0e0d24031045).
 It is a transport of its own: `transport_midi2.c` and `config_midi2.c` are
-new files, and the core gains one line in its transport table. The
-behaviour is that of the earlier revision. Sources live in
+new files, and the core gains one line where transports and their keys
+are registered. The behaviour is that of the earlier revision. Sources live in
 `workbench/network/netmidid`; shared driver headers use the maintainer's
 `workbench/devs/camd/networkmidi2` layout.
 

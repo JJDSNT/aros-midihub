@@ -1,4 +1,30 @@
-Add an AROSTCP-managed service that accepts AppleMIDI invitations or invites a configured IPv4 peer, exchanges clocks, and connects each session to a port of `DEVS:Midi/applemidi`. The daemon attaches through the driver's adapter interface rather than creating CAMD application links. It resumes invitations after timeout or peer departure.
+<!-- Title: netmidid: a network MIDI service, with AppleMIDI as its first transport -->
+
+Add `netmidid`, a service of the AROSTCP service manager that carries MIDI
+between the network and CAMD, and its first transport, AppleMIDI
+(RTP-MIDI). The service is no client of camd.library: it attaches to the
+adapter interface of the drivers in `DEVS:Midi`, a peer to a port.
+
+The PR has two commits:
+
+1. **`netmidid: a network MIDI service and its transport interface`**
+   (`aa6ca46a01`). The core has what every protocol needs alike: the
+   configuration (`ENV:NetMIDI`, watched and taken anew when it changes),
+   numbered UDP sockets, ports of a driver kept by name for a peer, the
+   counts published for a status command, and the loop. A protocol is a
+   transport, defined in `netmidid.h` (open, start, receive, next_due,
+   periodic, send_midi, flush, counts, stop, release, and the size of its
+   state, which the core allocates for each run). The core knows no
+   protocol. On its own the service has nothing to run: it says so and
+   ends.
+2. **`netmidid: AppleMIDI transport`** (`60f807ef96`). It accepts
+   AppleMIDI invitations, or invites a configured IPv4 peer and does so
+   again after a timeout or the peer's departure. It exchanges clocks and
+   gives each session a port of `DEVS:Midi/applemidi`: the one kept for
+   its session name, or the first free one. The protocol is the merged
+   `rtpmidi` library (#1678). The commit adds `transport_applemidi.c`
+   and `config_applemidi.c`, plus one line where transports and their
+   keys are registered.
 
 Configuration is read from `ENV:NetMIDI`, for example:
 
@@ -6,59 +32,49 @@ Configuration is read from `ENV:NetMIDI`, for example:
 local_port=5004
 peer_ip=192.168.166.1
 peer_port=5104
+applemidi.port.3=Kept peer
 ```
 
-The installed service is disabled (`Enabled=no`). Enabling it opens its UDP
-pair. This cut is AppleMIDI-only; discovery and Network MIDI 2.0 are separate
-changes. `NetMIDIStatus` remains a separate follow-up.
+The installed service is disabled (`Enabled=no`). Enabling it opens the
+AppleMIDI UDP pair. Network MIDI 2.0 (#1693) is a second transport, added
+the same way as its own files. Advertisement (#1743) and `NetMIDIStatus`
+(#1742) are separate follow-ups. None of them depends on another, only on
+this PR.
 
 The service lives in `workbench/network/netmidid`, alongside the merged
 `rtpmidi/` library, and uses the adapter header in
-`workbench/devs/camd/networkmidi2`. Its mmakefile owns the network build dependency.
+`workbench/devs/camd/networkmidi2`. Its mmakefile owns the network build
+dependency.
 
-### Core and transports (2026-10-21)
+### Base
 
-A third commit, `37915bd98f`, separates the core (`main.c`: configuration,
-sockets, CAMD, counts and the loop) from the AppleMIDI transport
-(`transport_applemidi.c`) through the interface in `netmidid.h`.
-`network.c` no longer knows the AppleMIDI port pair, and AppleMIDI's
-configuration keys are read in `config_applemidi.c`. Behaviour, output and
-the `ENV:NetMIDI` format are unchanged. Later transports (#1693) are added
-as files of their own. The exact revision compiles and links for hosted
-x86-64 and amiga-m68k with `-Werror`, and passes the hosted node-rtpmidi
-suite (7 checks; discovery skipped).
+Upstream master `a1b8aa6fd8b7ed6e0cae1ecbe83c82ecb905c343`. #1678 (the
+AppleMIDI session library), the drivers, the payload library and the CAMD
+and netinfo cleanup fixes (#1676, #1677) are merged.
 
-### Prerequisites and base (2026-10-20)
+### Validation
 
-#1678 is now merged, as are the drivers, payload library and CAMD cleanup
-prerequisites. This branch is rebased onto upstream master
-`a1b8aa6fd8b7ed6e0cae1ecbe83c82ecb905c343` and contains only the two service
-commits. The already merged session implementation is no longer duplicated
-in this PR's diff. The service source is unchanged by the rebase.
+Both commits compile and link for hosted x86-64 and amiga-m68k with
+warnings treated as errors (the existing m68k SDK volatile-register
+exclusion applies), each one on its own. The RTP-MIDI protocol suite
+passes under ASan/UBSan against the session sources merged in #1678.
 
-The exact service revision compiles and links for hosted x86-64 and
-amiga-m68k with warnings treated as errors (the existing m68k SDK
-volatile-register exclusion applies). The nine RTP-MIDI library translation
-units compile for both targets, and the protocol suite passes under
-ASan/UBSan against the session sources merged in #1678.
+The exact binary of the second commit passes the hosted UP AROS suite
+against node-rtpmidi 1.0.0, over three boots:
 
-Earlier hosted UP AROS tests against node-rtpmidi covered both invitation
-directions, clocks, notes/controllers/SysEx through CAMD, two peers on
-separate ports, configured port reservation, stop and reconnect. Driver
-unload/replacement and service restart used the separate CAMD/netinfo
-cleanup fixes: #1676 is merged and #1677 remains open for review.
+- both invitation directions and clock exchange;
+- notes, controller and SysEx through CAMD;
+- separate ports 0 and 3 with a reserved peer;
+- an outbound scale and chord;
+- NetMIDIStatus counters;
+- service stop;
+- an initial invitation timeout, and two successive sessions across the
+  peer's departure and return.
+
+Discovery is skipped because this PR has none. The existing hosted image
+and support modules are reused with the new service binary.
 
 Validation uses existing SDKs and a hosted image with replacement modules,
-not a fresh full current-master AROS build. Physical hardware, SMP, a native
-latency bound and complete RFC 6295/external journal interoperability remain
-outside that evidence.
-
-### Fresh hosted service run (2026-10-20)
-
-The exact rebased AppleMIDI-only binary passes the three-boot node-rtpmidi
-1.0.0 suite on hosted UP AROS: both invitation directions and clock exchange,
-notes/controller/SysEx through CAMD, separate ports 0 and 3 with a reserved
-peer, outbound scale and chord, NetMIDIStatus counters, service stop, initial
-invitation timeout and two successive sessions across peer departure/return.
-Discovery is skipped because this cut does not implement it. The existing
-hosted image and support modules are reused with the new service binary.
+not a fresh full current-master AROS build. Physical hardware, SMP, a
+native latency bound and complete RFC 6295/external journal
+interoperability remain outside that evidence.

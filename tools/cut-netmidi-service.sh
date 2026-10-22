@@ -6,8 +6,9 @@
 # the program the host tests run and what later pull requests add. Only
 # the build files and the service file are the cut's.
 #
-#   tools/cut-netmidi-service.sh n4|n7|n8-applemidi|n8|n9 AROS_SOURCE_DIR
+#   tools/cut-netmidi-service.sh n4-core|n4|n7|n8-applemidi|n8|n9 AROS_SOURCE_DIR
 #
+#   n4-core  the core alone, without a transport
 #   n4   AppleMIDI alone
 #   n7   the same with Network MIDI 2.0
 #   n8-applemidi  AppleMIDI advertised, without the MIDI 2.0 dependency
@@ -27,6 +28,8 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 stage=$1
 tree=$(realpath "$2")
 case "$stage" in
+n4-core) marks="-UNETMIDI_APPLEMIDI -UNETMIDI_MIDI2 -UNETMIDI_DISCOVERY -UNETMIDI_BROWSE"
+    build="$here/upstream/n4-core"; service=$build ;;
 n4) marks="-DNETMIDI_APPLEMIDI -UNETMIDI_MIDI2 -UNETMIDI_DISCOVERY -UNETMIDI_BROWSE"
     build="$here/upstream/n4-service"; service=$build ;;
 n7) marks="-DNETMIDI_APPLEMIDI -DNETMIDI_MIDI2 -UNETMIDI_DISCOVERY -UNETMIDI_BROWSE"
@@ -38,9 +41,10 @@ n8) marks="-DNETMIDI_APPLEMIDI -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -UNETMIDI_BRO
 n9) marks="-DNETMIDI_APPLEMIDI -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -DNETMIDI_BROWSE"
     build="$here/upstream/n8-discovery"
     service="$here/upstream/n9-browse" ;;
-*) echo "n4, n7, n8-applemidi, n8 or n9" >&2; exit 2 ;;
+*) echo "n4-core, n4, n7, n8-applemidi, n8 or n9" >&2; exit 2 ;;
 esac
-test "$stage" = n4 || test "$stage" = n8-applemidi ||
+test "$stage" = n4-core || test "$stage" = n4 ||
+    test "$stage" = n8-applemidi ||
     test -d "$tree/workbench/network/netmidid/netmidi2/include/netmidi2"
 test -f "$tree/workbench/devs/camd/networkmidi2/netmidi_camd.h"
 test -d "$tree/workbench/network/netmidid/rtpmidi/include/rtpmidi"
@@ -48,6 +52,8 @@ cut="$tree/workbench/network/netmidid"
 from="$here/ports/aros/midihub"
 # Protocol libraries live below the service now; do not remove them.
 rm -f "$cut/discovery.c" "$cut/discovery.h" "$cut/transport_midi2.c" \
+    "$cut/transport_applemidi.c" "$cut/config_applemidi.c" \
+    "$cut/include/netmidi/config_applemidi.h" \
     "$cut/config_midi2.c" "$cut/include/netmidi/config_midi2.h"
 mkdir -p "$cut/include/netmidi" "$cut/services.d"
 
@@ -58,16 +64,19 @@ strip() {
 }
 strip "$from/main.c" "$cut/main.c"
 strip "$from/netmidid.h" "$cut/netmidid.h"
-strip "$from/transport_applemidi.c" "$cut/transport_applemidi.c"
+test "$stage" = n4-core ||
+    strip "$from/transport_applemidi.c" "$cut/transport_applemidi.c"
 strip "$from/adapters.c" "$cut/adapters.c"
 strip "$from/camd.h" "$cut/camd.h"
 strip "$from/network.c" "$cut/network.c"
 strip "$from/network.h" "$cut/network.h"
 strip "$here/src/config.c" "$cut/config.c"
 strip "$here/include/netmidi/config.h" "$cut/include/netmidi/config.h"
-strip "$here/src/config_applemidi.c" "$cut/config_applemidi.c"
-strip "$here/include/netmidi/config_applemidi.h" \
-      "$cut/include/netmidi/config_applemidi.h"
+if [ "$stage" != n4-core ]; then
+    strip "$here/src/config_applemidi.c" "$cut/config_applemidi.c"
+    strip "$here/include/netmidi/config_applemidi.h" \
+          "$cut/include/netmidi/config_applemidi.h"
+fi
 case "$stage" in n7|n8|n9)
     strip "$from/transport_midi2.c" "$cut/transport_midi2.c"
     strip "$here/src/config_midi2.c" "$cut/config_midi2.c"

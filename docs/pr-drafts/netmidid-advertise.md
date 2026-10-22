@@ -27,10 +27,10 @@ label, at most 63 bytes, without literal dots.
 
 **Dependent draft: requires #1679**, the AppleMIDI service. #1591, which
 provides registration and the responder, is already merged. The branch
-contains the three #1679 commits (the last separates the core from the
-AppleMIDI transport) and one advertisement commit, `bb2b735306`; rebase
-onto master when the parent merges. `discovery.c` and `discovery.h` are
-unchanged from the earlier revision.
+contains the two #1679 commits (the netmidid core and its AppleMIDI
+transport) and one advertisement commit, `c1d710e74e`; rebase onto master
+when the parent merges. `discovery.c` and `discovery.h` are unchanged from
+the earlier revision.
 
 This AppleMIDI-only slice does not depend on #1693, #1695 or the status-command
 PR. It does not browse/resolve remote peers or add the Network MIDI 2.0

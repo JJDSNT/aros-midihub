@@ -1,7 +1,16 @@
 include $(SRCDIR)/config/aros.cfg
 
-# AppleMIDI service with DNS-SD registration through bonami.library.
-# The system mdnsd owns the multicast socket and the DNS-SD responder.
+# netmidid: MIDI over the network as a service of the network stack. Its
+# core keeps the configuration (ENV:NetMIDI), the sockets and the clock,
+# and reaches CAMD through the ports of the drivers in DEVS:Midi, whose
+# adapters it attaches to, a peer to a port: it is no client of
+# camd.library. Each protocol is a transport of its own (netmidid.h). Here
+# that is AppleMIDI (RTP-MIDI), the link library rtpmidi's: it answers
+# invitations on UDP 5004 and 5005, invites the peer the configuration
+# names, and keeps the clocks.
+#
+# Sessions are advertised by the system's mDNS service, which it asks
+# through bonami.library: it holds no socket on port 5353 itself.
 
 FILES := main transport_applemidi adapters network config config_applemidi \
     discovery

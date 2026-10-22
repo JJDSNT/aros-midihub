@@ -140,37 +140,41 @@ under review (see the handoff).
 
 ## Prepared for publication (not pushed)
 
-Local branches in `build/upstream-pr-prep`, each from the published head
-of its PR or from the new #1679 head, author Jaime Dias, no other
-attribution:
+#1679 is restructured so that it is about netmidid, with AppleMIDI as its
+first transport; it had no review yet. Local branches in
+`build/upstream-pr-prep`, author Jaime Dias, no other attribution:
 
-| PR | local branch | head | over |
-|---|---|---|---|
-| #1679 | `transports/netmidid-service` | `37915bd98f` | published `f541409f06`, one commit added |
-| #1693 | `transports/netmidid-midi2` | `f861f995d3` | `37915bd98f`; N7 cut |
-| #1743 | `transports/netmidid-advertise` | `bb2b735306` | `37915bd98f`; N8-AppleMIDI cut |
-| #1742 | `transports/netmidistat` | `0cb8338db0` | `37915bd98f`; `669a30346a` picked unchanged |
+| PR | local branch | commits over master `a1b8aa6fd8` |
+|---|---|---|
+| #1679 | `netmidid/service` | `aa6ca46a01` the core and its transport interface (cut `n4-core`); `60f807ef96` the AppleMIDI transport (cut `n4`) |
+| #1693 | `netmidid/midi2` | the two, then `4776ebc8f4` Network MIDI 2.0 (cut `n7`) |
+| #1743 | `netmidid/advertise` | the two, then `c1d710e74e` advertisement (cut `n8-applemidi`) |
+| #1742 | `netmidid/netmidistat` | the two, then `ad4ce857f2`, `669a30346a` picked unchanged |
 
-#1679 takes a fast-forward push; the three drafts are replaced. Each cut
-was compiled and linked for hosted x86-64 and amiga-m68k against the real
-SDKs with `-Werror` (the harness of `build/review-publication-2026-10-20`),
-and the exact x86-64 binaries ran on hosted AROS: N4 node-rtpmidi suite 7
-checks (discovery skipped), N8-AppleMIDI 8 including Avahi, N7 AppleMIDI 7
-and Network MIDI 2.0 3.
+The AppleMIDI commit and the MIDI 2.0 commit have one shape: a transport
+file, a configuration module, one line in each registry. The final #1679
+tree equals the validated refactor apart from the build file's comment.
+Every point, the core alone included, compiles and links for hosted
+x86-64 and amiga-m68k against the real SDKs with `-Werror`, and so does
+`NetMIDIStatus`.
 
 ```sh
 cd build/upstream-pr-prep
-git push fork transports/netmidid-service:review/netmidid-service
+git push --force-with-lease=review/netmidid-service:f541409f06 \
+    fork netmidid/service:review/netmidid-service
 git push --force-with-lease=review/netmidid-midi2:6e71764ba2 \
-    fork transports/netmidid-midi2:review/netmidid-midi2
+    fork netmidid/midi2:review/netmidid-midi2
 git push --force-with-lease=review/netmidid-advertise:989227ceac \
-    fork transports/netmidid-advertise:review/netmidid-advertise
+    fork netmidid/advertise:review/netmidid-advertise
 git push --force-with-lease=review/netmidistat:669a30346a \
-    fork transports/netmidistat:review/netmidistat
+    fork netmidid/netmidistat:review/netmidistat
 ```
 
-Then the comment `docs/pr-drafts/netmidid-transports-comment.md` on #1679
-and the updated bodies in `docs/pr-drafts/` (`netmidid-service.md`,
-`netmidid-midi2.md`, `netmidid-advertise.md`, `netmidistat.md`); `gh pr
-edit` fails on this repository (Projects classic), so bodies go through
-`gh api -X PATCH repos/aros-development-team/AROS/pulls/N -F body=@file`.
+Then the #1679 title ("netmidid: a network MIDI service, with AppleMIDI as
+its first transport"), the comment
+`docs/pr-drafts/netmidid-transports-comment.md`, and the bodies in
+`docs/pr-drafts/` (`netmidid-service.md`, `netmidid-midi2.md`,
+`netmidid-advertise.md`, `netmidistat.md`). `gh pr edit` fails on this
+repository (Projects classic), so title and body go through `gh api -X
+PATCH repos/aros-development-team/AROS/pulls/N -f title=... -F
+body=@file`.
