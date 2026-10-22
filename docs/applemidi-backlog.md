@@ -45,8 +45,10 @@ the payload, AppleMIDI control and neutral helpers, with independent
 libraries, public headers and isolated regression builds. AM28's shared
 helpers and runtime policy were moved as part of removing the accidental
 dependencies. See [the migration and validation record](applemidi-component-split-2026-10-22.md).
-The upstream library follow-up and the existing service PR consumers must
-be reviewed and migrated together; AM-ARCH-01 remains open upstream.
+The upstream library follow-up is draft
+[#1788](https://github.com/aros-development-team/AROS/pull/1788). It and
+the existing service PR consumers must be reviewed and migrated together;
+AM-ARCH-01 remains open upstream until that migration is merged.
 
 ## Done
 

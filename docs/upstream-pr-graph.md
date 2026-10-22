@@ -7,6 +7,7 @@ library. The current scripts export separate `applemidi`, `rtpmidi` and
 `netmidi-common` components. N4-core needs only the common component;
 the AppleMIDI transport needs both protocol libraries. The merged library
 migration must accompany consumer updates in #1679 and its dependents.
+The library correction is draft [#1788](https://github.com/aros-development-team/AROS/pull/1788).
 See [the source mapping and validation](applemidi-component-split-2026-10-22.md).
 The dated cut descriptions below record their earlier published layouts.
 

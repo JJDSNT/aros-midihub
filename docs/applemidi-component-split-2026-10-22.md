@@ -57,7 +57,10 @@ The cut script `cut-netmidi-common.sh` exports the neutral component.
 cuts use explicit include and link dependencies. `n4-core` links only
 `netmidi-common`. Source moves and build changes for the merged libraries
 are prepared on AROS branch `review/applemidi-component-split`, based on
-upstream `43e2e698c4`. The existing service PR branches are not rewritten
+upstream `43e2e698c4`, published as draft
+[#1788](https://github.com/aros-development-team/AROS/pull/1788), revision
+`1687a2173b151d06af1c752c6a74851b994484ce`.
+The existing service PR branches are not rewritten
 by this repository change. The library migration must be coordinated with
 the consumer changes before either side is merged.
 
@@ -78,6 +81,8 @@ the consumer changes before either side is merged.
 - Native MetaMake service and selftest targets: hosted x86-64 and
   amiga-m68k, all features enabled, including discovery and browse.
   The old aggregate library was cleaned before building the split targets.
+  Preferences and router targets also build on both architectures with
+  their new link lists.
 - Fresh generated MetaMake builds of `n4-core`, `n4`, `n7` and
   `n8-applemidi`: passed on hosted x86-64 and amiga-m68k with warnings as
   errors. The advertisement cut uses matching upstream Bonami public and
