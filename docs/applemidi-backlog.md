@@ -40,6 +40,14 @@ before a first use with a real peer, **P2** before an upstream proposal,
 
 **Priority:** P0 / fix promptly, before adding further AppleMIDI features or entrenching the layout. This is an architectural ownership defect, not evidence by itself that RTP packet functions directly call AppleMIDI functions. The distinction must be checked in code review. **Review rule:** reject future changes that merge independent protocol responsibilities merely because one protocol uses another. Link to the separate [RTP-MIDI backlog](rtp-midi-backlog.md).
 
+**Implementation (2026-10-22):** the companion repository now separates
+the payload, AppleMIDI control and neutral helpers, with independent
+libraries, public headers and isolated regression builds. AM28's shared
+helpers and runtime policy were moved as part of removing the accidental
+dependencies. See [the migration and validation record](applemidi-component-split-2026-10-22.md).
+The upstream library follow-up and the existing service PR consumers must
+be reviewed and migrated together; AM-ARCH-01 remains open upstream.
+
 ## Done
 
 On 2026-10-12, with host tests in `tests/protocol.c`; the whole host suite,
@@ -193,7 +201,7 @@ carries the time the service took it from the port's ring.
 |---|---|---|
 | AM26 | Of the three things read and never run, two were run on hosted AROS on 2026-10-12 (`tools/netmidi-driver-hosted.sh`): a driver in memory of another layout is left alone, the service says so once and goes on; and with the service stopped, a CAMD program that plays into a port finishes, and a service started again takes the ports up. The third was found to be a defect and corrected, and then could not be run: camd.library unloading the driver under a running service would have left the service calling an interrupt whose code was gone. The driver now marks its adapters as nobody's when it is expunged, the service looks at that mark with task switching forbidden before it wakes the driver, and it lets go of adapters that are no longer on the public list and takes those of a driver loaded after. On this system `Avail FLUSH` does not unload camd.library, something else holding it, so that path is still read and not run. Built for amiga-m68k on 2026-10-12, not run there (RTP-MIDI backlog R22). | Find what holds camd.library on hosted AROS, or run the case where nothing does; a run on m68k. |
 | AM21 | `applemidi_peers_receive()` sets the "left" event through two branches that end the same way. | Simplify when the function is next touched. |
-| AM28 | Code that is not AppleMIDI's lives in the rtpmidi library under AppleMIDI names, and netmidid's core and its Network MIDI 2.0 transport link it for that: `struct applemidi_ports` (ports kept by name, `ports.c`), used by the core for every driver; `struct rtpmidi_event_queue` (`timing.c`), `applemidi_text_length()`/`applemidi_name_fit()` (`applemidi.c`) and `APPLEMIDI_WANTED_FIRST_WAIT`/`_LONGEST_WAIT` (`peers.h`), used by the MIDI 2.0 transport. Beside that, the library joins two layers: the AppleMIDI session protocol (`applemidi.c`, `session.c`, `peers.c`, `clock.c`, `ports.c`) and the RTP-MIDI payload (`rtpmidi.c`, `sender.c`, `receiver.c`, `timing.c`). Found during the netmidid transport refactor of 2026-10-21 ([record](netmidid-transports-2026-10-21.md)). | Move the generic pieces to a neutral home with neutral names (a port table and a timed event queue for every transport, the back-off in netmidid's core), and consider splitting the AppleMIDI session layer from the RTP-MIDI payload. Both change libraries already merged (#1587, #1678): propose them on their own, not in a fix batch, when the owner chooses. |
+| AM28 | Generic port ownership, timed MIDI queues and text helpers were provided by the merged rtpmidi library under protocol-specific names. | Implemented locally on 2026-10-22 with AM-ARCH-01: neutral `netmidi-common`, independent payload/control libraries, runtime retry/scheduling policy and updated consumers. [Migration and validation](applemidi-component-split-2026-10-22.md). The upstream library and consumer migration remains to be reviewed and merged together. |
 
 ## Decisions needed
 

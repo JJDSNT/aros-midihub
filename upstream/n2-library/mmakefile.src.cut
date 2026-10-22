@@ -8,9 +8,10 @@ include $(SRCDIR)/config/aros.cfg
 
 FILES := rtpmidi sender receiver timing
 
-USER_INCLUDES := -I$(SRCDIR)/$(CURDIR)/include
+USER_INCLUDES := -I$(SRCDIR)/$(CURDIR)/include \
+    -I$(SRCDIR)/$(CURDIR)/../common/include
 
-#MM linklibs-rtpmidi : includes
+#MM linklibs-rtpmidi : includes linklibs-netmidi-common
 
 %build_linklib mmake=linklibs-rtpmidi \
     libname=rtpmidi \

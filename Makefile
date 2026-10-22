@@ -8,7 +8,17 @@ M68K_CFLAGS ?= -O2 -Wall -Wextra -Werror -Wno-volatile-register-var -std=gnu99
 FLUIDSYNTH_CFLAGS ?= $(shell pkg-config --cflags fluidsynth 2>/dev/null)
 FLUIDSYNTH_LIBS ?= $(shell pkg-config --libs fluidsynth 2>/dev/null)
 
-SOURCES = network/rtpmidi/applemidi.c network/rtpmidi/rtpmidi.c network/rtpmidi/session.c network/rtpmidi/peers.c network/rtpmidi/ports.c src/config.c src/config_applemidi.c src/config_midi2.c network/rtpmidi/timing.c network/rtpmidi/clock.c network/rtpmidi/sender.c network/rtpmidi/receiver.c src/routes.c
+COMMON_SOURCES = network/netmidi/ports.c network/netmidi/text.c network/netmidi/queue.c
+RTPMIDI_SOURCES = network/rtpmidi/rtpmidi.c network/rtpmidi/sender.c network/rtpmidi/receiver.c network/rtpmidi/timing.c
+APPLEMIDI_SOURCES = network/applemidi/applemidi.c network/applemidi/session.c network/applemidi/peers.c network/applemidi/clock.c
+COMMON_OBJECTS = $(patsubst network/%.c,build/components/%.o,$(COMMON_SOURCES))
+RTPMIDI_OBJECTS = $(patsubst network/%.c,build/components/%.o,$(RTPMIDI_SOURCES))
+APPLEMIDI_OBJECTS = $(patsubst network/%.c,build/components/%.o,$(APPLEMIDI_SOURCES))
+COMMON_HEADERS = include/netmidi/ports.h include/netmidi/text.h include/netmidi/queue.h include/netmidi/limits.h
+RTPMIDI_HEADERS = $(wildcard include/rtpmidi/*.h)
+APPLEMIDI_HEADERS = $(wildcard include/applemidi/*.h)
+
+SOURCES = $(COMMON_SOURCES) $(RTPMIDI_SOURCES) $(APPLEMIDI_SOURCES) src/config.c src/config_applemidi.c src/config_midi2.c src/routes.c
 PROGRAM_SOURCES = ports/aros/midihub/main.c ports/aros/midihub/camd.c \
                   ports/aros/midihub/transport_applemidi.c \
                   ports/aros/midihub/transport_midi2.c \
@@ -16,17 +26,22 @@ PROGRAM_SOURCES = ports/aros/midihub/main.c ports/aros/midihub/camd.c \
                   ports/aros/midihub/discovery.c \
                   ports/aros/camd_bridge.c \
                   src/netmidi2.c src/ump.c
-HEADERS = include/rtpmidi/applemidi.h include/rtpmidi/rtpmidi.h \
-          include/rtpmidi/session.h include/rtpmidi/peers.h include/rtpmidi/ports.h include/netmidi/config.h include/netmidi/config_applemidi.h include/netmidi/config_midi2.h include/rtpmidi/timing.h include/rtpmidi/clock.h include/rtpmidi/receiver.h \
+HEADERS = include/netmidi/limits.h include/netmidi/ports.h include/netmidi/text.h include/netmidi/queue.h include/applemidi/applemidi.h include/rtpmidi/rtpmidi.h \
+          include/applemidi/session.h include/applemidi/peers.h include/netmidi/config.h include/netmidi/config_applemidi.h include/netmidi/config_midi2.h include/rtpmidi/timing.h include/applemidi/clock.h include/rtpmidi/receiver.h \
           include/rtpmidi/sender.h include/midihub/routes.h \
           ports/aros/midihub/camd.h ports/aros/midihub/network.h \
           ports/aros/midihub/netmidid.h \
           ports/aros/camd_bridge.h
 
-.PHONY: fuzz test check-patches test-network test-synth test-synth-fluid demo m68k synth-m68k clean
+.PHONY: fuzz test test-components check-patches test-network test-synth test-synth-fluid demo m68k synth-m68k clean
 
-test: build/protocol-test build/ble-midi-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test build/camd-identity-file-test build/camd-identity-store-recovery-test build/camd-legacy-identity-set-test build/camd-app-endpoint-test
+test-components:
+	CC='$(CC)' CFLAGS='$(CFLAGS)' python3 tools/check-netmidi-components.py
+
+test: test-components build/config-test build/protocol-test build/applemidi-test build/ble-midi-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test build/camd-identity-file-test build/camd-identity-store-recovery-test build/camd-legacy-identity-set-test build/camd-app-endpoint-test
 	./build/protocol-test
+	./build/applemidi-test
+	./build/config-test
 	./build/ble-midi-test
 	./build/routes-test
 	./build/ump-test
@@ -271,7 +286,7 @@ build/fuzz: tests/fuzz.c $(SOURCES) src/netmidi2.c src/ump.c src/ble_midi.c
 	mkdir -p build
 	$(CC) -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -g -O1 \
 	    -fsanitize=address,undefined -fno-sanitize-recover=undefined \
-	    -Iinclude -o $@ tests/fuzz.c network/rtpmidi/*.c src/netmidi2.c \
+	    -Iinclude -o $@ tests/fuzz.c $(RTPMIDI_SOURCES) $(APPLEMIDI_SOURCES) $(COMMON_SOURCES) src/netmidi2.c \
 	    src/ump.c src/ble_midi.c
 
 fuzz: build/fuzz
@@ -317,9 +332,39 @@ build/MIDIHub-m68k: $(SOURCES) $(HEADERS) $(PROGRAM_SOURCES)
 	mkdir -p build
 	$(M68K_CC) $(CPPFLAGS) $(M68K_CFLAGS) -o $@ $(SOURCES) $(PROGRAM_SOURCES)
 
-build/protocol-test: $(SOURCES) $(HEADERS) tests/protocol.c
+build/config-test: tests/config.c src/config.c src/config_applemidi.c src/config_midi2.c $(wildcard include/netmidi/config*.h)
 	mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $(SOURCES) tests/protocol.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/config.c src/config.c src/config_applemidi.c src/config_midi2.c
+
+build/components/rtpmidi/%.o: network/rtpmidi/%.c $(RTPMIDI_HEADERS) $(COMMON_HEADERS)
+	mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+build/components/applemidi/%.o: network/applemidi/%.c $(APPLEMIDI_HEADERS) $(COMMON_HEADERS)
+	mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+build/components/netmidi/%.o: network/netmidi/%.c $(COMMON_HEADERS)
+	mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+build/components/libnetmidi-common.a: $(COMMON_OBJECTS)
+	$(AR) rcs $@ $^
+
+build/components/librtpmidi.a: $(RTPMIDI_OBJECTS)
+	$(AR) rcs $@ $^
+
+build/components/libapplemidi.a: $(APPLEMIDI_OBJECTS)
+	$(AR) rcs $@ $^
+
+# The payload regressions link without the AppleMIDI control component.
+build/protocol-test: tests/protocol.c $(RTPMIDI_HEADERS) $(COMMON_HEADERS) build/components/librtpmidi.a build/components/libnetmidi-common.a
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/protocol.c build/components/librtpmidi.a build/components/libnetmidi-common.a
+
+build/applemidi-test: tests/applemidi.c $(APPLEMIDI_HEADERS) $(COMMON_HEADERS) build/components/libapplemidi.a build/components/libnetmidi-common.a
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/applemidi.c build/components/libapplemidi.a build/components/libnetmidi-common.a
 
 clean:
 	rm -rf build

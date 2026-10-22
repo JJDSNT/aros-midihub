@@ -1,11 +1,22 @@
 # Pull requests from what there is, in an order that keeps upstream building
 
+## Architectural correction — 2026-10-22
+
+The historical N3 cut below combined AppleMIDI and RTP-MIDI into one
+library. The current scripts export separate `applemidi`, `rtpmidi` and
+`netmidi-common` components. N4-core needs only the common component;
+the AppleMIDI transport needs both protocol libraries. The merged library
+migration must accompany consumer updates in #1679 and its dependents.
+See [the source mapping and validation](applemidi-component-split-2026-10-22.md).
+The dated cut descriptions below record their earlier published layouts.
+
 **2026-10-21 transport refactor:** [netmidid is now a core and
 transports](netmidid-transports-2026-10-21.md). Over N4, N7 adds a new
 `transport_midi2.c` and one line to the core instead of 476 lines in
 `main.c`; each transport also has its own configuration keys and
-state, so N7 only adds files and one-line hooks. The local cuts changed; the published #1679, #1693, #1742 and
-#1743 branches did not, and wait for the owner's decision.
+state, so N7 only adds files and one-line hooks. That refactor was
+published to #1679, #1693, #1742 and #1743 on 2026-10-22; the library
+separation above is a distinct follow-up.
 
 **2026-10-20 publication update:** [#1742 adds NetMIDIStatus and #1743 adds
 AppleMIDI advertisement](network-midi-status-advertisement-2026-10-20.md).

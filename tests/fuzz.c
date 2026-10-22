@@ -9,9 +9,10 @@
  * that gives the same run for the same seed. It is less clever than a tool
  * that watches which code a packet reaches. */
 
-#include "rtpmidi/applemidi.h"
-#include "rtpmidi/clock.h"
-#include "rtpmidi/peers.h"
+#include <netmidi/queue.h>
+#include "applemidi/applemidi.h"
+#include "applemidi/clock.h"
+#include "applemidi/peers.h"
 #include "rtpmidi/receiver.h"
 #include "rtpmidi/rtpmidi.h"
 #include "rtpmidi/sender.h"
@@ -154,7 +155,7 @@ static size_t rtp_seed(uint8_t *wire, size_t capacity)
 static void rtp_take(const uint8_t *data, size_t length)
 {
     static struct rtpmidi_receiver receiver;
-    static struct rtpmidi_event_queue queue;
+    static struct netmidi_event_queue queue;
     static struct rtpmidi_sysex_assembler assembler;
     static uint8_t gathered[RTPMIDI_SYSEX_MAX];
     static int ready;
@@ -171,7 +172,7 @@ static void rtp_take(const uint8_t *data, size_t length)
     size_t i;
 
     if (!ready || rnd() % 64 == 0) {
-        rtpmidi_queue_reset(&queue);
+        netmidi_queue_reset(&queue);
         rtpmidi_receiver_init(&receiver, &quiet, NULL, &queue);
         rtpmidi_sysex_buffer(&assembler, gathered, sizeof(gathered));
         ready = 1;
@@ -232,11 +233,11 @@ static void rtp_take(const uint8_t *data, size_t length)
     }
     /* what recovery queued for later is taken off again */
     {
-        struct rtpmidi_queued_event queued;
+        struct netmidi_queued_event queued;
         guard = 0;
-        while (rtpmidi_queue_pop_due(&queue, UINT64_MAX, &queued) &&
+        while (netmidi_queue_pop_due(&queue, UINT64_MAX, &queued) &&
                ++guard < 1000)
-            rtpmidi_queue_event_release(&queued);
+            netmidi_queue_event_release(&queued);
     }
 }
 

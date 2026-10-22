@@ -1,6 +1,6 @@
-#include <rtpmidi/applemidi.h>
+#include <applemidi/applemidi.h>
 #include <rtpmidi/rtpmidi.h>
-#include <rtpmidi/session.h>
+#include <applemidi/session.h>
 
 #include <stdio.h>
 #include <string.h>

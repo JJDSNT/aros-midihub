@@ -44,16 +44,39 @@ USER_CFLAGS := -Wall -Wextra -Werror -Wno-volatile-register-var
 # with the same markers, since they decide which fields it has.
 USER_CPPFLAGS := -DNETMIDI_APPLEMIDI -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -DNETMIDI_BROWSE
 
+# Protocol components stay separate even in the contrib package. Names
+# are package-scoped so these can coexist with the upstream libraries.
+MIDIHUB_LIBS := arosmidihub arosmidihub-applemidi arosmidihub-rtpmidi arosmidihub-common
+
+#MM linklibs-arosmidihub-common : includes
+%build_linklib mmake=linklibs-arosmidihub-common \
+    libname=arosmidihub-common \
+    files="$(MIDIHUB_ROOT)/network/netmidi/ports \
+           $(MIDIHUB_ROOT)/network/netmidi/text \
+           $(MIDIHUB_ROOT)/network/netmidi/queue"
+
+#MM linklibs-arosmidihub-rtpmidi : includes linklibs-arosmidihub-common
+%build_linklib mmake=linklibs-arosmidihub-rtpmidi \
+    libname=arosmidihub-rtpmidi \
+    files="$(MIDIHUB_ROOT)/network/rtpmidi/rtpmidi \
+           $(MIDIHUB_ROOT)/network/rtpmidi/timing \
+           $(MIDIHUB_ROOT)/network/rtpmidi/sender \
+           $(MIDIHUB_ROOT)/network/rtpmidi/receiver"
+
+#MM linklibs-arosmidihub-applemidi : includes linklibs-arosmidihub-common
+%build_linklib mmake=linklibs-arosmidihub-applemidi \
+    libname=arosmidihub-applemidi \
+    files="$(MIDIHUB_ROOT)/network/applemidi/applemidi \
+           $(MIDIHUB_ROOT)/network/applemidi/session \
+           $(MIDIHUB_ROOT)/network/applemidi/peers \
+           $(MIDIHUB_ROOT)/network/applemidi/clock"
+
+#MM linklibs-arosmidihub : linklibs-arosmidihub-common \
+#MM      linklibs-arosmidihub-rtpmidi linklibs-arosmidihub-applemidi
 %build_linklib mmake=linklibs-arosmidihub \
     libname=arosmidihub \
-    files="$(MIDIHUB_ROOT)/network/rtpmidi/applemidi $(MIDIHUB_ROOT)/network/rtpmidi/rtpmidi \
-           $(MIDIHUB_ROOT)/network/rtpmidi/session $(MIDIHUB_ROOT)/network/rtpmidi/peers \
-           $(MIDIHUB_ROOT)/network/rtpmidi/ports \
-           $(MIDIHUB_ROOT)/src/config $(MIDIHUB_ROOT)/src/config_applemidi \
+    files="$(MIDIHUB_ROOT)/src/config $(MIDIHUB_ROOT)/src/config_applemidi \
            $(MIDIHUB_ROOT)/src/config_midi2 \
-           $(MIDIHUB_ROOT)/network/rtpmidi/timing $(MIDIHUB_ROOT)/network/rtpmidi/sender \
-           $(MIDIHUB_ROOT)/network/rtpmidi/receiver \
-           $(MIDIHUB_ROOT)/network/rtpmidi/clock \
            $(MIDIHUB_ROOT)/src/routes \
            $(MIDIHUB_ROOT)/src/ble_midi \
            $(MIDIHUB_ROOT)/src/ble_peripheral \
@@ -200,7 +223,7 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
            $(MIDIHUB_ROOT)/ports/aros/midihub/discovery" \
     objdir=$(GENDIR)/$(CURDIR)/netmidid \
     cppflags="-DNETMIDI_SERVICE -DNETMIDI_APPLEMIDI -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY -DNETMIDI_BROWSE -I$(MIDIHUB_ROOT)/ports/aros/netmidi" \
-    uselibs=arosmidihub \
+    uselibs="$(MIDIHUB_LIBS)" \
     targetdir=$(AROS_SYSTEM)/Network/Services
 
 # The CAMD drivers the service attaches to, one to a transport, from one
@@ -240,7 +263,7 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
 %build_prog mmake=contrib-aros-midihub-selftest \
     progname=aros-midihub-selftest \
     files="$(MIDIHUB_ROOT)/ports/aros/selftest/selftest" \
-    uselibs=arosmidihub \
+    uselibs="$(MIDIHUB_LIBS)" \
     targetdir=$(MIDIHUB_PACKAGE)/C
 
 %build_prog mmake=contrib-aros-midihub-camdprobe \
@@ -271,7 +294,7 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
 %build_prog mmake=contrib-aros-midihub-router \
     progname=MIDIHubRouter \
     files="$(MIDIHUB_ROOT)/ports/aros/router" \
-    uselibs=arosmidihub \
+    uselibs="$(MIDIHUB_LIBS)" \
     targetdir=$(MIDIHUB_PACKAGE)/C
 
 # Inside the package for now: whether a MIDI Preferences belongs in
@@ -280,7 +303,7 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
     progname=MIDIHub \
     files="$(MIDIHUB_ROOT)/ports/aros/prefs \
            $(MIDIHUB_ROOT)/ports/aros/MIDIHubPrefsClass" \
-    uselibs="arosmidihub mui" \
+    uselibs="$(MIDIHUB_LIBS) mui" \
     targetdir=$(MIDIHUB_PACKAGE)/Prefs
 
 %copy_files_q mmake=contrib-aros-midihub-prefs-icon \
@@ -303,7 +326,7 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
     progname=MIDIHubBLE \
     files="$(MIDIHUB_ROOT)/ports/aros/ble_bridge \
            $(MIDIHUB_ROOT)/ports/aros/camd_bridge" \
-    uselibs=arosmidihub \
+    uselibs="$(MIDIHUB_LIBS)" \
     targetdir=$(MIDIHUB_PACKAGE)/C
 
 # The live synthesizer plays a user-selected SoundFont; the bank is not

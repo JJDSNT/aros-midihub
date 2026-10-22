@@ -1,22 +1,18 @@
 
 include $(SRCDIR)/config/aros.cfg
 
-# RTP-MIDI (RFC 6295) and the AppleMIDI session protocol around it, as a
-# link library. The payload: the command section, the recovery journal, a
-# sender's and a receiver's state, and the timing of delivery. The
-# sessions: invitations, the table of peers, which port of a driver a peer
-# is given, the clock exchange. Portable C that calls nothing of the
-# system: whoever links it owns the sockets and the clock.
+# AppleMIDI control packets, sessions, peers, RS feedback and CK exchange.
+# The transport combines this with the independent RFC 6295 payload library.
 
-FILES := rtpmidi sender receiver timing \
-         applemidi session peers ports clock
+FILES := applemidi session peers clock
 
-USER_INCLUDES := -I$(SRCDIR)/$(CURDIR)/include
+USER_INCLUDES := -I$(SRCDIR)/$(CURDIR)/include \
+    -I$(SRCDIR)/$(CURDIR)/../common/include
 
-#MM linklibs-rtpmidi : includes
+#MM linklibs-applemidi : includes linklibs-netmidi-common
 
-%build_linklib mmake=linklibs-rtpmidi \
-    libname=rtpmidi \
+%build_linklib mmake=linklibs-applemidi \
+    libname=applemidi \
     files="$(FILES)"
 
 %common

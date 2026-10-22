@@ -17,8 +17,9 @@
 #
 # n8 and n9 need bonami.library's headers in the tree, which is M2 and M3
 # of the graph.
-# The tree has to have N1 (the drivers' header) and N3 (the library
-# rtpmidi) for the cut to build, and for n7 also N6 (the library
+# The core needs N1 (the drivers' header) and the neutral common library.
+# AppleMIDI stages also need the separate rtpmidi and applemidi libraries
+# exported by N3, and for n7 also N6 (the library
 # netmidi2): tools/cut-netmidi-drivers.sh, tools/cut-netmidi-library.sh n3
 # and tools/cut-netmidi2-library.sh. To take it out again, remove the
 # service files it wrote; keep the protocol subdirectories.
@@ -47,7 +48,11 @@ test "$stage" = n4-core || test "$stage" = n4 ||
     test "$stage" = n8-applemidi ||
     test -d "$tree/workbench/network/netmidid/netmidi2/include/netmidi2"
 test -f "$tree/workbench/devs/camd/networkmidi2/netmidi_camd.h"
-test -d "$tree/workbench/network/netmidid/rtpmidi/include/rtpmidi"
+test -d "$tree/workbench/network/netmidid/common/include/netmidi"
+if [ "$stage" != n4-core ]; then
+    test -d "$tree/workbench/network/netmidid/rtpmidi/include/rtpmidi"
+    test -d "$tree/workbench/network/netmidid/applemidi/include/applemidi"
+fi
 cut="$tree/workbench/network/netmidid"
 from="$here/ports/aros/midihub"
 # Protocol libraries live below the service now; do not remove them.
