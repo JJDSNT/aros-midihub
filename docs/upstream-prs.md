@@ -19,8 +19,8 @@ checks dos outros sete permanecem documentados pela consulta inicial.
 
 ## Abertos
 
-Atualizado em **2026-10-22, 16:37 UTC**: **31 merged, 5 abertos (4 prontos
-para review e o draft #1801), 1 fechado sem merge**. #1679, #1693, #1695, #1742,
+Atualizado em **2026-10-22, 16:37 UTC**: **31 merged, 7 abertos (5 prontos
+para review e os drafts #1801 e #1803), 1 fechado sem merge**. #1679, #1693, #1695, #1742,
 #1792, #1793 e #1796 foram mergeados hoje.
 
 | PR | Proposta | Situação | O que falta agora |
@@ -30,6 +30,8 @@ para review e o draft #1801), 1 fechado sem merge**. #1679, #1693, #1695, #1742,
 | [#1788](https://github.com/aros-development-team/AROS/pull/1788) | Separar AppleMIDI, RTP-MIDI e helpers | Pronto para review (saiu do draft em 2026-10-22) | Atualizado em `357ee16146` com os consumidores já mergeados (#1679, #1693, #1742, #1793, #1796), cortado com `cut-netmidi-library.sh n3`, `cut-netmidi-service.sh n7` e `cut-netmidi-status.sh`; compila sozinho sobre master. Sugerido antes do #1743, que então precisa de um rebase pequeno. Teste nativo hosted não refeito após a atualização. |
 | [#1789](https://github.com/aros-development-team/AROS/pull/1789) | Expor a porta MIDI pela binding Bluetooth existente | Pronto para review | Revisão e teste com binding real. |
 | [#1801](https://github.com/aros-development-team/AROS/pull/1801) | Peers e Hosts por nome (AppleMIDI e MIDI 2.0) e anúncio `_midi2._udp` | Draft (aberto em 2026-10-22) | Contém #1788 e #1743 (rebased sobre #1788); só `255496d21f` é novo, cortado com `cut-netmidi-service.sh n9`. Hosted: os 6 casos AppleMIDI e os 5 MIDI 2.0 passaram. Rebase quando #1788 e #1743 entrarem. |
+| [#1802](https://github.com/aros-development-team/AROS/pull/1802) | mdnsd: listar os tipos de serviço da rede (RFC 6763 §9) | Pronto para review (aberto em 2026-10-22) | Primeira parte do resto do port do Bonami (mDNS backlog MD25). Fixture de discovery 38/38; hosted com as ferramentas do #1803. |
+| [#1803](https://github.com/aros-development-team/AROS/pull/1803) | Ferramentas `dnssd`, `Nearby`, `Share`, `Handshake` sobre a fila | Draft (aberto em 2026-10-22) | Contém o commit do #1802. Hosted: 11/11 contra o Avahi. `dnssd -q`/`-G` esperam a PR de consultas. |
 
 ## Merged
 
