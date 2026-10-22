@@ -61,7 +61,10 @@ hosted x86-64, with master's mdnsd and bonami.library: the Host Avahi
 advertises is found by its endpoint's name, invited, and the four messages
 and the scale with SysEx cross CAMD both ways. Not upstream: it is the
 browsing cut (N9), after #1743. Inviting again after a session ended
-(#1796) was not run here.
+(#1796): the case `again` of the same runner. The Host goes unanswered
+for four invitations, answers, and ends the session with Bye 8 s later;
+a second Host is invited within its 22 s. Passes at `0f543fb`, fails
+with the reset taken out.
 
 ## P0 — wrong or unsafe as it is
 

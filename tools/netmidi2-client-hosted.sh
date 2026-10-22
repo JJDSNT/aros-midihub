@@ -15,7 +15,16 @@
 # it, invite it, and hand its Note On, Note Off, Control Change and SysEx
 # message to a CAMD program on networkmidi2.in.0; a scale and a SysEx
 # message a second CAMD program plays into networkmidi2.out.0 have to
-# reach the Host.
+# reach the Host. That is the case "messages"; the case "again" is this:
+#
+#   again   The Host is advertised with nothing behind it until AROS has
+#           invited it four times, so that its wait between invitations has
+#           grown; then the Host answers, and 8 s into the session it ends
+#           it with Bye. AROS has to invite again from the first wait, not
+#           after the longest it had reached (#1796): a second Host, there
+#           for the 22 s after the first one left, has to be invited.
+#
+# NETMIDI2_CASES, a list of the cases' names, runs only those.
 # Exit status: 0 when all of it passed.
 set -eu
 
@@ -46,6 +55,17 @@ sudo sysctl -qw net.ipv6.conf.eth1.disable_ipv6=1
 sudo ethtool -K aroshost tx off > /dev/null
 sudo ethtool -K eth1 tx off > /dev/null
 
+cases=${NETMIDI2_CASES:-messages again}
+want() {
+    case " $cases " in *" $1 "*) return 0 ;; esac
+    return 1
+}
+# a cut of the service that looks for nobody by name (N7, N8) is told the
+# Host's address
+discovery=1
+grep -aq 'MIDI 2.0 host "%s"' "$aros/System/Network/Services/netmidid" || discovery=0
+
+prepare() {
 sudo rm -rf "$sys"
 cp -a --reflink=auto "$aros" "$sys"
 db="$sys/System/Network/AROSTCP/db"
@@ -56,10 +76,6 @@ printf 'HOST 192.168.166.2 arosbox.arosnet arosbox\nDOMAIN arosnet 192.168.166.\
 sed -i 's/OPENGUI=.*/OPENGUI=NO/' "$db/general.config"
 # upstream's cut installs the service disabled, as it does sshd
 sed -i 's/^Enabled=.*/Enabled=yes/' "$db/services.d/netmidi"
-# a cut of the service that looks for nobody by name (N7, N8) is told the
-# Host's address
-discovery=1
-grep -aq 'MIDI 2.0 host "%s"' "$aros/System/Network/Services/netmidid" || discovery=0
 # the service's configuration, and what it would print to a file
 if [ $discovery = 1 ]; then
     printf 'midi2_port = 5673\nsession_name = AROS Net MIDI\nmidi2_peer_name = Host Endpoint\n' > "$sys/Prefs/Env-Archive/NetMIDI"
@@ -70,6 +86,11 @@ printf 'SYS:netmidid.log' > "$sys/Prefs/Env-Archive/netmidid.log"
 # a product id made before: it has to be the one used
 printf 'AROS-kept000000000001' > "$sys/Prefs/Env-Archive/NetMIDI.id"
 sudo setcap cap_net_raw,cap_net_admin+ep "$sys/boot/linux/AROSBootstrap"
+}
+
+status=0
+if want messages; then
+prepare
 cat > "$sys/S/netmidi2-run" <<RUNEOF
 FailAt 21
 CD SYS:System/Network/AROSTCP
@@ -107,7 +128,6 @@ wait || true
 cp "$sys/netmidid.log" "$work/hub.log" 2> /dev/null || true
 cp "$sys/camd-in.log" "$sys/camd-out.log" "$work/" 2> /dev/null || true
 
-status=0
 if { [ $discovery = 0 ] ||
      grep -q 'MIDI 2.0 host "Host Endpoint" ("0a1b-host") found at 192.168.166.1 port 5683' "$work/hub.log" 2> /dev/null; } &&
    grep -q 'inviting a MIDI 2.0 host' "$work/hub.log" &&
@@ -138,6 +158,62 @@ if grep -q '^midi from=0 903c64$' "$work/peer.log" 2> /dev/null &&
 else
     echo "FAIL: from CAMD to the Host"
     status=1
+fi
+fi
+
+# again: the session ends with Bye, the Host is still advertised. The host
+# reads the service's log as it is written to know when.
+if want again; then
+prepare
+cat > "$sys/S/netmidi2-run" <<RUNEOF
+FailAt 21
+CD SYS:System/Network/AROSTCP
+Path C S ADD QUIET
+Run >NIL: QUIET AROSTCP
+WaitForPort AROSTCP
+Wait 8
+Wait 150
+Shutdown
+RUNEOF
+printf 'Run >NIL: Execute S:netmidi2-run\n' > "$sys/S/User-Startup"
+log="$sys/netmidid.log"
+# how many lines say it so far; 0 before the log is there
+count() { n=$(grep -c "$1" "$log" 2> /dev/null) || true; echo "${n:-0}"; }
+(
+    [ $discovery = 0 ] ||
+    timeout 200 avahi-publish -s "0a1b-host" _midi2._udp 5683 \
+        "UMPEndpointName=Host Endpoint" "ProductInstanceId=0a1b" \
+        > "$work/publish-again.log" 2>&1 &
+    # nobody answers four invitations: AROS now waits a while for the next
+    for attempt in $(seq 1 150); do
+        [ "$(count 'inviting a MIDI 2.0 host')" -ge 4 ] && break
+        sleep 1
+    done
+    "$peer" 5683 > "$work/again-peer-1.log" 2>&1 &
+    first=$!
+    for attempt in $(seq 1 70); do
+        [ "$(count 'MIDI 2.0 session established')" -ge 1 ] && break
+        sleep 1
+    done
+    sleep 8
+    # sent SIGTERM, the Host ends the session with Bye
+    kill "$first" 2> /dev/null || true
+    wait "$first" 2> /dev/null || true
+    timeout 22 "$peer" 5683 > "$work/again-peer-2.log" 2>&1 || true
+    wait
+) &
+(cd "$sys" && timeout 220 xvfb-run -a boot/linux/AROSBootstrap \
+    > "$work/serial-again.log" 2>&1) || true
+wait || true
+cp "$sys/netmidid.log" "$work/hub-again.log" 2> /dev/null || true
+if grep -q '^established slot=' "$work/again-peer-1.log" 2> /dev/null &&
+   grep -q '^established slot=' "$work/again-peer-2.log" &&
+   [ "$(grep -c 'MIDI 2.0 session established' "$work/hub-again.log")" -ge 2 ]; then
+    echo "ok: after the Host ended the session, the service invited it again from the first wait"
+else
+    echo "FAIL: the Host was not invited again in time (#1796)"
+    status=1
+fi
 fi
 echo "logs: $work"
 exit $status

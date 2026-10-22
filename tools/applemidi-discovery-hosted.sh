@@ -219,7 +219,8 @@ RUNEOF
 printf 'Run >NIL: Execute S:discovery-run\n' > "$sys/S/User-Startup"
 printf 'peer_name = Host Session\n' > "$sys/Prefs/Env-Archive/NetMIDI"
 log="$sys/netmidid.log"
-count() { grep -c "$1" "$log" 2> /dev/null || true; }
+# how many lines say it so far; 0 before the log is there
+count() { n=$(grep -c "$1" "$log" 2> /dev/null) || true; echo "${n:-0}"; }
 
 (
     timeout 200 avahi-publish -s "Host Session" _apple-midi._udp 5104 \
