@@ -1634,6 +1634,35 @@ static const uint8_t first[] = {0xf0, 0x7d, 1, 0xf0};
                           &message_length) == 1);
     assert(message_length == 6 && message[0] == 0xf0 &&
            message[5] == 0xf7);
+
+    /* Realtime/guard packets between segments still advance the stream. */
+    rtpmidi_sysex_reset(&assembler);
+    event.sysex = first;
+    event.sysex_length = sizeof(first);
+    assert(rtpmidi_sysex_feed(&assembler, &event, 65534, &message,
+                             &message_length) == 0);
+    rtpmidi_sysex_packet(&assembler, 65535);
+    rtpmidi_sysex_packet(&assembler, 0);
+    rtpmidi_sysex_packet(&assembler, 1);
+    event.sysex = last;
+    event.sysex_length = sizeof(last);
+    assert(rtpmidi_sysex_feed(&assembler, &event, 1, &message,
+                             &message_length) == 1);
+    assert(message_length == sizeof(complete) &&
+           !memcmp(message, complete, message_length));
+
+    /* A gap in a non-SysEx packet must invalidate the partial message. */
+    event.sysex = first;
+    event.sysex_length = sizeof(first);
+    assert(rtpmidi_sysex_feed(&assembler, &event, 2, &message,
+                             &message_length) == 0);
+    rtpmidi_sysex_packet(&assembler, 4);
+    assert(!assembler.active && !assembler.length);
+    rtpmidi_sysex_packet(&assembler, 5);
+    event.sysex = last;
+    event.sysex_length = sizeof(last);
+    assert(rtpmidi_sysex_feed(&assembler, &event, 5, &message,
+                             &message_length) == -1);
 }
 
 static void session_handshake(void)
@@ -2607,8 +2636,49 @@ static void applemidi_accept_rule(void)
     }
 }
 
+static void applemidi_timeout_ordering(void)
+{
+    struct applemidi_clock clock;
+    struct applemidi_peers peers;
+    struct applemidi_packet out;
+    int peer;
+    const uint32_t start = UINT32_MAX - 20;
+
+    applemidi_clock_init(&clock, 0, 1000);
+    assert(!applemidi_clock_expired(&clock, 994));
+    assert(!applemidi_clock_expired(&clock, 999));
+    assert(!applemidi_clock_expired(&clock, 1000));
+    assert(!applemidi_clock_expired(&clock, 1000 + APPLEMIDI_CLOCK_TIMEOUT - 1));
+    assert(applemidi_clock_expired(&clock, 1000 + APPLEMIDI_CLOCK_TIMEOUT));
+    applemidi_clock_init(&clock, 1, 1000);
+    assert(applemidi_clock_poll(&clock, 1, 1000, &out) == 1);
+    assert(applemidi_clock_poll(&clock, 1, 994, &out) == 0);
+
+    assert(applemidi_peers_init(&peers, 1, NULL, 0) == 0);
+    peer = applemidi_peers_invite(&peers, 0xc0000201, 5004, 123, 1000, &out);
+    assert(peer >= 0);
+    assert(applemidi_peers_expired(&peers, 994, 50) == -1);
+    assert(applemidi_peers_expired(&peers, 999, 50) == -1);
+    assert(applemidi_peers_expired(&peers, 1000, 50) == -1);
+    assert(applemidi_peers_expired(&peers, 1049, 50) == -1);
+    assert(applemidi_peers_expired(&peers, 1050, 50) == peer);
+    applemidi_peers_seen(&peers, peer, 2000);
+    assert(applemidi_peers_expired(&peers, 1994, 50) == -1);
+    assert(applemidi_peers_expired(&peers, 2050, 50) == peer);
+
+    /* Low 32 bits of a 10 kHz clock wrap about every five days. */
+    applemidi_peers_seen(&peers, peer, start);
+    assert(applemidi_peers_expired(&peers, start - 6, 50) == -1);
+    assert(applemidi_peers_expired(&peers, start + 49, 50) == -1);
+    assert(applemidi_peers_expired(&peers, start + 50, 50) == peer);
+    applemidi_peers_seen(&peers, peer, 20);
+    assert(applemidi_peers_expired(&peers, UINT32_MAX - 5, 50) == -1);
+    assert(applemidi_peers_expired(&peers, 70, 50) == peer);
+}
+
 int main(void)
 {
+    applemidi_timeout_ordering();
     apple_exchange();
     apple_sync();
     apple_clock();

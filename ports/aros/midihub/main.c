@@ -462,7 +462,6 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
     const uint8_t *sysex_message;
     size_t sysex_length;
     int action;
-    int sysex_result;
     int system_decoded = 0;
     int16_t sequence_advance = 0;
     uint16_t previous_sequence = 0;
@@ -512,6 +511,7 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
     }
     if (!send_feedback(rt, index, midi.sequence))
         return; /* A duplicate or older packet must not replay MIDI events. */
+    rtpmidi_sysex_packet(&stream->sysex, midi.sequence);
     if (sequence_advance > 1 && midi.journal &&
         rtpmidi_journal_covers_gap(previous_sequence, midi.sequence,
                               journal.checkpoint)) {
@@ -553,7 +553,7 @@ static void receive_rtp(struct runtime *rt, int index, const uint8_t *bytes,
     rtpmidi_reader_init(&reader, &midi);
     while ((action = rtpmidi_reader_next(&reader, &event)) == 1) {
         if (event.sysex) {
-            sysex_result = rtpmidi_sysex_feed(&stream->sysex, &event,
+            int sysex_result = rtpmidi_sysex_feed(&stream->sysex, &event,
                                           midi.sequence,
                                           &sysex_message, &sysex_length);
             if (sysex_result == 1) {

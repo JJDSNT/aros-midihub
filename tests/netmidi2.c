@@ -799,6 +799,85 @@ static void test_table(void)
           !netmidi2_table_session(&table, 0)->host);
 }
 
+static void test_identity_validation(void)
+{
+    static const uint8_t payload[] = {'A', 0, 0, 0, 'B', 0, 0, 0};
+    struct netmidi2_command_packet command = {0};
+    char name[8], product[8];
+
+    command.payload = payload;
+    command.payload_words = 2;
+    command.csd1 = 1;
+    memcpy(name, "keep", 5);
+    memcpy(product, "keep", 5);
+    CHECK(netmidi2_identity(&command, name, 0, product, sizeof(product)) == -1);
+    CHECK(!strcmp(name, "keep") && !strcmp(product, "keep"));
+    CHECK(netmidi2_identity(&command, name, sizeof(name), product, 0) == -1);
+    CHECK(!strcmp(name, "keep") && !strcmp(product, "keep"));
+    CHECK(netmidi2_identity(&command, NULL, 0, product, sizeof(product)) == -1);
+    CHECK(netmidi2_identity(&command, NULL, 1, product, sizeof(product)) == -1);
+    CHECK(!strcmp(product, "keep"));
+    CHECK(netmidi2_identity(&command, name, sizeof(name), NULL, 0) == -1);
+    CHECK(netmidi2_identity(&command, name, sizeof(name), NULL, 1) == -1);
+    CHECK(!strcmp(name, "keep"));
+    command.csd1 = 3;
+    CHECK(netmidi2_identity(&command, name, sizeof(name), product, sizeof(product)) == -1);
+    CHECK(!strcmp(name, "keep") && !strcmp(product, "keep"));
+    command.csd1 = 1;
+    CHECK(netmidi2_identity(&command, name, 1, product, 1) == 0);
+    CHECK(!name[0] && !product[0]);
+    CHECK(netmidi2_identity(&command, name, sizeof(name), product, sizeof(product)) == 0);
+    CHECK(!strcmp(name, "A") && !strcmp(product, "B"));
+}
+
+static void test_accepted_identity(void)
+{
+    static struct netmidi2_session session;
+    struct netmidi2_writer packet, reply;
+    struct netmidi2_command_packet command;
+    uint8_t in[256], out[256];
+    unsigned i;
+
+    for (i = 0; i < 4; ++i) {
+        netmidi2_session_init(&session, 0, "Client", "client-1", NULL, NULL);
+        memcpy(session.peer_name, "previous", 9);
+        memcpy(session.peer_product_id, "previous-id", 12);
+        netmidi2_writer_init(&packet, in, sizeof(in));
+        CHECK(netmidi2_invite_to(&session, 123, 1000, &packet) == 0);
+        netmidi2_writer_init(&packet, in, sizeof(in));
+        if (i == 0)
+            CHECK(netmidi2_add(&packet, NETMIDI2_INVITATION_ACCEPTED, 1, 0, NULL, 0) == 0);
+        else
+            CHECK(netmidi2_add_identity(&packet, NETMIDI2_INVITATION_ACCEPTED, 0,
+                                       i == 1 || i == 3 ? "" : "Host",
+                                       i == 2 || i == 3 ? "" : "host-1") == 0);
+        netmidi2_writer_init(&reply, out, sizeof(out));
+        CHECK(netmidi2_receive_from(&session, 123, in, packet.length, 1001, &reply) == 0);
+        CHECK(session.state == NETMIDI2_INVITING);
+        CHECK(!strcmp(session.peer_name, "previous"));
+        CHECK(!strcmp(session.peer_product_id, "previous-id"));
+        CHECK(netmidi2_parse(out, reply.length, &command, 1) == 1 &&
+              command.code == NETMIDI2_NAK && command.csd1 == NETMIDI2_NAK_MALFORMED);
+        /* Invalid input does not prevent the existing invitation retry. */
+        netmidi2_writer_init(&reply, out, sizeof(out));
+        CHECK(netmidi2_tick(&session, 2000, &reply) == 1);
+        CHECK(netmidi2_parse(out, reply.length, &command, 1) == 1 &&
+              command.code == NETMIDI2_INVITATION);
+        netmidi2_writer_init(&packet, in, sizeof(in));
+        CHECK(netmidi2_add_identity(&packet, NETMIDI2_INVITATION_ACCEPTED, 0,
+                                   "Good Host", "good-id") == 0);
+        netmidi2_writer_init(&reply, out, sizeof(out));
+        CHECK(netmidi2_receive_from(&session, 123, in, packet.length, 2001, &reply) == 0);
+        CHECK(session.state == NETMIDI2_ESTABLISHED);
+        CHECK(!strcmp(session.peer_name, "Good Host") &&
+              !strcmp(session.peer_product_id, "good-id"));
+        session.rx_expected = 7;
+        netmidi2_writer_init(&reply, out, sizeof(out));
+        CHECK(netmidi2_receive_from(&session, 123, in, packet.length, 2002, &reply) == 0);
+        CHECK(session.state == NETMIDI2_ESTABLISHED && session.rx_expected == 7);
+    }
+}
+
 int main(void)
 {
     test_codec();
@@ -806,6 +885,8 @@ int main(void)
     test_against_specification();
     test_table();
     test_appendix_fec();
+    test_identity_validation();
+    test_accepted_identity();
     if (failures) {
         fprintf(stderr, "Network MIDI 2.0: %d failures\n", failures);
         return EXIT_FAILURE;

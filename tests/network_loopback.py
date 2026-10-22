@@ -733,6 +733,51 @@ class ScriptedPeer:
         self.data.close()
 
 
+def run_sysex_interleaving_case(binary):
+    """Realtime and guard packets between SysEx segments are not packet loss."""
+    port = free_port_pair()
+    log = tempfile.TemporaryFile(mode="w+b")
+    process = subprocess.Popen(
+        [binary, str(port)], stdout=log, stderr=subprocess.STDOUT
+    )
+    peer = ScriptedPeer(port, 2, 0x12345678, 0xAAAA0001, b"SysEx")
+    try:
+        peer.connect()
+        packets = (
+            (65534, b"\x04\xf0\x7d\x01\xf0"),
+            (65535, b"\x01\xf8"),       # MIDI Clock, across sequence wrap
+            (65534, b"\x01\xf8"),       # old packet must not reset assembly
+            (0, b"\x03\xf7\x02\xf7"),
+            (1, b"\x04\xf0\x7d\x01\xf0"),
+            (2, b"\x00"),               # guard packet, no MIDI commands
+            (3, b"\x03\xf7\x02\xf7"),
+            (4, b"\x04\xf0\x7d\x01\xf0"),
+            (6, b"\x01\xf8"),           # actual loss must discard assembly
+            (7, b"\x03\xf7\x02\xf7"),
+        )
+        for sequence, payload in packets:
+            header = struct.pack(">BBHII", 0x80, 0xe1, sequence, 100, peer.ssrc)
+            peer.data.sendto(header + payload, ("127.0.0.1", port + 1))
+            time.sleep(0.03)
+        time.sleep(0.1)
+    finally:
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        peer.close()
+        log.seek(0)
+        output = log.read().decode("utf-8", "replace")
+        log.close()
+    assert process.returncode == 0, output
+    assert output.count("SysEx complete bytes=5") == 2, output
+    assert output.count("SysEx segment discarded") == 1, output
+    assert output.count("1 RTP packet(s) lost") == 1, output
+    assert "malformed" not in output, output
+
+
 def run_two_peers_case(binary):
     """Two peers at once: each has its own sequence numbers, its own
     acknowledgements and its own repair, and one leaving leaves the other."""
@@ -1022,6 +1067,7 @@ def main():
     run_case(binary, None, (), use_config=True)
     run_feedback_case(binary)
     run_outgoing_journal_case(binary)
+    run_sysex_interleaving_case(binary)
     run_two_peers_case(binary)
     run_latency_cases(binary)
     run_config_change_case(binary)
