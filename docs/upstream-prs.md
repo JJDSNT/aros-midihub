@@ -19,16 +19,16 @@ checks dos outros sete permanecem documentados pela consulta inicial.
 
 ## Abertos
 
+Atualizado em **2026-10-22, 16:37 UTC**: **31 merged, 4 abertos (3 prontos
+para review e 1 draft), 1 fechado sem merge**. #1679, #1693, #1695, #1742,
+#1792, #1793 e #1796 foram mergeados hoje.
+
 | PR | Proposta | Situação | O que falta agora |
 | --- | --- | --- | --- |
-| [#1679](https://github.com/aros-development-team/AROS/pull/1679) | netmidid + transporte AppleMIDI | Pronto para review | Aguardar revisão. Para adotar #1788, atualizar consumidor e dependentes em conjunto; isso é coordenação nossa, não review recebido. |
-| [#1693](https://github.com/aros-development-team/AROS/pull/1693) | Transporte Network MIDI 2.0 | Draft | Merge de #1679; depois rebase. Bibliotecas #1588/#1692 já estão merged. |
-| [#1695](https://github.com/aros-development-team/AROS/pull/1695) | mDNS browse/resolve por filas | Pronto para review | Revisão do contrato de eventos proposto em #1559. Sem outro PR aberto como pré-requisito. |
-| [#1735](https://github.com/aros-development-team/AROS/pull/1735) | Correções do codec BLE-MIDI | Pronto para review | Aguardar revisão; #1507 já está merged. Independente do serviço de rede. |
-| [#1742](https://github.com/aros-development-team/AROS/pull/1742) | NetMIDIStatus | Draft | Merge de #1679, que fornece o serviço e o ABI do snapshot. |
-| [#1743](https://github.com/aros-development-team/AROS/pull/1743) | Anúncio AppleMIDI via mDNS | Draft | Merge de #1679. Registro mDNS #1591 já merged; não depende de #1693/#1695. |
-| [#1788](https://github.com/aros-development-team/AROS/pull/1788) | Separar AppleMIDI, RTP-MIDI e helpers | Draft | Revisar a divisão e coordenar a migração dos consumidores de #1679 e dependentes. |
-| [#1789](https://github.com/aros-development-team/AROS/pull/1789) | Expor a porta MIDI pela binding Bluetooth existente | Pronto para review | Revisão e teste com binding real. Nome e conexão já usam atributos Bluetooth comuns; não depende do codec #1735 nem de extensão CAMD. |
+| [#1735](https://github.com/aros-development-team/AROS/pull/1735) | Correções do codec BLE-MIDI | Pronto para review; review de Kalamatee respondida | Rebased sobre master em `a7fe624994`: versão 45.2, teste `rom/bluetooth/stack/tests/btmidi`, comentário corrigido. Aguardar nova leitura. |
+| [#1743](https://github.com/aros-development-team/AROS/pull/1743) | Anúncio AppleMIDI via mDNS | Pronto para review; review de Kalamatee respondida | Rebased após #1693 em `5666327816`, com o commit de mdnsd que não anuncia update sem mudança. Validação nativa com captura ainda não refeita (mDNS backlog MD22). Depois do merge: anúncio `_midi2._udp` (NM23). |
+| [#1788](https://github.com/aros-development-team/AROS/pull/1788) | Separar AppleMIDI, RTP-MIDI e helpers | Draft | Remove `APPLEMIDI_WANTED_*` de `peers.h` sem atualizar os consumidores em `netmidid`; a migração tem de cobrir os três usos em `transport_midi2.c`, inclusive o reset após sessão que #1796 acrescentou, e o transporte AppleMIDI. |
+| [#1789](https://github.com/aros-development-team/AROS/pull/1789) | Expor a porta MIDI pela binding Bluetooth existente | Pronto para review | Revisão e teste com binding real. |
 
 ## Merged
 
@@ -37,6 +37,13 @@ histórico, determina esta classificação.
 
 | PR | Mudança | Merge |
 | --- | --- | --- |
+| [#1796](https://github.com/aros-development-team/AROS/pull/1796) | netmidid: address the #1693 review of the MIDI 2.0 transport | 2026-10-22 |
+| [#1693](https://github.com/aros-development-team/AROS/pull/1693) | netmidid: connect Network MIDI 2.0 sessions to CAMD ports | 2026-10-22 |
+| [#1742](https://github.com/aros-development-team/AROS/pull/1742) | netmidid: add NetMIDIStatus session and port counters | 2026-10-22 |
+| [#1793](https://github.com/aros-development-team/AROS/pull/1793) | netmidid: finish service error and drop reporting | 2026-10-22 |
+| [#1792](https://github.com/aros-development-team/AROS/pull/1792) | mdnsd: isolate browse view exhaustion and bound cache scans | 2026-10-22 |
+| [#1679](https://github.com/aros-development-team/AROS/pull/1679) | netmidid: a network MIDI service, with AppleMIDI as its first transport | 2026-10-22 |
+| [#1695](https://github.com/aros-development-team/AROS/pull/1695) | mdnsd, bonami.library: queued DNS-SD browse and resolve with a lent-request wakeup | 2026-10-22 |
 | [#1677](https://github.com/aros-development-team/AROS/pull/1677) | netinfo: defer expunge until the worker finishes | 2026-10-20 |
 | [#1744](https://github.com/aros-development-team/AROS/pull/1744) | camd: ignore icon and debug files during driver scans | 2026-10-20 |
 | [#1734](https://github.com/aros-development-team/AROS/pull/1734) | camd: report oversized SysEx and honour MIDI_ErrFilter | 2026-10-20 |

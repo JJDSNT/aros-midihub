@@ -51,6 +51,11 @@ make m68k                 # cross build with m68k-aros-gcc (M68K_CC=...)
 Test suites are plain C programs whose `main` calls every case; there is no
 per-case selection, so run one suite binary.
 
+`make test` does not build or link `build/MIDIHub` (the netmidid runtime with
+the Linux CAMD stub `ports/aros/midihub/camd.c`): run `make demo
+test-network` too before committing. A function added to `camd.h` and
+`adapters.c` needs its stub in `camd.c`; f933047 broke the link that way.
+
 `CPPFLAGS` sets `-DNETMIDI_APPLEMIDI -DNETMIDI_MIDI2 -DNETMIDI_DISCOVERY
 -DNETMIDI_BROWSE`. All but the first change `struct netmidi_network_config`,
 so everything that shares it must be built with the same set.

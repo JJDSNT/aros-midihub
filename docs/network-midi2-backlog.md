@@ -71,6 +71,7 @@ Nothing open.
 | NM14 | The MIDI 2.0 protocol is never agreed: a Stream Configuration Request for it is answered with MIDI 1.0. | After the upward translation exists (UMP backlog UP11) and a client could use it (decision D1 there). | — |
 | NM15 | IPv4 or IPv6 is the caller's business, and there is no caller. Section 3.1: every device shall have an IPv4 address and should support IPv6 as well. | IPv4 first, then by the answer on IPv6 in AROS issue #1559. | — |
 | NM18 | Big-endian has not been looked at. | Run `netmidi2-test` built for m68k in the cross tree. | It passes there. |
+| NM23 | Upstream advertises only the AppleMIDI session (#1743). The `_midi2._udp` advertisement (`UMPEndpointName` and `ProductInstanceId` in TXT, 60 s TTL; M2-124-UM 4.4, 4.6) is in `transport_midi2.c` here under `NETMIDI_DISCOVERY`, but the cut left it out, and with it `netmidi_discovery_add_text()` and `netmidi_discovery_item()`, which the #1743 review asked to drop while unused. | After #1743 merges: a pull request that brings back the two helpers with the TXT and TTL fields (as in `ports/aros/midihub/discovery.c`) and the registration in `midi2_open()`. | A browse from Avahi or macOS finds the AROS Network MIDI 2.0 Host with its endpoint name. |
 
 ## P3 — polish
 

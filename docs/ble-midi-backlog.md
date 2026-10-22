@@ -85,6 +85,7 @@ it matters. The detail of each entry is in the three parts below.
 | P3 | L14 | A message begun inside an unfinished SysEx costs its whole packet | A device seen doing it |
 | P3 | L16 | Review characteristic security policy and implementation | Design/source work can start now; phone interoperability needs hardware tests |
 | P3 | L17 | Review central-role connection interval policy | Design/source work can start now; actual latency and compatibility need T02 |
+| P3 | L18 | x86-64 warns `-Wcast-function-type` at `camd/btmididriver.c:191` (`(HOOKFUNC)SendToCAMD`); m68k is clean. Present on master, seen 2026-10-22 building #1735 | Nothing; an AROS_UFH hook entry when the driver is next touched |
 
 Entries new on 2026-10-12, with no row in the parts below:
 
