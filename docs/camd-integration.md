@@ -49,9 +49,10 @@ model, and every later transport starts from it:
   opened it, and the stack refuses a call made on another task's base.
 
 CAMD client nodes are for programs: the SoundFont synthesizer, MIDIHub's
-router, tools. MIDIHub's own network and BLE code still uses them from the
-incubation period; that code is to be replaced by the native components,
-not carried upstream as it is.
+router, tools. The obsolete local BLE client class was removed on
+2026-10-22; BLE now uses the native class and driver from merged #1507.
+Remaining application-side network incubation code is to be replaced by
+the native service/driver components, not carried upstream as it is.
 
 ## Target architecture
 
@@ -104,10 +105,17 @@ registry, which already publishes each loaded driver's ports
 (`aros-camd-driver-endpoints.patch`) with file name plus port number as
 path-bound identity.
 
+Bluetooth-owned queries do not wait for this extension: the class can expose
+its device/port association, names and connection state with the current
+CAMD. See the [dependency audit](ble-dependencies-audit-2026-10-22.md).
+Publishing these properties through generic CAMD queries is separate.
+
 This replaces the earlier idea of transports registering endpoints through
-a provider interface of their own. The extension is a prerequisite for
-stable routes to BLE and network peers and for native Network MIDI 2.0, not
-a later refinement. It was put to the upstream maintainer as a question in
+a provider interface of their own. The extension is needed for generic
+device identity/presence through CAMD and a native UMP driver path.
+Class-side port persistence can improve numeric routes before that work,
+but does not create generic CAMD endpoint identity. The extension was put
+to the upstream maintainer as a question in
 PR #1507; a concrete sketch goes into a separate issue if the answer is
 yes, before any code. The portable codecs remain independent of it.
 

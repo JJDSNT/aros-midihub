@@ -1,86 +1,64 @@
-# Plano de decisão para L10
+# Plano de L10: completar a interface da classe BLE
 
-Data: 2026-10-22. Estado: recomendação para decisão; nenhuma nova API ou
-mudança nos PRs foi implementada por este plano.
+Data: 2026-10-22. Corrigido após a discussão com o usuário. Este plano
+substitui a recomendação anterior de adiar a consulta até a extensão CAMD.
+Nenhuma API nova está implementada por esta alteração documental.
 
-## Situação atual
+## Decisão
 
-L11 está concluída: BLE usa a classe e o driver nativos do AROS. Preferences
-reconhece as portas numéricas e as rotas periféricas antigas são migradas
-para a porta 0. A janela da classe já mostra a associação dispositivo/porta.
-Falta validar a integração atual em execução com rádio físico.
+A classe Bluetooth administra a associação entre dispositivo e porta.
+Ela deve oferecer uma consulta pública segura dessa associação,
+independentemente de como Preferences, ferramentas Bluetooth ou uma futura
+integração CAMD a consumam. Não há dependência técnica de B29/B30/B31.
+A implementação deve funcionar com o CAMD atual, preservando seu contrato.
 
-O restante de L10 é mostrar essa associação também no Preferences. A classe
-mantém a informação internamente, mas sua consulta pública não retorna o
-número da porta da binding. É possível acrescentar essa consulta sem mudar
-CAMD. Isso cria, porém, uma API pública Bluetooth a manter, mesmo que o
-Preferences passe depois a consultar metadados genéricos do CAMD.
+L10 tem duas entregas distintas: a capacidade pública da classe e sua
+adoção no Preferences. A primeira não deve aguardar a segunda nem a
+extensão CAMD. A futura publicação genérica de metadados pelo driver é
+outra integração, com contrato próprio; uma consulta Bluetooth não define
+por si só o ABI CAMD nem exige chamadas do driver em contexto inadequado.
 
-L01 é outro problema: a atribuição de uma porta livre a um dispositivo pode
-fazer uma rota salva pelo nome numérico atingir outro dispositivo. Mostrar
-o nome atual na interface não torna a identidade da rota persistente.
+## Sequência
 
-## Alternativas
+1. Definir a consulta usando as convenções públicas de atributos/bindings
+   Bluetooth existentes. Identificar a porta atribuída e como obter os
+   dados de dispositivo, nome e estado sem acesso às estruturas privadas.
+   Distinguir binding existente, conexão de rádio, serviço pronto e porta
+   CAMD aberta; um desses estados não prova os demais.
+2. Especificar cópia de resultados, tamanhos, lifetime das referências,
+   sincronização e resultado de consulta durante remoção/troca da binding.
+   Avaliar a consulta de binding contra uma enumeração copiada das portas;
+   escolher o contrato a partir da segurança e das convenções da classe,
+   não de uma tela específica. Submeter a API proposta ao review normal
+   upstream; isso não é aceite presumido nem bloqueio por outro projeto.
+3. Implementar na classe canônica/branch de follow-up upstream, sem uma
+   segunda implementação neste repositório. Validar consulta sem CAMD
+   aberto, com portas abertas e durante remoção e reutilização da porta.
+   Incluir testes de concorrência/lifetime e builds x64/m68k. A revisão SMP
+   deve cobrir o estado compartilhado usado pela consulta.
+4. Em uma entrega separada, adaptar Preferences para consumir a API e
+   confirmar nomes e estados corretos em execução. Manter funcionamento
+   com classe antiga que não ofereça a consulta. L10 completo inclui essa
+   adoção; a capacidade Bluetooth fica disponível antes dela.
+5. Futuramente integrar os metadados ao CAMD quando B29/B30/B31 tiverem
+   contrato acordado. O fluxo continuará classe/driver → CAMD → aplicativos.
+   Essa etapa não bloqueia as anteriores.
 
-| Caminho | Entrega | Limite e custo futuro |
-|---|---|---|
-| Consulta direta na classe agora | Preferences associa uma binding à porta e mostra o dispositivo | Nova API pública, revisão upstream, sincronização com desconexão e consumidor específico de BLE. Não resolve L01 nem presença genérica no CAMD. A consulta pode continuar útil para ferramentas Bluetooth, mas não deve ser descartada como API temporária. |
-| Metadados CAMD primeiro | Classe/driver fornece identidade, presença e nome; CAMD os publica para os aplicativos | Exige acordo de ABI e implementação ainda não aceitos upstream. Reaproveita o desenho e os protótipos existentes, mas eles ainda não constituem uma API operacional. |
-| Adiar ambas as implementações | Usar a janela da classe e as portas numéricas atuais | Mantém a limitação da interface e o risco L01; não se deve apresentar a rota por porta como identidade estável do dispositivo. |
+## Critérios e limites
 
-## Recomendação e sequência
+A consulta deve informar a associação atual sem ponteiros inválidos, nomes
+antigos após troca de dispositivo nem falsa indicação de conexão por uma
+porta estar aberta. Testar binding sem conexão, reconexão, mudança de nome,
+remoção durante consulta e reutilização da porta por outro dispositivo.
+Separar o que se prova por testes de estado do que exige um rádio real.
 
-Recomendo adiar a implementação da consulta pública exclusiva de BLE.
-Preparar agora o desenho mínimo de metadados CAMD e validar o funcionamento
-atual. Não condicionar L10 ao projeto completo de UMP ou ao registro de
-drivers residentes.
+L01 (atribuição persistente de porta e proteção de rotas) é trabalho
+separado. Consultar a associação atual não cria identidade persistente.
+A atribuição pode ser melhorada na própria classe com política explícita
+para dispositivos esquecidos, endereços mutáveis, esgotamento e reutilização
+segura; identidade genérica de endpoints no CAMD continua sendo B29.
 
-1. **Validar o estado atual.** Executar o pacote em uma árvore AROS atual;
-   conferir Preferences, abertura das portas, troca de bindings, reconexão
-   e a migração das rotas da porta 0. Repetir o teste com Pi/telefone e,
-   para portas 1–15, com um periférico BLE real. Registrar separadamente o
-   comportamento de uma rota quando a porta muda de dispositivo (L01).
-2. **Preparar uma proposta mínima para B29/B30/B31.** Aproveitar o ADR e o
-   rascunho ABI existentes. Delimitar identidade por dispositivo, presença
-   por porta e nome de exibição. O fluxo é classe/driver → CAMD → cliente.
-   Preservar `MidiDeviceData`, nomes de clusters e comportamento de drivers
-   sem extensão. Definir quem copia os dados, referências, concorrência,
-   retirada da binding e notificação/reconsulta. Não tratar nome ou endereço
-   Bluetooth isolado como garantia universal de identidade estável.
-3. **Fechar o escopo de integração antes de implementar publicamente.**
-   Identificar o subconjunto necessário do registro/consulta de endpoints
-   existente nos protótipos. Não supor que basta acrescentar três campos:
-   descoberta do bloco, armazenamento CAMD e consulta pelo cliente precisam
-   funcionar juntos. Separar B32 (UMP/timestamps), drivers residentes e
-   demais ampliações. Levar o desenho à revisão upstream quando autorizado;
-   o aceite de #1507 não equivale ao aceite desta extensão.
-4. **Com o contrato acordado, implementar uma cadeia completa.** Começar
-   pelo fallback de drivers antigos e pelos metadados BLE; depois adaptar
-   Preferences para consultar CAMD. Verificar que a identidade permanece
-   correta quando um dispositivo troca de porta ou outra binding a ocupa.
-   A adoção de identidade nas rotas é trabalho explícito de L01, não efeito
-   automático de exibir o nome em L10.
-5. **Encerrar L10 quando o resultado for demonstrado.** Preferences mostra
-   o dispositivo correto, deixa de associá-lo após remoção, acompanha uma
-   nova binding sem dados antigos e continua funcionando com CAMD/driver
-   sem metadados. Validar cópias/lifetime, concorrência e builds x64/m68k;
-   compilar sozinho não demonstra a correção da interface em execução.
-
-## Quando antecipar a consulta BLE
-
-Reabrir essa decisão se testes de uso mostrarem que a seleção por portas
-numéricas impede o uso necessário com vários dispositivos e a consulta for
-útil independentemente do CAMD, ou se upstream orientar explicitamente esse
-caminho. Nesse caso, propor uma extensão pequena da consulta de bindings,
-com resultado copiado e lifetime definido, e encapsular o consumidor no
-Preferences para uma futura migração. Não acessar estruturas privadas nem
-recriar uma implementação local da classe.
-
-Enquanto não houver resposta sobre os metadados, continuamos a validação
-e os trabalhos independentes dos drivers de rede. Não iniciar uma API BLE
-alternativa apenas porque a proposta CAMD ainda está em discussão.
-
-Referências: [backlog BLE](ble-midi-backlog.md),
-[backlog CAMD](camd-backlog.md),
-[decisão de arquitetura](camd-endpoint-architecture-decision.md) e
-[rascunho ABI](camd-endpoint-abi-draft.md).
+Veja a [auditoria de dependências Bluetooth](ble-dependencies-audit-2026-10-22.md)
+para os demais itens. Referências: [backlog BLE](ble-midi-backlog.md),
+[backlog CAMD](camd-backlog.md) e
+[decisão de arquitetura](camd-endpoint-architecture-decision.md).

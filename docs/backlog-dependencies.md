@@ -10,6 +10,12 @@ the obsolete BLE class, manual bridge and duplicate codec are removed.
 The historical L10 → L11 arrow no longer applies; a device-to-port query
 is a separate enhancement, not a blocker for upstream ownership.
 
+The [Bluetooth dependency audit](ble-dependencies-audit-2026-10-22.md)
+also separates L10 and Bluetooth-side name/state queries from later CAMD
+publication. B31 → L02 and B30 → L03 below apply only to their generic
+CAMD behavior, not to exposing data owned by the Bluetooth class. CAMD
+receive-loss feedback (W02) need not wait for UMP/timestamps in B32.
+
 One graph over the seven lists of work owed:
 [CAMD](camd-backlog.md) (B), [RTP-MIDI](rtp-midi-backlog.md) (R),
 [AppleMIDI](applemidi-backlog.md) (AM), [UMP](ump-backlog.md) (UP),

@@ -97,6 +97,7 @@ significa que uma mudança de API já foi aceita pelos mantenedores.
 | UP16 — dar um local próprio aos fontes UMP | Depende da decisão de propriedade de UP12. | Preparar um plano de movimento e consumidores; não colocar UMP em `network/` apenas porque a rede o utiliza. |
 | NM19 — mover Network MIDI 2.0 de `src/` para `network/netmidi2/` | Nenhum PR aberto é pré-requisito técnico para o movimento no companion repository; evitar misturar a reorganização com a migração #1788 ainda em review. | Pode avançar isoladamente, com atualização de builds/cortes e testes. É organização dos fontes; namespace público já é próprio. |
 | L11 — concluída em 2026-10-22 | Removidos a classe BLE antiga, o programa manual e o codec duplicado. O pacote depende da classe AROS; Preferences usa suas portas e os testes compilam seu codec. | L10 continua apenas para a consulta dispositivo/porta. Builds x64/m68k e testes host passaram; rádio e build integral em upstream limpo ainda precisam de validação. Ver [BLE](ble-midi.md) e [política de fontes](upstream-source-policy.md). |
+| L10 e capacidades próprias da classe Bluetooth | A consulta pública segura dispositivo/porta ainda precisa ser definida e implementada; não depende de B29/B30/B31 nem do consumidor Preferences. | Expor associação, nome e estados distintos na classe; adoção no Preferences e publicação CAMD são entregas separadas. Ver [plano corrigido](ble-l10-plan.md) e [auditoria de dependências BT](ble-dependencies-audit-2026-10-22.md). |
 | B29/B30/B31 — identidade, presença e nomes por porta CAMD | Ainda dependem de desenho/contrato de extensão acordado com mantenedores. O merge da classe #1507 não é aceite automático desse bloco opcional. | Preparar proposta ABI e comportamento com drivers legados; comprovar identidade estável sem alterar nomes de clusters ou `MidiDeviceData` existente. |
 | B32 — UMP e timestamps pela fronteira do driver | Depende da extensão acima e dos gates de especificação/compatibilidade CAMD. | Pode haver desenho e testes preparatórios; não é requisito para o primeiro driver de rede funcional em MIDI 1.0. Essa limitação já foi aceita para a primeira etapa. |
 | Drivers residentes em memória — [issue #1736](https://github.com/aros-development-team/AROS/issues/1736) | Issue aberta, sem comentário de mantenedor. Contrato de retenção da classe, remoção com portas em uso e fallback por arquivo ainda precisa ser definido. | Proposta de desenho antes de implementar nova API pública. #1732/#1744 melhoram o scan por arquivo; não implementam registro residente. Não confundir esta proposta com o bloco de metadados B29–B32. |
@@ -125,9 +126,11 @@ significa que uma mudança de API já foi aceita pelos mantenedores.
 4. Em paralelo, review de #1695 e #1735, ambos independentes do merge de
    #1679. Preparar N9 como dependente da API proposta, sem prometer
    descoberta por nome só porque #1695 mergeou.
-5. Deixar UMP compartilhado, remoção da cópia BLE, driver residente e
-   reorganizações de diretório como propostas próprias. Não torná-las
-   pré-requisitos artificiais do primeiro caminho MIDI 1.0 funcional.
+5. A remoção da cópia BLE (L11) está concluída. A consulta da classe BLE
+   (L10) pode avançar independentemente do CAMD futuro e dos PRs de rede.
+   Deixar UMP compartilhado, driver residente e reorganizações de diretório
+   como propostas próprias, sem torná-las pré-requisitos artificiais do
+   primeiro caminho MIDI 1.0 funcional.
 
 ## Divergências encontradas na documentação
 
