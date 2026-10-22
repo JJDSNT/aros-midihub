@@ -115,7 +115,8 @@ transport uses `rtpmidi_event_queue`, `applemidi_text_length`/`_name_fit`
 and the invitation back-off constants. That code is generic but lives in
 the merged rtpmidi library under AppleMIDI names. It is a link dependency
 only: no transport calls the other's code. Moving it to a neutral place
-would change a merged library and is left as its own proposal.
+would change a merged library and is left as its own proposal: item AM28
+of [the AppleMIDI backlog](applemidi-backlog.md).
 
 ## Validation
 
