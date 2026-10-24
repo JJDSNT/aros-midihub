@@ -14,7 +14,9 @@
 # SSH" (_ssh._tcp, port 22). On AROS:
 #   dnssd -V                           the library's version
 #   dnssd -B _services._dns-sd._udp    both types listed
-#   dnssd -B _http._tcp, -Z _http._tcp the instance, with address, port, text
+#   dnssd -B _http._tcp                the instance, address, port and text
+#   dnssd -Z _http._tcp                valid PTR/TXT records; address and port
+#                                      in a comment (the API has no SRV target)
 #   dnssd -L, Handshake                "Host Web" resolved
 #   dnssd -L of a name nobody has      not resolved, after mdnsd gives up
 #   Nearby (no type), Nearby web       the kinds, and the web server
@@ -69,6 +71,11 @@ C:Nearby >SYS:web.log web PORTS TIME 6
 C:dnssd >SYS:resolve.log -L "Host Web" _http._tcp
 C:Handshake >SYS:handshake.log "Host Web" web TIME 10
 C:dnssd >SYS:missing.log -L "Nobody Here" _http._tcp
+C:dnssd >SYS:bad-port.log -R "Bad Port" _http._tcp . 70000
+C:dnssd >SYS:bad-port-tail.log -R "Bad Port" _http._tcp . 80x
+C:dnssd >SYS:bad-ttl.log -R "Bad TTL" _http._tcp . 8082 -t 60x
+C:dnssd >SYS:bad-txt.log -R "Bad TXT" _http._tcp . 8082 "k=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+C:Share >SYS:bad-share-port.log "Bad Share" web 0
 Run >SYS:share.log C:Share AmigaShare web 8081 "path=/x" "note=a b"
 Run >SYS:register.log C:dnssd -R "AROS Printer" _ipp._tcp . 631 rp=printer
 Wait 14
@@ -85,6 +92,11 @@ Shutdown
 RUNEOF
 printf 'Run >NIL: Execute S:tools-run\n' > "$sys/S/User-Startup"
 
+# Keep the packets when Avahi sees a PTR but cannot resolve the instance
+# (mdns backlog MD20); that failure cannot be diagnosed from either side's
+# application log alone.
+(sudo timeout 90 tcpdump -i aroshost -n -l -v udp port 5353 \
+    > "$work/mdns-capture.txt" 2> /dev/null || true) &
 (
     for attempt in $(seq 1 60); do
         ping -c 1 -W 1 192.168.166.2 > /dev/null 2>&1 && break
@@ -102,7 +114,8 @@ printf 'Run >NIL: Execute S:tools-run\n' > "$sys/S/User-Startup"
     > "$work/serial.log" 2>&1) || true
 wait || true
 for log in version types browse zone kinds web resolve handshake missing \
-           share register; do
+           bad-port bad-port-tail bad-ttl bad-txt bad-share-port share \
+           register; do
     cp "$sys/$log.log" "$work/" 2> /dev/null || true
 done
 
@@ -121,8 +134,8 @@ check "dnssd -B _services._dns-sd._udp listed _http._tcp and _ssh._tcp" \
     "grep -q '^TYPE  *_http._tcp' '$work/types.log' && grep -q '^TYPE  *_ssh._tcp' '$work/types.log'"
 check "dnssd -B _http._tcp saw Host Web at 192.168.166.1 port 8080 with path=/" \
     "grep '^ADD  *Host Web  *_http._tcp' '$work/browse.log' | grep -q '192.168.166.1  *8080  *path=/'"
-check "dnssd -Z gave the PTR, SRV, A and TXT lines" \
-    "grep -qP '^_http._tcp.local.\\tPTR\\tHost Web._http._tcp.local.' '$work/zone.log' && grep -qP '^Host Web._http._tcp.local.\\tSRV\\t0 0 8080 ' '$work/zone.log' && grep -qP '^Host Web._http._tcp.local.\\tA\\t192.168.166.1' '$work/zone.log' && grep -qP '^Host Web._http._tcp.local.\\tTXT\\tpath=/' '$work/zone.log'"
+check "dnssd -Z gave valid PTR/TXT lines without inventing an SRV target or A owner" \
+    "grep -qP '^_http._tcp.local.\\tPTR\\tHost Web._http._tcp.local.' '$work/zone.log' && grep -qP '^Host Web._http._tcp.local.\\tTXT\\tpath=/' '$work/zone.log' && grep -q '^; Host Web._http._tcp.local.: port 8080, address 192.168.166.1; SRV target unavailable$' '$work/zone.log' && ! grep -qP '\\t(SRV|A)\\t' '$work/zone.log'"
 check "Nearby with no type listed the web server and SSH kinds" \
     "grep -q 'Web server (HTTP)' '$work/kinds.log' && grep -q 'SSH login' '$work/kinds.log'"
 check "Nearby web PORTS showed Host Web, port 8080 and its info" \
@@ -133,6 +146,16 @@ check "Handshake reached Host Web" \
     "grep -q 'IP:    192.168.166.1' '$work/handshake.log' && grep -q 'Port:  8080' '$work/handshake.log'"
 check "dnssd -L of an absent name said it was not resolved" \
     "grep -q '^Not resolved' '$work/missing.log'"
+check "dnssd rejected an overflowing port instead of wrapping it" \
+    "grep -q '^dnssd: port must be 1-65535' '$work/bad-port.log'"
+check "dnssd rejected trailing characters in a port" \
+    "grep -q '^dnssd: port must be 1-65535' '$work/bad-port-tail.log'"
+check "dnssd rejected trailing characters in a TTL" \
+    "grep -q '^dnssd: TTL must be 1-4500 seconds' '$work/bad-ttl.log'"
+check "dnssd rejected a TXT record instead of silently truncating it" \
+    "grep -q '^dnssd: TXT record is too long' '$work/bad-txt.log'"
+check "Share rejected port zero before registration" \
+    "grep -q '^Share: PORT must be 1-65535' '$work/bad-share-port.log'"
 check "the host's Avahi saw Share's AmigaShare with its text, a space kept" \
     "grep '^=;aroshost;IPv4;AmigaShare;_http._tcp;' '$work/avahi-http.log' | grep -q '192.168.166.2;8081;.*\"note=a b\"' && grep '^=;aroshost;IPv4;AmigaShare;_http._tcp;' '$work/avahi-http.log' | grep -q '\"path=/x\"'"
 check "the host's Avahi saw dnssd -R's AROS Printer" \

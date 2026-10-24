@@ -33,17 +33,14 @@ The AROS maintainer moved the contribution process into [PULL_REQUESTS.md](https
 
 ## Abertos
 
-Atualizado em **2026-10-24**: **36 merged, 2 abertos (1 pronto para review e
-o draft histórico #1803), 1 fechado sem merge**. #1789 e #1802 também foram
-mergeados. #1801 foi reconstruído como um único commit sobre master,
-revalidado e retirado de draft. O merge de #1802 removeu a dependência de
-#1803, mas sua branch ainda precisa receber o mesmo tratamento antes de sair
-de draft.
+Atualizado em **2026-10-24**: **37 merged, 1 aberto (pronto para review),
+nenhum draft e 1 fechado sem merge**. #1801 foi mergeado. #1803 foi
+reconstruído como um único commit sobre master, auditado, revalidado e
+retirado de draft.
 
 | PR | Proposta | Situação | O que falta agora |
 | --- | --- | --- | --- |
-| [#1801](https://github.com/aros-development-team/AROS/pull/1801) | Peers e Hosts por nome e anúncio `_midi2._udp` | Pronto para review; `1ff702b743` | Um commit diretamente sobre master. Builds x86-64/m68k, 24 fixtures de browse, 27 de anúncio, `make test`, cppcheck, integração hosted AppleMIDI/MIDI 2.0 e os quatro checks do PR passam. Aguardar review. |
-| [#1803](https://github.com/aros-development-team/AROS/pull/1803) | Ferramentas `dnssd`, `Nearby`, `Share`, `Handshake` sobre a fila | Draft histórico; dependência já merged | #1802 foi mergeado. Reconstruir somente o commit das ferramentas sobre master, revisar o encaixe com a implementação final de #1802, validar e então retirar de draft. |
+| [#1803](https://github.com/aros-development-team/AROS/pull/1803) | Ferramentas `dnssd`, `Nearby`, `Share`, `Handshake` sobre a fila | Pronto para review; `d758d02a22` | Um commit diretamente sobre master. Builds x86-64/m68k, cppcheck, 16 checks hosted e os quatro checks do PR passam. A auditoria eliminou buffer fixo de saída, parsing numérico parcial/overflow, truncamento TXT silencioso e registros SRV/A sintéticos em `-Z`. Aguardar review. |
 
 ## Merged
 
@@ -52,6 +49,7 @@ histórico, determina esta classificação.
 
 | PR | Mudança | Merge |
 | --- | --- | --- |
+| [#1801](https://github.com/aros-development-team/AROS/pull/1801) | Peers e Hosts por nome e anúncio `_midi2._udp` | 2026-10-24 |
 | [#1802](https://github.com/aros-development-team/AROS/pull/1802) | mdnsd: listar os tipos de serviço da rede (RFC 6763 §9) | 2026-10-24 |
 | [#1789](https://github.com/aros-development-team/AROS/pull/1789) | btmidi.class: report MIDI port exhaustion | 2026-10-24 |
 | [#1788](https://github.com/aros-development-team/AROS/pull/1788) | netmidi: separate AppleMIDI control from the RTP-MIDI payload | 2026-10-24 |

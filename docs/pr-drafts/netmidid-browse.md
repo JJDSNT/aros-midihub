@@ -1,4 +1,4 @@
-AROS PR: [#1801](https://github.com/aros-development-team/AROS/pull/1801), ready for review, branch `review/netmidid-browse` (prepared in `build/ready-netmidid-browse-review`), opened 2026-10-22.
+AROS PR: [#1801](https://github.com/aros-development-team/AROS/pull/1801), merged 2026-10-24 as `14b571dc20`, branch `review/netmidid-browse` (prepared in `build/ready-netmidid-browse-review`), opened 2026-10-22.
 
 With the queued DNS-SD discovery that bonami.library 41.2 has (#1695),
 netmidid can find what its configuration names wherever it is on the link,
