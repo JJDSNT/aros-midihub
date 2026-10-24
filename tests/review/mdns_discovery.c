@@ -468,7 +468,7 @@ static void feed_service_type(const char *type, ULONG ttl)
 }
 static void enumerate_types(void)
 {
-    APTR types, browse; struct MDNSDiscoveryEvent e;
+    APTR types, second, browse; struct MDNSDiscoveryEvent e;
 
     init();
     types = begin_type(0, NULL, "_services._dns-sd._udp");
@@ -477,10 +477,19 @@ static void enumerate_types(void)
     CHECK(read_event(types, &e) == MDNS_OK && e.de_Code == MEVENT_ADD);
     CHECK(!strcmp(e.de_Type, "_http._tcp") && e.de_Name[0] == 0);
     CHECK(e.de_Address == 0 && e.de_Port == 0 && e.de_TXTLength == 0);
+    /* Type PTR targets are types, not instances: never ask for SRV/TXT. */
+    CHECK(srv_questions == 0 && txt_questions == 0);
     feed_service_type("_http._tcp.local", 120);
     CHECK(read_event(types, &e) == MDNSERR_NOTREADY);
     feed_service_type("_midi2._udp.local", 120);
     CHECK(read_event(types, &e) == MDNS_OK && !strcmp(e.de_Type, "_midi2._udp"));
+    /* A later enumeration browse immediately receives the cached types. */
+    second = begin_type(0, NULL, "_services._dns-sd._udp");
+    CHECK(read_event(second, &e) == MDNS_OK && e.de_Code == MEVENT_ADD);
+    CHECK(!strcmp(e.de_Type, "_http._tcp"));
+    CHECK(read_event(second, &e) == MDNS_OK && e.de_Code == MEVENT_ADD);
+    CHECK(!strcmp(e.de_Type, "_midi2._udp"));
+    CHECK(read_event(second, &e) == MDNSERR_NOTREADY);
     /* not types: an instance, a name without _tcp/_udp */
     feed_service_type("Session._midi2._udp.local", 120);
     feed_service_type("printer.local", 120);

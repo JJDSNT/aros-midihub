@@ -6,14 +6,15 @@ codec passes ASan/UBSan, but radio/lifecycle evidence is still missing.
 Reserved-header-bit acceptance is receiver tolerance, not an explicit
 RP-052 requirement. C0 is now upstream through merged #1585.
 
-**2026-10-22 update:** #1507 is merged and **L11 is complete**. The old
+**2026-10-24 update:** #1507 and the codec correction #1735 are merged, and
+**L11 is complete**. The old
 class, manual bridge and duplicate codec have been removed. Host tests and
-fuzz now compile the actual AROS class codec, including active #1735.
+fuzz now compile the canonical AROS class codec.
 The class and embedded driver build for x64 and m68k; radio/runtime checks
 remain open. The dated notes below retain the earlier audit history.
 
-**Scope:** the native AROS `btmidi.class`, the active codec follow-up
-#1735 and MIDIHub's consumers of the driver. This file was
+**Scope:** the native AROS `btmidi.class`, the merged codec follow-up #1735
+and MIDIHub's consumers of the driver. This file was
 `ble-midi-driver-limitations.md`, written on 2026-10-11 after the class was
 rewritten from a CAMD client into a CAMD driver; the entries keep their
 numbers (L lost against the client version, W weak in the code sent, T not
@@ -23,15 +24,18 @@ Background: [BLE MIDI](ble-midi.md), [the review](upstream-prs.md),
 [what the driver model cannot say](camd-integration.md), and the amendment to
 [the architecture decision](camd-endpoint-architecture-decision.md).
 
-**Dependency correction, 2026-10-22:**
+**Dependency correction, updated 2026-10-24:**
 [L10 plan](ble-l10-plan.md) and [Bluetooth dependency audit](ble-dependencies-audit-2026-10-22.md).
-The class must expose its own device/port association independently of
-consumers. Its public query does not wait for CAMD metadata extensions.
-Device names and connection state are already public Bluetooth attributes
-(`BDA_Name`, `BDA_IsConnected` via `BCBA_Device`). The confirmed missing
-attribute is the binding's MIDI port, now proposed as `BCBA_MidiPort` in
-[#1789](https://github.com/aros-development-team/AROS/pull/1789). Generic
-publication through CAMD is separate.
+The class stores its device/port association internally. That fact did not
+establish a public Bluetooth application interface. Device names and
+connection state remain Bluetooth attributes (`BDA_Name`, `BDA_IsConnected`
+via `BCBA_Device`), while the confirmed MIDI-facing gap is the device behind
+a numbered CAMD port. The review of
+[#1789](https://github.com/aros-development-team/AROS/pull/1789) rejected
+`BCBA_MidiPort`: profile-specific tags are not the generic class pattern, and
+a MIDI application must not use Bluetooth's internal service traversal.
+The PR now contains only the accepted L06 exhaustion warning. L10 needs a
+concrete CAMD consumer and interface proposal before implementation.
 The historical notes below describe older limitations, not new blockers.
 The dependency audit is not an implementation specification: items without
 sufficient source/contract research remain investigations, even when no
@@ -41,8 +45,8 @@ Current readiness of the next Bluetooth items:
 
 | Item | Readiness | Evidence still required before implementation |
 |---|---|---|
-| L10 class attribute / L06 warning | Implemented in #1789, under review | A real service binding, removal/reconnection and a full 15-device pool |
-| L10 Preferences consumer / L02 mapping | Investigation before implementation | Confirm the Preferences device-lock/enumeration path, fallback with the merged class and UI behavior before coding |
+| L06 warning | Implemented in the narrowed #1789, under review | A real full 15-device pool |
+| L10 / L02 device-to-port mapping | Investigation before implementation | Identify the concrete CAMD consumer, audit public CAMD naming/identity interfaces, then define fallback and UI behavior |
 | L03 additional readiness state | Investigation | Show a state distinct from existing binding and `BDA_IsConnected`, and identify its owner and transition rules |
 | L01 persistent assignment | Investigation | Examine class configuration, address/privacy behavior, forgetting, exhaustion and safe port reuse before selecting storage or identity |
 | TX failures | Investigation | Classify writer return values as pre-acceptance refusal or uncertain delivery, then define accounting/retry policy |
@@ -63,8 +67,8 @@ it matters. The detail of each entry is in the three parts below.
 |---|---|---|---|
 | P0 | T01 | The driver version has never run on a radio; the PR promises the test | A Pi 3 and a phone |
 | P1 | L01 | A device's port number depends on which other devices are bound | Investigation of class configuration, privacy/identity, forgetting, exhaustion and reuse; generic CAMD identity is separate B29 work |
-| P1 | L06 | Port-exhaustion warning implemented in #1789 | Upstream review; real full-pool warning not exercised with devices |
-| P1 | L10 | Class binding-port attribute proposed in #1789; consumer adoption still pending | Upstream review and real-binding validation; no CAMD-extension dependency |
+| P1 | L06 | Port-exhaustion warning is the sole remaining change in #1789 | Upstream rereview; real full-pool warning not exercised with devices |
+| P1 | L10 | A CAMD program cannot identify the device behind `btmidi.N`; the Bluetooth-tag design was rejected | Concrete consumer, audit of public CAMD interfaces, accepted minimum design, then real binding/consumer validation |
 | P1 | T04 | Never run with an unpatched `camd.library`; the network drivers, built the same way, are not found by it without the driver-scan fix ([pull requests](upstream-pr-graph.md), C0) | Nothing: a clean tree exists now |
 | P1 | T06 | A port that outlives its binding was read, never run | Nothing |
 | P1 | T03 | The decoder has run on the host only | T01 |
@@ -187,10 +191,10 @@ device. These are things it did that the driver version does not.
 | L03 | **Presence in the CAMD graph.** A client's clusters had a participant only while its task lived, which is what `MIDI_PartSignal`, `MidiLinkConnected()` and the version 42 ClusterWatch report. A driver's ports are attached to all 16 pairs of clusters from the moment it is loaded. | MIDIHub's router cannot hold a BLE route "waiting" and wake it when the device returns: the port always looks present. All 16 endpoints are published as available. | Existing Bluetooth binding and `BDA_IsConnected` data can be queried. First demonstrate whether another class-side readiness state is missing. Reflecting presence in the CAMD graph needs B30 or an agreed CAMD lifecycle change. | investigation; extension for CAMD behavior | read; the 16 endpoints were seen in a run |
 | L04 | **Linking before the device exists.** A program could link to a cluster by name and wait for the class to join it. Now `OpenPort()` fails for a port no device is bound to, and so does the link. | A program has to try again, and nothing tells it when. | Either accept an open on an unbound port and attach the binding when it comes (the adapter already survives either side going first), or presence through the extension. The maintainer asked for the failure, so the first needs his agreement. | class, with upstream's agreement | run: a link to `btmidi.out.5` returned NULL |
 | L05 | **Available as soon as the class starts.** An unpatched `camd.library` scans `DEVS:Midi` only when it is loaded. | On a first installation with CAMD already in memory, BLE MIDI appears only after CAMD is reloaded, in practice a reboot. With this repository's rescan patch nothing changes for `btmidi`, because it does not call `RethinkCAMD()`: it may not open `camd.library`. | A trigger for the rescan that does not make the class open CAMD: CAMD watching `DEVS:Midi` with a DOS notification, or a rescan when a client names a driver CAMD does not know. See W03. | camd | read |
-| L06 | **More than 15 devices.** `NPorts` is 16; a 16th bound device gets no port. | Before #1789 the binding was refused without a word to the user. | #1789 adds a Bluetooth error-log warning. A class-window message and a larger pool are separate proposals requiring demonstrated need. | class | source implemented; full pool not run |
+| L06 | **More than 15 devices.** `NPorts` is 16; a 16th bound device gets no port. | Before #1789 the binding was refused without a word to the user. | The narrowed #1789 adds a Bluetooth error-log warning and bumps the class to 45.3. A class-window message and a larger pool are separate proposals requiring demonstrated need. | class | source implemented; x64/m68k builds and 2793/2793 host checks pass; full pool not run |
 | L07 | **Several centrals sending SysEx at once.** Each central had its own reassembly, up to four. CAMD parses one byte stream per port, so only one SysEx at a time reaches it: a second is left out and counted as an error, and a message from another central that interrupts a SysEx ends it. | Rare: two phones dumping patches to AROS at the same moment. Channel messages from several centrals still interleave correctly. | Reassemble a second central's SysEx in the class and feed it when the first has ended. That brings a SysEx buffer back, which the review asked to drop, so only if it turns out to matter. | class | read |
 | L09 | **No disk needed.** Historically the class wrote `DEVS:Midi/btmidi`, and CAMD retained loaded drivers. | A read-only image may fail to gain BLE MIDI dynamically; replacement/unload behavior is a separate concern. | Revalidate the current merged scan/lifecycle and the class's matching-driver path on a read-only image. If preinstallation solves the observed case, document/package it; define resident registration or unload only from separately demonstrated needs. | investigation in build and CAMD | historical source read; current runtime not revalidated |
-| L10 | **MIDIHub.prefs knows the ports.** It read the peripheral role's names from the class's configuration chunk and derived a bound device's from its name. There is no chunk now. | Numeric ports are recognised and old peripheral routes migrate. The device behind a port remains unknown to Preferences. | #1789 proposes `BCBA_MidiPort` alongside existing `BCBA_Device`; Preferences adoption and legacy fallback remain a separate follow-up. | class proposal, then midihub | getter fixture and legacy fallback run; real binding/UI not exercised |
+| L10 | **MIDIHub.prefs knows the ports.** It read the peripheral role's names from the class's configuration chunk and derived a bound device's from its name. There is no chunk now. | Numeric ports are recognised and old peripheral routes migrate. The device behind a port remains unknown to Preferences. | Start from the concrete Preferences/CAMD use case and audit public CAMD port naming/identity. `BCBA_MidiPort` was rejected because it exposed a profile-specific tag through internal Bluetooth plumbing. Define the minimum generic contract and fallback before coding. | investigation in CAMD/consumer | gap demonstrated; proposed interface rejected; no implementation-ready design |
 
 What the driver version gained, so the balance is on record: BLE MIDI is a
 device to anything that enumerates CAMD drivers; CAMD does the parsing; the
@@ -223,9 +227,10 @@ Not losses: things the driver version does that should be better.
 
 ## Suggested order
 
-1. Review #1789: the missing binding port is exposed through the existing
-   attribute mechanism. Reuse existing device name/connection attributes.
-   Validate real bindings and adopt the result in Preferences separately.
+1. Finish the narrowed #1789 as L06 only. For L10, document the concrete
+   Preferences/CAMD operation, inspect the public CAMD interfaces and propose
+   the minimum generic naming/identity contract; do not restore the rejected
+   Bluetooth tag or private fixture.
 2. In parallel, investigate the TX failure policy from the October 17
    review and W05's shared-state/lifetime safety. Neither needs B29–B32.
 3. Investigate class-side port assignment (L01): configuration, device

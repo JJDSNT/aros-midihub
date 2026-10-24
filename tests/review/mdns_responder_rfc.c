@@ -12,6 +12,7 @@
 
 static ULONG ticks = 5000;
 static unsigned packets, answer_records, announcements, zero_host_addresses;
+static unsigned srv_questions, txt_questions;
 static struct Task owner;
 static ULONG live_task_id = 1;
 
@@ -92,6 +93,10 @@ BOOL mdnsNetSendOn(struct MDNSDaemon *md, LONG index, const UBYTE *packet, LONG 
         struct MDNSQuestion question;
         if (mdnsParseQuestion(packet, length, offset, &question, &consumed))
             abort();
+        if (question.qtype == DNS_TYPE_SRV)
+            ++srv_questions;
+        else if (question.qtype == DNS_TYPE_TXT)
+            ++txt_questions;
         offset += consumed;
     }
     for (i = 0; i < answers; ++i) {
@@ -190,6 +195,7 @@ static struct MDNSRegisteredService *setup(struct MDNSDaemon *md, ULONG ttl)
     service->rs_State = MDNS_NAME_ANNOUNCED;
     service->rs_Step = MDNS_ANNOUNCE_COUNT;
     packets = answer_records = announcements = zero_host_addresses = 0;
+    srv_questions = txt_questions = 0;
     return service;
 }
 static void receive(struct MDNSDaemon *md, const UBYTE *packet, size_t length)

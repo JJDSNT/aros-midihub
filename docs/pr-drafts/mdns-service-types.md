@@ -25,8 +25,11 @@ Validation:
   daemon's packet path and IPC dispatch. A new case covers: two types
   announced give two `MEVENT_ADD`; a repeat gives nothing; an instance and a
   non-type PTR are ignored; an instance browse alongside is unaffected; a
-  goodbye gives `MEVENT_REMOVE`; a resolve of the name is refused. All 38
-  discovery cases pass under ASan/UBSan.
+  goodbye gives `MEVENT_REMOVE`; a resolve of the name is refused. After the
+  2026-10-24 review it also proves that type targets cause no SRV/TXT queries
+  and that a second browse receives the cached types immediately. The updated
+  case fails on `fbe98e714b`; all 38 discovery cases pass under ASan/UBSan on
+  `263a854570`.
 - mdnsd builds and links for hosted x86-64 and amiga-m68k.
 - Hosted x86-64 AROS against the host's Avahi, with the command-line tools
   of the follow-up pull request: `dnssd -B _services._dns-sd._udp` lists the

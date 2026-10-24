@@ -1,5 +1,10 @@
 # PRs, dependências e propostas — 2026-10-22
 
+> **Superado em 2026-10-24.** Use o [registro vivo de PRs](upstream-prs.md).
+> #1735, #1743 e #1788 estão merged. O review rejeitou a interface
+> `BCBA_MidiPort` de #1789, que agora contém somente o aviso de esgotamento de
+> portas. As tabelas abaixo preservam o estado conhecido em 2026-10-22.
+
 Consulta inicial ao GitHub: **2026-10-22, 07:51 UTC / 04:51 BRT**.
 Escopo: PRs de `JJDSNT` contra `aros-development-team/AROS` e as propostas
 relacionadas ao driver MIDI de rede e à separação dos componentes.

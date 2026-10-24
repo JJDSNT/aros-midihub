@@ -4,10 +4,10 @@
 [verified PR and proposal dependency register](upstream-status-2026-10-22.md).
 Its initial snapshot records seven open PRs, merged prerequisites, the
 proposed #1788 consumer migration and what still blocks the unsubmitted
-backlog work. A later update records #1789 as the eighth open PR: it proposes
-only the missing Bluetooth binding-port attribute after examining the
-existing interfaces. It does not turn the remaining Bluetooth rows into
-implementation-ready work.
+backlog work. A later update records #1789. Its proposed Bluetooth
+binding-port attribute was rejected in review on 2026-10-22; the PR was
+narrowed on 2026-10-24 to the accepted port-exhaustion warning. L10 is again
+an interface investigation, not implementation-ready work.
 The graph below is the historical 2026-10-12 snapshot; several PRs shown
 as prerequisites there have since merged. L11 was completed on 2026-10-22:
 the obsolete BLE class, manual bridge and duplicate codec are removed.
@@ -15,10 +15,10 @@ The historical L10 → L11 arrow no longer applies; a device-to-port query
 is a separate enhancement, not a blocker for upstream ownership.
 
 The [Bluetooth dependency audit](ble-dependencies-audit-2026-10-22.md)
-also separates L10 and Bluetooth-side name/state queries from later CAMD
-publication. Name and connection state already exist as public device
-attributes; #1789 proposes the missing binding-port association. B31 → L02
-and B30 → L03 below apply only to their generic CAMD behavior. CAMD
+also records why the earlier Bluetooth-side L10 design was rejected. Name and
+connection state exist as Bluetooth device attributes, but a MIDI application
+must not traverse internal binding plumbing to map them to CAMD ports. B31 →
+L02 and B30 → L03 below apply to their generic CAMD behavior. CAMD
 receive-loss feedback (W02) need not wait for UMP/timestamps in B32.
 
 One graph over the seven lists of work owed:
