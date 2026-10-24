@@ -14,13 +14,31 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--aros-tree", type=Path, default=Path.home() / "AROS-net")
     parser.add_argument("--revision", default="24f476235e7ed6babaad84a44e90242948a029f9")
-    parser.add_argument("--discovery", action="store_true")
+    parser.add_argument("--worktree", action="store_true",
+                        help="compile the current AROS worktree, including uncommitted files")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--discovery", action="store_true")
+    mode.add_argument("--query", action="store_true")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parent.parent
-    revision = subprocess.check_output(
-        ["git", "-C", str(args.aros_tree), "rev-parse", "--verify", args.revision + "^{commit}"],
+    head = subprocess.check_output(
+        ["git", "-C", str(args.aros_tree), "rev-parse", "HEAD"],
         text=True,
     ).strip()
+    if args.worktree:
+        revision = head + "-worktree"
+
+        def source(name):
+            return (args.aros_tree / "workbench/network/mdns" / name).read_bytes()
+    else:
+        revision = subprocess.check_output(
+            ["git", "-C", str(args.aros_tree), "rev-parse", "--verify",
+             args.revision + "^{commit}"], text=True).strip()
+
+        def source(name):
+            return subprocess.check_output(
+                ["git", "-C", str(args.aros_tree), "show",
+                 revision + ":workbench/network/mdns/" + name])
     output = repo / "build/mdns-responder-review" / revision
     shim = output / "shim"
     shim.mkdir(parents=True, exist_ok=True)
@@ -31,20 +49,20 @@ def main():
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text('#include "mdns_exec_mock.h"\n')
     sources = ("mdns_dns.c", "mdns_host.c", "mdns_reg.c", "mdns_packet.c")
-    ipc = subprocess.check_output(["git", "-C", str(args.aros_tree), "show", revision + ":workbench/network/mdns/mdns_ipc.h"]).decode()
+    ipc = source("mdns_ipc.h").decode()
     if "mi_TaskID" in ipc:
         sources += ("mdns_client.c",)
     if "MDNS_IPC_READ" in ipc:
         sources += ("mdns_discovery.c",)
+    if "MDNS_IPC_QUERY" in ipc:
+        sources += ("mdns_query.c",)
     for name in (*sources, "mdns_dns.h", "mdnsd.h", "mdns_ipc.h",
                  "include/bonami/mdns.h", "include/libraries/bonamibase.h"):
         target = output / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(subprocess.check_output(
-            ["git", "-C", str(args.aros_tree), "show",
-             revision + ":workbench/network/mdns/" + name]
-        ))
-    binary = output / ("discovery" if args.discovery else "responder-rfc")
+        target.write_bytes(source(name))
+    binary = output / ("query" if args.query else
+                       "discovery" if args.discovery else "responder-rfc")
     reap = b"mdnsDiscoveryReap" in (output / "mdnsd.h").read_bytes()
     flags = [os.environ.get("CC", "cc"), "-std=c99", "-O1", "-g", "-Wall", "-Wextra",
              "-Werror", "-Wno-unused-parameter", "-fno-strict-aliasing",
@@ -53,7 +71,9 @@ def main():
              "-I" + str(output / "include"), "-I" + str(output)]
     if reap:
         flags.append("-DMDNS_DISCOVERY_REAP")
-    subprocess.run(flags + [str(repo / ("tests/review/mdns_discovery.c" if args.discovery else "tests/review/mdns_responder_rfc.c")),
+    fixture = ("mdns_query.c" if args.query else
+               "mdns_discovery.c" if args.discovery else "mdns_responder_rfc.c")
+    subprocess.run(flags + [str(repo / "tests/review" / fixture),
                            *(str(output / source) for source in sources),
                            "-o", str(binary)], check=True)
     cases = ("known-default", "known-expiring", "known-short", "known-wrong-owner",
@@ -80,6 +100,12 @@ def main():
                       "notify-refused", "notify-overflow", "notify-shutdown",
                       "notify-release", "notify-vanished", "notify-resolve",
                       "notify-reset")
+    if args.query:
+        cases = ("query-a", "query-own-host", "query-ptr-compressed",
+                 "query-coalesce", "query-overflow", "query-timeout",
+                 "query-notify-stop", "query-owner-restart",
+                 "query-network-reset",
+                 "query-wrong-class", "query-wrong-port", "query-invalid")
     failures = 0
     env = dict(os.environ, ASAN_OPTIONS="detect_leaks=0:halt_on_error=1")
     print("Revision:", revision, flush=True)

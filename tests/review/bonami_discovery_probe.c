@@ -111,7 +111,7 @@ int main(void)
     };
     BonamiBase = OpenLibrary((CONST_STRPTR)"bonami.library", 41);
     if (!BonamiBase) return 20;
-    CHECK(BonamiBase->lib_Revision == 2);
+    CHECK(BonamiBase->lib_Revision >= 2);
     port = CreateMsgPort();
     if (!port) return 20;
     lent_requests();

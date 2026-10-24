@@ -33,13 +33,14 @@ The AROS maintainer moved the contribution process into [PULL_REQUESTS.md](https
 
 ## Abertos
 
-Atualizado em **2026-10-24**: **37 merged, 1 aberto (pronto para review),
+Atualizado em **2026-10-24**: **37 merged, 2 abertos (prontos para review),
 nenhum draft e 1 fechado sem merge**. #1801 foi mergeado. #1803 foi
 reconstruído como um único commit sobre master, auditado, revalidado e
 retirado de draft.
 
 | PR | Proposta | Situação | O que falta agora |
 | --- | --- | --- | --- |
+| [#1836](https://github.com/aros-development-team/AROS/pull/1836) | BonAmi: lookup IPv4 e consultas genéricas de registros por fila | Pronto para review; `141450804f` | Um commit diretamente sobre master, sem depender do #1803. LVOs 22–25, biblioteca 41.3/IPC 4. Builds x86-64/m68k, 12 casos novos, 64 regressões, execução hosted pela ABI pública e os quatro checks do PR passam. Aguardar review. |
 | [#1803](https://github.com/aros-development-team/AROS/pull/1803) | Ferramentas `dnssd`, `Nearby`, `Share`, `Handshake` sobre a fila | Pronto para review; `d758d02a22` | Um commit diretamente sobre master. Builds x86-64/m68k, cppcheck, 16 checks hosted e os quatro checks do PR passam. A auditoria eliminou buffer fixo de saída, parsing numérico parcial/overflow, truncamento TXT silencioso e registros SRV/A sintéticos em `-Z`. Aguardar review. |
 
 ## Merged
