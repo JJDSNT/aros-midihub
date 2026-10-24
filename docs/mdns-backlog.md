@@ -131,3 +131,16 @@ parameter, none of `strcpy`, `strncpy`, `strncat` and `strlen`.
   AM09 and AM10 in [the AppleMIDI backlog](applemidi-backlog.md), NM08 in
   [the Network MIDI 2.0 backlog](network-midi2-backlog.md).
 - DNS-SD over unicast DNS, wide-area discovery, sleep proxy.
+
+## Tool completion follow-up — AROS #1803 / #1836 (2026-10-24)
+
+**Action required after both PRs merge; do not treat merging #1836 as completion.** Revisit the tools introduced by [AROS #1803](https://github.com/aros-development-team/AROS/pull/1803) using the public APIs from [AROS #1836](https://github.com/aros-development-team/AROS/pull/1836):
+
+- [ ] Implement `dnssd -q` via `QueryRecordA()`.
+- [ ] Implement `dnssd -G` via `LookupHostA()`.
+- [ ] Complete `dnssd -Z` with the actual SRV target hostname and corresponding A owner, using `ReadMDNSRecordEvent()`; test an instance whose name differs from its host.
+- [ ] Recheck `Nearby`, `Share`, and `Handshake` against the expanded API; avoid unnecessary changes.
+- [ ] Run hosted/native interop tests (Avahi when available), review command help/docs, and remove obsolete limitations.
+- [ ] Keep MD20's intermittent resolution failure independently tracked; the new API does not imply that it is fixed.
+
+**Acceptance:** commands function through the public Bonami API, verification is documented, and a dedicated follow-up upstream PR is prepared only after its prerequisites are merged. Cross-reference MD29 and the upstream submission gate in `docs/upstream-prs.md`.
