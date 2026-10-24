@@ -17,6 +17,20 @@ Após a abertura do #1789 no mesmo dia, são **24 merged, 8 abertos
 `MERGEABLE` e `REVIEW_REQUIRED`. Os quatro checks do #1789 passaram; os
 checks dos outros sete permanecem documentados pela consulta inicial.
 
+## AROS pull request policy (2026-10-23/24)
+
+The AROS maintainer moved the contribution process into [PULL_REQUESTS.md](https://github.com/aros-development-team/AROS/blob/master/PULL_REQUESTS.md) in [commit a8fcffdf](https://github.com/aros-development-team/AROS/commit/a8fcffdf160964b675da81fd3398f9ec972ba51e) and tightened it in [commit 4269a3ac](https://github.com/aros-development-team/AROS/commit/4269a3acc381002e340971d36c0e11c074783f8e).
+
+**Submission gate for all future Midihub/Bonami/CAMD upstream PRs:**
+
+1. **No draft PRs.** Keep unfinished work on local/fork branches and in this repository's backlog; submit only complete changes ready for review and inclusion. Existing draft PRs require reassessment against the new policy; do not simply mark incomplete work ready.
+2. **No unaccepted PR dependencies.** A submitted PR must stand on its own against upstream master. Wait for prerequisite PRs to be merged before opening dependent work; if changes cannot reasonably be separated, submit a single coherent PR. Limit scope to one logical change and one component/subsystem; explain any essential cross-component edits.
+3. **Licensing and notices.** AROS-specific original code must use the standard `Copyright (C) 1995-<year>, The AROS Development Team. All rights reserved.` notice, not a personal copyright. Preserve original notices and licenses for imported/derived code (especially Bonami); disclose origin and license in the PR description. Review the APL and `LICENSE.Author` guidance before proposing cross-project reuse.
+4. **Pre-submit verification.** Follow AROS style and LF line endings; update versions and docs as needed; build and run relevant tests/regressions. State exactly which 32/64-bit and LE/BE targets were tested, and which were not; check pointer sizes, alignment, ABI and byte order, particularly for m68k and network code. Describe scope, rationale, verification and limitations in the PR body.
+5. **Active author follow-up.** Track review and CI, respond promptly to reviewer requests, and update or explain outstanding issues. The maintainer explicitly warns that unattended PRs may be closed without merge.
+
+**Known historical conflicts requiring review (snapshot 2026-10-22, not a live status check):** #1801 was a draft stacked on #1788/#1743; #1803 was a draft stacked on #1802. Do not repeat this submission pattern. Check their current GitHub state and dependency graph before taking action; the inventory below is a dated snapshot.
+
 ## Abertos
 
 Atualizado em **2026-10-22, 16:37 UTC**: **31 merged, 7 abertos (5 prontos
