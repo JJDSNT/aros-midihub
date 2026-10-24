@@ -24,11 +24,12 @@ uses `PutStr()`/`VNewRawDoFmt()`, with no C library I/O or string functions.
 The tools open bonami.library at `BONAMI_LIB_VERSION`, 41. They keep the
 amigazen copyright of the original tools, BSD-2-Clause like the library.
 
-**Draft: requires #1802.** Listing service types (`dnssd -B
-_services._dns-sd._udp`, `Nearby` with no type) needs that pull request,
-whose commit (`fbe98e714b`) this branch carries. Only the last commit is
-this proposal. The tools are presented with the rest of the Bonami port, for
-the maintainers to decide whether AROS wants them.
+**Draft branch must be rebuilt.** #1802 is merged, so the functional
+dependency is gone. The current branch still carries the old #1802 commit
+`fbe98e714b`; rebuild it on master with only the tools commit, reconcile it
+with the final reviewed implementation `02175e4765`, repeat the validation,
+and only then take the PR out of draft. The tools are presented with the rest
+of the Bonami port, for the maintainers to decide whether AROS wants them.
 
 **Not here yet.** `dnssd -q` (any record) and `-G` (a host's address) need
 host lookup and record queries, which come in a later pull request as new

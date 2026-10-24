@@ -33,18 +33,17 @@ The AROS maintainer moved the contribution process into [PULL_REQUESTS.md](https
 
 ## Abertos
 
-Atualizado em **2026-10-24**: **34 merged, 4 abertos (2 prontos para review e
-os drafts históricos #1801 e #1803), 1 fechado sem merge**. #1735, #1743 e
-#1788 foram mergeados. Os dois drafts preexistem à política atual que proíbe
-PRs dependentes/incompletos e precisam ser reconstruídos sobre master antes
-de qualquer mudança de estado.
+Atualizado em **2026-10-24**: **36 merged, 2 abertos (1 pronto para review e
+o draft histórico #1803), 1 fechado sem merge**. #1789 e #1802 também foram
+mergeados. #1801 foi reconstruído como um único commit sobre master,
+revalidado e retirado de draft. O merge de #1802 removeu a dependência de
+#1803, mas sua branch ainda precisa receber o mesmo tratamento antes de sair
+de draft.
 
 | PR | Proposta | Situação | O que falta agora |
 | --- | --- | --- | --- |
-| [#1789](https://github.com/aros-development-team/AROS/pull/1789) | Avisar quando as quinze portas de dispositivos BLE MIDI estão ocupadas | Pronto para nova leitura; `4d6c27b7c0` | O review rejeitou `BCBA_MidiPort`, o header público e a fixture privada. O PR foi reduzido a um commit com o aviso aceito e versão 45.3. Builds x86-64/m68k e suíte host 2793/2793 passam; o pool real cheio não foi exercitado. |
-| [#1801](https://github.com/aros-development-team/AROS/pull/1801) | Peers e Hosts por nome e anúncio `_midi2._udp` | Draft histórico; `DIRTY` | #1788 e #1743 já merged. Reconstruir sobre master deixando somente o commit próprio, resolver conflitos, repetir a validação e então adequar à política sem drafts/dependências. |
-| [#1802](https://github.com/aros-development-team/AROS/pull/1802) | mdnsd: listar os tipos de serviço da rede (RFC 6763 §9) | Review atendido; `263a854570` | Tipos não geram mais SRV/TXT e um segundo browse recebe o cache imediatamente. O caso atualizado falha no head anterior e os 38 passam; builds x86-64/m68k passam. Aguardar nova leitura. |
-| [#1803](https://github.com/aros-development-team/AROS/pull/1803) | Ferramentas `dnssd`, `Nearby`, `Share`, `Handshake` sobre a fila | Draft histórico; depende de #1802 | Não atualizar sobre um PR aberto. Depois do merge de #1802, reconstruir somente o commit das ferramentas sobre master, validar e apresentar pronto para inclusão. |
+| [#1801](https://github.com/aros-development-team/AROS/pull/1801) | Peers e Hosts por nome e anúncio `_midi2._udp` | Pronto para review; `1ff702b743` | Um commit diretamente sobre master. Builds x86-64/m68k, 24 fixtures de browse, 27 de anúncio, `make test`, cppcheck, integração hosted AppleMIDI/MIDI 2.0 e os quatro checks do PR passam. Aguardar review. |
+| [#1803](https://github.com/aros-development-team/AROS/pull/1803) | Ferramentas `dnssd`, `Nearby`, `Share`, `Handshake` sobre a fila | Draft histórico; dependência já merged | #1802 foi mergeado. Reconstruir somente o commit das ferramentas sobre master, revisar o encaixe com a implementação final de #1802, validar e então retirar de draft. |
 
 ## Merged
 
@@ -53,6 +52,8 @@ histórico, determina esta classificação.
 
 | PR | Mudança | Merge |
 | --- | --- | --- |
+| [#1802](https://github.com/aros-development-team/AROS/pull/1802) | mdnsd: listar os tipos de serviço da rede (RFC 6763 §9) | 2026-10-24 |
+| [#1789](https://github.com/aros-development-team/AROS/pull/1789) | btmidi.class: report MIDI port exhaustion | 2026-10-24 |
 | [#1788](https://github.com/aros-development-team/AROS/pull/1788) | netmidi: separate AppleMIDI control from the RTP-MIDI payload | 2026-10-24 |
 | [#1743](https://github.com/aros-development-team/AROS/pull/1743) | netmidid: advertise AppleMIDI sessions through system mDNS | 2026-10-24 |
 | [#1735](https://github.com/aros-development-team/AROS/pull/1735) | btmidi.class: follow BLE-MIDI on the header's reserved bit; drop F9 and FD | 2026-10-24 |

@@ -4,23 +4,31 @@
 # (tests/review/mdns_advertise_mock.h), under ASan and UBSan.
 #   advertise  registrations, as the AppleMIDI-only cut (#1743) has them
 #   browse     the same with NETMIDI_BROWSE: queued searches
-# Usage: tools/test-discovery-fixtures.sh [output-dir]
+# Usage: DISCOVERY_SOURCE=/path/to/discovery.c \
+#        DISCOVERY_MARKS=-DNETMIDI_BROWSE \
+#        DISCOVERY_CFLAGS=-Wno-unused-function \
+#        tools/test-discovery-fixtures.sh [output-dir]
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:-$here/build/discovery-fixtures}
+source=${DISCOVERY_SOURCE:-$here/ports/aros/midihub/discovery.c}
+source_include=$(dirname "$source")
+extra_marks=${DISCOVERY_MARKS:-}
+extra_cflags=${DISCOVERY_CFLAGS:-}
 mkdir -p "$out"
 for case in advertise browse; do
     marks="-D__AROS__ -DNETMIDI_SERVICE"
     test "$case" = browse && marks="$marks -DNETMIDI_BROWSE"
+    marks="$marks $extra_marks"
     {
         echo '#include "mdns_advertise_mock.h"'
-        sed -E '/^#include [<"].*[>"]/d' "$here/ports/aros/midihub/discovery.c"
+        sed -E '/^#include [<"].*[>"]/d' "$source"
         cat "$here/tests/review/mdns_${case}_cases.c"
     } > "$out/$case.c"
     # shellcheck disable=SC2086
-    ${CC:-cc} $marks -std=c99 -g -O1 -Wall -Wextra -Werror \
+    ${CC:-cc} $marks $extra_cflags -std=c99 -g -O1 -Wall -Wextra -Werror \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I"$here/ports/aros/midihub" -I"$here/tests/review" \
+        -I"$source_include" -I"$here/tests/review" \
         "$out/$case.c" -o "$out/$case"
     ASAN_OPTIONS=detect_leaks=0 "$out/$case"
 done

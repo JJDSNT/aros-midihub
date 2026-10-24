@@ -1,4 +1,4 @@
-AROS PR: [#1802](https://github.com/aros-development-team/AROS/pull/1802), branch `review/mdns-service-types` (`build/mdns-types`), opened 2026-10-22.
+AROS PR: [#1802](https://github.com/aros-development-team/AROS/pull/1802), merged 2026-10-24 as `02175e4765` after the review fixes, branch `review/mdns-service-types` (`build/mdns-types`), opened 2026-10-22.
 
 A browse of `_services._dns-sd._udp` (`MDNS_TYPE_SERVICES_DNS_SD`) is now told
 the service types present on the link (RFC 6763 section 9). Before, it was

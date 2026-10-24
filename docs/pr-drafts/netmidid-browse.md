@@ -1,4 +1,4 @@
-AROS PR: [#1801](https://github.com/aros-development-team/AROS/pull/1801), draft, branch `review/netmidid-browse` (`build/netmidid-browse`), opened 2026-10-22.
+AROS PR: [#1801](https://github.com/aros-development-team/AROS/pull/1801), ready for review, branch `review/netmidid-browse` (prepared in `build/ready-netmidid-browse-review`), opened 2026-10-22.
 
 With the queued DNS-SD discovery that bonami.library 41.2 has (#1695),
 netmidid can find what its configuration names wherever it is on the link,
@@ -28,12 +28,12 @@ begun again; when mdnsd ends, every registration and search is asked for
 again once it is back. The text record is read as it is on the wire,
 length-prefixed strings, keys without regard to ASCII case.
 
-### Dependencies
+### Base
 
-**Draft: requires #1788 and #1743.** The branch carries #1788's commit
-(`357ee16146`) and #1743's two commits rebased onto it (`d0bec047dd`,
-`e32c5fac1c`, the rebase applied without conflict). Only the last commit,
-`255496d21f`, is this proposal. It will be rebased as those merge.
+#1788 and #1743 are merged. The branch was rebuilt on 2026-10-24 as the
+single proposal commit `1ff702b743`, directly over upstream master
+`467f8fe329`; it carries no dependency commits. Its stable patch id is the
+same as the former stacked commit `255496d21f`.
 
 ### Validation
 
@@ -41,8 +41,8 @@ length-prefixed strings, keys without regard to ASCII case.
   included: the Bonami includes, `linklibs-netmidi-common`,
   `linklibs-rtpmidi`, `linklibs-applemidi`, `linklibs-netmidi2`,
   `workbench-network-netmidid` and `workbench-network-netmidistat`.
-- Hosted x86-64 AROS with master's mdnsd plus #1743's mdnsd commit,
-  bonami.library 41.2, and the netmidid of this branch's generated build,
+- Hosted x86-64 AROS with mdnsd and bonami.library built from master and
+  the netmidid of this branch's generated build,
   against the host's Avahi, node-rtpmidi 1.0.0 and a Network MIDI 2.0
   endpoint built from the same netmidi2 library:
   - the AppleMIDI session advertised, renamed through `ENV:NetMIDI`, and
@@ -58,12 +58,14 @@ length-prefixed strings, keys without regard to ASCII case.
     invitations invited again within 22 s; fails without the reset;
   - AROS's own Host resolved by Avahi as `_midi2._udp` with its endpoint
     name and product id in the text record.
-- Host fixtures in the companion repository compile the AROS half of
-  `discovery.c` against mocked library calls under ASan/UBSan: 24 browse
-  checks (queue reading, rate, overflow, daemon restart, a new run, wire TXT
-  parsing) and 27 for registrations.
+- Host fixtures compile this branch's exact `discovery.c` against mocked
+  library calls under ASan/UBSan: 24 browse checks (queue reading, rate,
+  overflow, daemon restart, a new run, wire TXT parsing) and 27 for
+  registrations. The repository's default fixture run and full `make test`
+  pass too.
 - cppcheck reports nothing for the changed files.
 
-The hosted runs used the binary built before the last change to
-`netmidi_discovery_txt_value()`, a bounded key length in place of
-`strlen()`; that change was rebuilt for both targets but not run again.
+The final x86-64 `netmidid` and bonami.library binaries after the rebase are
+byte-for-byte identical to the binaries used by the full hosted runs. A
+fresh MIDI 2.0 message/discovery run also passed with mdnsd rebuilt from the
+final master, including #1802.
