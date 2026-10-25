@@ -15,8 +15,9 @@
 #   dnssd -V                           the library's version
 #   dnssd -B _services._dns-sd._udp    both types listed
 #   dnssd -B _http._tcp                the instance, address, port and text
-#   dnssd -Z _http._tcp                valid PTR/TXT records; address and port
-#                                      in a comment (the API has no SRV target)
+#   dnssd -Z _http._tcp                PTR/SRV/TXT/A with the real SRV target
+#   dnssd -q arospeer.local A          the queued generic record query
+#   dnssd -G v4 arospeer.local         the bounded IPv4 host lookup
 #   dnssd -L, Handshake                "Host Web" resolved
 #   dnssd -L of a name nobody has      not resolved, after mdnsd gives up
 #   Nearby (no type), Nearby web       the kinds, and the web server
@@ -66,6 +67,8 @@ C:dnssd >SYS:version.log -V
 Run >SYS:types.log C:dnssd -B _services._dns-sd._udp
 Run >SYS:browse.log C:dnssd -B _http._tcp
 Run >SYS:zone.log C:dnssd -Z _http._tcp
+C:dnssd >SYS:lookup.log -G v4 arospeer.local
+Run >SYS:query.log C:dnssd -q arospeer.local A
 C:Nearby >SYS:kinds.log TIME 8
 C:Nearby >SYS:web.log web PORTS TIME 6
 C:dnssd >SYS:resolve.log -L "Host Web" _http._tcp
@@ -74,11 +77,14 @@ C:dnssd >SYS:missing.log -L "Nobody Here" _http._tcp
 C:dnssd >SYS:bad-port.log -R "Bad Port" _http._tcp . 70000
 C:dnssd >SYS:bad-port-tail.log -R "Bad Port" _http._tcp . 80x
 C:dnssd >SYS:bad-ttl.log -R "Bad TTL" _http._tcp . 8082 -t 60x
+C:dnssd >SYS:bad-rrtype.log -q arospeer.local 1x
 C:dnssd >SYS:bad-txt.log -R "Bad TXT" _http._tcp . 8082 "k=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 C:Share >SYS:bad-share-port.log "Bad Share" web 0
-Run >SYS:share.log C:Share AmigaShare web 8081 "path=/x" "note=a b"
-Run >SYS:register.log C:dnssd -R "AROS Printer" _ipp._tcp . 631 rp=printer
+Run >SYS:share.log C:Share "AmigaShare RUNID" web 8081 "path=/x" "note=a b"
+Run >SYS:register.log C:dnssd -R "AROS Printer RUNID" _ipp._tcp . 631 rp=printer
 Wait 14
+Break `Status COMMAND=dnssd` C
+Wait 1
 Break `Status COMMAND=dnssd` C
 Wait 1
 Break `Status COMMAND=dnssd` C
@@ -90,6 +96,10 @@ Break `Status COMMAND=Share` C
 Wait 3
 Shutdown
 RUNEOF
+# A unique instance avoids resolving a PTR left in the host's long-lived
+# Avahi cache by an interrupted earlier run.
+sed -i "s/AROS Printer RUNID/AROS Printer $$/" "$sys/S/tools-run"
+sed -i "s/AmigaShare RUNID/AmigaShare $$/" "$sys/S/tools-run"
 printf 'Run >NIL: Execute S:tools-run\n' > "$sys/S/User-Startup"
 
 # Keep the packets when Avahi sees a PTR but cannot resolve the instance
@@ -106,6 +116,64 @@ printf 'Run >NIL: Execute S:tools-run\n' > "$sys/S/User-Startup"
         > "$work/publish-web.log" 2>&1 &
     timeout 75 avahi-publish -s "Host SSH" _ssh._tcp 22 \
         > "$work/publish-ssh.log" 2>&1 &
+    timeout 75 python3 - "$work/publish-address.log" <<'PYEOF' &
+import socket, struct, sys, time
+
+group, port, host = '224.0.0.251', 5353, '192.168.166.1'
+log = open(sys.argv[1], 'w')
+
+def wire(name):
+    return b''.join(bytes([len(label)]) + label.encode()
+                    for label in name.split('.')) + b'\0'
+
+def read_name(packet, offset):
+    labels = []
+    while offset < len(packet):
+        length = packet[offset]
+        offset += 1
+        if length == 0:
+            return '.'.join(labels), offset
+        if length > 63 or offset + length > len(packet):
+            raise ValueError
+        labels.append(packet[offset:offset + length].decode('ascii'))
+        offset += length
+    raise ValueError
+
+rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+rx.bind(('', port))
+rx.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+              socket.inet_aton(group) + socket.inet_aton(host))
+rx.settimeout(1)
+rx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(host))
+rx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
+rx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+
+end = time.time() + 70
+while time.time() < end:
+    try:
+        packet, source = rx.recvfrom(9000)
+    except socket.timeout:
+        continue
+    if source[0] != '192.168.166.2' or len(packet) < 12:
+        continue
+    try:
+        ident, flags, questions = struct.unpack('>HHH', packet[:6])
+        name, offset = read_name(packet, 12)
+        rrtype, rrclass = struct.unpack('>HH', packet[offset:offset + 4])
+    except (ValueError, UnicodeError, struct.error):
+        continue
+    if flags & 0x8000 or not questions or name.lower() != 'arospeer.local' or \
+            rrtype not in (1, 255):
+        continue
+    answer = (struct.pack('>HHHHHH', 0, 0x8400, 0, 1, 0, 0) + wire(name) +
+              struct.pack('>HHIH', 1, 0x8001, 120, 4) +
+              socket.inet_aton(host))
+    rx.sendto(answer, (group, port))
+    log.write('answered %s type %d\n' % (name, rrtype))
+    log.flush()
+PYEOF
     timeout 75 avahi-browse -rpk _http._tcp > "$work/avahi-http.log" 2>&1 &
     timeout 75 avahi-browse -rpk _ipp._tcp > "$work/avahi-ipp.log" 2>&1 &
     wait
@@ -113,11 +181,22 @@ printf 'Run >NIL: Execute S:tools-run\n' > "$sys/S/User-Startup"
 (cd "$sys" && timeout 150 xvfb-run -a boot/linux/AROSBootstrap \
     > "$work/serial.log" 2>&1) || true
 wait || true
-for log in version types browse zone kinds web resolve handshake missing \
-           bad-port bad-port-tail bad-ttl bad-txt bad-share-port share \
-           register; do
+for log in version types browse zone lookup query kinds web resolve \
+           handshake missing bad-port bad-port-tail bad-ttl bad-rrtype \
+           bad-txt bad-share-port share register; do
     cp "$sys/$log.log" "$work/" 2> /dev/null || true
 done
+
+zone_complete=no
+if awk -F '\t' '
+    $2 == "SRV" && $3 ~ /^0 0 8080 / {
+        split($3, fields, " "); target = fields[4]
+    }
+    $2 == "A" && $1 == target && $3 == "192.168.166.1" { good = 1 }
+    END { exit !good }
+' "$work/zone.log"; then
+    zone_complete=yes
+fi
 
 status=0
 check() {
@@ -134,8 +213,12 @@ check "dnssd -B _services._dns-sd._udp listed _http._tcp and _ssh._tcp" \
     "grep -q '^TYPE  *_http._tcp' '$work/types.log' && grep -q '^TYPE  *_ssh._tcp' '$work/types.log'"
 check "dnssd -B _http._tcp saw Host Web at 192.168.166.1 port 8080 with path=/" \
     "grep '^ADD  *Host Web  *_http._tcp' '$work/browse.log' | grep -q '192.168.166.1  *8080  *path=/'"
-check "dnssd -Z gave valid PTR/TXT lines without inventing an SRV target or A owner" \
-    "grep -qP '^_http._tcp.local.\\tPTR\\tHost Web._http._tcp.local.' '$work/zone.log' && grep -qP '^Host Web._http._tcp.local.\\tTXT\\tpath=/' '$work/zone.log' && grep -q '^; Host Web._http._tcp.local.: port 8080, address 192.168.166.1; SRV target unavailable$' '$work/zone.log' && ! grep -qP '\\t(SRV|A)\\t' '$work/zone.log'"
+check "dnssd -Z printed PTR/SRV/TXT/A with the real host, distinct from the instance" \
+    "test '$zone_complete' = yes && grep -qP '^_http._tcp.local.\\tPTR\\tHost Web._http._tcp.local.' '$work/zone.log' && grep -qP '^Host Web._http._tcp.local.\\tTXT\\tpath=/' '$work/zone.log'"
+check "dnssd -G resolved the explicitly published IPv4 host" \
+    "grep -q '^arospeer.local  192.168.166.1$' '$work/lookup.log'"
+check "dnssd -q read an A record through the queued record API" \
+    "grep '^arospeer.local.  type 1  ttl ' '$work/query.log' | grep -q '192.168.166.1'"
 check "Nearby with no type listed the web server and SSH kinds" \
     "grep -q 'Web server (HTTP)' '$work/kinds.log' && grep -q 'SSH login' '$work/kinds.log'"
 check "Nearby web PORTS showed Host Web, port 8080 and its info" \
@@ -152,13 +235,15 @@ check "dnssd rejected trailing characters in a port" \
     "grep -q '^dnssd: port must be 1-65535' '$work/bad-port-tail.log'"
 check "dnssd rejected trailing characters in a TTL" \
     "grep -q '^dnssd: TTL must be 1-4500 seconds' '$work/bad-ttl.log'"
+check "dnssd rejected trailing characters in a numeric record type" \
+    "grep -q '^dnssd -q: unknown record type \"1x\"' '$work/bad-rrtype.log'"
 check "dnssd rejected a TXT record instead of silently truncating it" \
     "grep -q '^dnssd: TXT record is too long' '$work/bad-txt.log'"
 check "Share rejected port zero before registration" \
     "grep -q '^Share: PORT must be 1-65535' '$work/bad-share-port.log'"
 check "the host's Avahi saw Share's AmigaShare with its text, a space kept" \
-    "grep '^=;aroshost;IPv4;AmigaShare;_http._tcp;' '$work/avahi-http.log' | grep -q '192.168.166.2;8081;.*\"note=a b\"' && grep '^=;aroshost;IPv4;AmigaShare;_http._tcp;' '$work/avahi-http.log' | grep -q '\"path=/x\"'"
+    "grep '^=;aroshost;IPv4;AmigaShare\\\\032[0-9][0-9]*;_http._tcp;' '$work/avahi-http.log' | grep -q '192.168.166.2;8081;.*\"note=a b\"' && grep '^=;aroshost;IPv4;AmigaShare\\\\032[0-9][0-9]*;_http._tcp;' '$work/avahi-http.log' | grep -q '\"path=/x\"'"
 check "the host's Avahi saw dnssd -R's AROS Printer" \
-    "grep '^=;aroshost;IPv4;AROS\\\\032Printer;_ipp._tcp;' '$work/avahi-ipp.log' | grep -q '192.168.166.2;631;\"rp=printer\"'"
+    "grep '^=;aroshost;IPv4;AROS\\\\032Printer\\\\032[0-9][0-9]*;_ipp._tcp;' '$work/avahi-ipp.log' | grep -q '192.168.166.2;631;\"rp=printer\"'"
 echo "logs: $work"
 exit $status
