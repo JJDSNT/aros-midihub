@@ -25,8 +25,7 @@ one normalized result.
 - `mungwall.c`, `freemem.c` and `memory.c` compile with `-Werror` using the
   generated AROS flags for linux-x86_64 and amiga-m68k;
 - `git diff --check` passes;
-- the PR is non-draft and mergeable; GitHub checks were still running at the
-  time of this record.
+- the PR is non-draft and mergeable; all four GitHub checks pass.
 
 The historical fault was captured on a Pi 3/m68k MungWall boot. This revision
 has not yet been run on m68k hardware or in an m68k emulator. A complete clean
