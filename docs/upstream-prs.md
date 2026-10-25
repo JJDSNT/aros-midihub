@@ -33,12 +33,14 @@ The AROS maintainer moved the contribution process into [PULL_REQUESTS.md](https
 
 ## Abertos
 
-Atualizado em **2026-10-25**: **39 merged, 3 abertos (prontos para review),
+Atualizado em **2026-10-25**: **39 merged, 4 abertos (prontos para review),
 nenhum draft e 1 fechado sem merge**. #1803 e #1836 foram mergeados; os três
-PRs abertos são independentes entre si e diretamente baseados em master.
+PRs anteriores e o novo #1848 são independentes entre si e diretamente
+baseados em master.
 
 | PR | Proposta | Situação | O que falta agora |
 | --- | --- | --- | --- |
+| [#1848](https://github.com/aros-development-team/AROS/pull/1848) | `exec`: preservar o alinhamento real e o tamanho do bloco ao liberar memória com MungWall | Pronto para review; `cc40ebad9d`; não é draft; mergeable; checks iniciais em execução | Um commit diretamente sobre master, sem dependências. Os três objetos alterados compilam com `-Werror` para linux-x86_64 e amiga-m68k. A reprodução histórica é em Pi 3/m68k; esta revisão ainda não foi executada em hardware ou em uma imagem m68k com MungWall. Aguardar checks e review. |
 | [#1847](https://github.com/aros-development-team/AROS/pull/1847) | `pthread`: devolver o valor anterior no test-and-set m68k | Pronto para review; `8f220e83bd`; não é draft; quatro checks aprovados | Um commit diretamente sobre master, sem dependências. `libpthread.a` e o teste dedicado compilam em x86-64 e m68k; o teste passa no AROS hosted. O binário m68k foi inspecionado, mas não executado em hardware/emulador nesta validação. Aguardar review. |
 | [#1846](https://github.com/aros-development-team/AROS/pull/1846) | `dnssd -q`, `-G` e zona completa por meio das APIs de registro aceitas | Pronto para review; `c6722aee2f`; não é draft; quatro checks aprovados | Um commit diretamente sobre master; depende somente dos já mergeados #1803/#1836, não do #1845. Builds x86-64/m68k, cppcheck, `make test` e 19 checks hosted passam. O único alerta inicial do Codacy (escopo de variável) foi corrigido. Aguardar review. |
 | [#1845](https://github.com/aros-development-team/AROS/pull/1845) | `mdnsd`: reunir respostas de vários serviços para DNS legado (RFC 6762 §6.7) | Pronto para review; `d835629e93`; não é draft; quatro checks aprovados | Um commit diretamente sobre master, sem dependências de PR. Reproduz 2 pacotes/8 registros no master e entrega 1 pacote/7 registros para dois serviços, com ID/pergunta, TTL e classe legados preservados. Fixtures 27+38+12, builds x86-64/m68k e execução hosted passam. Aguardar review. |
