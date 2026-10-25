@@ -2,7 +2,7 @@
 
 [AROS #1845](https://github.com/aros-development-team/AROS/pull/1845) is
 ready for review, not a draft. Branch `review/mdns-legacy-unicast`, commit
-`e69e9a8030`, is one commit directly on AROS `master` `412963d55f`.
+`d835629e93`, is one commit directly on AROS `master` `827810f5f1`.
 
 ## Scope
 
