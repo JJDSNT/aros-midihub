@@ -39,7 +39,9 @@ copy.
 - queued record-query regressions under ASan/UBSan: 12/12;
 - generated `mdnsd` builds: linux-x86_64 and amiga-m68k;
 - Linux-hosted AROS wire test with two registered services;
-- repository `make test`.
+- repository `make test`;
+- all four GitHub checks pass (line endings, Windows filenames, Codacy and
+  mergefreeze).
 
 The test does not claim IPv6, multi-packet known-answer completion or DNS over
 unicast DNS; those remain separate backlog items.

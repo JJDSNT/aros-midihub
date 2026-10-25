@@ -39,7 +39,7 @@ nenhum draft e 1 fechado sem merge**. #1803 e #1836 foram mergeados; o
 
 | PR | Proposta | Situação | O que falta agora |
 | --- | --- | --- | --- |
-| [#1845](https://github.com/aros-development-team/AROS/pull/1845) | `mdnsd`: reunir respostas de vários serviços para DNS legado (RFC 6762 §6.7) | Pronto para review; `e69e9a8030`; não é draft | Um commit diretamente sobre master, sem dependências de PR. Reproduz 2 pacotes/8 registros no master e entrega 1 pacote/7 registros para dois serviços, com ID/pergunta, TTL e classe legados preservados. Fixtures 27+38+12, builds x86-64/m68k e execução hosted passam. Checks do GitHub ainda em andamento na consulta inicial. |
+| [#1845](https://github.com/aros-development-team/AROS/pull/1845) | `mdnsd`: reunir respostas de vários serviços para DNS legado (RFC 6762 §6.7) | Pronto para review; `e69e9a8030`; não é draft; quatro checks aprovados | Um commit diretamente sobre master, sem dependências de PR. Reproduz 2 pacotes/8 registros no master e entrega 1 pacote/7 registros para dois serviços, com ID/pergunta, TTL e classe legados preservados. Fixtures 27+38+12, builds x86-64/m68k e execução hosted passam. Aguardar review. |
 
 ## Merged
 
