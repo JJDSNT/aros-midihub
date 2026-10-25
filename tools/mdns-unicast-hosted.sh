@@ -5,7 +5,7 @@
 #   tools/mdns-unicast-hosted.sh [AROS_DIR [WORK_DIR]]
 #
 # As tools/bonami-hosted.sh: eth1 for AROS (192.168.166.2, arosbox),
-# aroshost for Linux (192.168.166.1). AROS registers one service. The host:
+# aroshost for Linux (192.168.166.1). AROS registers two services. The host:
 #
 # 1. asks from another port than 5353, as a resolver that knows plain DNS
 #    does, for the service type and for the host's address. The answer has
@@ -60,6 +60,7 @@ Run >NIL: QUIET AROSTCP
 WaitForPort AROSTCP
 Wait 6
 Run >NIL: $c/BonamiProbe REGISTER UniSvc TYPE $type PORT 5004 SECONDS 70
+Run >NIL: $c/BonamiProbe REGISTER UniSvc2 TYPE $type PORT 5005 SECONDS 70
 Echo "registered" >SYS:uni-registered.log
 Wait 66
 Shutdown
@@ -172,20 +173,28 @@ for label, name, qtype, ident in (('legacy-ptr', kind, 12, 0x1234), ('legacy-a',
                  (GROUP, PORT))
     plain.settimeout(1)
     result = 'none'
+    packets = 0
     try:
-        data, source = plain.recvfrom(9000)
-        rid, flags, questions, records = parse(data)
-        result = 'id=%d qr=%d question=%d answers=%d maxttl=%d flush=%d from=%s:%d' % (
-            int(rid == ident), int(bool(flags & 0x8000)),
-            int(questions == [(name.lower(), qtype, 1)]),
-            sum(1 for r in records if r[0] == name.lower() and r[1] == qtype),
-            max([r[3] for r in records] or [0]),
-            sum(1 for r in records if r[2] & 0x8000), source[0], source[1])
+        deadline = time.time() + 1
+        while time.time() < deadline:
+            data, source = plain.recvfrom(9000)
+            rid, flags, questions, records = parse(data)
+            if not flags & 0x8000:
+                continue
+            packets += 1
+            if result == 'none':
+                result = 'id=%d qr=1 question=%d answers=%d maxttl=%d flush=%d from=%s:%d' % (
+                    int(rid == ident), int(questions == [(name.lower(), qtype, 1)]),
+                    sum(1 for r in records if r[0] == name.lower() and r[1] == qtype),
+                    max([r[3] for r in records] or [0]),
+                    sum(1 for r in records if r[2] & 0x8000), source[0], source[1])
+            plain.settimeout(max(0.01, deadline - time.time()))
     except socket.timeout:
         pass
     except (IndexError, struct.error):
         result = 'unreadable'
-    log.write('%s %s group=%d\n' % (label, result, len(from_group(0.4, name.lower()))))
+    log.write('%s %s packets=%d group=%d\n' %
+              (label, result, packets, len(from_group(0.4, name.lower()))))
     log.flush()
 
 def ask_direct(label):
@@ -214,12 +223,12 @@ check() {
     if [ "$1" = yes ]; then echo "ok: $2"; else echo "FAIL: $2"; status=1; fi
 }
 has() { grep -q "$1" "$work/uni.log" && echo yes || echo no; }
-check "$(has '^legacy-ptr id=1 qr=1 question=1 answers=1 maxttl=10 flush=0 from=192.168.166.2:5353 group=0$')" \
-    "a plain DNS question for the type is answered to its port alone: same ID, the question, ten seconds, no cache-flush bit"
-check "$(has '^legacy-a id=1 qr=1 question=1 answers=1 maxttl=10 flush=0 from=192.168.166.2:5353 group=0$')" \
+check "$(has '^legacy-ptr id=1 qr=1 question=1 answers=2 maxttl=10 flush=0 from=192.168.166.2:5353 packets=1 group=0$')" \
+    "a plain DNS question gathers both services in one reply to its port: same ID, the question, ten seconds, no cache-flush bit"
+check "$(has '^legacy-a id=1 qr=1 question=1 answers=1 maxttl=10 flush=0 from=192.168.166.2:5353 packets=1 group=0$')" \
     "and so is one for the host's address"
-check "$(has '^direct-soon 192.168.166.1$')" "a question with the unicast-response bit, soon after the announcement, is answered to the asker alone"
+check "$(has '^direct-soon 192.168.166.1,192.168.166.1$')" "a question with the unicast-response bit, soon after the announcement, answers both services to the asker alone"
 check "$(has '^direct-late 224.0.0.251$')" "after 34 seconds without the records on the group, it is answered to the group"
-check "$(has '^direct-again 192.168.166.1$')" "and right after that to the asker alone again"
+check "$(has '^direct-again 192.168.166.1,192.168.166.1$')" "and right after that both services go to the asker alone again"
 echo "logs: $work"
 exit $status

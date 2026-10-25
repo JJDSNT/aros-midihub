@@ -200,6 +200,9 @@ static struct MDNSRegisteredService *setup(struct MDNSDaemon *md, ULONG ttl)
 }
 static void receive(struct MDNSDaemon *md, const UBYTE *packet, size_t length)
 { mdnsHandlePacket(md, packet, (LONG)length, 0xc0000201, MDNS_DNS_PORT); }
+static void receive_from_port(struct MDNSDaemon *md, const UBYTE *packet,
+                              size_t length, UWORD port)
+{ mdnsHandlePacket(md, packet, (LONG)length, 0xc0000201, port); }
 static void flush(struct MDNSDaemon *md)
 { ticks += 10; mdnsRegTick(md); }
 
@@ -332,6 +335,29 @@ int main(int argc, char **argv)
         printf("probe with later TXT: step=%u, retry in %u ticks\n", service->rs_Step,
                service->rs_NextTick - ticks);
         failure = service->rs_Step != 0 || service->rs_NextTick < ticks + 50;
+    } else if (!strcmp(argv[1], "legacy-multiple")) {
+        struct MDNSIPCMsg message;
+        struct MDNSRegisteredService *second;
+
+        memset(&message, 0, sizeof(message));
+        strcpy(message.mi_Name, "Second");
+        strcpy(message.mi_ServiceType, "_midi2._udp");
+        strcpy(message.mi_Domain, "local");
+        message.mi_Port = 5674;
+        message.mi_TTL = 60;
+        own_message(&message);
+        if (mdnsRegAdd(&md, &message))
+            abort();
+        second = (struct MDNSRegisteredService *)md.md_Services.lh_TailPred;
+        second->rs_State = MDNS_NAME_ANNOUNCED;
+        second->rs_Step = MDNS_ANNOUNCE_COUNT;
+
+        at = question(packet, DNS_TYPE_PTR, DNS_CLASS_IN, 0);
+        put16(packet, 0x1234);
+        receive_from_port(&md, packet, at, 49152);
+        printf("legacy browse with two services: packets=%u, records=%u\n",
+               packets, answer_records);
+        failure = packets != 1 || answer_records != 7;
     }
 #if MDNS_IPC_VERSION >= 2
     if (!strcmp(argv[1], "identical-txt") || !strcmp(argv[1], "goodbye-txt") ||

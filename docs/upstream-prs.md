@@ -33,15 +33,13 @@ The AROS maintainer moved the contribution process into [PULL_REQUESTS.md](https
 
 ## Abertos
 
-Atualizado em **2026-10-24**: **37 merged, 2 abertos (prontos para review),
-nenhum draft e 1 fechado sem merge**. #1801 foi mergeado. #1803 foi
-reconstruído como um único commit sobre master, auditado, revalidado e
-retirado de draft.
+Atualizado em **2026-10-25**: **39 merged, 1 aberto (pronto para review),
+nenhum draft e 1 fechado sem merge**. #1803 e #1836 foram mergeados; o
+único PR aberto é um corte independente de conformidade ao RFC 6762.
 
 | PR | Proposta | Situação | O que falta agora |
 | --- | --- | --- | --- |
-| [#1836](https://github.com/aros-development-team/AROS/pull/1836) | BonAmi: lookup IPv4 e consultas genéricas de registros por fila | Pronto para review; `141450804f` | Um commit diretamente sobre master, sem depender do #1803. LVOs 22–25, biblioteca 41.3/IPC 4. Builds x86-64/m68k, 12 casos novos, 64 regressões, execução hosted pela ABI pública e os quatro checks do PR passam. Aguardar review. |
-| [#1803](https://github.com/aros-development-team/AROS/pull/1803) | Ferramentas `dnssd`, `Nearby`, `Share`, `Handshake` sobre a fila | Pronto para review; `d758d02a22` | Um commit diretamente sobre master. Builds x86-64/m68k, cppcheck, 16 checks hosted e os quatro checks do PR passam. A auditoria eliminou buffer fixo de saída, parsing numérico parcial/overflow, truncamento TXT silencioso e registros SRV/A sintéticos em `-Z`. Aguardar review. |
+| [#1845](https://github.com/aros-development-team/AROS/pull/1845) | `mdnsd`: reunir respostas de vários serviços para DNS legado (RFC 6762 §6.7) | Pronto para review; `e69e9a8030`; não é draft | Um commit diretamente sobre master, sem dependências de PR. Reproduz 2 pacotes/8 registros no master e entrega 1 pacote/7 registros para dois serviços, com ID/pergunta, TTL e classe legados preservados. Fixtures 27+38+12, builds x86-64/m68k e execução hosted passam. Checks do GitHub ainda em andamento na consulta inicial. |
 
 ## Merged
 
@@ -50,6 +48,8 @@ histórico, determina esta classificação.
 
 | PR | Mudança | Merge |
 | --- | --- | --- |
+| [#1836](https://github.com/aros-development-team/AROS/pull/1836) | BonAmi: lookup IPv4 e consultas genéricas de registros por fila | 2026-10-25 |
+| [#1803](https://github.com/aros-development-team/AROS/pull/1803) | Ferramentas `dnssd`, `Nearby`, `Share`, `Handshake` sobre a fila | 2026-10-25 |
 | [#1801](https://github.com/aros-development-team/AROS/pull/1801) | Peers e Hosts por nome e anúncio `_midi2._udp` | 2026-10-24 |
 | [#1802](https://github.com/aros-development-team/AROS/pull/1802) | mdnsd: listar os tipos de serviço da rede (RFC 6763 §9) | 2026-10-24 |
 | [#1789](https://github.com/aros-development-team/AROS/pull/1789) | btmidi.class: report MIDI port exhaustion | 2026-10-24 |

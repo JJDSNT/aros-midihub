@@ -79,7 +79,8 @@ def main():
     cases = ("known-default", "known-expiring", "known-short", "known-wrong-owner",
              "identical-srv", "different-srv", "class-in", "class-any", "class-ch",
              "opcode", "rcode", "withdraw-service", "probe-txt",
-             "announce-initial", "update-port", "update-unchanged")
+             "announce-initial", "update-port", "update-unchanged",
+             "legacy-multiple")
     if "mi_TaskID" in ipc:
         cases += ("identical-txt", "goodbye-txt", "goodbye-srv", "compressed-srv",
                   "local-rename", "reject-instance", "proxy-own-name",
