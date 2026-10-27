@@ -80,7 +80,9 @@ def main():
              "identical-srv", "different-srv", "class-in", "class-any", "class-ch",
              "opcode", "rcode", "withdraw-service", "probe-txt",
              "announce-initial", "update-port", "update-unchanged",
-             "legacy-multiple")
+             "legacy-multiple", "shared-delay", "shared-repeat",
+             "shared-interface", "types-delay", "types-legacy", "types-repeat",
+             "types-interface")
     if "mi_TaskID" in ipc:
         cases += ("identical-txt", "goodbye-txt", "goodbye-srv", "compressed-srv",
                   "local-rename", "reject-instance", "proxy-own-name",

@@ -33,17 +33,27 @@ The AROS maintainer moved the contribution process into [PULL_REQUESTS.md](https
 
 ## Abertos
 
-Atualizado em **2026-10-25**: **39 merged, 4 abertos (prontos para review),
-nenhum draft e 1 fechado sem merge**. #1803 e #1836 foram mergeados; os três
-PRs anteriores e o novo #1848 são independentes entre si e diretamente
-baseados em master.
+Atualizado em **2026-10-27**: **42 merged, 2 abertos (prontos para review),
+nenhum draft e 1 fechado sem merge**. #1845, #1846 e #1847 foram mergeados
+em 2026-10-26. Os dois PRs restantes são independentes entre si e diretamente
+baseados em master; ambos têm os quatro checks aprovados e nenhuma revisão ou
+thread pendente registrada no GitHub.
 
 | PR | Proposta | Situação | O que falta agora |
 | --- | --- | --- | --- |
+| [#1869](https://github.com/aros-development-team/AROS/pull/1869) | Mesa: correções m68k de alinhamento, tamanho de ponteiro e seleção softpipe | Pronto para review; `8abd264a`; não é draft; mergeable; quatro checks aprovados | Dois commits diretamente sobre master, sem dependências. Executado em emu68/QEMU com softpipe; os testes independentes de `ralloc` passam com ASan/UBSan. Aguardar review; ainda não foi validado em hardware m68k real. |
 | [#1848](https://github.com/aros-development-team/AROS/pull/1848) | `exec`: preservar o alinhamento real e o tamanho do bloco ao liberar memória com MungWall | Pronto para review; `cc40ebad9d`; não é draft; mergeable; quatro checks aprovados | Um commit diretamente sobre master, sem dependências. Os três objetos alterados compilam com `-Werror` para linux-x86_64 e amiga-m68k. A reprodução histórica é em Pi 3/m68k; esta revisão ainda não foi executada em hardware ou em uma imagem m68k com MungWall. Aguardar review. |
-| [#1847](https://github.com/aros-development-team/AROS/pull/1847) | `pthread`: devolver o valor anterior no test-and-set m68k | Pronto para review; `8f220e83bd`; não é draft; quatro checks aprovados | Um commit diretamente sobre master, sem dependências. `libpthread.a` e o teste dedicado compilam em x86-64 e m68k; o teste passa no AROS hosted. O binário m68k foi inspecionado, mas não executado em hardware/emulador nesta validação. Aguardar review. |
-| [#1846](https://github.com/aros-development-team/AROS/pull/1846) | `dnssd -q`, `-G` e zona completa por meio das APIs de registro aceitas | Pronto para review; `c6722aee2f`; não é draft; quatro checks aprovados | Um commit diretamente sobre master; depende somente dos já mergeados #1803/#1836, não do #1845. Builds x86-64/m68k, cppcheck, `make test` e 19 checks hosted passam. O único alerta inicial do Codacy (escopo de variável) foi corrigido. Aguardar review. |
-| [#1845](https://github.com/aros-development-team/AROS/pull/1845) | `mdnsd`: reunir respostas de vários serviços para DNS legado (RFC 6762 §6.7) | Pronto para review; `d835629e93`; não é draft; quatro checks aprovados | Um commit diretamente sobre master, sem dependências de PR. Reproduz 2 pacotes/8 registros no master e entrega 1 pacote/7 registros para dois serviços, com ID/pergunta, TTL e classe legados preservados. Fixtures 27+38+12, builds x86-64/m68k e execução hosted passam. Aguardar review. |
+
+## Preparado localmente
+
+O próximo candidato é o MD11, ainda **sem PR**: branch
+`review/mdns-shared-delay`, commit `479d1c1646`, diretamente sobre o master
+`adff8323a1`. Ele aplica o atraso aleatório de 20–120 ms à enumeração
+`_services._dns-sd._udp.local` e impede a retransmissão multicast do mesmo
+PTR na mesma interface por um segundo, sem mudar API ou ABI pública e sem
+atrasar respostas unicast legadas. A prova e as limitações de validação estão
+registradas no [backlog mDNS](mdns-backlog.md) e no
+[rascunho da proposta](pr-drafts/mdns-shared-delay.md).
 
 ## Merged
 
@@ -52,6 +62,9 @@ histórico, determina esta classificação.
 
 | PR | Mudança | Merge |
 | --- | --- | --- |
+| [#1847](https://github.com/aros-development-team/AROS/pull/1847) | `pthread`: devolver o valor anterior no test-and-set m68k | 2026-10-26 |
+| [#1846](https://github.com/aros-development-team/AROS/pull/1846) | `dnssd -q`, `-G` e zona completa por meio das APIs de registro aceitas | 2026-10-26 |
+| [#1845](https://github.com/aros-development-team/AROS/pull/1845) | `mdnsd`: reunir respostas de vários serviços para DNS legado (RFC 6762 §6.7) | 2026-10-26 |
 | [#1836](https://github.com/aros-development-team/AROS/pull/1836) | BonAmi: lookup IPv4 e consultas genéricas de registros por fila | 2026-10-25 |
 | [#1803](https://github.com/aros-development-team/AROS/pull/1803) | Ferramentas `dnssd`, `Nearby`, `Share`, `Handshake` sobre a fila | 2026-10-25 |
 | [#1801](https://github.com/aros-development-team/AROS/pull/1801) | Peers e Hosts por nome e anúncio `_midi2._udp` | 2026-10-24 |

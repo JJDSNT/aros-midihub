@@ -2,16 +2,22 @@
 # Checks on Linux-hosted AROS that mdnsd delays its answers to a browse
 # question and sends them together (RFC 6762 section 6).
 #
-#   tools/mdns-answer-delay-hosted.sh [AROS_DIR [WORK_DIR]]
+#   tools/mdns-answer-delay-hosted.sh [AROS_DIR [WORK_DIR [MDNSD]]]
 #
 # As tools/bonami-hosted.sh: eth1 for AROS (192.168.166.2), aroshost for
 # Linux (192.168.166.1). AROS registers three services of one type. The host
-# asks for the type five times, two seconds apart, and reads what comes back
-# within 600 ms: how many packets, how many PTR and address records, and how
-# long after the question the first packet came.
+# asks for the type five times, two seconds apart, then repeats browse and
+# service-type enumeration questions inside and outside the one-second
+# multicast suppression window. It reads what comes back within 600 ms: how
+# many packets, how many PTR and address records, and how long after the
+# question the first packet came.
+# MDNSD may name a prospective daemon binary to install in the temporary
+# image while retaining the known-good hosted system around it.
 # Exit status: 0 when every question got one packet with the three PTR
-# records and one address record, 20 to 200 ms after the question, and a
-# question for one instance by name was answered within 15 ms.
+# records and at least one address record, 20 to 200 ms after the question,
+# and a question for one instance by name was answered within 15 ms. Repeated
+# shared PTR questions must be silent inside one second and answer again
+# after it; service-type enumeration follows the same delayed behavior.
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -19,10 +25,15 @@ aros=$(realpath "${1:-$here/build-aros-linux/bin/linux-x86_64/AROS}")
 work=$(realpath "${2:-$(mktemp -d)}")
 sys="$work/AROS"
 type=_bonamidelay._udp
+mdnsd=${3:-}
 
 test -x "$aros/boot/linux/AROSBootstrap"
 test -f "$aros/System/Network/Services/mdnsd"
 test -f "$aros/Extras/aros-midihub/C/BonamiProbe"
+if [ -n "$mdnsd" ]; then
+    mdnsd=$(realpath "$mdnsd")
+    test -f "$mdnsd"
+fi
 
 if ! ip link show aroshost > /dev/null 2>&1; then
     sudo ip link add eth1 type veth peer name aroshost
@@ -37,6 +48,9 @@ sudo ethtool -K eth1 tx off > /dev/null
 sudo rm -rf "$sys"
 mkdir -p "$work"
 cp -a --reflink=auto "$aros" "$sys"
+if [ -n "$mdnsd" ]; then
+    cp "$mdnsd" "$sys/System/Network/Services/mdnsd"
+fi
 db="$sys/System/Network/AROSTCP/db"
 echo 'eth1 DEV=DEVS:networks/eth.device UNIT=1 IP=192.168.166.2 NETMASK=255.255.255.0 UP' \
     >> "$db/interfaces"
@@ -108,7 +122,7 @@ s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(HOST))
 s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
 s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
 
-def ask(name, qtype, label):
+def ask(name, qtype, label, ptr_target=None):
     question = struct.pack('>HHHHHH', 0, 0, 1, 0, 0, 0) + wire(name) + struct.pack('>HH', qtype, 1)
     s.sendto(question, (GROUP, PORT))
     sent = time.time()
@@ -137,10 +151,13 @@ def ask(name, qtype, label):
             for _ in range(an + ns + ar):
                 owner, offset = read_name(data, offset)
                 rtype, rclass, ttl, rdlen = struct.unpack('>HHIH', data[offset:offset + 10])
-                offset += 10 + rdlen
-                if rtype == 12 and owner.lower() == kind:
-                    ptrs += 1
-                    mine += 1
+                rdata = offset + 10
+                offset = rdata + rdlen
+                if rtype == 12 and owner.lower() == name.lower():
+                    target, _ = read_name(data, rdata)
+                    if ptr_target is None or target.lower() == ptr_target.lower():
+                        ptrs += 1
+                        mine += 1
                 elif rtype == 33 and owner.lower().endswith(kind):
                     srvs += 1
                     mine += 1
@@ -160,6 +177,13 @@ for _ in range(5):
     ask(kind, 12, 'browse')
     time.sleep(1.4)
 ask('DelayTwo.' + kind, 33, 'named')
+ask(kind, 12, 'repeat-first')
+ask(kind, 12, 'repeat-blocked')
+ask(kind, 12, 'repeat-after')
+types = '_services._dns-sd._udp.local'
+ask(types, 12, 'types-first', kind)
+ask(types, 12, 'types-blocked', kind)
+ask(types, 12, 'types-after', kind)
 PYEOF
 ) &
 
@@ -171,13 +195,21 @@ check() {
     if [ "$1" = yes ]; then echo "ok: $2"; else echo "FAIL: $2"; status=1; fi
 }
 browse=$(grep -c '^browse ' "$work/delay.log" || true)
-one=$(awk '$1 == "browse" && $2 == 1 && $3 == 3 && $5 == 1' "$work/delay.log" | wc -l)
+one=$(awk '$1 == "browse" && $2 == 1 && $3 == 3 && $5 >= 1' "$work/delay.log" | wc -l)
 timed=$(awk '$1 == "browse" && $6 >= 0.02 && $6 <= 0.2' "$work/delay.log" | wc -l)
 delays=$(awk '$1 == "browse" {printf "%s%d", sep, $6 * 1000; sep=", "}' "$work/delay.log")
 named=$(awk '$1 == "named" && $2 == 1 && $4 == 1 && $6 >= 0 && $6 < 0.015' "$work/delay.log" | wc -l)
 namedms=$(awk '$1 == "named" {printf "%.1f", $6 * 1000}' "$work/delay.log")
-check "$([ "$browse" -eq 5 ] && [ "$one" -eq 5 ] && echo yes || echo no)" "each of $browse browse questions got one packet with three PTR records and one address record ($one)"
+repeat_first=$(awk '$1 == "repeat-first" && $2 == 1 && $3 == 3 && $5 >= 1 && $6 >= 0.02 && $6 <= 0.2' "$work/delay.log" | wc -l)
+repeat_blocked=$(awk '$1 == "repeat-blocked" && $2 == 0' "$work/delay.log" | wc -l)
+repeat_after=$(awk '$1 == "repeat-after" && $2 == 1 && $3 == 3 && $5 >= 1 && $6 >= 0.02 && $6 <= 0.2' "$work/delay.log" | wc -l)
+types_first=$(awk '$1 == "types-first" && $2 == 1 && $3 == 1 && $5 == 0 && $6 >= 0.02 && $6 <= 0.2' "$work/delay.log" | wc -l)
+types_blocked=$(awk '$1 == "types-blocked" && $2 == 0' "$work/delay.log" | wc -l)
+types_after=$(awk '$1 == "types-after" && $2 == 1 && $3 == 1 && $5 == 0 && $6 >= 0.02 && $6 <= 0.2' "$work/delay.log" | wc -l)
+check "$([ "$browse" -eq 5 ] && [ "$one" -eq 5 ] && echo yes || echo no)" "each of $browse browse questions got one packet with three PTR records and at least one address record ($one)"
 check "$([ "$browse" -eq 5 ] && [ "$timed" -eq 5 ] && echo yes || echo no)" "after a delay of 20 to 200 ms: $delays ms"
 check "$([ "$named" -eq 1 ] && echo yes || echo no)" "a question for one instance by name was answered at once, in one packet ($namedms ms)"
+check "$([ "$repeat_first" -eq 1 ] && [ "$repeat_blocked" -eq 1 ] && [ "$repeat_after" -eq 1 ] && echo yes || echo no)" "ordinary shared PTR repeats are suppressed inside one second and resume afterward"
+check "$([ "$types_first" -eq 1 ] && [ "$types_blocked" -eq 1 ] && [ "$types_after" -eq 1 ] && echo yes || echo no)" "service-type PTR answers are delayed and suppress repeats per RFC 6762"
 echo "logs: $work"
 exit $status

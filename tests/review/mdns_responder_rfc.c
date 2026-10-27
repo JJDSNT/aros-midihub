@@ -113,7 +113,8 @@ void mdnsNetSendAll(struct MDNSDaemon *md, const UBYTE *packet, LONG length)
 {
     LONG i;
     for (i = 0; i < md->md_IfCount; ++i)
-        mdnsNetSendOn(md, i, packet, length);
+        if (md->md_SendIf < 0 || md->md_SendIf == i)
+            mdnsNetSendOn(md, i, packet, length);
 }
 
 static void put16(UBYTE *p, UWORD n) { p[0] = n >> 8; p[1] = n; }
@@ -137,16 +138,23 @@ static size_t name(UBYTE *packet, size_t at, const char *text)
     packet[at++] = 0;
     return at;
 }
-static size_t question(UBYTE *packet, UWORD type, UWORD cls, UWORD flags)
+static size_t question_name(UBYTE *packet, const char *owner, UWORD type,
+                            UWORD cls, UWORD flags)
 {
     size_t at;
     memset(packet, 0, MDNS_MAX_PACKET);
     put16(packet + 2, flags);
     put16(packet + 4, 1);
-    at = name(packet, 12, type == DNS_TYPE_PTR ? "_midi2._udp.local" : "Session._midi2._udp.local");
+    at = name(packet, 12, owner);
     put16(packet + at, type);
     put16(packet + at + 2, cls);
     return at + 4;
+}
+static size_t question(UBYTE *packet, UWORD type, UWORD cls, UWORD flags)
+{
+    return question_name(packet, type == DNS_TYPE_PTR ?
+        "_midi2._udp.local" : "Session._midi2._udp.local", type, cls,
+        flags);
 }
 static size_t record(UBYTE *packet, size_t at, const char *owner_name,
                      UWORD type, UWORD cls, ULONG ttl, const UBYTE *data, size_t length)
@@ -358,6 +366,90 @@ int main(int argc, char **argv)
         printf("legacy browse with two services: packets=%u, records=%u\n",
                packets, answer_records);
         failure = packets != 1 || answer_records != 7;
+    } else if (!strcmp(argv[1], "shared-delay")) {
+        at = question(packet, DNS_TYPE_PTR, DNS_CLASS_IN, 0);
+        receive(&md, packet, at);
+        failure = packets != 0;
+        flush(&md);
+        printf("shared browse: immediate=%u, after delay=%u\n",
+               failure != 0, packets);
+        failure |= packets != 1;
+    } else if (!strcmp(argv[1], "shared-repeat")) {
+        mdnsRegAnnounceAll(&md);
+        packets = answer_records = announcements = 0;
+        at = question(packet, DNS_TYPE_PTR, DNS_CLASS_IN, 0);
+        receive(&md, packet, at);
+        flush(&md);
+        printf("shared browse inside one second: responses=%u\n", packets);
+        failure = packets != 0;
+        ticks += 50;
+        receive(&md, packet, at);
+        flush(&md);
+        printf("shared browse after one second: responses=%u\n", packets);
+        failure |= packets != 1;
+    } else if (!strcmp(argv[1], "shared-interface")) {
+        md.md_IfCount = 2;
+        md.md_Ifs[1].mi_Addr = 0xc6336402;
+        md.md_SendIf = 0;
+        mdnsRegAnnounceAll(&md);
+        packets = answer_records = announcements = 0;
+        md.md_SendIf = 1;
+        at = question(packet, DNS_TYPE_PTR, DNS_CLASS_IN, 0);
+        receive(&md, packet, at);
+        flush(&md);
+        printf("shared browse on another interface: responses=%u\n", packets);
+        failure = packets != 1;
+    } else if (!strcmp(argv[1], "types-delay")) {
+        at = question_name(packet, "_services._dns-sd._udp.local",
+            DNS_TYPE_PTR, DNS_CLASS_IN, 0);
+        receive(&md, packet, at);
+        failure = packets != 0;
+        flush(&md);
+        printf("service-type browse: immediate=%u, after delay=%u\n",
+               failure != 0, packets);
+        failure |= packets != 1;
+    } else if (!strcmp(argv[1], "types-legacy")) {
+        at = question_name(packet, "_services._dns-sd._udp.local",
+            DNS_TYPE_PTR, DNS_CLASS_IN, 0);
+        put16(packet, 0x1234);
+        receive_from_port(&md, packet, at, 49152);
+        failure = packets != 1;
+        flush(&md);
+        printf("legacy service-type browse: responses=%u\n", packets);
+        failure |= packets != 1;
+    } else if (!strcmp(argv[1], "types-repeat")) {
+        at = question_name(packet, "_services._dns-sd._udp.local",
+            DNS_TYPE_PTR, DNS_CLASS_IN, 0);
+        receive(&md, packet, at);
+        flush(&md);
+        failure = packets != 1;
+        packets = answer_records = announcements = 0;
+        receive(&md, packet, at);
+        flush(&md);
+        printf("service-type browse inside one second: responses=%u\n",
+               packets);
+        failure |= packets != 0;
+        ticks += 50;
+        receive(&md, packet, at);
+        flush(&md);
+        printf("service-type browse after one second: responses=%u\n",
+               packets);
+        failure |= packets != 1;
+    } else if (!strcmp(argv[1], "types-interface")) {
+        md.md_IfCount = 2;
+        md.md_Ifs[1].mi_Addr = 0xc6336402;
+        md.md_SendIf = 0;
+        at = question_name(packet, "_services._dns-sd._udp.local",
+            DNS_TYPE_PTR, DNS_CLASS_IN, 0);
+        receive(&md, packet, at);
+        flush(&md);
+        packets = answer_records = announcements = 0;
+        md.md_SendIf = 1;
+        receive(&md, packet, at);
+        flush(&md);
+        printf("service-type browse on another interface: responses=%u\n",
+               packets);
+        failure = packets != 1;
     }
 #if MDNS_IPC_VERSION >= 2
     if (!strcmp(argv[1], "identical-txt") || !strcmp(argv[1], "goodbye-txt") ||
