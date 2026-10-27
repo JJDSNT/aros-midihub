@@ -4,8 +4,9 @@ Title: mdnsd: delay shared type replies and suppress repeats
 
 This is one internal responder change. It does not alter the Bonami public
 API, ABI, message format or tool behavior, and it has no unmerged dependency.
-The prepared branch is `review/mdns-shared-delay`, commit `479d1c1646`, based
-directly on upstream master `adff8323a1`.
+Published as [AROS #1887](https://github.com/aros-development-team/AROS/pull/1887)
+from `review/mdns-shared-delay`, commit `479d1c1646`, based directly on
+upstream master `adff8323a1`.
 
 RFC 6762 section 6 requires shared multicast responses to be delayed by a
 random 20--120 ms and says that the same record must not normally be
@@ -60,6 +61,7 @@ repeated multicast replies. A positive packet capture of this candidate has
 not yet been claimed: the available complete hosted image predates the
 candidate's build/API context, while the current partial build image rejects
 its Bonami fixture registrations. Run the candidate in one version-consistent
-hosted image before publication, or state this limitation explicitly.
+hosted image as follow-up validation. The published PR states this limitation
+explicitly.
 
 Not tested on physical m68k or big-endian hardware.

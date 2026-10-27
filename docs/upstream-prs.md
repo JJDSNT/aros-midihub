@@ -33,27 +33,17 @@ The AROS maintainer moved the contribution process into [PULL_REQUESTS.md](https
 
 ## Abertos
 
-Atualizado em **2026-10-27**: **42 merged, 2 abertos (prontos para review),
+Atualizado em **2026-10-27**: **42 merged, 3 abertos (prontos para review),
 nenhum draft e 1 fechado sem merge**. #1845, #1846 e #1847 foram mergeados
-em 2026-10-26. Os dois PRs restantes são independentes entre si e diretamente
-baseados em master; ambos têm os quatro checks aprovados e nenhuma revisão ou
+em 2026-10-26. Os três PRs restantes são independentes entre si e diretamente
+baseados em master; todos têm os quatro checks aprovados e nenhuma revisão ou
 thread pendente registrada no GitHub.
 
 | PR | Proposta | Situação | O que falta agora |
 | --- | --- | --- | --- |
+| [#1887](https://github.com/aros-development-team/AROS/pull/1887) | `mdnsd`: atrasar PTRs compartilhados e suprimir repetições conforme RFC 6762 §6 | Pronto para review; `479d1c1646`; não é draft; mergeable; quatro checks aprovados | Um commit diretamente sobre master, sem dependências nem mudança pública de API/ABI. O baseline falha exatamente 3/34 casos; a proposta passa 34+38+12 fixtures, ASan/UBSan, cppcheck, `make test` e builds completos x86-64/m68k. Aguardar review; a captura positiva numa imagem hosted coerente ainda é uma limitação declarada. |
 | [#1869](https://github.com/aros-development-team/AROS/pull/1869) | Mesa: correções m68k de alinhamento, tamanho de ponteiro e seleção softpipe | Pronto para review; `8abd264a`; não é draft; mergeable; quatro checks aprovados | Dois commits diretamente sobre master, sem dependências. Executado em emu68/QEMU com softpipe; os testes independentes de `ralloc` passam com ASan/UBSan. Aguardar review; ainda não foi validado em hardware m68k real. |
 | [#1848](https://github.com/aros-development-team/AROS/pull/1848) | `exec`: preservar o alinhamento real e o tamanho do bloco ao liberar memória com MungWall | Pronto para review; `cc40ebad9d`; não é draft; mergeable; quatro checks aprovados | Um commit diretamente sobre master, sem dependências. Os três objetos alterados compilam com `-Werror` para linux-x86_64 e amiga-m68k. A reprodução histórica é em Pi 3/m68k; esta revisão ainda não foi executada em hardware ou em uma imagem m68k com MungWall. Aguardar review. |
-
-## Preparado localmente
-
-O próximo candidato é o MD11, ainda **sem PR**: branch
-`review/mdns-shared-delay`, commit `479d1c1646`, diretamente sobre o master
-`adff8323a1`. Ele aplica o atraso aleatório de 20–120 ms à enumeração
-`_services._dns-sd._udp.local` e impede a retransmissão multicast do mesmo
-PTR na mesma interface por um segundo, sem mudar API ou ABI pública e sem
-atrasar respostas unicast legadas. A prova e as limitações de validação estão
-registradas no [backlog mDNS](mdns-backlog.md) e no
-[rascunho da proposta](pr-drafts/mdns-shared-delay.md).
 
 ## Merged
 
