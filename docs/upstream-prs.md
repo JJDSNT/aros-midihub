@@ -33,14 +33,15 @@ The AROS maintainer moved the contribution process into [PULL_REQUESTS.md](https
 
 ## Abertos
 
-Atualizado em **2026-10-27**: **43 merged, 2 abertos (prontos para review),
+Atualizado em **2026-10-27**: **43 merged, 3 abertos (prontos para review),
 nenhum draft e 1 fechado sem merge**. #1845, #1846 e #1847 foram mergeados
-em 2026-10-26, e #1869 em 2026-10-27. Os dois PRs restantes são independentes
-entre si e diretamente baseados em master; ambos têm os quatro checks
+em 2026-10-26, e #1869 em 2026-10-27. Os três PRs restantes são independentes
+entre si e diretamente baseados em master; todos têm os quatro checks
 aprovados e nenhuma revisão ou thread pendente registrada no GitHub.
 
 | PR | Proposta | Situação | O que falta agora |
 | --- | --- | --- | --- |
+| [#1888](https://github.com/aros-development-team/AROS/pull/1888) | `camd`: inicializar o limite do ring de saída realtime | Pronto para review; `feb88d0d2a`; não é draft; mergeable; quatro checks aprovados | Uma atribuição diretamente sobre master, sem dependências nem mudança pública de API/ABI. O baseline falha após 100000 mensagens realtime e deixa a porta corrompida; a proposta entrega todas e a mensagem seguinte. Builds completos x86-64/m68k e `make test` passam. Aguardar review. |
 | [#1887](https://github.com/aros-development-team/AROS/pull/1887) | `mdnsd`: atrasar PTRs compartilhados e suprimir repetições conforme RFC 6762 §6 | Pronto para review; `479d1c1646`; não é draft; mergeable; quatro checks aprovados | Um commit diretamente sobre master, sem dependências nem mudança pública de API/ABI. O baseline falha exatamente 3/34 casos; a proposta passa 34+38+12 fixtures, ASan/UBSan, cppcheck, `make test` e builds completos x86-64/m68k. Aguardar review; a captura positiva numa imagem hosted coerente ainda é uma limitação declarada. |
 | [#1848](https://github.com/aros-development-team/AROS/pull/1848) | `exec`: preservar o alinhamento real e o tamanho do bloco ao liberar memória com MungWall | Pronto para review; `cc40ebad9d`; não é draft; mergeable; quatro checks aprovados | Um commit diretamente sobre master, sem dependências. Os três objetos alterados compilam com `-Werror` para linux-x86_64 e amiga-m68k. A reprodução histórica é em Pi 3/m68k; esta revisão ainda não foi executada em hardware ou em uma imagem m68k com MungWall. Aguardar review. |
 
@@ -52,15 +53,6 @@ sobre master e sem depender do #1887. O baseline falha apenas os dois novos
 casos locais; a proposta passa discovery 39/39 e query 13/13, cppcheck,
 `make test` e build/link completos x86-64 e m68k. Ainda não foi publicado;
 veja o [rascunho e a validação](pr-drafts/mdns-local-reflection.md).
-
-A correção B28 do CAMD 41.1 está preparada em
-`review/camd-realtime-ring`, commit `feb88d0`, diretamente sobre master. O
-baseline deixa os cursores realtime avançarem além do bloco alocado porque
-`bufferend_rt` não é inicializado; a proposta corrige somente essa atribuição.
-Com 100000 mensagens realtime, o baseline falha e deixa de entregar a mensagem
-seguinte, enquanto a proposta passa ambos os casos. A biblioteca completa
-compila e liga para x86-64 e amiga-m68k. Não há mudança pública de API/ABI;
-veja o [rascunho e a validação](pr-drafts/camd-realtime-ring.md).
 
 ## Merged
 
