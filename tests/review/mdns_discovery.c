@@ -94,6 +94,12 @@ static void init(void)
 {
     ticks = 5000; live_task_id = 1; packets = 0; feed_type = "_midi2._udp.local";
     setup(&md, 0); md.md_DaemonID = 77;
+    mdnsRegFree(&md);
+}
+static void init_local(void)
+{
+    ticks = 5000; live_task_id = 1; packets = 0; feed_type = "_midi2._udp.local";
+    setup(&md, 60); md.md_DaemonID = 77;
 }
 static void finish(void)
 {
@@ -515,6 +521,59 @@ static void enumerate_types(void)
     finish();
 }
 
+/* A registration owned by this daemon is part of the same link-local DNS-SD
+ * namespace as remote services. It must be visible without relying on the
+ * multicast socket looping the daemon's own packet back. */
+static void local_registration(void)
+{
+    static const UBYTE local_txt[] = { 3, 'v', '=', 'a' };
+    struct MDNSRegisteredService *second, *service;
+    struct MDNSDiscoveryEvent e;
+    struct MDNSIPCMsg msg = {0};
+    APTR browse, types;
+
+    init_local();
+    service = (struct MDNSRegisteredService *)md.md_Services.lh_Head;
+    browse = begin(0, NULL);
+    types = begin_type(0, NULL, "_services._dns-sd._udp");
+    mdnsDiscoveryTick(&md);
+    CHECK(read_event(browse, &e) == MDNS_OK && e.de_Code == MEVENT_ADD);
+    CHECK(!strcmp(e.de_Name, "Session"));
+    CHECK(!strcmp(e.de_Type, "_midi2._udp"));
+    CHECK(ntohl(e.de_Address) == 0xc0000202u && e.de_Port == 5673);
+    CHECK(e.de_TXTLength == sizeof(local_txt));
+    CHECK(!memcmp(e.de_TXT, local_txt, sizeof(local_txt)));
+    CHECK(read_event(types, &e) == MDNS_OK && e.de_Code == MEVENT_ADD);
+    CHECK(!strcmp(e.de_Type, "_midi2._udp") && e.de_Name[0] == 0);
+    msg.mi_Handle = service->rs_ClientRef;
+    own_message(&msg);
+    mdnsRegRemove(&md, &msg);
+    ticks += 50;
+    mdnsDiscoveryTick(&md);
+    CHECK(read_event(browse, &e) == MDNS_OK && e.de_Code == MEVENT_REMOVE);
+    CHECK(!strcmp(e.de_Name, "Session"));
+    CHECK(read_event(types, &e) == MDNS_OK && e.de_Code == MEVENT_REMOVE);
+    CHECK(!strcmp(e.de_Type, "_midi2._udp"));
+    memset(&msg, 0, sizeof(msg));
+    strcpy(msg.mi_Name, "Second");
+    strcpy(msg.mi_ServiceType, "_midi2._udp");
+    strcpy(msg.mi_Domain, "local");
+    msg.mi_Port = 6000;
+    msg.mi_TTL = 60;
+    own_message(&msg);
+    CHECK(mdnsRegAdd(&md, &msg) == MDNS_OK);
+    second = (struct MDNSRegisteredService *)md.md_Services.lh_Head;
+    second->rs_State = MDNS_NAME_ANNOUNCED;
+    second->rs_Step = MDNS_ANNOUNCE_COUNT;
+    mdnsRegAnnounceAll(&md);
+    mdnsDiscoveryTick(&md);
+    CHECK(read_event(browse, &e) == MDNS_OK && e.de_Code == MEVENT_ADD);
+    CHECK(!strcmp(e.de_Name, "Second") && e.de_Port == 6000);
+    CHECK(read_event(types, &e) == MDNS_OK && e.de_Code == MEVENT_ADD);
+    CHECK(!strcmp(e.de_Type, "_midi2._udp"));
+    finish();
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -542,6 +601,7 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "release-quiet")) release_no_queries();
     else if (!strcmp(argv[1], "missing-backoff")) missing_backoff();
     else if (!strcmp(argv[1], "enumerate-types")) enumerate_types();
+    else if (!strcmp(argv[1], "local-registration")) local_registration();
 #ifdef MDNS_DISCOVERY_REAP
     else if (!strcmp(argv[1], "unrelated-not-cached")) unrelated_not_cached();
     else if (!strcmp(argv[1], "evict-unwanted")) evict_unwanted();

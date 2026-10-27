@@ -94,7 +94,7 @@ def main():
                  "pointer-cycle", "short-rdata", "wrong-port", "multiple-links",
                  "clock-wrap", "release-quiet", "missing-backoff")
         if b"services_key" in (output / "mdns_discovery.c").read_bytes():
-            cases += ("enumerate-types",)
+            cases += ("enumerate-types", "local-registration")
         if reap:
             cases += ("unrelated-not-cached", "evict-unwanted", "views-scoped",
                       "a-before-srv")
@@ -104,7 +104,8 @@ def main():
                       "notify-release", "notify-vanished", "notify-resolve",
                       "notify-reset")
     if args.query:
-        cases = ("query-a", "query-own-host", "query-ptr-compressed",
+        cases = ("query-a", "query-own-host", "query-local-service",
+                 "query-ptr-compressed",
                  "query-coalesce", "query-overflow", "query-timeout",
                  "query-notify-stop", "query-owner-restart",
                  "query-network-reset",
