@@ -45,6 +45,15 @@ thread pendente registrada no GitHub.
 | [#1869](https://github.com/aros-development-team/AROS/pull/1869) | Mesa: correções m68k de alinhamento, tamanho de ponteiro e seleção softpipe | Pronto para review; `8abd264a`; não é draft; mergeable; quatro checks aprovados | Dois commits diretamente sobre master, sem dependências. Executado em emu68/QEMU com softpipe; os testes independentes de `ralloc` passam com ASan/UBSan. Aguardar review; ainda não foi validado em hardware m68k real. |
 | [#1848](https://github.com/aros-development-team/AROS/pull/1848) | `exec`: preservar o alinhamento real e o tamanho do bloco ao liberar memória com MungWall | Pronto para review; `cc40ebad9d`; não é draft; mergeable; quatro checks aprovados | Um commit diretamente sobre master, sem dependências. Os três objetos alterados compilam com `-Werror` para linux-x86_64 e amiga-m68k. A reprodução histórica é em Pi 3/m68k; esta revisão ainda não foi executada em hardware ou em uma imagem m68k com MungWall. Aguardar review. |
 
+## Preparado localmente
+
+O item MD25(3), reflexão das inscrições locais nas APIs de browse/query, está
+preparado em `review/mdns-local-discovery`, commit `fb8981e861`, diretamente
+sobre master e sem depender do #1887. O baseline falha apenas os dois novos
+casos locais; a proposta passa discovery 39/39 e query 13/13, cppcheck,
+`make test` e build/link completos x86-64 e m68k. Ainda não foi publicado;
+veja o [rascunho e a validação](pr-drafts/mdns-local-reflection.md).
+
 ## Merged
 
 Datas em UTC. O campo `state=MERGED`, e não o `reviewDecision`

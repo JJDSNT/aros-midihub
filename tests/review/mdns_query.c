@@ -125,6 +125,57 @@ query_own_host(void)
 }
 
 static void
+query_local_service(void)
+{
+    struct MDNSRegisteredService *second, *service;
+    struct MDNSRecordEvent event;
+    struct MDNSIPCMsg msg;
+    char expanded[256];
+    APTR other, ref;
+
+    init_query();
+    service = (struct MDNSRegisteredService *)daemon.md_Services.lh_Head;
+    ref = begin("_midi2._udp.local", DNS_TYPE_PTR, 0);
+    CHECK(read_record(ref, &event) == MDNS_OK);
+    CHECK(event.re_Type == DNS_TYPE_PTR && event.re_Class == DNS_CLASS_IN);
+    CHECK(event.re_TTL == 4500);
+    CHECK(ntohl(event.re_Interface) == 0xc0000202u);
+    CHECK(mdnsWireToName(event.re_Data, event.re_DataLength, 0,
+        event.re_Data, event.re_DataLength, expanded, sizeof(expanded)) >= 0);
+    CHECK(!strcmp(expanded, "Session._midi2._udp.local"));
+    CHECK(read_record(ref, &event) == MDNSERR_NOTREADY);
+    other = begin("Session._midi2._udp.local", DNS_TYPE_SRV, 0);
+    CHECK(read_record(ref, &event) == MDNSERR_NOTREADY);
+    CHECK(read_record(other, &event) == MDNS_OK);
+    CHECK(event.re_Type == DNS_TYPE_SRV && event.re_DataLength > 6);
+    CHECK(event.re_Data[4] == 0x16 && event.re_Data[5] == 0x29);
+    memset(&msg, 0, sizeof(msg));
+    msg.mi_Handle = service->rs_ClientRef;
+    own_message(&msg);
+    mdnsRegRemove(&daemon, &msg);
+    CHECK(read_record(ref, &event) == MDNS_OK);
+    CHECK(event.re_Type == DNS_TYPE_PTR && event.re_TTL == 0);
+    memset(&msg, 0, sizeof(msg));
+    strcpy(msg.mi_Name, "Second");
+    strcpy(msg.mi_ServiceType, "_midi2._udp");
+    strcpy(msg.mi_Domain, "local");
+    msg.mi_Port = 6000;
+    msg.mi_TTL = 60;
+    own_message(&msg);
+    CHECK(mdnsRegAdd(&daemon, &msg) == MDNS_OK);
+    second = (struct MDNSRegisteredService *)daemon.md_Services.lh_Head;
+    second->rs_State = MDNS_NAME_ANNOUNCED;
+    second->rs_Step = MDNS_ANNOUNCE_COUNT;
+    mdnsRegAnnounceAll(&daemon);
+    CHECK(read_record(ref, &event) == MDNS_OK);
+    CHECK(event.re_Type == DNS_TYPE_PTR && event.re_TTL == 60);
+    CHECK(mdnsWireToName(event.re_Data, event.re_DataLength, 0,
+        event.re_Data, event.re_DataLength, expanded, sizeof(expanded)) >= 0);
+    CHECK(!strcmp(expanded, "Second._midi2._udp.local"));
+    finish_query();
+}
+
+static void
 query_ptr_compressed(void)
 {
     struct MDNSRecordEvent event;
@@ -314,6 +365,7 @@ main(int argc, char **argv)
     }
     if (!strcmp(argv[1], "query-a")) query_a();
     else if (!strcmp(argv[1], "query-own-host")) query_own_host();
+    else if (!strcmp(argv[1], "query-local-service")) query_local_service();
     else if (!strcmp(argv[1], "query-ptr-compressed")) query_ptr_compressed();
     else if (!strcmp(argv[1], "query-coalesce")) query_coalesce();
     else if (!strcmp(argv[1], "query-overflow")) query_overflow();
