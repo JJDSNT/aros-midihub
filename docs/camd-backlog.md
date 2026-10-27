@@ -43,7 +43,7 @@ pass (six tasks, 900 rounds, no unexpected result in fifteen runs):
 | B05 | `test_endpoint_stress`: two senders, a receiver, two publishers and an observer at once on the loopback port and on published endpoints. It found nothing; the count of received messages varies with timing because input sessions come and go, and is not asserted. |
 | B25 | `Receiver()` refuses what the ring cannot hold; the receiver process reports `CMEF_RecvOverflow`, gives up a SysEx message in progress and looks for a status byte again. The ring's count is updated atomically. |
 | B27 | `CamdWait()` waits for an answer signal from its timer process instead of borrowing a semaphore, so it blocks on every call. There is no test that holds `Forbid()` across a legacy wait. |
-| B28 | `bufferend_rt` is set; 100000 realtime messages pass a driver port and a following channel message still arrives. Prepared independently on current upstream master as `review/camd-realtime-ring`, commit `feb88d0`. |
+| B28 | `bufferend_rt` is set; 100000 realtime messages pass a driver port and a following channel message still arrives. Published independently as AROS PR [#1888](https://github.com/aros-development-team/AROS/pull/1888), commit `feb88d0`. |
 
 Closed in `aros-camd-endpoint-hold-and-drain.patch` (193 v43 checks, three
 runs in a row):
