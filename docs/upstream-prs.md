@@ -33,16 +33,15 @@ The AROS maintainer moved the contribution process into [PULL_REQUESTS.md](https
 
 ## Abertos
 
-Atualizado em **2026-10-27**: **42 merged, 3 abertos (prontos para review),
+Atualizado em **2026-10-27**: **43 merged, 2 abertos (prontos para review),
 nenhum draft e 1 fechado sem merge**. #1845, #1846 e #1847 foram mergeados
-em 2026-10-26. Os três PRs restantes são independentes entre si e diretamente
-baseados em master; todos têm os quatro checks aprovados e nenhuma revisão ou
-thread pendente registrada no GitHub.
+em 2026-10-26, e #1869 em 2026-10-27. Os dois PRs restantes são independentes
+entre si e diretamente baseados em master; ambos têm os quatro checks
+aprovados e nenhuma revisão ou thread pendente registrada no GitHub.
 
 | PR | Proposta | Situação | O que falta agora |
 | --- | --- | --- | --- |
 | [#1887](https://github.com/aros-development-team/AROS/pull/1887) | `mdnsd`: atrasar PTRs compartilhados e suprimir repetições conforme RFC 6762 §6 | Pronto para review; `479d1c1646`; não é draft; mergeable; quatro checks aprovados | Um commit diretamente sobre master, sem dependências nem mudança pública de API/ABI. O baseline falha exatamente 3/34 casos; a proposta passa 34+38+12 fixtures, ASan/UBSan, cppcheck, `make test` e builds completos x86-64/m68k. Aguardar review; a captura positiva numa imagem hosted coerente ainda é uma limitação declarada. |
-| [#1869](https://github.com/aros-development-team/AROS/pull/1869) | Mesa: correções m68k de alinhamento, tamanho de ponteiro e seleção softpipe | Pronto para review; `8abd264a`; não é draft; mergeable; quatro checks aprovados | Dois commits diretamente sobre master, sem dependências. Executado em emu68/QEMU com softpipe; os testes independentes de `ralloc` passam com ASan/UBSan. Aguardar review; ainda não foi validado em hardware m68k real. |
 | [#1848](https://github.com/aros-development-team/AROS/pull/1848) | `exec`: preservar o alinhamento real e o tamanho do bloco ao liberar memória com MungWall | Pronto para review; `cc40ebad9d`; não é draft; mergeable; quatro checks aprovados | Um commit diretamente sobre master, sem dependências. Os três objetos alterados compilam com `-Werror` para linux-x86_64 e amiga-m68k. A reprodução histórica é em Pi 3/m68k; esta revisão ainda não foi executada em hardware ou em uma imagem m68k com MungWall. Aguardar review. |
 
 ## Preparado localmente
@@ -54,6 +53,15 @@ casos locais; a proposta passa discovery 39/39 e query 13/13, cppcheck,
 `make test` e build/link completos x86-64 e m68k. Ainda não foi publicado;
 veja o [rascunho e a validação](pr-drafts/mdns-local-reflection.md).
 
+A correção B28 do CAMD 41.1 está preparada em
+`review/camd-realtime-ring`, commit `feb88d0`, diretamente sobre master. O
+baseline deixa os cursores realtime avançarem além do bloco alocado porque
+`bufferend_rt` não é inicializado; a proposta corrige somente essa atribuição.
+Com 100000 mensagens realtime, o baseline falha e deixa de entregar a mensagem
+seguinte, enquanto a proposta passa ambos os casos. A biblioteca completa
+compila e liga para x86-64 e amiga-m68k. Não há mudança pública de API/ABI;
+veja o [rascunho e a validação](pr-drafts/camd-realtime-ring.md).
+
 ## Merged
 
 Datas em UTC. O campo `state=MERGED`, e não o `reviewDecision`
@@ -61,6 +69,7 @@ histórico, determina esta classificação.
 
 | PR | Mudança | Merge |
 | --- | --- | --- |
+| [#1869](https://github.com/aros-development-team/AROS/pull/1869) | Mesa: correções m68k de alinhamento, tamanho de ponteiro e seleção softpipe | 2026-10-27 |
 | [#1847](https://github.com/aros-development-team/AROS/pull/1847) | `pthread`: devolver o valor anterior no test-and-set m68k | 2026-10-26 |
 | [#1846](https://github.com/aros-development-team/AROS/pull/1846) | `dnssd -q`, `-G` e zona completa por meio das APIs de registro aceitas | 2026-10-26 |
 | [#1845](https://github.com/aros-development-team/AROS/pull/1845) | `mdnsd`: reunir respostas de vários serviços para DNS legado (RFC 6762 §6.7) | 2026-10-26 |

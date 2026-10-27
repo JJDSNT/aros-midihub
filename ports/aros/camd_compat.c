@@ -690,7 +690,7 @@ static void test_loopback(void)
     {
         int i, seen = 0;
 
-        for (i = 0; i < 2000; i++) {
+        for (i = 0; i < 100000; i++) {
             PutMidi(sender, 0xf8000000UL);
             while (GetMidi(in, &msg)) seen++;
         }
@@ -698,8 +698,8 @@ static void test_loopback(void)
         while (GetMidi(in, &msg)) seen++;
         GetMidiErr(in);
         PutMidi(sender, 0x90404000UL);
-        check(seen == 2000 && get_soon(in, &msg) && msg.mm_Status == 0x90 && msg.mm_Data1 == 0x40,
-              "two thousand realtime messages pass a driver port and leave it working", NULL);
+        check(seen == 100000 && get_soon(in, &msg) && msg.mm_Status == 0x90 && msg.mm_Data1 == 0x40,
+              "one hundred thousand realtime messages pass a driver port and leave it working", NULL);
     }
 
     /* A burst the port's receive ring cannot hold: the sender outranks the
