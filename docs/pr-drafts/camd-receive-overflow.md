@@ -34,7 +34,7 @@ the receiving node observes `CMEF_RecvOverflow`, then sends a channel message
 to verify that parsing and delivery recover.
 
 In the isolated `--receive-overflow` run on unmodified upstream master
-`36668e1379`:
+`8ab9e5f7b9`:
 
 - linking, ordinary messages, order and normal SysEx pass;
 - the oversized burst is not reported as `CMEF_RecvOverflow`;
