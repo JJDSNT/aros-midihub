@@ -31,6 +31,10 @@
                                 at run time; needs the driver moved to
                                 SYS:camdcompat-debugdriver before CAMD starts
                                 (tools/camd-compat-hosted.sh does it)
+   MIDIHubCAMDCompat --realtime-ring
+                                the driver's realtime output ring only
+   MIDIHubCAMDCompat --receive-overflow
+                                the driver's input-ring overflow only
 
    Prints one PASS, FAIL or SKIP line per check and a summary; returns 0
    when nothing failed, 5 otherwise. */
@@ -643,7 +647,7 @@ static int get_soon(struct MidiNode *node, MidiMsg *msg)
 }
 
 /* The loopback driver: what goes to loopback.out.<n> comes from loopback.in.<n>. */
-static void test_loopback(void)
+static void test_loopback(int realtime_ring, int receive_overflow)
 {
     static char out_cluster[] = "loopback.out.0";
     static char in_cluster[] = "loopback.in.0";
@@ -687,7 +691,7 @@ static void test_loopback(void)
     check(!GetMidi(other, &msg), "another port of the driver receives nothing", NULL);
 
     /* More realtime messages than the port's realtime ring holds at once. */
-    {
+    if (realtime_ring) {
         int i, seen = 0;
 
         for (i = 0; i < 100000; i++) {
@@ -704,7 +708,7 @@ static void test_loopback(void)
 
     /* A burst the port's receive ring cannot hold: the sender outranks the
        port's receiver process, so nothing is read while it arrives. */
-    {
+    if (receive_overflow) {
         static UBYTE burst[3000];
         BYTE old;
         int i;
@@ -3298,11 +3302,14 @@ int main(int argc, char **argv)
     int abandon_mode = argc == 2 && !strcmp(argv[1], "--v43-abandon");
     int router_mode = argc == 4 && !strcmp(argv[1], "--router");
     int store_mode = argc == 3 && !strcmp(argv[1], "--v43-store");
+    int realtime_ring_mode = argc == 2 && !strcmp(argv[1], "--realtime-ring");
+    int receive_overflow_mode = argc == 2 && !strcmp(argv[1], "--receive-overflow");
 
     /* Unbuffered, so a crash still leaves the checks before it in the log. */
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (argc != 1 && !rethink_mode && !v42_mode && !v43_mode && !leak_mode && !router_mode && !store_mode) {
-        puts("Usage: MIDIHubCAMDCompat [--v42 | --v43 | --v43-leak | --v43-abandon | --v43-store NAME | --rethink | --router SOURCE DESTINATION]");
+    if (argc != 1 && !rethink_mode && !v42_mode && !v43_mode && !leak_mode && !router_mode && !store_mode &&
+        !realtime_ring_mode && !receive_overflow_mode) {
+        puts("Usage: MIDIHubCAMDCompat [--v42 | --v43 | --v43-leak | --v43-abandon | --v43-store NAME | --rethink | --realtime-ring | --receive-overflow | --router SOURCE DESTINATION]");
         return 20;
     }
     /* The shell that runs User-Startup at boot has task switching disabled
@@ -3320,6 +3327,12 @@ int main(int argc, char **argv)
     printf("camd.library %d.%d\n", CamdBase->lib_Version, CamdBase->lib_Revision);
     if (router_mode) {
         test_router(argv[2], argv[3]);
+    } else if (realtime_ring_mode) {
+        printf("-- test_loopback\n");
+        test_loopback(1, 0);
+    } else if (receive_overflow_mode) {
+        printf("-- test_loopback\n");
+        test_loopback(0, 1);
     } else if (rethink_mode) {
         if (CamdBase->lib_Version >= 43) start_rethink_watch();
         RUN(test_rethink_load);
@@ -3377,7 +3390,8 @@ int main(int argc, char **argv)
         RUN(test_msgtypes);
         RUN(test_notify);
         RUN(test_driver);
-        RUN(test_loopback);
+        printf("-- test_loopback\n");
+        test_loopback(1, 1);
         RUN(test_rethink_stub);
         /* Last: a deadlock leaves its process holding LockCAMD(). */
         RUN(test_notify_locked);
