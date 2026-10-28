@@ -4,8 +4,8 @@ Title: mdnsd: reflect local registrations into discovery
 
 This is an internal behavior change with no public API, ABI, IPC or message
 format change. The prepared branch is `review/mdns-local-discovery`, commit
-`fb8981e861`, directly on upstream master `adff8323a1`. It does not depend on
-AROS #1887; the two branches only touch some of the same source files.
+`486a12732d`, directly on upstream master `67f7b77542`. The base includes the
+merged AROS #1887; this change has no dependency on an open pull request.
 
 ## Existing interfaces and reproduced gap
 
@@ -54,8 +54,8 @@ remote and local records.
 - Candidate: discovery 39/39 and query 13/13 under AddressSanitizer and
   UndefinedBehaviorSanitizer. The local cases cover initial replay, a second
   query not duplicating the first, withdrawal, and a later registration.
-- Responder results are unchanged at 31/34 on this master-based branch: the
-  three failures are the RFC 6762 timing cases fixed independently by #1887.
+- Responder fixtures pass 34/34, including the RFC 6762 timing cases merged
+  independently through #1887.
 - `cppcheck --enable=warning,performance,portability` passes on the changed C
   sources.
 - Complete mdnsd compile and link pass for hosted linux-x86_64 and
