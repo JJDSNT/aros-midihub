@@ -19,7 +19,7 @@ This is one library-only change. It adds no ABI slot, tag, error value, daemon
 message or private IPC operation, and it does not need mdnsd to be running.
 The library revision becomes 41.4 so clients can distinguish the implemented
 helpers from the 41.3 stubs. It is based directly on upstream master
-`67f7b77542` and has no dependency on an open pull request.
+`cbca98214f` and has no dependency on an open pull request.
 
 The implementation follows the existing BSD-2-Clause Bonami source and keeps
 the imported amigazen/Jaime Dias notices already present on the source file.

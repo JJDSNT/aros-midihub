@@ -103,12 +103,13 @@ history of `tools/mdns-*-hosted.sh`. Under it:
 | MD28 | **Consider selective backport of AROS Bonami/mDNS improvements to the original amigazen project.** The AROS port has diverged from the original and includes changes in the responder, discovery queue, lifetime/error handling and integrations; not every change belongs upstream in the original project's API or target environment. | Audit AROS commits and implementation against [amigazen/Bonami](https://github.com/amigazen/Bonami) and identify self-contained fixes, RFC-conformance improvements, robustness tests, documentation and examples that are portable. Propose these individually to the original maintainers, preserving their compatibility and API decisions; do not mechanically copy AROS-specific `mdnsd`/Exec IPC, queued contracts, build glue or NetMIDI integration. Confirm licensing/attribution and run tests on the original targets. This is **optional collaboration**, not a blocker for AROS upstream; follow the original-project communication decision D2 and MU6. | A categorized candidate list (portable / needs adaptation / AROS-only), with links to originating AROS commits, and upstream issues or PRs only after agreement; no unsupported claims that changes have already been accepted upstream. |
 | MD29 | **Queued discovery does not expose the SRV target hostname.** The public `MDNSDiscoveryEvent` has instance, type, address, port and TXT only. `snapshot()` in `mdns_discovery.c` finds the SRV record and uses its target to find the A record, then discards the target. Appending a field would overwrite the smaller structure allocated by a 41.2 caller. | #1836 supplied the compatible design: a separate `MDNSRecordEvent` and `ReadMDNSRecordEvent()`, leaving `MDNSDiscoveryEvent` unchanged. [AROS #1846](https://github.com/aros-development-team/AROS/pull/1846) merged 2026-10-26 as `5127a8beaf`; it implements `dnssd -q`, `-G` and makes `-Z` query the real SRV target before printing SRV/A. | Done. Hosted interop passes with instance `Host Web` and target `palerma-2.local`, proving the SRV target and A owner are not synthesized from the instance. |
 
-MD25(4)'s local TXT helper half is prepared independently as
-`review/bonami-txt-record`, commit `0416f0e`. It implements the existing LVOs
-14/15 without daemon or IPC work and bumps `bonami.library` from 41.3 to 41.4.
-The native baseline is 1/10; the proposal is 11/11, with full x86-64/m68k
-library builds. `GetMDNSStatusA()` remains a separate proposal because it needs
-daemon counters and an IPC snapshot.
+MD25(4)'s local TXT helper half is published independently as AROS PR
+[#1916](https://github.com/aros-development-team/AROS/pull/1916), commit
+`fdfa6b1`. It implements the existing LVOs 14/15 without daemon or IPC work
+and bumps `bonami.library` from 41.3 to 41.4. The native baseline is 1/10; the
+proposal is 11/11, with full x86-64/m68k library builds. `GetMDNSStatusA()`
+remains a separate proposal because it needs daemon counters and an IPC
+snapshot.
 
 ## The way upstream
 
