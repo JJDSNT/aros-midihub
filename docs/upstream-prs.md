@@ -33,25 +33,17 @@ The AROS maintainer moved the contribution process into [PULL_REQUESTS.md](https
 
 ## Abertos
 
-Atualizado em **2026-10-28**: **45 merged, 3 abertos (prontos para review),
+Atualizado em **2026-10-28**: **45 merged, 4 abertos (prontos para review),
 nenhum draft e 1 fechado sem merge**. #1887 e #1888 foram mergeados em
-2026-10-28. Os três PRs abertos são independentes entre si e diretamente
+2026-10-28. Os quatro PRs abertos são independentes entre si e diretamente
 baseados em master; todos têm os quatro checks aprovados e aguardam review.
 
 | PR | Proposta | Situação | O que falta agora |
 | --- | --- | --- | --- |
+| [#1916](https://github.com/aros-development-team/AROS/pull/1916) | `bonami.library`: implementar os helpers de alocação de TXT | Pronto para review; `fdfa6b1ce4`; não é draft; mergeable; quatro checks aprovados | Um commit diretamente sobre master, sem dependência funcional de PR aberto nem mudança de ABI. O baseline 41.3 fica em 1/10 e a proposta 41.4 passa 11/11 no probe nativo. `cppcheck`, `make test` e builds completos x86-64/m68k passam. Aguardar review; se #1915 entrar primeiro, rebasesar a sobreposição documental do README. |
 | [#1915](https://github.com/aros-development-team/AROS/pull/1915) | `mdnsd`: refletir inscrições locais nas APIs de descoberta | Pronto para review; `486a12732d`; não é draft; mergeable; quatro checks aprovados | Um commit diretamente sobre o master que contém #1887, sem dependência de PR aberto nem mudança pública de API/ABI/IPC. Passam responder 34/34, discovery 39/39, query 13/13, ASan/UBSan, cppcheck, `make test` e builds completos x86-64/m68k. Aguardar review; a validação nativa numa imagem hosted coerente continua declarada como acompanhamento desejável. |
 | [#1913](https://github.com/aros-development-team/AROS/pull/1913) | `camd`: preservar dados ainda não lidos no overflow do ring de recepção | Pronto para review; `a0664810d2`; não é draft; mergeable; quatro checks aprovados | Um commit diretamente sobre master, sem dependência de PR aberto nem mudança pública de API/ABI. O baseline isolado falha exatamente o reporte de `CMEF_RecvOverflow` (6/1); três execuções da proposta passam 7/0. Builds completos x86-64/m68k e `make test` passam. Aguardar review. |
 | [#1848](https://github.com/aros-development-team/AROS/pull/1848) | `exec`: preservar o alinhamento real e o tamanho do bloco ao liberar memória com MungWall | Pronto para review; `cc40ebad9d`; não é draft; mergeable; quatro checks aprovados | Um commit diretamente sobre master, sem dependências. Os três objetos alterados compilam com `-Werror` para linux-x86_64 e amiga-m68k. A reprodução histórica é em Pi 3/m68k; esta revisão ainda não foi executada em hardware ou em uma imagem m68k com MungWall. Aguardar review. |
-
-## Preparado localmente
-
-Os helpers `MakeTXTRecordA()`/`FreeTXTRecord()` estão preparados em
-`review/bonami-txt-record`, commit `0416f0e`, diretamente sobre master e sem
-dependência funcional do #1915. O baseline 41.3 fica em 1/10 e a proposta 41.4
-passa 11/11 no probe nativo, além de `cppcheck`, `make test` e build/link
-completos x86-64 e m68k. Veja o
-[rascunho e a validação](pr-drafts/bonami-txt-record.md).
 
 ## Merged
 
