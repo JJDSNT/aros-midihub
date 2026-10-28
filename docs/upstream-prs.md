@@ -47,6 +47,13 @@ aprovados e nenhuma revisão ou thread pendente registrada no GitHub.
 
 ## Preparado localmente
 
+O overflow do ring de entrada do CAMD (B25) está preparado em
+`review/camd-receive-overflow`, commit `7af5f08`, diretamente sobre master e
+sem depender do #1888. O baseline isolado falha exatamente o reporte de
+`CMEF_RecvOverflow` (6/1); três execuções da proposta passam 7/0, além de
+build/link completos x86-64 e m68k e `make test`. Veja o
+[rascunho e a validação](pr-drafts/camd-receive-overflow.md).
+
 O item MD25(3), reflexão das inscrições locais nas APIs de browse/query, está
 preparado em `review/mdns-local-discovery`, commit `fb8981e861`, diretamente
 sobre master e sem depender do #1887. O baseline falha apenas os dois novos
