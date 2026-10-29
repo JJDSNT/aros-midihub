@@ -11,8 +11,9 @@ still intact, and the documented `CMEF_RecvOverflow` condition is not reported.
 
 Keep unread entries intact. Once the ring reaches its usable capacity,
 `Receiver()` records overflow, wakes the receiver process and drops new bytes
-until that process has drained the preserved input. The receiver then reports
-`CMEF_RecvOverflow`, cancels any partial SysEx and resets parsing so data bytes
+until that process has drained the preserved input. The receiver drains once
+more after observing the overflow flag, reports `CMEF_RecvOverflow`, cancels a
+SysEx only when one is still being collected, and resets parsing so data bytes
 from a lost running-status sequence are ignored until a fresh status arrives.
 The producer/consumer count and overflow flag use the existing AROS atomic
 operations.
@@ -29,9 +30,11 @@ source valid UTF-8/ASCII while following the current contribution policy.
 ## Reproduction and validation
 
 The external CAMD compatibility fixture uses the software loopback driver to
-send a 3000-byte SysEx burst into the 1025-entry receive ring. It checks that
-the receiving node observes `CMEF_RecvOverflow`, then sends a channel message
-to verify that parsing and delivery recover.
+send bursts into the 1025-entry receive ring. Besides checking overflow and
+subsequent recovery, it leaves a completed SysEx unread, forces an unrelated
+overflow and verifies that the completed message remains intact. This covers
+the review case where unconditional cancellation would rewind the SysEx buffer
+and release a semaphore no longer owned by the receiver process.
 
 In the isolated `--receive-overflow` run on unmodified upstream master
 `8ab9e5f7b9`:
@@ -41,13 +44,14 @@ In the isolated `--receive-overflow` run on unmodified upstream master
 - the following channel message still arrives;
 - the result is 6 passed and 1 failed.
 
-With this commit, three consecutive hosted runs report 7 passed and 0 failed:
-the overflow is reported and the following channel message arrives each time.
+With the review regression included, unmodified upstream reports 8 passed and
+2 failed. The reviewed commit reports 10 passed and 0 failed: both overflows
+are reported, the completed unread SysEx is preserved and delivery recovers.
 
 Additional validation:
 
-- complete `camd.library` build and link for hosted x86-64;
-- complete `camd.library` build and link for amiga-m68k;
+- `camd.library` rebuild and link for hosted x86-64;
+- `camd.library` rebuild and link for amiga-m68k;
 - companion repository `make test` passes;
 - `git diff --check` passes.
 

@@ -41,7 +41,7 @@ pass (six tasks, 900 rounds, no unexpected result in fifteen runs):
 | # | What was done |
 |---|---|
 | B05 | `test_endpoint_stress`: two senders, a receiver, two publishers and an observer at once on the loopback port and on published endpoints. It found nothing; the count of received messages varies with timing because input sessions come and go, and is not asserted. |
-| B25 | `Receiver()` refuses what the ring cannot hold; the receiver process reports `CMEF_RecvOverflow`, gives up a SysEx message in progress and looks for a status byte again. The ring's count is updated atomically. Published independently as AROS PR [#1913](https://github.com/aros-development-team/AROS/pull/1913), commit `a066481`. The isolated baseline is 6/1 and three candidate runs are 7/0. |
+| B25 | `Receiver()` refuses what the ring cannot hold; the receiver process drains once more after observing overflow, reports `CMEF_RecvOverflow`, gives up a SysEx only while one is in progress and looks for a status byte again. The ring's count is updated atomically. Published independently as AROS PR [#1913](https://github.com/aros-development-team/AROS/pull/1913), commit `616222a`. The review regression leaves a completed SysEx unread across an unrelated overflow: upstream is 8/2 and the candidate is 10/0. |
 | B27 | `CamdWait()` waits for an answer signal from its timer process instead of borrowing a semaphore, so it blocks on every call. There is no test that holds `Forbid()` across a legacy wait. |
 | B28 | `bufferend_rt` is set; 100000 realtime messages pass a driver port and a following channel message still arrives. Published independently as AROS PR [#1888](https://github.com/aros-development-team/AROS/pull/1888), commit `feb88d0`. |
 
