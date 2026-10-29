@@ -713,6 +713,31 @@ static void test_loopback(int realtime_ring, int receive_overflow)
         BYTE old;
         int i;
 
+        /* A completed but unread SysEx must survive an unrelated overflow.
+           Cancelling it would rewind the SysEx buffer and release a semaphore
+           which the receiver process no longer owns. */
+        PutSysEx(sender, identity);
+        check(get_soon(in, &msg) && msg.mm_Status == 0xf0,
+              "a completed SysEx is pending before ordinary traffic overflows", NULL);
+        GetMidiErr(in);
+        for (i = 0; i < (int)sizeof(burst) - 1; i++) burst[i] = 0xf4;
+        burst[sizeof(burst) - 1] = 0xf7;
+        old = SetTaskPri(FindTask(NULL), 40);
+        /* PutSysEx is the driver's raw burst path. Undefined System Common
+           statuses fill only the receive ring; they do not fill the client's
+           completed-message queue and obscure the SysEx lifetime check. */
+        PutSysEx(sender, burst);
+        SetTaskPri(FindTask(NULL), old);
+        Delay(10);
+        while (GetMidi(in, &msg));
+        check(GetMidiErr(in) & CMEF_RecvOverflow,
+              "ordinary traffic past the receive ring reports CMEF_RecvOverflow", NULL);
+        memset(buffer, 0, sizeof(buffer));
+        check(QuerySysEx(in) == sizeof(identity) &&
+              GetSysEx(in, buffer, sizeof(buffer)) == sizeof(identity) &&
+              !memcmp(buffer, identity, sizeof(identity)),
+              "overflow outside SysEx preserves a completed unread SysEx", NULL);
+
         burst[0] = 0xf0;
         for (i = 1; i < (int)sizeof(burst) - 1; i++) burst[i] = 0x11;
         burst[sizeof(burst) - 1] = 0xf7;
