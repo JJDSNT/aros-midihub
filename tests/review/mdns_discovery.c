@@ -574,6 +574,27 @@ static void local_registration(void)
     finish();
 }
 
+#ifdef MDNS_IPC_STATUS
+static void status_counters(void)
+{
+    struct MDNSIPCMsg msg = {0};
+
+    init();
+    md.md_RxPackets = 7;
+    md.md_TxPackets = 11;
+    (void)begin(0, NULL);
+    feed("Status", 15, 120, 12);
+    CHECK(call(&msg, MDNS_IPC_STATUS, NULL, 1, 0) == MDNS_OK);
+    CHECK(msg.mi_StatusRxPackets == 7);
+    CHECK(msg.mi_StatusTxPackets == 11);
+    CHECK(msg.mi_StatusRxAnswers == 4);
+    CHECK(msg.mi_StatusDbgRecs == 4);
+    CHECK(msg.mi_StatusDbgPtr == 1);
+    CHECK(msg.mi_StatusDbgNotify == 1);
+    finish();
+}
+#endif
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -602,6 +623,9 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "missing-backoff")) missing_backoff();
     else if (!strcmp(argv[1], "enumerate-types")) enumerate_types();
     else if (!strcmp(argv[1], "local-registration")) local_registration();
+#ifdef MDNS_IPC_STATUS
+    else if (!strcmp(argv[1], "status-counters")) status_counters();
+#endif
 #ifdef MDNS_DISCOVERY_REAP
     else if (!strcmp(argv[1], "unrelated-not-cached")) unrelated_not_cached();
     else if (!strcmp(argv[1], "evict-unwanted")) evict_unwanted();
