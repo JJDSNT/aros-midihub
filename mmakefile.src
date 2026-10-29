@@ -273,6 +273,12 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
     files="$(MIDIHUB_ROOT)/ports/aros/camd_compat" \
     targetdir=$(MIDIHUB_PACKAGE)/C
 
+# A deliberately slow loopback driver for the CAMD 41.1 wait regression.
+%build_prog mmake=contrib-aros-midihub-camdwaitdriver \
+    progname=waitdriver \
+    files="$(MIDIHUB_ROOT)/ports/aros/camd_wait_driver" \
+    targetdir=$(MIDIHUB_PACKAGE)/Tests
+
 %build_prog mmake=contrib-aros-midihub-mcastjoin \
     progname=McastJoin \
     files="$(MIDIHUB_ROOT)/ports/aros/mcast_join" \

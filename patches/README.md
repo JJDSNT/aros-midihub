@@ -96,7 +96,7 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-endpoint-ump.patch` | native UMP without conversion for published endpoints: `PutEndpointUMP()`, `GetEndpointUMP()`, `PutPublishedUMP()`, `GetPublishedUMP()`; Groups and Function Blocks with `SetPublishedEndpointTopology()`, `GetEndpointGroup()` and `GetEndpointFunctionBlock()`; word counts checked against the message type |
 | `aros-camd-endpoint-layout.patch` | `midi/camdendpoint.h` checks every record's size at compile time |
 | `aros-camd-endpoint-hardening.patch` | objects go with their task's last close of the library; temporary IDs and a full identity store; time-ordered session queues and timed SysEx; a bounded, really blocking drain; direction flags, snapshot generation, name checks, per-session SysEx limits and `GetPublishedEndpointStats()` |
-| `aros-camd-receive-ring-and-wait.patch` | legacy fixes: a full receive ring loses the new bytes and reports `CMEF_RecvOverflow` instead of overwriting unread ones; `CamdWait()` really waits on every call; the realtime send ring wraps |
+| `aros-camd-receive-ring-and-wait.patch` | historical combined patch: the receive overflow and realtime-ring fixes are upstream; its remaining `CamdWait()` fix is AROS PR [#1956](https://github.com/aros-development-team/AROS/pull/1956), commit `6c01b38b9` |
 | `aros-camd-endpoint-hold-and-drain.patch` | `CAMD_PUBLISH_HOLD_UNTIL_DUE` keeps clients' timed messages until they are due before a publisher can take them; `DrainEndpointSession()` is woken when a queue empties or its endpoint is withdrawn instead of polling |
 
 ```sh
