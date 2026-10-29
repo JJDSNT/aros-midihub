@@ -103,6 +103,8 @@ def main():
                       "notify-refused", "notify-overflow", "notify-shutdown",
                       "notify-release", "notify-vanished", "notify-resolve",
                       "notify-reset")
+        if "MDNS_IPC_STATUS" in ipc:
+            cases += ("status-counters",)
     if args.query:
         cases = ("query-a", "query-own-host", "query-local-service",
                  "query-ptr-compressed",

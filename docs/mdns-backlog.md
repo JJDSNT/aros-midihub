@@ -104,12 +104,27 @@ history of `tools/mdns-*-hosted.sh`. Under it:
 | MD29 | **Queued discovery does not expose the SRV target hostname.** The public `MDNSDiscoveryEvent` has instance, type, address, port and TXT only. `snapshot()` in `mdns_discovery.c` finds the SRV record and uses its target to find the A record, then discards the target. Appending a field would overwrite the smaller structure allocated by a 41.2 caller. | #1836 supplied the compatible design: a separate `MDNSRecordEvent` and `ReadMDNSRecordEvent()`, leaving `MDNSDiscoveryEvent` unchanged. [AROS #1846](https://github.com/aros-development-team/AROS/pull/1846) merged 2026-10-26 as `5127a8beaf`; it implements `dnssd -q`, `-G` and makes `-Z` query the real SRV target before printing SRV/A. | Done. Hosted interop passes with instance `Host Web` and target `palerma-2.local`, proving the SRV target and A owner are not synthesized from the instance. |
 
 MD25(4)'s local TXT helper half is published independently as AROS PR
-[#1916](https://github.com/aros-development-team/AROS/pull/1916), commit
-`fdfa6b1`. It implements the existing LVOs 14/15 without daemon or IPC work
+[#1916](https://github.com/aros-development-team/AROS/pull/1916), merged
+2026-10-29 as `62249bcc` after its review fix.
+It implements the existing LVOs 14/15 without daemon or IPC work
 and bumps `bonami.library` from 41.3 to 41.4. The native baseline is 1/10; the
 proposal is 11/11, with full x86-64/m68k library builds. `GetMDNSStatusA()`
 remains a separate proposal because it needs daemon counters and an IPC
-snapshot.
+snapshot. The 41.4 identity records the newly implemented TXT helpers. The
+independent `dnssd` record modes keep their actual 41.3 minimum locally, so a
+later library revision does not raise that requirement.
+
+The status half is published as AROS PR
+[#1942](https://github.com/aros-development-team/AROS/pull/1942), commit
+`be461e3`, directly on the master containing #1916. It implements
+the existing LVO 16 and six public tags through an IPC-v5 daemon snapshot;
+AROS's three debug values describe discovery records and queued delivery
+attempts rather than client Hooks. The exact counter fixture, responder 34/34,
+discovery 40/40 and query 13/13 pass along with cppcheck and `make test`; every
+daemon/library source compiles for m68k with `-Werror`. Complete generated
+x86-64/m68k library and daemon links pass, as does the hosted native status
+probe (8/8) with library 41.5 and IPC-v5 mdnsd installed together. The PR is
+mergeable, all four checks pass, and it awaits review.
 
 ## The way upstream
 
