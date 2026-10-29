@@ -33,16 +33,17 @@ The AROS maintainer moved the contribution process into [PULL_REQUESTS.md](https
 
 ## Abertos
 
-Atualizado em **2026-10-29**: **47 merged, 3 abertos (prontos para review),
-nenhum draft e 1 fechado sem merge**. #1887 e #1888 foram mergeados em
-2026-10-28; #1915 e #1916 também foram mergeados. Os três PRs abertos são
-independentes entre si e diretamente
-baseados em master; todos têm os quatro checks aprovados e aguardam review.
+Atualizado em **2026-10-29**: há **6 PRs abertos de `JJDSNT`**, todos prontos
+para review, diretamente baseados em master, mergeable e com os quatro checks
+aprovados. #1913, #1916 e #1942 foram mergeados no mesmo dia.
 
 | PR | Proposta | Situação | O que falta agora |
 | --- | --- | --- | --- |
-| [#1942](https://github.com/aros-development-team/AROS/pull/1942) | `bonami.library`: implementar o snapshot de status do daemon | Pronto para review; `be461e3fd2`; não é draft; mergeable; quatro checks aprovados | Um commit diretamente sobre o master que contém #1916, sem dependência de PR aberto. Responder 34/34, discovery 40/40, query 13/13, links completos x86-64/m68k e probe nativo 8/8 passam. Aguardar review. |
-| [#1913](https://github.com/aros-development-team/AROS/pull/1913) | `camd`: preservar dados ainda não lidos no overflow do ring de recepção | Review de Kalamatee atendido e publicado; `616222a48b`; mergeable; quatro checks aprovados | O cancelamento de SysEx agora ocorre apenas enquanto `Receiver_SysEx` está ativo, e uma segunda drenagem cobre bytes produzidos antes da observação do overflow. A regressão que mantém um SysEx concluído e não lido durante overflow comum dá 8/2 no upstream e 10/0 na proposta. Rebuilds/link x86-64 e m68k, `make test` e `diff --check` passam. Aguardar nova avaliação do reviewer. |
+| [#1956](https://github.com/aros-development-team/AROS/pull/1956) | `camd`: esperar cada resposta do timer em `CamdWait()` | Pronto para review; `6c01b38b91`; mergeable; quatro checks aprovados | Um commit 41.1 diretamente sobre master, sem mudança pública nem dependência de v42/v43. O upstream trava no teste legado; a proposta passa 5/5, contrato 59/59 e links x86-64/m68k. Aguardar review. |
+| [#1950](https://github.com/aros-development-team/AROS/pull/1950) | AROSTCP: ciclo de vida de endereços IPv6 | Pronto para review; `acbd31357a`; mergeable; quatro checks aprovados | Remove a rota de prefixo com o endereço, aplica DAD e mantém um temporário por prefixo. Aguardar review. |
+| [#1948](https://github.com/aros-development-team/AROS/pull/1948) | AROSTCP: rotas IPv6 por um router | Pronto para review; `eb4ad81125`; mergeable; quatro checks aprovados | Preserva gateway, resolve o próximo salto e instala a rota default de RA. Aguardar review. |
+| [#1947](https://github.com/aros-development-team/AROS/pull/1947) | AROSTCP: ancillary data completa em LP64 e RFC 3542 | Pronto para review; `b759f25ec0`; mergeable; quatro checks aprovados | Independente de #1945, mas ambos tocam poucas linhas comuns e o segundo a entrar precisará de rebase. Aguardar review. |
+| [#1945](https://github.com/aros-development-team/AROS/pull/1945) | AROSTCP: entregar multicast IPv6 aos membros locais | Pronto para review; `b5fa279299`; mergeable; quatro checks aprovados | Entrada, fan-out UDP e loopback multicast IPv6. Aguardar review. |
 | [#1848](https://github.com/aros-development-team/AROS/pull/1848) | `exec`: preservar o alinhamento real e o tamanho do bloco ao liberar memória com MungWall | Pronto para review; `cc40ebad9d`; não é draft; mergeable; quatro checks aprovados | Um commit diretamente sobre master, sem dependências. Os três objetos alterados compilam com `-Werror` para linux-x86_64 e amiga-m68k. A reprodução histórica é em Pi 3/m68k; esta revisão ainda não foi executada em hardware ou em uma imagem m68k com MungWall. Aguardar review. |
 
 ## Merged
@@ -52,6 +53,8 @@ histórico, determina esta classificação.
 
 | PR | Mudança | Merge |
 | --- | --- | --- |
+| [#1913](https://github.com/aros-development-team/AROS/pull/1913) | `camd`: preservar dados ainda não lidos no overflow do ring de recepção | 2026-10-29 |
+| [#1942](https://github.com/aros-development-team/AROS/pull/1942) | `bonami.library`: implementar o snapshot de status do daemon | 2026-10-29 |
 | [#1916](https://github.com/aros-development-team/AROS/pull/1916) | `bonami.library`: implementar os helpers de alocação de TXT | 2026-10-29 |
 | [#1915](https://github.com/aros-development-team/AROS/pull/1915) | `mdnsd`: refletir inscrições locais nas APIs de descoberta | 2026-10-28 |
 | [#1888](https://github.com/aros-development-team/AROS/pull/1888) | `camd`: inicializar o limite do ring de saída realtime | 2026-10-28 |

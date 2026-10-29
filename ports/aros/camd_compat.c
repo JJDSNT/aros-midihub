@@ -35,6 +35,9 @@
                                 the driver's realtime output ring only
    MIDIHubCAMDCompat --receive-overflow
                                 the driver's input-ring overflow only
+   MIDIHubCAMDCompat --legacy-wait
+                                repeated legacy hardware waits, with task
+                                switching forbidden by the caller
 
    Prints one PASS, FAIL or SKIP line per check and a summary; returns 0
    when nothing failed, 5 otherwise. */
@@ -759,6 +762,87 @@ out:
     if (out) DeleteMidi(out);
     if (in) DeleteMidi(in);
     if (other) DeleteMidi(other);
+}
+
+/* PutSysEx() waits through CamdWait() while a hardware driver drains the
+   message. The test driver takes one byte per timer tick. Holding Forbid()
+   makes the old semaphore handshake deterministic: its first call waits,
+   then later calls can return without letting the timer or driver run. */
+static void test_legacy_wait(void)
+{
+    static char out_cluster[] = "waitdriver.out.0";
+    static char in_cluster[] = "waitdriver.in.0";
+    static UBYTE message[] = {
+        0xf0, 0x7d, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+        0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0xf7
+    };
+    UBYTE received[sizeof(message)];
+    struct MidiNode *out = NULL, *in = NULL;
+    struct MidiLink *sender = NULL, *receiver = NULL;
+    MidiMsg msg;
+    BYTE held_signals[32], signal;
+    int held_count = 0;
+    int got;
+    ULONG available, copied;
+
+    if (!FindCluster(out_cluster) || !FindCluster(in_cluster)) {
+        skip("legacy CamdWait", "no DEVS:Midi/waitdriver");
+        return;
+    }
+    out = new_node("camdcompat wait out", 8, sizeof(message));
+    in = new_node("camdcompat wait in", 8, sizeof(message));
+    if (!out || !in) {
+        check(0, "legacy wait: CreateMidiA", NULL);
+        goto done;
+    }
+    receiver = link_to(in, MLTYPE_Receiver, in_cluster);
+    sender = link_to(out, MLTYPE_Sender, out_cluster);
+    check(sender && receiver, "links to the slow legacy driver", NULL);
+    if (!sender || !receiver) goto done;
+
+    Forbid();
+    PutSysEx(sender, message);
+    Permit();
+    check(1, "PutSysEx returns after repeated waits under Forbid()", NULL);
+
+    memset(received, 0, sizeof(received));
+    check(get_soon(in, &msg) && msg.mm_Status == 0xf0 &&
+          QuerySysEx(in) == sizeof(message) &&
+          GetSysEx(in, received, sizeof(received)) == sizeof(message) &&
+          !memcmp(received, message, sizeof(message)),
+          "the slow driver receives the complete SysEx", NULL);
+    Delay(2); /* Let the test driver return from its final per-byte delay. */
+
+    /* Force CamdWait()'s reserved-signal fallback and leave SIGF_SINGLE
+       pending beforehand: the fallback must preserve the caller's state. */
+    while (held_count < (int)sizeof(held_signals) &&
+           (signal = AllocSignal(-1)) != -1)
+        held_signals[held_count++] = signal;
+    Signal(FindTask(NULL), SIGF_SINGLE);
+    Forbid();
+    PutSysEx(sender, message);
+    Permit();
+    check(SetSignal(0, SIGF_SINGLE) & SIGF_SINGLE,
+          "legacy wait preserves a pending SIGF_SINGLE without a free signal", NULL);
+    while (held_count) FreeSignal(held_signals[--held_count]);
+    memset(received, 0, sizeof(received));
+    got = get_soon(in, &msg);
+    available = QuerySysEx(in);
+    copied = GetSysEx(in, received, sizeof(received));
+    if (!got || msg.mm_Status != 0xf0 || available != sizeof(message) ||
+        copied != sizeof(message) || memcmp(received, message, sizeof(message)))
+        printf("     got=%d status=%02x available=%lu copied=%lu\n", got,
+               got ? msg.mm_Status : 0, (unsigned long)available,
+               (unsigned long)copied);
+    check(got && msg.mm_Status == 0xf0 && available == sizeof(message) &&
+          copied == sizeof(message) && !memcmp(received, message, sizeof(message)),
+          "the fallback wait also delivers the complete SysEx", NULL);
+
+done:
+    if (sender) RemoveMidiLink(sender);
+    if (receiver) RemoveMidiLink(receiver);
+    if (out) DeleteMidi(out);
+    if (in) DeleteMidi(in);
 }
 
 static void test_rethink_stub(void)
@@ -3329,12 +3413,13 @@ int main(int argc, char **argv)
     int store_mode = argc == 3 && !strcmp(argv[1], "--v43-store");
     int realtime_ring_mode = argc == 2 && !strcmp(argv[1], "--realtime-ring");
     int receive_overflow_mode = argc == 2 && !strcmp(argv[1], "--receive-overflow");
+    int legacy_wait_mode = argc == 2 && !strcmp(argv[1], "--legacy-wait");
 
     /* Unbuffered, so a crash still leaves the checks before it in the log. */
     setvbuf(stdout, NULL, _IONBF, 0);
     if (argc != 1 && !rethink_mode && !v42_mode && !v43_mode && !leak_mode && !router_mode && !store_mode &&
-        !realtime_ring_mode && !receive_overflow_mode) {
-        puts("Usage: MIDIHubCAMDCompat [--v42 | --v43 | --v43-leak | --v43-abandon | --v43-store NAME | --rethink | --realtime-ring | --receive-overflow | --router SOURCE DESTINATION]");
+        !realtime_ring_mode && !receive_overflow_mode && !legacy_wait_mode) {
+        puts("Usage: MIDIHubCAMDCompat [--v42 | --v43 | --v43-leak | --v43-abandon | --v43-store NAME | --rethink | --realtime-ring | --receive-overflow | --legacy-wait | --router SOURCE DESTINATION]");
         return 20;
     }
     /* The shell that runs User-Startup at boot has task switching disabled
@@ -3358,6 +3443,8 @@ int main(int argc, char **argv)
     } else if (receive_overflow_mode) {
         printf("-- test_loopback\n");
         test_loopback(0, 1);
+    } else if (legacy_wait_mode) {
+        RUN(test_legacy_wait);
     } else if (rethink_mode) {
         if (CamdBase->lib_Version >= 43) start_rethink_watch();
         RUN(test_rethink_load);
