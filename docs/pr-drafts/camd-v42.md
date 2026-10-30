@@ -1,8 +1,9 @@
 Title: camd: add version 42 timing and cluster observation APIs
 
-Branch: `review/camd-v42`, commit `7b14f148af`, based directly on upstream
-master `62bd8216b1`. The prerequisite `CamdWait()` fix is already merged as AROS
-PR #1956; this proposal has no dependency on an unaccepted pull request.
+AROS PR: [#1972](https://github.com/aros-development-team/AROS/pull/1972),
+branch `review/camd-v42`, commit `7b14f148af`, based directly on upstream
+master `62bd8216b1`. The prerequisite `CamdWait()` fix is already merged as
+AROS PR #1956; this proposal has no dependency on an unaccepted pull request.
 
 ## Scope
 

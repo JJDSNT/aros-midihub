@@ -23,8 +23,9 @@ and `MIDI_SystemClock` (step 4), cluster watches (step 5),
 The version 42 subset is rebased as the standalone upstream proposal branch
 `review/camd-v42` after the merge of PR #1956. It is confined to CAMD 42,
 contains no provisional version 43 endpoint implementation and has no
-unaccepted PR dependency. Its publication is intentionally pending owner
-approval; the prepared scope and validation record is
+unaccepted PR dependency. It was published as AROS PR
+[#1972](https://github.com/aros-development-team/AROS/pull/1972); the prepared
+scope and validation record is
 [`pr-drafts/camd-v42.md`](pr-drafts/camd-v42.md).
 
 Every change to CAMD must keep passing the compatibility suite
