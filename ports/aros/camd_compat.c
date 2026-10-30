@@ -914,6 +914,10 @@ static void test_participants(void)
         {MLINK_Private, TRUE},
         {TAG_DONE, 0}
     };
+    struct TagItem public_tags[] = {
+        {MLINK_Private, FALSE},
+        {TAG_DONE, 0}
+    };
     BYTE abit = AllocSignal(-1), bbit = AllocSignal(-1);
     ULONG amask = 1UL << abit, bmask = 1UL << bbit;
     struct MidiNode *a = NULL, *b = NULL, *c = NULL;
@@ -957,6 +961,10 @@ static void test_participants(void)
     check(cluster_attr(cluster, MCLA_Participants) == 4 &&
           cluster_attr(cluster, MCLA_PublicParticipants) == 3,
           "MCLA_PublicParticipants leaves out MLINK_Private links", NULL);
+
+    SetMidiLinkAttrsA(clink, public_tags);
+    check(cluster_attr(cluster, MCLA_PublicParticipants) == 4,
+          "MCLA_PublicParticipants follows MLINK_Private being cleared", NULL);
 
     SetSignal(0, amask);
     RemoveMidiLink(blink);
@@ -1188,6 +1196,11 @@ static void test_watch(void)
         {CWA_SigBit, (IPTR)bit},
         {TAG_DONE, 0}
     };
+    struct TagItem no_task[] = {
+        {CWA_SigBit, (IPTR)bit},
+        {CWA_Task, 0},
+        {TAG_DONE, 0}
+    };
     struct MidiNode *node = new_node("camdcompat watch", 32, 256);
     struct MidiLink *first = NULL, *second = NULL;
     APTR watch = NULL;
@@ -1195,6 +1208,7 @@ static void test_watch(void)
     int i, ok;
 
     check(StartClusterWatchA(no_bit) == NULL, "StartClusterWatchA needs CWA_SigBit", NULL);
+    check(StartClusterWatchA(no_task) == NULL, "StartClusterWatchA rejects a NULL task", NULL);
     if (bit < 0 || !node || !(watch = StartClusterWatchA(tags))) {
         check(0, "watch: setup", NULL);
         goto out;
@@ -1222,8 +1236,17 @@ static void test_watch(void)
     first = NULL;
     check(GetClusterWatchEvent(watch, &event) && event.cwe_Type == CWE_Lost,
           "a full watch reports CWE_Lost first", NULL);
-    while (GetClusterWatchEvent(watch, &event))
-        ;
+    check(!GetClusterWatchEvent(watch, &event),
+          "CWE_Lost discards the incomplete event history", NULL);
+    first = link_to(node, MLTYPE_Receiver, cluster);
+    ok = next_event(watch, CWE_Added, cluster);
+    ok = ok && next_event(watch, CWE_Participants, cluster);
+    check(ok, "a cluster watch resumes after CWE_Lost is read", NULL);
+    if (first) {
+        RemoveMidiLink(first);
+        first = NULL;
+    }
+    while (GetClusterWatchEvent(watch, &event)) ;
     EndClusterWatch(watch);
     watch = NULL;
     EndClusterWatch(NULL);

@@ -20,6 +20,13 @@ and `MIDI_SystemClock` (step 4), cluster watches (step 5),
 `MLINK_Comment` (step 1), and SysEx size/error filtering (step 2).
 [Implemented steps](#implemented-steps) records their design.
 
+The version 42 subset is rebased as the standalone upstream proposal branch
+`review/camd-v42` after the merge of PR #1956. It is confined to CAMD 42,
+contains no provisional version 43 endpoint implementation and has no
+unaccepted PR dependency. Its publication is intentionally pending owner
+approval; the prepared scope and validation record is
+[`pr-drafts/camd-v42.md`](pr-drafts/camd-v42.md).
+
 Every change to CAMD must keep passing the compatibility suite
 (`ports/aros/camd_compat.c`, `MIDIHubCAMDCompat`). It checks the 41.1
 behaviour that programs rely on: nodes, links, clusters, message delivery
