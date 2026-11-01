@@ -24,7 +24,7 @@ Revisions read: AROS upstream master `f04bb2c13e`. That includes AROSTCP 5.20 (#
 These are planned for other reasons and are useful to MIDIHub:
 - **Group 3:** UDP `IPV6_DONTFRAG`/`IP_DONTFRAG` and path-MTU reporting (`IPV6_PATHMTU`, `IPV6_RECVPATHMTU`), plus UDP ECN ancillary data.
 - **Group 4:** `SO_TIMESTAMP`; UDP correctness tests (large datagrams, `MSG_TRUNC`, buffers, non-blocking sockets), and `localhost` resolving to `::1` and `127.0.0.1`.
-- **Group 5:** RDNSS (DNS servers from Router Advertisements), source-address selection and zones, IPv6 `SO_BINDTODEVICE`, and two-interface multicast tests.
+- **Group 5:** RDNSS (DNS servers from Router Advertisements), source-address selection and zones, IPv6 `SO_BINDTODEVICE`, IPv6 address flags (`SIOCGIFAFLAG_IN6`) with the address-change signal when DAD ends, and two-interface multicast tests.
 
 Only one AROSTCP PR group is open upstream at a time. A stack need that MIDIHub finds later should be added to aros-matter's plan rather than sent as a separate AROSTCP PR, so the PRs don't conflict over the stack revision.
 
@@ -48,3 +48,14 @@ Read against upstream `workbench/network/mdns` (bonami 41.6, `README.md` §Limit
 3. **DNS-SD subtypes** (RFC 6763 §7.1). Bonami has none. Matter needs browse by subtype (`_L<discriminator>._sub._matterc._udp`, `_I<id>._sub._matter._tcp`), and registration with subtypes for an accessory. Worth a backlog item, so that it is designed with the extended event rather than after it. aros-matter's ISSUE-0005 lists what Matter needs.
 4. **MD13: interface changes.** Replace the 3 s look with the `SBTC_SIG_ADDRESS_CHANGE_MASK` signal (see above), keeping a slow timer as a fallback. Choosing the IPv6 link-local address needs a stack change too: mdnsd can't tell whether an address is still tentative or is a duplicate (README §Limits), and today the stack doesn't signal when DAD ends. Both are now in aros-matter's group 5: `SIOCGIFAFLAG_IN6`, and the signal when DAD ends. Until then, mdnsd should skip an address that fails to bind or send and try again later.
 5. **Tests for IPv6-only links.** Run the Avahi runners with IPv4 off on the veth link: host lookup, registration, and browse/resolve once (2) is in. MD14's own "done when" (Avahi resolves the host over IPv6) is a good first check.
+
+## Who does what
+
+| Work | Owner |
+|---|---|
+| Stack: everything listed under groups 3–5 above | aros-matter (AROSTCP PR groups) |
+| mdnsd/Bonami: extended discovery event, subtypes, using the address-change signal and the address flags, MD07/MD10/MD11, tests | MIDIHub / the Bonami maintainer |
+| SANA-II drivers' multicast filters (MD08), the m68k build dependency (MD18) | MIDIHub, as separate small PRs |
+| What Matter needs from Bonami | recorded only, in aros-matter's ISSUE-0005; no implementation there |
+
+There is one mDNS responder on the system: mdnsd. Matter uses Bonami, and the SDK's `minimal_mdns` stays a test tool (aros-matter ISSUE-0004).
