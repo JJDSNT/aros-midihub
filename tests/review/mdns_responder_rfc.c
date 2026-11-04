@@ -12,7 +12,11 @@
 
 static ULONG ticks = 5000;
 static unsigned packets, answer_records, announcements, zero_host_addresses;
-static unsigned srv_questions, txt_questions;
+#ifdef MDNS_IPV6_CORE
+static unsigned host_aaaa_records;
+static unsigned ipv4_packets, ipv6_packets, dual_packets;
+#endif
+static unsigned a_questions, aaaa_questions, srv_questions, txt_questions;
 static struct Task owner;
 static ULONG live_task_id = 1;
 
@@ -76,6 +80,17 @@ BOOL mdnsNetIsOwn(struct MDNSDaemon *md, ULONG address)
             return TRUE;
     return FALSE;
 }
+#ifdef MDNS_IPV6_CORE
+BOOL mdnsNetIsOwn6(struct MDNSDaemon *md, const struct in6_addr *address)
+{
+    LONG i;
+    for (i = 0; i < md->md_IfCount; ++i)
+        if (!IN6_IS_ADDR_UNSPECIFIED(&md->md_Ifs[i].mi_Addr6) &&
+            !memcmp(&md->md_Ifs[i].mi_Addr6, address, sizeof(*address)))
+            return TRUE;
+    return FALSE;
+}
+#endif
 void mdnsNetNameHost(struct MDNSDaemon *md)
 { snprintf(md->md_HostName, sizeof(md->md_HostName), "arosbox-%u", md->md_HostSuffix); }
 BOOL mdnsNetSendOn(struct MDNSDaemon *md, LONG index, const UBYTE *packet, LONG length)
@@ -86,6 +101,14 @@ BOOL mdnsNetSendOn(struct MDNSDaemon *md, LONG index, const UBYTE *packet, LONG 
     (void)md;
     (void)index;
     ++packets;
+#ifdef MDNS_IPV6_CORE
+    if (md->md_SendFamily == AF_INET)
+        ++ipv4_packets;
+    else if (md->md_SendFamily == AF_INET6)
+        ++ipv6_packets;
+    else
+        ++dual_packets;
+#endif
     answer_records += answers;
     if (ntohs(header->flags) & DNS_FLAG_QR)
         ++announcements;
@@ -97,6 +120,12 @@ BOOL mdnsNetSendOn(struct MDNSDaemon *md, LONG index, const UBYTE *packet, LONG 
             ++srv_questions;
         else if (question.qtype == DNS_TYPE_TXT)
             ++txt_questions;
+        else if (question.qtype == DNS_TYPE_A)
+            ++a_questions;
+#ifdef MDNS_IPV6_CORE
+        else if (question.qtype == DNS_TYPE_AAAA)
+            ++aaaa_questions;
+#endif
         offset += consumed;
     }
     for (i = 0; i < answers; ++i) {
@@ -105,6 +134,11 @@ BOOL mdnsNetSendOn(struct MDNSDaemon *md, LONG index, const UBYTE *packet, LONG 
             abort();
         if (record.type == DNS_TYPE_A && !strcmp(record.name, "arosbox.local") && !record.ttl)
             ++zero_host_addresses;
+#ifdef MDNS_IPV6_CORE
+        if (record.type == DNS_TYPE_AAAA &&
+            !strcmp(record.name, "arosbox.local"))
+            ++host_aaaa_records;
+#endif
         offset += consumed;
     }
     return TRUE;
@@ -180,6 +214,9 @@ static struct MDNSRegisteredService *setup(struct MDNSDaemon *md, ULONG ttl)
     memset(md, 0, sizeof(*md));
     NEWLIST(&md->md_Services);
     md->md_IfCount = 1;
+#ifdef MDNS_IPV6_CORE
+    md->md_Ifs[0].mi_Index = 1;
+#endif
     md->md_Ifs[0].mi_Addr = 0xc0000202;
     md->md_HostAddr = 0xc0000202;
     md->md_Socket = 0;
@@ -203,16 +240,44 @@ static struct MDNSRegisteredService *setup(struct MDNSDaemon *md, ULONG ttl)
     service->rs_State = MDNS_NAME_ANNOUNCED;
     service->rs_Step = MDNS_ANNOUNCE_COUNT;
     packets = answer_records = announcements = zero_host_addresses = 0;
-    srv_questions = txt_questions = 0;
+#ifdef MDNS_IPV6_CORE
+    host_aaaa_records = 0;
+    ipv4_packets = ipv6_packets = dual_packets = 0;
+#endif
+    a_questions = aaaa_questions = srv_questions = txt_questions = 0;
     return service;
 }
 static void receive(struct MDNSDaemon *md, const UBYTE *packet, size_t length)
 { mdnsHandlePacket(md, packet, (LONG)length, 0xc0000201, MDNS_DNS_PORT); }
+#ifdef MDNS_IPV6_CORE
+static void receive6(struct MDNSDaemon *md, const UBYTE *packet, size_t length)
+{
+    struct in6_addr source;
+
+    memset(&source, 0, sizeof(source));
+    source.s6_addr[0] = 0xfe;
+    source.s6_addr[1] = 0x80;
+    source.s6_addr[15] = 1;
+    md->md_SendFamily = AF_INET6;
+    mdnsHandlePacket6(md, packet, (LONG)length, &source, MDNS_DNS_PORT);
+    md->md_SendFamily = 0;
+}
+#endif
 static void receive_from_port(struct MDNSDaemon *md, const UBYTE *packet,
                               size_t length, UWORD port)
 { mdnsHandlePacket(md, packet, (LONG)length, 0xc0000201, port); }
 static void flush(struct MDNSDaemon *md)
 { ticks += 10; mdnsRegTick(md); }
+
+#ifdef MDNS_IPV6_CORE
+static void enable_ipv6(struct MDNSDaemon *md)
+{
+    static const UBYTE address[16] = {
+        0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2
+    };
+    memcpy(&md->md_Ifs[0].mi_Addr6, address, sizeof(address));
+}
+#endif
 
 int main(int argc, char **argv)
 {
@@ -224,6 +289,49 @@ int main(int argc, char **argv)
     if (argc != 2)
         return 2;
     service = setup(&md, 60);
+#ifdef MDNS_IPV6_CORE
+    if (!strcmp(argv[1], "host-aaaa")) {
+        enable_ipv6(&md);
+        at = question_name(packet, "arosbox.local", DNS_TYPE_AAAA,
+            DNS_CLASS_IN, 0);
+        receive(&md, packet, at);
+        flush(&md);
+        printf("AAAA host query: packets=%u, AAAA records=%u\n",
+            packets, host_aaaa_records);
+        failure = packets != 1 || host_aaaa_records != 1;
+    } else if (!strcmp(argv[1], "host-conflict-aaaa")) {
+        static const UBYTE peer[16] = {
+            0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99
+        };
+
+        enable_ipv6(&md);
+        memset(packet, 0, 12);
+        put16(packet + 2, DNS_FLAG_QR | DNS_FLAG_AA);
+        put16(packet + 6, 1);
+        at = record(packet, 12, "arosbox.local", DNS_TYPE_AAAA,
+            DNS_CLASS_IN_FLUSH, 120, peer, sizeof(peer));
+        receive(&md, packet, at);
+        printf("AAAA conflict: hostname=%s, state=%u\n", md.md_HostName,
+            md.md_HostState);
+        failure = strcmp(md.md_HostName, "arosbox-2") != 0 ||
+            md.md_HostState != MDNS_NAME_PROBING;
+    } else if (!strcmp(argv[1], "service-aaaa")) {
+        enable_ipv6(&md);
+        mdnsRegAnnounceAll(&md);
+        printf("service announcement: packets=%u, AAAA records=%u\n",
+            packets, host_aaaa_records);
+        failure = packets != 1 || host_aaaa_records != 1;
+    } else if (!strcmp(argv[1], "shared-ipv6-family")) {
+        enable_ipv6(&md);
+        at = question(packet, DNS_TYPE_PTR, DNS_CLASS_IN, 0);
+        receive6(&md, packet, at);
+        flush(&md);
+        printf("delayed IPv6 browse: v4=%u, v6=%u, dual=%u\n",
+            ipv4_packets, ipv6_packets, dual_packets);
+        failure = packets != 1 || ipv4_packets != 0 || ipv6_packets != 1 ||
+            dual_packets != 0;
+    } else
+#endif
     if (!strcmp(argv[1], "known-short") || !strcmp(argv[1], "known-expiring") ||
         !strcmp(argv[1], "known-default") || !strcmp(argv[1], "known-wrong-owner")) {
         const int default_ttl = !strcmp(argv[1], "known-default");

@@ -25,7 +25,11 @@ static size_t key(UBYTE *out, size_t at, const char *instance, int host)
 static size_t rr(size_t at, const char *instance, UWORD type, UWORD cls,
                  ULONG ttl, const UBYTE *rdata, size_t len)
 {
-    at = key(packet, at, instance, type == DNS_TYPE_A);
+    at = key(packet, at, instance, type == DNS_TYPE_A
+#ifdef MDNS_IPV6_CORE
+        || type == DNS_TYPE_AAAA
+#endif
+        );
     put16(packet + at, type); put16(packet + at + 2, cls);
     put32(packet + at + 4, ttl); put16(packet + at + 8, len);
     memcpy(packet + at + 10, rdata, len);
@@ -54,6 +58,13 @@ static void feed_records(const char *instance, unsigned mask, ULONG ttl,
         const UBYTE addr[] = {203,0,113,ip};
         at = rr(at, NULL, DNS_TYPE_A, 0x8001, ttl, addr, sizeof(addr)); ++count;
     }
+#ifdef MDNS_IPV6_CORE
+    if (mask & 16) {
+        UBYTE addr[16] = {0xfe, 0x80};
+        addr[15] = ip;
+        at = rr(at, NULL, DNS_TYPE_AAAA, 0x8001, ttl, addr, sizeof(addr)); ++count;
+    }
+#endif
     put16(packet + 6, count);
     mdnsHandlePacket(&md, packet, at, 0xcb007101, 5353);
     if (tick) mdnsDiscoveryTick(&md);
@@ -235,7 +246,11 @@ static void invalid_record(int kind)
 static void multiple_links(void)
 {
     APTR ref;
-    init(); md.md_IfCount = 2; md.md_Ifs[1].mi_Addr = 0xc0000302;
+    init(); md.md_IfCount = 2;
+#ifdef MDNS_IPV6_CORE
+    md.md_Ifs[1].mi_Index = 2;
+#endif
+    md.md_Ifs[1].mi_Addr = 0xc0000302;
     ref = begin(0, NULL); feed("Session", 15, 120, 9); expect_add(ref, "Session", 9);
     md.md_SendIf = 1; feed("Session", 15, 120, 10); expect_add(ref, "Session", 10);
     md.md_SendIf = 0; feed("Session", 8, 120, 11); expect_add(ref, "Session", 11);
@@ -331,6 +346,59 @@ static void a_before_srv(void)
     feed("Session", 8, 120, 9); expect_add(ref, "Session", 9);
     finish();
 }
+
+#ifdef MDNS_IPV6_CORE
+static void aaaa_before_a(void)
+{
+    struct MDNSDiscoveryEvent event;
+    APTR ref;
+
+    init();
+    ref = begin(0, NULL);
+    feed("IPv6", 16, 120, 42);
+    feed("IPv6", 7, 120, 42);
+    CHECK(read_event(ref, &event) == MDNSERR_NOTREADY);
+    feed("IPv6", 8, 120, 42);
+    expect_add(ref, "IPv6", 42);
+    finish();
+}
+
+/* Once either address family makes a host reachable, ask once for the
+ * other family but do not keep treating an intentionally absent family as
+ * a missing service component. The legacy discovery event still needs A;
+ * AAAA remains available through QueryRecordA(). */
+static void single_address_family(void)
+{
+    struct MDNSDiscoveryEvent event;
+    unsigned questions;
+    APTR ref;
+
+    init();
+    ref = begin(0, NULL);
+    feed("IPv4Only", 15, 120, 42);
+    expect_add(ref, "IPv4Only", 42);
+    CHECK(aaaa_questions == 1);
+    questions = aaaa_questions;
+    ticks += 50;
+    mdnsDiscoveryTick(&md);
+    CHECK(aaaa_questions == questions);
+    finish();
+
+    init();
+    ref = begin(0, NULL);
+    feed("IPv6Only", 23, 120, 43);
+    CHECK(read_event(ref, &event) == MDNSERR_NOTREADY);
+    CHECK(a_questions == 1);
+    questions = a_questions;
+    ticks += 50;
+    mdnsDiscoveryTick(&md);
+    CHECK(a_questions == questions);
+    /* A arriving later still completes the backward-compatible event. */
+    feed("IPv6Only", 8, 120, 43);
+    expect_add(ref, "IPv6Only", 43);
+    finish();
+}
+#endif
 #endif
 #ifdef MDNS_IPC_NOTIFY
 /* Lent requests: the device I/O contract of RequestMDNSEvent(). */
@@ -631,6 +699,10 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "evict-unwanted")) evict_unwanted();
     else if (!strcmp(argv[1], "views-scoped")) views_scoped();
     else if (!strcmp(argv[1], "a-before-srv")) a_before_srv();
+#ifdef MDNS_IPV6_CORE
+    else if (!strcmp(argv[1], "aaaa-before-a")) aaaa_before_a();
+    else if (!strcmp(argv[1], "single-address-family")) single_address_family();
+#endif
 #endif
 #ifdef MDNS_IPC_NOTIFY
     else if (!strcmp(argv[1], "notify-pending")) notify_pending();

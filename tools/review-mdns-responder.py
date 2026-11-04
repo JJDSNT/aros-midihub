@@ -69,6 +69,9 @@ def main():
              "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
              "-fno-omit-frame-pointer", "-I" + str(shim), "-I" + str(repo / "tests/review"),
              "-I" + str(output / "include"), "-I" + str(output)]
+    ipv6_core = b"MDNS_MCAST_ADDR6" in (output / "mdns_dns.h").read_bytes()
+    if ipv6_core:
+        flags.append("-DMDNS_IPV6_CORE")
     if reap:
         flags.append("-DMDNS_DISCOVERY_REAP")
     fixture = ("mdns_query.c" if args.query else
@@ -87,6 +90,9 @@ def main():
         cases += ("identical-txt", "goodbye-txt", "goodbye-srv", "compressed-srv",
                   "local-rename", "reject-instance", "proxy-own-name",
                   "restart-probes", "task-ids", "update-ttl")
+    if ipv6_core:
+        cases += ("host-aaaa", "host-conflict-aaaa", "service-aaaa",
+                  "shared-ipv6-family")
     if args.discovery:
         cases = ("labels-order-txt", "expire-ptr", "expire-srv", "expire-txt", "expire-a",
                  "goodbye", "rescue", "update", "lifecycle", "overflow", "resolve",
@@ -98,6 +104,8 @@ def main():
         if reap:
             cases += ("unrelated-not-cached", "evict-unwanted", "views-scoped",
                       "a-before-srv")
+            if ipv6_core:
+                cases += ("aaaa-before-a", "single-address-family")
         if "MDNS_IPC_NOTIFY" in ipc:
             cases += ("notify-pending", "notify-stop", "notify-event-then-stop",
                       "notify-refused", "notify-overflow", "notify-shutdown",
@@ -112,6 +120,8 @@ def main():
                  "query-notify-stop", "query-owner-restart",
                  "query-network-reset",
                  "query-wrong-class", "query-wrong-port", "query-invalid")
+        if ipv6_core:
+            cases += ("query-aaaa",)
     failures = 0
     env = dict(os.environ, ASAN_OPTIONS="detect_leaks=0:halt_on_error=1")
     print("Revision:", revision, flush=True)
