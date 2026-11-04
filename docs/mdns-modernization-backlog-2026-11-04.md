@@ -66,6 +66,12 @@ upstream PR.
 This design is intentionally first because it is the most important remaining
 functional change and the only near-term public ABI addition.
 
+**Status:** the concrete proposal is recorded in
+[`mdns-discovery-api-design-2026-11-04.md`](mdns-discovery-api-design-2026-11-04.md).
+The source behavior and missing capability are demonstrated, and candidate
+m68k/host layouts have been compiled. Public names and layout still require
+review before AROS implementation.
+
 **Existing behavior**
 
 - `MDNSDiscoveryEvent` is pointer-free and IPv4-only.
