@@ -160,6 +160,24 @@ IPv4 half of G1c; G1b and G2 remain independent.
 
 **Repository owner:** AROS `workbench/network/mdns`; Midihub fixtures/runners.
 
+**Current status:** implemented locally on AROS branch
+`review/mdns-ipv6-lifecycle` as two bisectable commits:
+
+1. `0b0c545e69` filters tentative, duplicate, detached and deprecated IPv6
+   addresses through `SIOCGIFAFLAG_IN6`;
+2. `a916c03fd6` subscribes mdnsd's task-local `SocketBase` to
+   `SBTC_SIG_ADDRESS_CHANGE_MASK`, rescans on the signal and unregisters it
+   before closing the library.
+
+Both commits compile and link the complete hosted `mdnsd` executable in the
+persistent `/home/jaime/aros-build-mdns-codex` tree. An IPv6-only hosted run
+with AROSTCP kernel 0.71/bsdsocket 5.32, bonami.library 41.6 and the current
+`dnssd` exchanged multicast with the Linux peer: AROS used source `fe80::2`,
+sent five AAAA queries, answered 60 AAAA queries and emitted no packet with a
+hop limit other than 255. This proves operation after DAD, not the exact
+tentative-to-usable signal latency. An amiga-m68k build and a dedicated
+address-state transition capture remain outstanding; no upstream PR is open.
+
 **Scope**
 
 - Query each enumerated link-local address with `SIOCGIFAFLAG_IN6`.
