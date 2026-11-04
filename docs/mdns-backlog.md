@@ -1,5 +1,12 @@
 # mDNS backlog — from a service that runs here to one in the AROS tree
 
+> This file retains the detailed historical item record. The reconciled
+> baseline and authoritative forward order after AROS #1980/#2053 are
+> [mdns-modernization-baseline-2026-11-04.md](mdns-modernization-baseline-2026-11-04.md)
+> and
+> [mdns-modernization-backlog-2026-11-04.md](mdns-modernization-backlog-2026-11-04.md).
+> Where an old item conflicts with those documents, the 2026-11-04 audit wins.
+
 **2026-10-18:** see the [#1591 fixes](bonami-review-followup-2026-10-18.md)
 and [browse/resolve draft](mdns-discovery-followup-2026-10-18.md). The owner
 authorized preparing a polling proposal in draft; the maintainer's event-API
