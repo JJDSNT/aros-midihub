@@ -122,13 +122,18 @@ clock, entropy and I/O, expanded incrementally against independent vectors.
 The first portable C slice is in `include/midici/midici.h` and
 `src/midici.c`. It implements:
 
-- strict MIDI-CI envelope and Discovery/Reply codecs;
+- strict MIDI-CI envelope and all Management body codecs: Discovery/Reply,
+  Endpoint Inquiry/Reply, ACK, MIDI-CI 1.1/1.2 NAK and Invalidate MUID;
 - assignable 28-bit MUID generation and collision recovery;
-- Invalidate MUID encoding;
+- an initial no-allocation Management Responder with Discovery/Endpoint
+  replies, structured NAKs and both used/unused collision branches;
 - fixed-capacity request correlation, conflict rejection, timeout polling and
   disconnect cancellation;
 - no OS calls, hidden allocation, threads or transport ownership.
 
 The tests also pass a byte-exact Discovery through the existing Midihub
 MIDI-byte-to-UMP SysEx7 packetizer and back through its bounded reassembler.
-This is a foundation, not a claim of complete MIDI-CI 1.2.1 support.
+The byte vectors are cross-checked against the pinned `midici` 0.0.1
+spec-derived Management fixture; that is source comparison, not independent
+interoperability evidence. This is a foundation, not a claim of complete
+MIDI-CI 1.2.1 support.

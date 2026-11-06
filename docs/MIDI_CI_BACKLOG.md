@@ -1,6 +1,8 @@
 # MIDI-CI chronological backlog
 
 Statuses: **done** means source and reproducible host tests exist;
+**in progress** means an independently testable subset exists but stated
+acceptance criteria remain;
 **ready** means public interfaces/current behavior, missing capability,
 minimum change, real dependencies and validation are identified;
 **blocked** means one of those facts is still missing.
@@ -35,23 +37,28 @@ minimum change, real dependencies and validation are identified;
 - Tests: `make build/midici-test && ./build/midici-test`; sanitizer run.
 - Upstream PR: separate Midihub engine commit, no CAMD change.
 
-### CI03 — Complete management codec and responder transitions — ready
+### CI03 — Complete management codec and responder transitions — in progress
 
 - Objective: add Endpoint Inquiry/Reply, ACK/NAK, Discovery responder behavior
   and Invalidate receive behavior for MIDI-CI 1.2.1.
 - Dependencies: authoritative 1.2.1 tables available during review; CI02.
 - Repository/component: aros-midihub portable MIDI-CI engine.
-- Existing interface/behavior: `midici_decode_envelope`, fixed caller-owned
-  buffers and `midici_context`; only Discovery is typed today.
-- Missing capability: typed management bodies and Initiator/Responder event
-  transitions.
-- Minimum change: append typed body codecs and event-returning `handle`/`poll`
-  calls; do not add I/O or CAMD handles.
+- Existing interface/behavior: fixed caller-owned buffers and
+  `midici_context`; Discovery, Endpoint Inquiry/Reply, Invalidate MUID,
+  ACK and both the 1.1 and 1.2 NAK forms now have typed codecs. The initial
+  Responder handles Discovery, both MUID-collision options, Endpoint
+  Information, Invalidate receive and structured error NAKs.
+- Missing capability: the Initiator peer/discovery-round state machine and
+  its event/correlation path; differential execution against a separately
+  maintained implementation.
+- Minimum remaining change: append bounded Initiator peer state and
+  event-returning `handle`/`poll` calls; do not add I/O or CAMD handles.
 - Acceptance: every management message and malformed length/value has a
   vector; unknown future minor fields are ignored safely; reserved major bits
   yield an explicit unsupported-version event.
-- Tests: spec-derived vectors plus differential tests against at least one
-  independent implementation.
+- Tests: the spec-derived Management vectors and malformed cases pass on the
+  host; differential tests against at least one independently maintained
+  implementation remain required.
 - Upstream PR: engine-only.
 
 ### CI04 — Function Block MIDI-CI metadata in CAMD 43 — ready for upstream API review

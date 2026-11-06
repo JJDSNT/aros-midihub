@@ -111,10 +111,20 @@ MUID.
 `include/midici/midici.h` currently exposes caller-owned records and functions
 for:
 
-- strict envelope/Discovery decode and Discovery/Invalidate encode;
+- strict envelope and all Management body codecs (Discovery, Endpoint
+  Information, ACK/NAK and Invalidate); variable decoded fields are borrowed
+  from the caller's frame and have no hidden allocation;
 - MUID generation/collision recovery;
 - a 16-entry request table with unique 7-bit IDs, deadlines, completion and
-  remote cancellation.
+  remote cancellation;
+- an initial synchronous Management Responder which emits at most one complete
+  response for each input and implements Discovery, Endpoint Information,
+  Invalidate receive and the used/unused MUID collision branches.
+
+The Responder is protocol state, not the system coordinator: it owns no CAMD
+session, clock, entropy source or output queue. The caller supplies the frame,
+fresh entropy and response storage. Initiator peer/discovery-round state is the
+remaining CI03 engine work and is not implied by the transaction table.
 
 The engine has no internal mutex. The coordinator task serializes it. This is
 intentional: adding locks would not define cross-process ownership and would

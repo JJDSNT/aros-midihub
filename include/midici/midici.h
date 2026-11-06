@@ -24,7 +24,21 @@ extern "C" {
 
 #define MIDICI_SUB_ID_DISCOVERY        0x70u
 #define MIDICI_SUB_ID_DISCOVERY_REPLY  0x71u
+#define MIDICI_SUB_ID_ENDPOINT_INQUIRY 0x72u
+#define MIDICI_SUB_ID_ENDPOINT_REPLY   0x73u
+#define MIDICI_SUB_ID_ACK              0x7du
 #define MIDICI_SUB_ID_INVALIDATE_MUID  0x7eu
+#define MIDICI_SUB_ID_NAK              0x7fu
+
+#define MIDICI_ENDPOINT_PRODUCT_INSTANCE_ID 0x00u
+#define MIDICI_MAX_PRODUCT_INSTANCE_ID      16u
+#define MIDICI_RESPONDER_MIN_RESPONSE_CAPACITY 34u
+
+#define MIDICI_ACK_STATUS_OK           0x00u
+#define MIDICI_ACK_STATUS_TIMEOUT_WAIT 0x10u
+#define MIDICI_NAK_STATUS_NOT_SUPPORTED 0x01u
+#define MIDICI_NAK_STATUS_VERSION_NOT_SUPPORTED 0x02u
+#define MIDICI_NAK_STATUS_MALFORMED     0x41u
 
 enum midici_result {
     MIDICI_OK = 0,
@@ -64,6 +78,33 @@ struct midici_discovery {
     uint8_t function_block;
 };
 
+/*
+ * Endpoint Reply data and ACK/NAK text are borrowed views into the frame
+ * passed to their decoder. They remain valid only while that frame does.
+ */
+struct midici_endpoint_message {
+    struct midici_envelope envelope;
+    uint8_t status;
+    const uint8_t *data;
+    uint16_t data_length;
+};
+
+struct midici_invalidate {
+    struct midici_envelope envelope;
+    uint32_t invalidated_muid;
+};
+
+struct midici_report {
+    struct midici_envelope envelope;
+    uint8_t has_report;
+    uint8_t original_sub_id2;
+    uint8_t status_code;
+    uint8_t status_data;
+    uint8_t details[5];
+    const uint8_t *text;
+    uint16_t text_length;
+};
+
 struct midici_transaction {
     uint8_t active;
     uint8_t request_id;
@@ -84,6 +125,38 @@ struct midici_timeout {
     uint32_t remote_muid;
 };
 
+struct midici_responder_config {
+    struct midici_identity identity;
+    uint8_t categories;
+    uint32_t max_sysex_bytes;
+    uint8_t has_function_block;
+    uint8_t function_block;
+    const uint8_t *product_instance_id;
+    uint8_t product_instance_id_length;
+};
+
+struct midici_responder {
+    struct midici_context context;
+    uint8_t used;
+};
+
+enum midici_responder_event_type {
+    MIDICI_RESPONDER_IGNORED = 0,
+    MIDICI_RESPONDER_DISCOVERY,
+    MIDICI_RESPONDER_ENDPOINT_INQUIRY,
+    MIDICI_RESPONDER_REMOTE_INVALIDATED,
+    MIDICI_RESPONDER_LOCAL_MUID_CHANGED,
+    MIDICI_RESPONDER_UNSUPPORTED_VERSION
+};
+
+struct midici_responder_event {
+    enum midici_responder_event_type type;
+    uint8_t emitted_sub_id2;
+    uint32_t peer_muid;
+    uint32_t previous_local_muid;
+    uint32_t local_muid;
+};
+
 /* MUIDs are four 7-bit bytes, least significant group first. */
 int midici_muid_assignable(uint32_t muid);
 uint32_t midici_muid_from_entropy(uint32_t entropy);
@@ -101,9 +174,26 @@ enum midici_result midici_encode_discovery(
 enum midici_result midici_decode_discovery(
     const uint8_t *bytes, size_t length, struct midici_discovery *message);
 
+/* Endpoint Inquiry (data_length == 0) and Endpoint Reply. */
+enum midici_result midici_encode_endpoint(
+    const struct midici_endpoint_message *message, uint8_t *bytes,
+    size_t capacity, size_t *length);
+enum midici_result midici_decode_endpoint(
+    const uint8_t *bytes, size_t length,
+    struct midici_endpoint_message *message);
+
+/* ACK and NAK. A MIDI-CI 1.1 NAK is represented by has_report == 0. */
+enum midici_result midici_encode_report(
+    const struct midici_report *message, uint8_t *bytes, size_t capacity,
+    size_t *length);
+enum midici_result midici_decode_report(
+    const uint8_t *bytes, size_t length, struct midici_report *message);
+
 enum midici_result midici_encode_invalidate_muid(
     uint32_t source_muid, uint32_t invalidated_muid, uint8_t *bytes,
     size_t capacity, size_t *length);
+enum midici_result midici_decode_invalidate_muid(
+    const uint8_t *bytes, size_t length, struct midici_invalidate *message);
 
 /*
  * The context is deliberately lock-free and sans-I/O. Exactly one owner
@@ -126,6 +216,22 @@ enum midici_result midici_transaction_next_timeout(
     struct midici_timeout *timeout);
 void midici_context_cancel_remote(struct midici_context *context,
                                   uint32_t remote_muid);
+
+/*
+ * Initial Management Responder state machine. It emits at most one complete
+ * SysEx response per call. A zero response length means that no reply is
+ * required. The caller supplies fresh entropy for any MUID replacement and
+ * at least MIDICI_RESPONDER_MIN_RESPONSE_CAPACITY bytes of response storage,
+ * so a state transition never loses its mandatory output.
+ */
+enum midici_result midici_responder_init(struct midici_responder *responder,
+                                         uint32_t entropy);
+enum midici_result midici_responder_handle(
+    struct midici_responder *responder,
+    const struct midici_responder_config *config, const uint8_t *bytes,
+    size_t length, uint32_t replacement_entropy, uint8_t *response,
+    size_t response_capacity, size_t *response_length,
+    struct midici_responder_event *event);
 
 #ifdef __cplusplus
 }
