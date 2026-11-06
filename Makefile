@@ -42,13 +42,15 @@ test-components:
 test-discovery:
 	CC='$(CC)' tools/test-discovery-fixtures.sh
 
-test: test-components test-discovery build/config-test build/protocol-test build/applemidi-test build/blemidi-class-test build/routes-test build/ump-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test build/camd-identity-file-test build/camd-identity-store-recovery-test build/camd-legacy-identity-set-test build/camd-app-endpoint-test
+test: test-components test-discovery build/config-test build/protocol-test build/applemidi-test build/blemidi-class-test build/routes-test build/ump-test build/midici-test build/midici-concurrency-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test build/camd-identity-file-test build/camd-identity-store-recovery-test build/camd-legacy-identity-set-test build/camd-app-endpoint-test
 	./build/protocol-test
 	./build/applemidi-test
 	./build/config-test
 	./build/blemidi-class-test
 	./build/routes-test
 	./build/ump-test
+	./build/midici-test
+	./build/midici-concurrency-test
 	./build/netmidi2-test
 	./build/camd-endpoint-core-test
 	./build/camd-provider-contract-test
@@ -255,6 +257,17 @@ build/camd-legacy-identity-set-test: tests/camd_legacy_identity_set.c \
 build/ump-test: tests/ump.c src/ump.c include/ump/ump.h
 	mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/ump.c src/ump.c
+
+build/midici-test: tests/midici.c src/midici.c src/ump.c \
+		include/midici/midici.h include/ump/ump.h
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/midici.c src/midici.c src/ump.c
+
+build/midici-concurrency-test: tests/midici_concurrency.c src/midici.c \
+		include/midici/midici.h
+	mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -pthread -o $@ \
+		tests/midici_concurrency.c src/midici.c
 
 build/netmidi2-test: tests/netmidi2.c src/netmidi2.c src/ump.c \
                      include/netmidi2/netmidi2.h include/ump/ump.h
