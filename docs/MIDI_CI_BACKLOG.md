@@ -61,12 +61,13 @@ minimum change, real dependencies and validation are identified;
   implementation remain required.
 - Upstream PR: engine-only.
 
-### CI04 — Function Block MIDI-CI metadata in CAMD 43 — in progress
+### CI04 — Function Block MIDI-CI metadata in CAMD 43 — hosted-validated
 
 - Objective: expose the MIDI-CI version and SysEx8 stream capacity already
   carried by UMP Function Block Info.
 - Dependencies: maintainer agreement on field names/unknown semantics; PR
-  #2101 remains provisional.
+  #2101 remains provisional. No implementation dependency remains for the
+  requested Linux-hosted validation scope.
 - Repository/component: AROS CAMD public topology records and UMP drivers.
 - Existing interface: `CAMDFunctionBlockInfoV1`,
   `GetEndpointFunctionBlock`, sized output records.
@@ -78,10 +79,15 @@ minimum change, real dependencies and validation are identified;
   `patches/aros-camd-function-block-capabilities.patch`.
 - Acceptance: old shorter record callers work; full record reports exact known
   values; zero/unknown is documented.
-- Tests: host canonical-source registry tests pass for 104-byte arrays,
-  112-byte values, offsets 104/108, invalid values and inconsistent strides.
-  A known Stream message, public short-output canary, topology watch and
-  multi-architecture builds remain.
+- Tests: canonical-source registry tests pass for 104-byte arrays, 112-byte
+  values, offsets 104/108, invalid values and inconsistent strides. The public
+  header canary compiles with `x86_64-aros-gcc`. On AROS Linux-hosted, the
+  known `f0118037 05010205 00000000 00000000` Stream fixture, legacy and full
+  publication, zero extension and guarded 104-byte output pass 8/8. The
+  unpatched library fails the four new capability checks. CAMD contract/v42/v43
+  sections pass 71/38/229; the aggregate debug-driver reload check fails
+  identically in the baseline. No AArch64 result is claimed per current scope;
+  a dedicated topology-watch assertion is a non-blocking follow-up.
 - Upstream PR: incorporate into draft #2101, not 43.1; isolate commit.
 
 ### CI05 — Native UMP driver extension — ready for API review

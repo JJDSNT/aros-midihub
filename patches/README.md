@@ -289,6 +289,16 @@ runtime evidence, not a host-side model or QEMU result. Against the prior CAMD
 the first `RemTask()`, so the differential run stopped at round zero with all
 three checks failed.
 
+`tools/camd-function-block-hosted.sh` validates
+`aros-camd-function-block-capabilities.patch` independently. Its compatibility
+client is compiled with the original 104-byte public record, while the public
+header canary is compiled with the candidate 112-byte record. On AROS
+Linux-hosted, the known Function Block Info words
+`f0118037 05010205 00000000 00000000`, both publication sizes and a guarded
+104-byte output pass 8/8. The same client against CAMD 43 without the patch
+fails the four capability-specific checks. The general CAMD contract/v42/v43
+sections pass 71/38/229; no AArch64 result is claimed for this increment.
+
 [`tools/camd-compat-qemu.sh`](../tools/camd-compat-qemu.sh) runs
 `MIDIHubCAMDCompat`, a suite of the CAMD 41.1 behaviour programs rely on,
 on `raspi-aarch64` under QEMU. Against camd.library with the first four

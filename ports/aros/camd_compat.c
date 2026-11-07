@@ -28,6 +28,9 @@
                                 repeatedly removes a task that owns every
                                 endpoint object and verifies reaping, stale
                                 signal removal and slot recovery
+   MIDIHubCAMDCompat --v43-function-block
+                                validates the 104/112-byte Function Block
+                                ABI with a known UMP Stream message
    MIDIHubCAMDCompat --router SOURCE DESTINATION
                                 how long MIDIHubRouter, routing SOURCE to
                                 DESTINATION, takes to forward a message
@@ -2319,6 +2322,188 @@ static struct CAMDUMPEventV1 ump(ULONG word0, ULONG word1, ULONG words)
     return event;
 }
 
+/* CAMDFunctionBlockInfoV1 was 104 bytes in the first CAMD 43 draft.  Keep
+   both layouts here so this compatibility client itself can be compiled with
+   that header while testing a library which implements the additive record.
+   This is deliberately not a second public definition. */
+struct function_block_legacy_v1 {
+    ULONG Size;
+    ULONG Version;
+    struct CAMDEndpointIDV1 EndpointID;
+    ULONG Number;
+    ULONG Flags;
+    ULONG FirstGroup;
+    ULONG GroupCount;
+    char Name[CAMD_TOPOLOGY_NAME_BYTES];
+};
+
+struct function_block_extended_v1 {
+    ULONG Size;
+    ULONG Version;
+    struct CAMDEndpointIDV1 EndpointID;
+    ULONG Number;
+    ULONG Flags;
+    ULONG FirstGroup;
+    ULONG GroupCount;
+    char Name[CAMD_TOPOLOGY_NAME_BYTES];
+    ULONG MIDICIVersion;
+    ULONG MaxSysEx8Streams;
+};
+
+typedef char function_block_legacy_size_must_be_104[
+    sizeof(struct function_block_legacy_v1) == 104 ? 1 : -1];
+typedef char function_block_extended_size_must_be_112[
+    sizeof(struct function_block_extended_v1) == 112 ? 1 : -1];
+
+static LONG endpoint_index(struct CAMDHandleV1 *snapshot, ULONG count,
+                           const char *name, struct CAMDEndpointInfoV1 *info);
+
+/* UMP 1.1 section 7.1.8, figure 22, with its zero MIDI-CI/SysEx8 octets
+   replaced by the values under test.  This fixture is block zero, active,
+   sender and receiver UI hints, unrestricted MIDI 1.0, bidirectional, Group
+   5 for one Group, MIDI-CI version 2 and five SysEx8 streams. */
+static int block_from_known_stream(const ULONG words[4],
+                                   const struct CAMDEndpointIDV1 *id,
+                                   struct function_block_extended_v1 *block)
+{
+    if (words[0] != 0xf0118037UL || (words[1] & 0xffff0000UL) != 0x05010000UL ||
+        words[2] != 0 || words[3] != 0)
+        return 0;
+    memset(block, 0, sizeof(*block));
+    block->Size = sizeof(*block);
+    block->Version = 1;
+    block->EndpointID = *id;
+    block->Number = (words[0] >> 8) & 0x7f;
+    block->Flags = CAMD_BLOCK_FLAG_INPUT | CAMD_BLOCK_FLAG_OUTPUT |
+                   CAMD_BLOCK_FLAG_ACTIVE | CAMD_BLOCK_FLAG_UI_INPUT |
+                   CAMD_BLOCK_FLAG_UI_OUTPUT | CAMD_BLOCK_FLAG_MIDI1;
+    block->FirstGroup = (words[1] >> 24) & 0xff;
+    block->GroupCount = (words[1] >> 16) & 0xff;
+    strcpy(block->Name, "Known Stream block");
+    block->MIDICIVersion = (words[1] >> 8) & 0xff;
+    block->MaxSysEx8Streams = words[1] & 0xff;
+    return 1;
+}
+
+static void test_function_block_capabilities(void)
+{
+    static const ULONG known_stream[4] = {
+        0xf0118037UL, 0x05010205UL, 0, 0
+    };
+    static char name[] = "camdcompat function block";
+    struct CAMDPublishRequestV1 publish;
+    struct CAMDHandleV1 port, snapshot;
+    struct CAMDEndpointIDV1 id;
+    struct CAMDEndpointInfoV1 info;
+    struct CAMDGroupInfoV1 group;
+    struct function_block_legacy_v1 legacy;
+    struct function_block_extended_v1 extended, got;
+    union {
+        ULONG alignment;
+        UBYTE bytes[112];
+    } canary;
+    struct function_block_legacy_v1 *short_record =
+        (struct function_block_legacy_v1 *)canary.bytes;
+    ULONG count = 0, i;
+    LONG index, result;
+    int untouched = 1;
+
+    check(sizeof(legacy) == 104 && sizeof(extended) == 112,
+          "Function Block ABI fixtures are 104 and 112 bytes", NULL);
+    memset(&publish, 0, sizeof(publish));
+    publish.Size = sizeof(publish);
+    publish.Version = 1;
+    publish.Directions = CAMD_DIRECTION_INPUT | CAMD_DIRECTION_OUTPUT;
+    publish.DataFormat = CAMD_DATA_FORMAT_UMP;
+    publish.Protocol = CAMD_PROTOCOL_MIDI2;
+    publish.Signal = CAMD_SIGNAL_NONE;
+    strcpy(publish.Name, name);
+    result = PublishEndpoint(&publish, &port, &id);
+    check(result == CAMD_RESULT_OK, "Function Block canary publishes a UMP endpoint", NULL);
+    if (result != CAMD_RESULT_OK)
+        return;
+
+    memset(&group, 0, sizeof(group));
+    group.Size = sizeof(group);
+    group.Version = 1;
+    group.EndpointID = id;
+    group.Group = 5;
+    group.Flags = CAMD_GROUP_FLAG_INPUT | CAMD_GROUP_FLAG_OUTPUT;
+    group.Protocol = CAMD_PROTOCOL_MIDI2;
+    strcpy(group.Name, "Group 5");
+
+    memset(&legacy, 0, sizeof(legacy));
+    legacy.Size = sizeof(legacy);
+    legacy.Version = 1;
+    legacy.EndpointID = id;
+    legacy.Number = 0;
+    legacy.FirstGroup = 5;
+    legacy.GroupCount = 1;
+    strcpy(legacy.Name, "Legacy block");
+    result = SetPublishedEndpointTopology(&port, &group, 1,
+        (struct CAMDFunctionBlockInfoV1 *)&legacy, 1);
+    check(result == CAMD_RESULT_OK,
+          "a 104-byte Function Block publisher remains compatible", NULL);
+
+    memset(&got, 0, sizeof(got));
+    got.Size = sizeof(got);
+    got.Version = 1;
+    if (result == CAMD_RESULT_OK &&
+        ObtainEndpointSnapshot(&snapshot, &count, NULL) == CAMD_RESULT_OK) {
+        index = endpoint_index(&snapshot, count, name, &info);
+        result = index < 0 ? CAMD_RESULT_OUT_OF_RANGE :
+            GetEndpointFunctionBlock(&snapshot, (ULONG)index, 0,
+                (struct CAMDFunctionBlockInfoV1 *)&got);
+        check(result == CAMD_RESULT_OK && got.Size == sizeof(got) &&
+              got.MIDICIVersion == 0 && got.MaxSysEx8Streams == 0,
+              "a 104-byte record is extended with zero capability fields", NULL);
+        ReleaseEndpointSnapshot(&snapshot);
+    } else {
+        check(0, "a 104-byte record is extended with zero capability fields", NULL);
+    }
+
+    check(block_from_known_stream(known_stream, &id, &extended) &&
+          extended.MIDICIVersion == 2 && extended.MaxSysEx8Streams == 5,
+          "the known Function Block Info Stream vector decodes to 2 and 5", NULL);
+    result = SetPublishedEndpointTopology(&port, &group, 1,
+        (struct CAMDFunctionBlockInfoV1 *)&extended, 1);
+    check(result == CAMD_RESULT_OK,
+          "a 112-byte Function Block publisher supplies both capabilities", NULL);
+
+    memset(&canary, 0xa5, sizeof(canary));
+    short_record->Size = sizeof(*short_record);
+    short_record->Version = 1;
+    if (result == CAMD_RESULT_OK &&
+        ObtainEndpointSnapshot(&snapshot, &count, NULL) == CAMD_RESULT_OK) {
+        index = endpoint_index(&snapshot, count, name, &info);
+        result = index < 0 ? CAMD_RESULT_OUT_OF_RANGE :
+            GetEndpointFunctionBlock(&snapshot, (ULONG)index, 0,
+                (struct CAMDFunctionBlockInfoV1 *)short_record);
+        for (i = sizeof(*short_record); i < sizeof(canary.bytes); ++i)
+            if (canary.bytes[i] != 0xa5)
+                untouched = 0;
+        check(result == CAMD_RESULT_OK && short_record->Size == sizeof(extended) &&
+              short_record->Number == 0 && short_record->FirstGroup == 5 &&
+              short_record->GroupCount == 1 && untouched,
+              "a 104-byte GetEndpointFunctionBlock caller is not overwritten", NULL);
+
+        memset(&got, 0, sizeof(got));
+        got.Size = sizeof(got);
+        got.Version = 1;
+        result = index < 0 ? CAMD_RESULT_OUT_OF_RANGE :
+            GetEndpointFunctionBlock(&snapshot, (ULONG)index, 0,
+                (struct CAMDFunctionBlockInfoV1 *)&got);
+        check(result == CAMD_RESULT_OK && got.Size == sizeof(got) &&
+              got.MIDICIVersion == 2 && got.MaxSysEx8Streams == 5,
+              "the public API returns MIDI-CI version 2 and five SysEx8 streams", NULL);
+        ReleaseEndpointSnapshot(&snapshot);
+    } else {
+        check(0, "a 104-byte GetEndpointFunctionBlock caller is not overwritten", NULL);
+        check(0, "the public API returns MIDI-CI version 2 and five SysEx8 streams", NULL);
+    }
+    WithdrawEndpoint(&port);
+}
+
 /* The place of a named endpoint in a snapshot, or -1. */
 static LONG endpoint_index(struct CAMDHandleV1 *snapshot, ULONG count, const char *name, struct CAMDEndpointInfoV1 *info)
 {
@@ -3631,6 +3816,7 @@ int main(int argc, char **argv)
     int v42_mode = argc == 2 && !strcmp(argv[1], "--v42");
     int v43_mode = argc == 2 && !strcmp(argv[1], "--v43");
     int task_death_mode = argc == 2 && !strcmp(argv[1], "--v43-task-death");
+    int function_block_mode = argc == 2 && !strcmp(argv[1], "--v43-function-block");
     int leak_mode = argc == 2 && (!strcmp(argv[1], "--v43-leak") || !strcmp(argv[1], "--v43-abandon"));
     int abandon_mode = argc == 2 && !strcmp(argv[1], "--v43-abandon");
     int router_mode = argc == 4 && !strcmp(argv[1], "--router");
@@ -3641,9 +3827,9 @@ int main(int argc, char **argv)
 
     /* Unbuffered, so a crash still leaves the checks before it in the log. */
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (argc != 1 && !rethink_mode && !v42_mode && !v43_mode && !task_death_mode && !leak_mode && !router_mode && !store_mode &&
+    if (argc != 1 && !rethink_mode && !v42_mode && !v43_mode && !task_death_mode && !function_block_mode && !leak_mode && !router_mode && !store_mode &&
         !realtime_ring_mode && !receive_overflow_mode && !legacy_wait_mode) {
-        puts("Usage: MIDIHubCAMDCompat [--v42 | --v43 | --v43-task-death | --v43-leak | --v43-abandon | --v43-store NAME | --rethink | --realtime-ring | --receive-overflow | --legacy-wait | --router SOURCE DESTINATION]");
+        puts("Usage: MIDIHubCAMDCompat [--v42 | --v43 | --v43-task-death | --v43-function-block | --v43-leak | --v43-abandon | --v43-store NAME | --rethink | --realtime-ring | --receive-overflow | --legacy-wait | --router SOURCE DESTINATION]");
         return 20;
     }
     /* The shell that runs User-Startup at boot has task switching disabled
@@ -3684,6 +3870,12 @@ int main(int argc, char **argv)
             skip("camd.library 43", "older library");
         } else {
             RUN(test_endpoint_task_death);
+        }
+    } else if (function_block_mode) {
+        if (CamdBase->lib_Version < 43) {
+            skip("camd.library 43", "older library");
+        } else {
+            RUN(test_function_block_capabilities);
         }
     } else if (leak_mode) {
         if (CamdBase->lib_Version < 43) {
