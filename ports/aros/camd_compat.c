@@ -24,6 +24,10 @@
    MIDIHubCAMDCompat --v43-abandon
                                 the same without closing camd.library, as a
                                 task that just ends: the library then stays
+   MIDIHubCAMDCompat --v43-task-death
+                                repeatedly removes a task that owns every
+                                endpoint object and verifies reaping, stale
+                                signal removal and slot recovery
    MIDIHubCAMDCompat --router SOURCE DESTINATION
                                 how long MIDIHubRouter, routing SOURCE to
                                 DESTINATION, takes to forward a message
@@ -1837,6 +1841,202 @@ static void test_endpoint_watch(void)
     check(1, "ending a watch twice returns", NULL);
 }
 
+#define TASK_DEATH_ROUNDS 20
+
+static ULONG endpoint_state(const char *name);
+
+struct task_death_context {
+    struct Task *parent;
+    ULONG parent_signal;
+    volatile LONG stage;
+    char name[CAMD_ENDPOINT_NAME_BYTES];
+    struct CAMDEndpointIDV1 endpoint_id;
+};
+
+enum {
+    TASK_DEATH_READY = 1,
+    TASK_DEATH_OPEN_FAILED = -1,
+    TASK_DEATH_SIGNAL_FAILED = -2,
+    TASK_DEATH_WATCH_FAILED = -3,
+    TASK_DEATH_SNAPSHOT_FAILED = -4,
+    TASK_DEATH_PUBLISH_FAILED = -5,
+    TASK_DEATH_SESSION_FAILED = -6
+};
+
+static void task_death_report(struct task_death_context *context, LONG stage)
+{
+    context->stage = stage;
+    Signal(context->parent, 1UL << context->parent_signal);
+}
+
+/* Deliberately owns an opener, watch, snapshot, publisher and input session.
+ * The parent removes this task without allowing any normal cleanup. */
+static void task_death_client(void)
+{
+    struct task_death_context *context = FindTask(NULL)->tc_UserData;
+    struct CAMDPublishRequestV1 publish;
+    struct CAMDSessionRequestV1 request;
+    struct CAMDHandleV1 watch, snapshot, publisher, session;
+    struct Library *opened;
+    ULONG count;
+    BYTE signal;
+
+    opened = OpenLibrary((CONST_STRPTR)"camd.library", 43);
+    if (opened == NULL) {
+        task_death_report(context, TASK_DEATH_OPEN_FAILED);
+        Wait(SIGBREAKF_CTRL_F);
+        return;
+    }
+    signal = AllocSignal(-1);
+    if (signal < 0) {
+        task_death_report(context, TASK_DEATH_SIGNAL_FAILED);
+        Wait(SIGBREAKF_CTRL_F);
+        return;
+    }
+    if (StartEndpointWatch(&watch, (ULONG)signal, NULL) != CAMD_RESULT_OK) {
+        task_death_report(context, TASK_DEATH_WATCH_FAILED);
+        Wait(SIGBREAKF_CTRL_F);
+        return;
+    }
+    if (ObtainEndpointSnapshot(&snapshot, &count, NULL) != CAMD_RESULT_OK) {
+        task_death_report(context, TASK_DEATH_SNAPSHOT_FAILED);
+        Wait(SIGBREAKF_CTRL_F);
+        return;
+    }
+    memset(&publish, 0, sizeof(publish));
+    publish.Size = sizeof(publish);
+    publish.Version = 1;
+    publish.Directions = CAMD_DIRECTION_INPUT | CAMD_DIRECTION_OUTPUT;
+    publish.Signal = (ULONG)signal;
+    publish.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+    publish.Protocol = CAMD_PROTOCOL_MIDI1;
+    publish.Flags = CAMD_PUBLISH_TEMPORARY;
+    strcpy(publish.Name, context->name);
+    strcpy(publish.ProductInstance, "task-death-regression");
+    if (PublishEndpoint(&publish, &publisher, &context->endpoint_id) !=
+        CAMD_RESULT_OK) {
+        task_death_report(context, TASK_DEATH_PUBLISH_FAILED);
+        Wait(SIGBREAKF_CTRL_F);
+        return;
+    }
+    memset(&request, 0, sizeof(request));
+    request.Size = sizeof(request);
+    request.Version = 1;
+    request.EndpointID = context->endpoint_id;
+    request.Direction = CAMD_DIRECTION_INPUT;
+    request.DataFormat = CAMD_DATA_FORMAT_MIDI1;
+    request.Protocol = CAMD_PROTOCOL_MIDI1;
+    request.QueueCapacity = 4;
+    request.MaxSysExBytes = 64;
+    request.Signal = (ULONG)signal;
+    if (OpenEndpointSession(&request, &session, NULL) != CAMD_RESULT_OK) {
+        task_death_report(context, TASK_DEATH_SESSION_FAILED);
+        Wait(SIGBREAKF_CTRL_F);
+        return;
+    }
+    task_death_report(context, TASK_DEATH_READY);
+    Wait(SIGBREAKF_CTRL_F);
+}
+
+static int wait_task_death_stage(struct task_death_context *context)
+{
+    ULONG n;
+
+    for (n = 0; n < 100 && context->stage == 0; ++n)
+        Delay(1);
+    return context->stage != 0;
+}
+
+static int wait_endpoint_departure(const struct CAMDHandleV1 *watch,
+                                   const struct CAMDEndpointIDV1 *id)
+{
+    struct CAMDEndpointWatchEventV1 event;
+    ULONG n;
+
+    for (n = 0; n < 100; ++n) {
+        while (GetEndpointWatchEvent((struct CAMDHandleV1 *)watch, &event) ==
+               CAMD_RESULT_OK) {
+            if (event.Type != CAMD_ENDPOINT_EVENT_ADDED &&
+                !memcmp(&event.EndpointID, id, sizeof(*id)))
+                return 1;
+        }
+        Delay(1);
+    }
+    return 0;
+}
+
+static void test_endpoint_task_death(void)
+{
+    struct task_death_context context;
+    struct CAMDHandleV1 observer, probe, snapshot;
+    struct Task *child;
+    BYTE signal;
+    ULONG count, round;
+    int created = 0, departed = 0, recovered = 0;
+    char detail[96];
+
+    signal = AllocSignal(-1);
+    if (signal < 0) {
+        check(0, "task death: parent signal", NULL);
+        return;
+    }
+    if (StartEndpointWatch(&observer, (ULONG)signal, NULL) != CAMD_RESULT_OK) {
+        FreeSignal(signal);
+        check(0, "task death: observer watch", NULL);
+        return;
+    }
+    for (round = 0; round < TASK_DEATH_ROUNDS; ++round) {
+        memset(&context, 0, sizeof(context));
+        context.parent = FindTask(NULL);
+        context.parent_signal = (ULONG)signal;
+        snprintf(context.name, sizeof(context.name),
+                 "camdcompat dead %02lu", (unsigned long)round);
+        SetSignal(0, 1UL << signal);
+        child = NewCreateTask(TASKTAG_PC, (IPTR)task_death_client,
+                              TASKTAG_NAME, (IPTR)"camdcompat doomed client",
+                              TASKTAG_STACKSIZE, 32768,
+                              TASKTAG_USERDATA, (IPTR)&context,
+                              TAG_DONE);
+        if (child == NULL || !wait_task_death_stage(&context)) {
+            if (child != NULL)
+                RemTask(child);
+            break;
+        }
+        if (context.stage == TASK_DEATH_READY)
+            ++created;
+        RemTask(child);
+        if (context.stage != TASK_DEATH_READY)
+            break;
+        if (wait_endpoint_departure(&observer, &context.endpoint_id))
+            ++departed;
+        else
+            break;
+        if (StartEndpointWatch(&probe, CAMD_SIGNAL_NONE, NULL) !=
+                CAMD_RESULT_OK ||
+            ObtainEndpointSnapshot(&snapshot, &count, NULL) !=
+                CAMD_RESULT_OK)
+            break;
+        EndEndpointWatch(&probe);
+        ReleaseEndpointSnapshot(&snapshot);
+        if (endpoint_state(context.name) != 0)
+            break;
+        ++recovered;
+    }
+    EndEndpointWatch(&observer);
+    FreeSignal(signal);
+    snprintf(detail, sizeof(detail), "stage %ld after %lu rounds",
+             (long)context.stage, (unsigned long)round);
+    check(created == TASK_DEATH_ROUNDS,
+          "forced termination creates all endpoint object kinds repeatedly",
+          created == TASK_DEATH_ROUNDS ? NULL : detail);
+    check(departed == TASK_DEATH_ROUNDS,
+          "the private reaper withdraws each dead task's endpoint",
+          departed == TASK_DEATH_ROUNDS ? NULL : detail);
+    check(recovered == TASK_DEATH_ROUNDS,
+          "watch, snapshot and signal slots recover after every death",
+          recovered == TASK_DEATH_ROUNDS ? NULL : detail);
+}
+
 /* Around test_rethink_load(): the driver RethinkCAMD() loads adds endpoints. */
 static struct CAMDHandleV1 rethink_watch;
 static BYTE rethink_bit = -1;
@@ -3430,6 +3630,7 @@ int main(int argc, char **argv)
     int rethink_mode = argc == 2 && !strcmp(argv[1], "--rethink");
     int v42_mode = argc == 2 && !strcmp(argv[1], "--v42");
     int v43_mode = argc == 2 && !strcmp(argv[1], "--v43");
+    int task_death_mode = argc == 2 && !strcmp(argv[1], "--v43-task-death");
     int leak_mode = argc == 2 && (!strcmp(argv[1], "--v43-leak") || !strcmp(argv[1], "--v43-abandon"));
     int abandon_mode = argc == 2 && !strcmp(argv[1], "--v43-abandon");
     int router_mode = argc == 4 && !strcmp(argv[1], "--router");
@@ -3440,9 +3641,9 @@ int main(int argc, char **argv)
 
     /* Unbuffered, so a crash still leaves the checks before it in the log. */
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (argc != 1 && !rethink_mode && !v42_mode && !v43_mode && !leak_mode && !router_mode && !store_mode &&
+    if (argc != 1 && !rethink_mode && !v42_mode && !v43_mode && !task_death_mode && !leak_mode && !router_mode && !store_mode &&
         !realtime_ring_mode && !receive_overflow_mode && !legacy_wait_mode) {
-        puts("Usage: MIDIHubCAMDCompat [--v42 | --v43 | --v43-leak | --v43-abandon | --v43-store NAME | --rethink | --realtime-ring | --receive-overflow | --legacy-wait | --router SOURCE DESTINATION]");
+        puts("Usage: MIDIHubCAMDCompat [--v42 | --v43 | --v43-task-death | --v43-leak | --v43-abandon | --v43-store NAME | --rethink | --realtime-ring | --receive-overflow | --legacy-wait | --router SOURCE DESTINATION]");
         return 20;
     }
     /* The shell that runs User-Startup at boot has task switching disabled
@@ -3477,6 +3678,12 @@ int main(int argc, char **argv)
             skip("camd.library 43", "older library");
         } else {
             store_publish(argv[2]);
+        }
+    } else if (task_death_mode) {
+        if (CamdBase->lib_Version < 43) {
+            skip("camd.library 43", "older library");
+        } else {
+            RUN(test_endpoint_task_death);
         }
     } else if (leak_mode) {
         if (CamdBase->lib_Version < 43) {

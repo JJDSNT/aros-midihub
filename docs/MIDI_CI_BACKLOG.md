@@ -106,27 +106,35 @@ minimum change, real dependencies and validation are identified;
   pinned, m68k callback ABI.
 - Upstream PR: isolated CAMD commit, preferably folded into #2101 after review.
 
-### CI05A — Reclaim endpoint objects after task death — in progress
+### CI05A — Reclaim endpoint objects after task death — implemented; upstream review pending
 
 - Objective: prevent dead CAMD clients from exhausting endpoint object slots
   or leaving stale task pointers as signal targets.
-- Dependencies: `task.resource` lifecycle notification contract present in the
-  PR #2101 baseline; real AROS task-removal stress environment.
+- Dependencies: satisfied by task.resource 1.4 in the PR #2101 baseline and
+  the AROS linux-hosted task-removal environment.
 - Repository/component: AROS CAMD private endpoint owner/client lifecycle.
 - Existing interface/behavior: `endpoint_owner.c` only cleans on a task's last
   `CloseLibrary()` and explicitly leaves objects when the task terminates;
   `OwnEndpointObject()` also silently loses ownership on allocation failure.
-- Minimum change: no public API. Register one `TNA_REMOVED` hook, immediately
+- Implemented minimum change: no public API. Register one `TNA_REMOVED` hook, immediately
   neutralize that task's signal targets, mark its owned objects dead and defer
   provider/session cleanup to safe task context. Make ownership registration
   fallible and roll back a newly created object on `NOMEM`.
 - Acceptance: repeated dead owners do not exhaust 16 watches, 32 snapshots,
   64 receivers or 32 publishers; statistics return to baseline; stale handles
   fail; healthy owners survive; ownership-allocation failure rolls back.
-- Tests: AROS runtime `RemTask`/natural-exit stress, including SMP where
-  available. Host registry tests cannot validate task-resource ordering.
+- Test result: `tools/camd-task-death-hosted.sh` removed 20 tasks, each holding
+  an opener, signalled watch, snapshot, publisher and signalled input session.
+  The observer received every departure and capacity recovered after every
+  death: 3 passes, 0 failures on AROS linux-hosted. Canonical PR source builds
+  and clean patch application pass. The same test against the prior CAMD 43
+  failed in round zero because the dead endpoint produced no departure event,
+  reproducing the missing cleanup. Allocation-failure injection,
+  healthy-owner isolation and SMP stress remain P1 validation work; host
+  registry tests cannot validate task-resource ordering.
 - Upstream PR: private CAMD lifecycle commit, separate from Function Block and
-  native-driver API patches.
+  native-driver API patches. Patch:
+  `patches/aros-camd-endpoint-task-death.patch`.
 
 ### CI06 — AROS coordinator concurrency prototype — in progress
 

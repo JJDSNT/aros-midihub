@@ -1,0 +1,696 @@
+diff --git a/workbench/libs/camd/camd_init.c b/workbench/libs/camd/camd_init.c
+index 87a993f47f..637330a41e 100644
+--- a/workbench/libs/camd/camd_init.c
++++ b/workbench/libs/camd/camd_init.c
+@@ -39,8 +39,7 @@ static int ExpungeCamd(struct CamdBase *CamdBase)
+    close of the library. */
+ static int OpenCamd(struct CamdBase *CamdBase)
+ {
+-    TaskOpenedCamd(CamdBase);
+-    return TRUE;
++    return TaskOpenedCamd(CamdBase);
+ }
+ 
+ static int CloseCamd(struct CamdBase *CamdBase)
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+index 042235d99a..97a550fb88 100644
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -292,6 +292,7 @@ struct EndpointPublisher{
+ 	struct CAMDLegacyDriverAdapter *adapter;
+ 	ULONG generation;
+ 	BOOL withdrawn;
++	struct CamdBase *camd_base;
+ 	struct Task *task;
+ 	ULONG signal;			// signal number, or CAMD_SIGNAL_NONE
+ };
+@@ -300,6 +301,7 @@ struct EndpointPublisher{
+ struct EndpointWatcher{
+ 	struct CAMDEndpointWatch *watch;	// NULL while the slot is free
+ 	ULONG generation;
++	struct CamdBase *camd_base;
+ 	struct Task *task;
+ 	ULONG signal;			// signal number, or CAMD_SIGNAL_NONE
+ };
+@@ -308,6 +310,7 @@ struct EndpointWatcher{
+ struct EndpointReceiver{
+ 	struct CAMDHandleV1 session;	// generation 0 while the slot is free
+ 	struct CAMDNativeEventQueue *queue;
++	struct CamdBase *camd_base;
+ 	struct Task *task;
+ 	ULONG signal;			// signal number, or CAMD_SIGNAL_NONE
+ 	ULONG format;			// CAMD_DATA_FORMAT_MIDI1 or _UMP
+@@ -374,8 +377,14 @@ struct CamdBase_intern{
+        it made, so that they go when it closes the library for the last
+        time. Under EndpointOwnerSemaphore, taken last. */
+     struct SignalSemaphore EndpointOwnerSemaphore;
++    struct SignalSemaphore EndpointSignalSemaphore;
+     struct MinList EndpointOpeners;
+     struct MinList EndpointOwned;
++#ifndef __amigaos4__
++    struct Library *EndpointTaskResource;
++    struct Hook EndpointTaskHook;
++    struct Task *EndpointOwnerReaper;
++#endif
+ 
+ 
+ };
+@@ -611,12 +620,16 @@ LONG ForgetStoredIdentity(const struct CAMDEndpointIDV1 *id,
+ /* Copies a record a caller hands in. See TakeEndpointRecord(). */
+ BOOL TakeEndpointRecord(const APTR given,APTR record,ULONG size,ULONG least);
+ 
+-void OwnEndpointObject(ULONG kind,const struct CAMDHandleV1 *handle,
++BOOL OwnEndpointObject(ULONG kind,const struct CAMDHandleV1 *handle,
+ 	struct CamdBase *CamdBase);
+ void DisownEndpointObject(ULONG kind,const struct CAMDHandleV1 *handle,
+ 	struct CamdBase *CamdBase);
+-void TaskOpenedCamd(struct CamdBase *CamdBase);
++BOOL TaskOpenedCamd(struct CamdBase *CamdBase);
+ void TaskClosedCamd(struct CamdBase *CamdBase);
++BOOL InitEndpointOwners(struct CamdBase *CamdBase);
++void UninitEndpointOwners(struct CamdBase *CamdBase);
++void ReapDeadEndpointOwners(struct CamdBase *CamdBase);
++void DisableEndpointTaskSignals(struct Task *task,struct CamdBase *CamdBase);
+ void FreeEndpointOwners(struct CamdBase *CamdBase);
+ struct CAMDGroupInfoV1;
+ struct CAMDFunctionBlockInfoV1;
+diff --git a/workbench/libs/camd/endpoint_client.c b/workbench/libs/camd/endpoint_client.c
+index 59f50f04c8..b76d084495 100644
+--- a/workbench/libs/camd/endpoint_client.c
++++ b/workbench/libs/camd/endpoint_client.c
+@@ -73,6 +73,7 @@ BOOL EndpointClientsRemain(struct CamdBase *CamdBase)
+     struct CamdBase_intern *base = CB(CamdBase);
+     ULONG i;
+ 
++    ReapDeadEndpointOwners(CamdBase);
+     for (i = 0; i < ENDPOINT_SNAPSHOTS; ++i) {
+         if (base->EndpointSnapshots[i] != NULL)
+             return TRUE;
+@@ -113,10 +114,14 @@ static enum CAMDProviderResult queue_to_provider(
+ static void receiver_arrived(struct EndpointReceiver *receiver,
+                              enum CAMDNativeQueueResult result)
+ {
++    struct CamdBase_intern *base = CB(receiver->camd_base);
++
+     if (result != CAMD_NATIVE_QUEUE_OK)
+         receiver->lost = TRUE;
+-    if (receiver->signal != CAMD_SIGNAL_NONE)
++    ObtainSemaphoreShared(&base->EndpointSignalSemaphore);
++    if (receiver->signal != CAMD_SIGNAL_NONE && receiver->task != NULL)
+         Signal(receiver->task, 1UL << receiver->signal);
++    ReleaseSemaphore(&base->EndpointSignalSemaphore);
+ }
+ 
+ /* The two sinks run in the port's receiver process. */
+@@ -248,8 +253,11 @@ LONG StartEndpointReceiver(const struct CAMDHandleV1 *session, ULONG format,
+         ReleaseSemaphore(&base->EndpointClientSemaphore);
+         return CAMD_REGISTRY_NOMEM;
+     }
++    ObtainSemaphore(&base->EndpointSignalSemaphore);
++    receiver->camd_base = CamdBase;
+     receiver->task = FindTask(NULL);
+     receiver->signal = signal;
++    ReleaseSemaphore(&base->EndpointSignalSemaphore);
+     receiver->format = format;
+     receiver->lost = FALSE;
+     receiver->session = *session;
+@@ -264,6 +272,10 @@ LONG StartEndpointReceiver(const struct CAMDHandleV1 *session, ULONG format,
+     result = camd_registry_session_start_receive(base->EndpointRegistry,
+                                                  *session, &sink);
+     if (result != CAMD_REGISTRY_OK) {
++        ObtainSemaphore(&base->EndpointSignalSemaphore);
++        receiver->task = NULL;
++        receiver->signal = CAMD_SIGNAL_NONE;
++        ReleaseSemaphore(&base->EndpointSignalSemaphore);
+         receiver->session.generation = 0;
+         camd_native_queue_destroy(receiver->queue);
+         receiver->queue = NULL;
+@@ -285,6 +297,10 @@ void StopEndpointReceiver(const struct CAMDHandleV1 *session,
+     receiver = find_receiver(session, CamdBase);
+     if (receiver != NULL) {
+         camd_registry_session_stop_receive(base->EndpointRegistry, *session);
++        ObtainSemaphore(&base->EndpointSignalSemaphore);
++        receiver->task = NULL;
++        receiver->signal = CAMD_SIGNAL_NONE;
++        ReleaseSemaphore(&base->EndpointSignalSemaphore);
+         camd_native_queue_destroy(receiver->queue);
+         receiver->queue = NULL;
+         receiver->session.generation = 0;
+@@ -358,9 +374,12 @@ LONG ReadEndpointReceiver(const struct CAMDHandleV1 *session,
+ static void watcher_notify(void *context)
+ {
+     struct EndpointWatcher *watcher = context;
++    struct CamdBase_intern *base = CB(watcher->camd_base);
+ 
+-    if (watcher->signal != CAMD_SIGNAL_NONE)
++    ObtainSemaphoreShared(&base->EndpointSignalSemaphore);
++    if (watcher->signal != CAMD_SIGNAL_NONE && watcher->task != NULL)
+         Signal(watcher->task, 1UL << watcher->signal);
++    ReleaseSemaphore(&base->EndpointSignalSemaphore);
+ }
+ 
+ /* The calling task is the one that gets the signal. */
+@@ -394,8 +413,11 @@ LONG StartEndpointWatcher(struct CAMDHandleV1 *handle, ULONG signal,
+     if (result == CAMD_REGISTRY_OK) {
+         if (++watcher->generation == 0)
+             ++watcher->generation;
++        ObtainSemaphore(&base->EndpointSignalSemaphore);
++        watcher->camd_base = CamdBase;
+         watcher->task = FindTask(NULL);
+         watcher->signal = signal;
++        ReleaseSemaphore(&base->EndpointSignalSemaphore);
+         camd_endpoint_watch_set_notify(watcher->watch, watcher_notify,
+                                        watcher);
+         handle->slot = i;
+@@ -450,11 +472,47 @@ void EndEndpointWatcher(const struct CAMDHandleV1 *handle,
+         /* Ending it takes the registry lock, so no notify is running or
+          * comes afterwards. */
+         camd_endpoint_watch_end(watcher->watch);
++        ObtainSemaphore(&base->EndpointSignalSemaphore);
++        watcher->task = NULL;
++        watcher->signal = CAMD_SIGNAL_NONE;
++        ReleaseSemaphore(&base->EndpointSignalSemaphore);
+         watcher->watch = NULL;
+     }
+     ReleaseSemaphore(&base->EndpointClientSemaphore);
+ }
+ 
++/* TNA_REMOVED runs before Exec removes the task. Take the same semaphore as
++ * every endpoint callback, so no callback can retain and use a stale task
++ * pointer after this function returns. The objects themselves are reaped in
++ * a private task because the notification hook must not wait. */
++void DisableEndpointTaskSignals(struct Task *task,
++                                struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    ULONG i;
++
++    ObtainSemaphore(&base->EndpointSignalSemaphore);
++    for (i = 0; i < ENDPOINT_RECEIVERS; ++i) {
++        if (base->EndpointReceivers[i].task == task) {
++            base->EndpointReceivers[i].task = NULL;
++            base->EndpointReceivers[i].signal = CAMD_SIGNAL_NONE;
++        }
++    }
++    for (i = 0; i < ENDPOINT_WATCHES; ++i) {
++        if (base->EndpointWatchers[i].task == task) {
++            base->EndpointWatchers[i].task = NULL;
++            base->EndpointWatchers[i].signal = CAMD_SIGNAL_NONE;
++        }
++    }
++    for (i = 0; i < ENDPOINT_PUBLISHERS; ++i) {
++        if (base->EndpointPublishers[i].task == task) {
++            base->EndpointPublishers[i].task = NULL;
++            base->EndpointPublishers[i].signal = CAMD_SIGNAL_NONE;
++        }
++    }
++    ReleaseSemaphore(&base->EndpointSignalSemaphore);
++}
++
+ LONG ReadEndpointReceiverUMP(const struct CAMDHandleV1 *session,
+                              struct CAMDUMPEventV1 *event,
+                              struct CamdBase *CamdBase)
+diff --git a/workbench/libs/camd/endpoint_owner.c b/workbench/libs/camd/endpoint_owner.c
+index 1a2965a434..233832b8e9 100644
+--- a/workbench/libs/camd/endpoint_owner.c
++++ b/workbench/libs/camd/endpoint_owner.c
+@@ -4,12 +4,18 @@
+  * A session, snapshot, watch or published endpoint belongs to the task that
+  * made it. When that task closes camd.library for the last time, what it
+  * left behind is released as if it had done so itself: its signals stop and
+- * the library can go. A task that ends without closing the library is not
+- * seen here; its objects stay and keep the library loaded.
++ * the library can go. task.resource marks objects whose task is being
++ * removed; a private CAMD task releases them outside the notification hook.
+  */
+ 
+ #include <proto/exec.h>
++#include <proto/dos.h>
+ #include <exec/memory.h>
++#ifndef __amigaos4__
++#include <proto/task.h>
++#include <resources/task.h>
++#include <aros/asmcall.h>
++#endif
+ 
+ #include "camd_intern.h"
+ #include "endpoint_registry.h"
+@@ -18,6 +24,7 @@ struct EndpointOpener {
+     struct MinNode node;
+     struct Task *task;
+     ULONG count;
++    BOOL dead;
+ };
+ 
+ struct EndpointOwned {
+@@ -25,6 +32,7 @@ struct EndpointOwned {
+     struct Task *task;
+     ULONG kind;
+     struct CAMDHandleV1 handle;
++    BOOL dead;
+ };
+ 
+ #define FOR_NODES(list, pointer, type) \
+@@ -32,22 +40,23 @@ struct EndpointOwned {
+          (pointer)->node.mln_Succ != NULL; \
+          (pointer) = (type *)(pointer)->node.mln_Succ)
+ 
+-/* Without memory the object simply has no owner and is not cleaned up. */
+-void OwnEndpointObject(ULONG kind, const struct CAMDHandleV1 *handle,
++BOOL OwnEndpointObject(ULONG kind, const struct CAMDHandleV1 *handle,
+                        struct CamdBase *CamdBase)
+ {
+     struct CamdBase_intern *base = CB(CamdBase);
+     struct EndpointOwned *owned;
+ 
++    ReapDeadEndpointOwners(CamdBase);
+     owned = AllocMem(sizeof(*owned), MEMF_ANY | MEMF_CLEAR);
+     if (owned == NULL)
+-        return;
++        return FALSE;
+     owned->task = FindTask(NULL);
+     owned->kind = kind;
+     owned->handle = *handle;
+     ObtainSemaphore(&base->EndpointOwnerSemaphore);
+     AddTail((struct List *)&base->EndpointOwned, (struct Node *)owned);
+     ReleaseSemaphore(&base->EndpointOwnerSemaphore);
++    return TRUE;
+ }
+ 
+ /* The object is gone, whoever released it. */
+@@ -72,7 +81,7 @@ void DisownEndpointObject(ULONG kind, const struct CAMDHandleV1 *handle,
+         FreeMem(found, sizeof(*found));
+ }
+ 
+-void TaskOpenedCamd(struct CamdBase *CamdBase)
++BOOL TaskOpenedCamd(struct CamdBase *CamdBase)
+ {
+     struct CamdBase_intern *base = CB(CamdBase);
+     struct Task *task = FindTask(NULL);
+@@ -96,6 +105,7 @@ void TaskOpenedCamd(struct CamdBase *CamdBase)
+     if (found != NULL)
+         ++found->count;
+     ReleaseSemaphore(&base->EndpointOwnerSemaphore);
++    return found != NULL;
+ }
+ 
+ static void release_owned(const struct EndpointOwned *owned,
+@@ -119,6 +129,68 @@ static void release_owned(const struct EndpointOwned *owned,
+     }
+ }
+ 
++static void release_matching(struct Task *task, BOOL dead_only,
++                             struct CamdBase *CamdBase)
++{
++    static const ULONG order[] = {
++        ENDPOINT_OWNED_SESSION,
++        ENDPOINT_OWNED_SNAPSHOT,
++        ENDPOINT_OWNED_WATCH,
++        ENDPOINT_OWNED_PUBLISHER
++    };
++    struct CamdBase_intern *base = CB(CamdBase);
++    struct EndpointOwned *owned;
++    ULONG index;
++
++    for (index = 0; index < sizeof(order) / sizeof(order[0]); ++index) {
++        for (;;) {
++            struct EndpointOwned taken;
++            BOOL any = FALSE;
++
++            ObtainSemaphore(&base->EndpointOwnerSemaphore);
++            FOR_NODES(&base->EndpointOwned, owned, struct EndpointOwned) {
++                if ((task == NULL || owned->task == task) &&
++                    owned->kind == order[index] &&
++                    (!dead_only || owned->dead)) {
++                    taken = *owned;
++                    Remove((struct Node *)owned);
++                    FreeMem(owned, sizeof(*owned));
++                    any = TRUE;
++                    break;
++                }
++            }
++            ReleaseSemaphore(&base->EndpointOwnerSemaphore);
++            if (!any)
++                break;
++            release_owned(&taken, CamdBase);
++        }
++    }
++}
++
++void ReapDeadEndpointOwners(struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++    struct EndpointOpener *opener;
++
++    for (;;) {
++        struct EndpointOpener *dead = NULL;
++
++        ObtainSemaphore(&base->EndpointOwnerSemaphore);
++        FOR_NODES(&base->EndpointOpeners, opener, struct EndpointOpener) {
++            if (opener->dead) {
++                dead = opener;
++                Remove((struct Node *)dead);
++                break;
++            }
++        }
++        ReleaseSemaphore(&base->EndpointOwnerSemaphore);
++        if (dead == NULL)
++            break;
++        FreeMem(dead, sizeof(*dead));
++    }
++    release_matching(NULL, TRUE, CamdBase);
++}
++
+ /* The calling task closes the library. On its last close, what it still
+  * owns is released: sessions first, since they pin what it published. */
+ void TaskClosedCamd(struct CamdBase *CamdBase)
+@@ -126,8 +198,6 @@ void TaskClosedCamd(struct CamdBase *CamdBase)
+     struct CamdBase_intern *base = CB(CamdBase);
+     struct Task *task = FindTask(NULL);
+     struct EndpointOpener *opener, *found = NULL;
+-    struct EndpointOwned *owned;
+-    ULONG kind;
+     BOOL last = FALSE;
+ 
+     ObtainSemaphore(&base->EndpointOwnerSemaphore);
+@@ -145,31 +215,114 @@ void TaskClosedCamd(struct CamdBase *CamdBase)
+     ReleaseSemaphore(&base->EndpointOwnerSemaphore);
+     if (!last)
+         return;
++    release_matching(task, FALSE, CamdBase);
++}
+ 
+-    for (kind = ENDPOINT_OWNED_SNAPSHOT; kind <= ENDPOINT_OWNED_PUBLISHER;
+-         ++kind) {
+-        for (;;) {
+-            struct EndpointOwned taken;
+-            BOOL any = FALSE;
++#ifndef __amigaos4__
++AROS_UFH3(static IPTR, endpoint_task_notify,
++    AROS_UFHA(struct Hook *, hook, A0),
++    AROS_UFHA(struct Task *, caller, A2),
++    AROS_UFHA(struct TaskNotifyMsg *, message, A1))
++{
++    AROS_USERFUNC_INIT
+ 
+-            /* One at a time and outside the semaphore: releasing takes
+-             * other locks and comes back through DisownEndpointObject(). */
+-            ObtainSemaphore(&base->EndpointOwnerSemaphore);
+-            FOR_NODES(&base->EndpointOwned, owned, struct EndpointOwned) {
+-                if (owned->task == task && owned->kind == kind) {
+-                    taken = *owned;
+-                    Remove((struct Node *)owned);
+-                    FreeMem(owned, sizeof(*owned));
+-                    any = TRUE;
+-                    break;
+-                }
+-            }
+-            ReleaseSemaphore(&base->EndpointOwnerSemaphore);
+-            if (!any)
+-                break;
+-            release_owned(&taken, CamdBase);
+-        }
++    struct CamdBase *CamdBase = hook->h_Data;
++    struct CamdBase_intern *base = CB(CamdBase);
++    struct EndpointOpener *opener;
++    struct EndpointOwned *owned;
++
++    (void)caller;
++    if (message->tnm_Action != TNA_REMOVED)
++        return 0;
++
++    ObtainSemaphore(&base->EndpointOwnerSemaphore);
++    FOR_NODES(&base->EndpointOpeners, opener, struct EndpointOpener)
++        if (opener->task == message->tnm_Task)
++            opener->dead = TRUE;
++    FOR_NODES(&base->EndpointOwned, owned, struct EndpointOwned)
++        if (owned->task == message->tnm_Task)
++            owned->dead = TRUE;
++    ReleaseSemaphore(&base->EndpointOwnerSemaphore);
++
++    DisableEndpointTaskSignals(message->tnm_Task, CamdBase);
++    if (base->EndpointOwnerReaper != NULL)
++        Signal(base->EndpointOwnerReaper, SIGBREAKF_CTRL_E);
++    return 0;
++
++    AROS_USERFUNC_EXIT
++}
++
++static void endpoint_owner_reaper(void)
++{
++    struct CamdBase *CamdBase = FindTask(NULL)->tc_UserData;
++    struct CamdBase_intern *base = CB(CamdBase);
++    ULONG signals;
++
++    do {
++        signals = Wait(SIGBREAKF_CTRL_E | SIGBREAKF_CTRL_F);
++        ReapDeadEndpointOwners(CamdBase);
++    } while ((signals & SIGBREAKF_CTRL_F) == 0);
++
++    Forbid();
++    base->EndpointOwnerReaper = NULL;
++    Permit();
++}
++#endif
++
++BOOL InitEndpointOwners(struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++
++    InitSemaphore(&base->EndpointOwnerSemaphore);
++    InitSemaphore(&base->EndpointSignalSemaphore);
++    NEWLIST((struct List *)&base->EndpointOpeners);
++    NEWLIST((struct List *)&base->EndpointOwned);
++#ifndef __amigaos4__
++    base->EndpointOwnerReaper = NewCreateTask(
++        TASKTAG_PC, (IPTR)endpoint_owner_reaper,
++        TASKTAG_NAME, (IPTR)"camd endpoint owner reaper",
++        TASKTAG_STACKSIZE, 32768,
++        TASKTAG_USERDATA, (IPTR)CamdBase,
++        TAG_DONE);
++    if (base->EndpointOwnerReaper == NULL)
++        return FALSE;
++    base->EndpointTaskResource = OpenResource("task.resource");
++    if (base->EndpointTaskResource != NULL) {
++        struct Library *TaskResBase = base->EndpointTaskResource;
++        base->EndpointTaskHook.h_Entry = (HOOKFUNC)endpoint_task_notify;
++        base->EndpointTaskHook.h_SubEntry = NULL;
++        base->EndpointTaskHook.h_Data = CamdBase;
++        if (AddTaskNotifyHook(&base->EndpointTaskHook))
++            return TRUE;
++        base->EndpointTaskResource = NULL;
++    }
++    Signal(base->EndpointOwnerReaper, SIGBREAKF_CTRL_F);
++    while (base->EndpointOwnerReaper != NULL)
++        Delay(1);
++    return FALSE;
++#else
++    return TRUE;
++#endif
++}
++
++void UninitEndpointOwners(struct CamdBase *CamdBase)
++{
++    struct CamdBase_intern *base = CB(CamdBase);
++
++#ifndef __amigaos4__
++    if (base->EndpointTaskResource != NULL) {
++        struct Library *TaskResBase = base->EndpointTaskResource;
++        RemTaskNotifyHook(&base->EndpointTaskHook);
++        base->EndpointTaskResource = NULL;
++    }
++    if (base->EndpointOwnerReaper != NULL) {
++        Signal(base->EndpointOwnerReaper, SIGBREAKF_CTRL_F);
++        while (base->EndpointOwnerReaper != NULL)
++            Delay(1);
+     }
++#endif
++    ReapDeadEndpointOwners(CamdBase);
++    FreeEndpointOwners(CamdBase);
+ }
+ 
+ /* CAMD must be expunging. */
+diff --git a/workbench/libs/camd/endpoint_publish.c b/workbench/libs/camd/endpoint_publish.c
+index 4bb3021b17..b25ff2a946 100644
+--- a/workbench/libs/camd/endpoint_publish.c
++++ b/workbench/libs/camd/endpoint_publish.c
+@@ -21,9 +21,12 @@
+ static void publisher_notify(void *context)
+ {
+     struct EndpointPublisher *publisher = context;
++    struct CamdBase_intern *base = CB(publisher->camd_base);
+ 
+-    if (publisher->signal != CAMD_SIGNAL_NONE)
++    ObtainSemaphoreShared(&base->EndpointSignalSemaphore);
++    if (publisher->signal != CAMD_SIGNAL_NONE && publisher->task != NULL)
+         Signal(publisher->task, 1UL << publisher->signal);
++    ReleaseSemaphore(&base->EndpointSignalSemaphore);
+ }
+ 
+ static uint32_t publisher_now(void *context)
+@@ -56,6 +59,10 @@ static void reap_publishers(struct CamdBase *CamdBase)
+             publisher->adapter = NULL;
+         if (publisher->adapter == NULL &&
+             camd_app_endpoint_destroy(publisher->app) == CAMD_PROVIDER_OK) {
++            ObtainSemaphore(&base->EndpointSignalSemaphore);
++            publisher->task = NULL;
++            publisher->signal = CAMD_SIGNAL_NONE;
++            ReleaseSemaphore(&base->EndpointSignalSemaphore);
+             publisher->app = NULL;
+             publisher->withdrawn = FALSE;
+         }
+@@ -320,8 +327,11 @@ LONG PublishAppEndpoint(const struct CAMDPublishRequestV1 *request,
+         result = CAMD_REGISTRY_NOMEM;
+         goto out;
+     }
++    ObtainSemaphore(&base->EndpointSignalSemaphore);
++    publisher->camd_base = CamdBase;
+     publisher->task = FindTask(NULL);
+     publisher->signal = request->Signal;
++    ReleaseSemaphore(&base->EndpointSignalSemaphore);
+     publisher->withdrawn = FALSE;
+     if (++publisher->generation == 0)
+         ++publisher->generation;
+@@ -382,6 +392,10 @@ void WithdrawAppEndpoint(const struct CAMDHandleV1 *handle,
+     ObtainSemaphore(&base->EndpointClientSemaphore);
+     publisher = find_publisher(handle, CamdBase);
+     if (publisher != NULL) {
++        ObtainSemaphore(&base->EndpointSignalSemaphore);
++        publisher->task = NULL;
++        publisher->signal = CAMD_SIGNAL_NONE;
++        ReleaseSemaphore(&base->EndpointSignalSemaphore);
+         DeleteEndpointProjection(publisher->projection);
+         publisher->projection = NULL;
+         camd_app_endpoint_detach(publisher->app);
+diff --git a/workbench/libs/camd/init.c b/workbench/libs/camd/init.c
+index d61e9a3eee..dd2996e8e0 100644
+--- a/workbench/libs/camd/init.c
++++ b/workbench/libs/camd/init.c
+@@ -32,15 +32,19 @@ BOOL InitCamd(struct CamdBase *CamdBase){
+ 	InitSemaphore(&CB(CamdBase)->DriverScanSemaphore);
+ 	InitSemaphore(&CB(CamdBase)->NotifySemaphore);
+ 	InitSemaphore(&CB(CamdBase)->EndpointClientSemaphore);
+-	InitSemaphore(&CB(CamdBase)->EndpointOwnerSemaphore);
+-	NEWLIST((struct List *)&CB(CamdBase)->EndpointOpeners);
+-	NEWLIST((struct List *)&CB(CamdBase)->EndpointOwned);
+ 	CB(CamdBase)->EndpointRegistry=camd_registry_create();
+ 	if(CB(CamdBase)->EndpointRegistry==NULL){
+ 		FreeMem(CB(CamdBase)->CLSemaphore,sizeof(struct SignalSemaphore));
+ 		CB(CamdBase)->CLSemaphore=NULL;
+ 		return FALSE;
+ 	}
++	if(!InitEndpointOwners(CamdBase)){
++		camd_registry_destroy(CB(CamdBase)->EndpointRegistry);
++		CB(CamdBase)->EndpointRegistry=NULL;
++		FreeMem(CB(CamdBase)->CLSemaphore,sizeof(struct SignalSemaphore));
++		CB(CamdBase)->CLSemaphore=NULL;
++		return FALSE;
++	}
+ 	CB(CamdBase)->EndpointIdentity=camd_identity_store_aros_create();
+ #ifndef __amigaos4__
+ 	NEWLIST(&CB(CamdBase)->mymidinodes);
+@@ -84,6 +88,7 @@ fail:
+ #ifndef __amigaos4__
+ 	StopDriverWatch();
+ #endif
++	UninitEndpointOwners(CamdBase);
+ 	camd_identity_store_aros_destroy(CB(CamdBase)->EndpointIdentity);
+ 	CB(CamdBase)->EndpointIdentity=NULL;
+ 	camd_registry_destroy(CB(CamdBase)->EndpointRegistry);
+@@ -107,6 +112,7 @@ void UninitCamd(struct CamdBase *CamdBase){
+ #ifndef __amigaos4__
+ 	StopDriverWatch();
+ #endif
++	UninitEndpointOwners(CamdBase);
+ 
+ 	if( ! IsListEmpty(&CB(CamdBase)->midiclusters)){
+ 		node=CB(CamdBase)->midiclusters.lh_Head;
+@@ -143,7 +149,6 @@ void UninitCamd(struct CamdBase *CamdBase){
+ 		driver=temp2;
+ 	}
+ 	FreeEndpointSnapshots(CamdBase);
+-	FreeEndpointOwners(CamdBase);
+ 	camd_identity_store_aros_destroy(CB(CamdBase)->EndpointIdentity);
+ 	CB(CamdBase)->EndpointIdentity=NULL;
+ 	camd_registry_destroy(CB(CamdBase)->EndpointRegistry);
+diff --git a/workbench/libs/camd/obtainendpointsnapshot.c b/workbench/libs/camd/obtainendpointsnapshot.c
+index 0f9c64e66a..af9f10b53b 100644
+--- a/workbench/libs/camd/obtainendpointsnapshot.c
++++ b/workbench/libs/camd/obtainendpointsnapshot.c
+@@ -71,7 +71,12 @@
+ 	}
+ 	if(count!=NULL) *count=(ULONG)camd_snapshot_endpoint_count(taken);
+ 	if(generation!=NULL) *generation=camd_snapshot_generation(taken);
+-	OwnEndpointObject(ENDPOINT_OWNED_SNAPSHOT,snapshot,CamdBase);
++	if(!OwnEndpointObject(ENDPOINT_OWNED_SNAPSHOT,snapshot,CamdBase)){
++		RemoveEndpointSnapshot(snapshot,CamdBase);
++		snapshot->slot=0;
++		snapshot->generation=0;
++		return camd_public_result(CAMD_REGISTRY_NOMEM);
++	}
+ 
+ 	return camd_public_result(CAMD_REGISTRY_OK);
+ 
+diff --git a/workbench/libs/camd/openendpointsession.c b/workbench/libs/camd/openendpointsession.c
+index 82537addbe..b951d6a63b 100644
+--- a/workbench/libs/camd/openendpointsession.c
++++ b/workbench/libs/camd/openendpointsession.c
+@@ -116,6 +116,12 @@
+ 		return camd_public_result(result);
+ 	}
+ 
++	if(!OwnEndpointObject(ENDPOINT_OWNED_SESSION,&handle,CamdBase)){
++		StopEndpointReceiver(&handle,CamdBase);
++		camd_registry_session_close(CB(CamdBase)->EndpointRegistry,handle);
++		return camd_public_result(CAMD_REGISTRY_NOMEM);
++	}
++
+ 	if(info!=NULL){
+ 		full.Size=sizeof(full);
+ 		full.Version=1;
+@@ -129,7 +135,6 @@
+ 		info->Size=sizeof(full);
+ 	}
+ 	*session=handle;
+-	OwnEndpointObject(ENDPOINT_OWNED_SESSION,session,CamdBase);
+ 
+ 	return camd_public_result(CAMD_REGISTRY_OK);
+ 
+diff --git a/workbench/libs/camd/publishendpoint.c b/workbench/libs/camd/publishendpoint.c
+index 103f984e20..d83339dfae 100644
+--- a/workbench/libs/camd/publishendpoint.c
++++ b/workbench/libs/camd/publishendpoint.c
+@@ -67,8 +67,12 @@
+ 	if(request==NULL || endpoint==NULL) return camd_public_result(CAMD_REGISTRY_INVALID);
+ 
+ 	result=PublishAppEndpoint(request,endpoint,id,CamdBase);
+-	if(result==CAMD_REGISTRY_OK){
+-		OwnEndpointObject(ENDPOINT_OWNED_PUBLISHER,endpoint,CamdBase);
++	if(result==CAMD_REGISTRY_OK &&
++	   !OwnEndpointObject(ENDPOINT_OWNED_PUBLISHER,endpoint,CamdBase)){
++		WithdrawAppEndpoint(endpoint,CamdBase);
++		endpoint->slot=0;
++		endpoint->generation=0;
++		result=CAMD_REGISTRY_NOMEM;
+ 	}
+ 
+ 	return camd_public_result(result);
+diff --git a/workbench/libs/camd/startendpointwatch.c b/workbench/libs/camd/startendpointwatch.c
+index 5851521840..fe8be22072 100644
+--- a/workbench/libs/camd/startendpointwatch.c
++++ b/workbench/libs/camd/startendpointwatch.c
+@@ -63,8 +63,12 @@
+ 	watch->generation=0;
+ 
+ 	result=StartEndpointWatcher(watch,signal,generation,CamdBase);
+-	if(result==CAMD_REGISTRY_OK){
+-		OwnEndpointObject(ENDPOINT_OWNED_WATCH,watch,CamdBase);
++	if(result==CAMD_REGISTRY_OK &&
++	   !OwnEndpointObject(ENDPOINT_OWNED_WATCH,watch,CamdBase)){
++		EndEndpointWatcher(watch,CamdBase);
++		watch->slot=0;
++		watch->generation=0;
++		result=CAMD_REGISTRY_NOMEM;
+ 	}
+ 
+ 	return camd_public_result(result);

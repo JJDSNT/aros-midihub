@@ -61,6 +61,9 @@ claimed.
 | AROS coordinator cancellation | Exact owner/task/token cancellation releases the operation to a new task | pass on raspi-aarch64 AROS/QEMU |
 | AROS coordinator dead owner | Owner exits without cancellation; next request reaps it and succeeds | pass on raspi-aarch64 AROS/QEMU |
 | AROS coordinator shutdown | Remaining logical ownership cleared and public prototype port removed | pass on raspi-aarch64 AROS/QEMU |
+| CAMD abnormal client termination | 20 `RemTask()` rounds; each owns opener, signalled watch, snapshot, publisher and signalled input session | pass on AROS linux-hosted |
+| CAMD dead-owner reaper | Healthy observer receives every endpoint departure before capacity reuse | pass on AROS linux-hosted |
+| CAMD stale signal/capacity recovery | Fresh watch and snapshot succeed after every forced death; no crash or exhaustion | pass on AROS linux-hosted |
 
 ## AROS-native coordinator run
 
@@ -81,6 +84,42 @@ as dead and rejected the now-stale cancel. Keeping the client alive until the
 ACK removed that ambiguity; the passing behavior is the required service
 contract.
 
+## CAMD abnormal-client-termination run
+
+The proposal library and compatibility client were built from PR #2101 commit
+`4c1510f1d0` plus `aros-camd-endpoint-task-death.patch` using the
+linux-x86_64 AROS toolchain, then injected into a copied hosted system:
+
+```sh
+tools/camd-task-death-hosted.sh \
+  build-aros-linux/bin/linux-x86_64/AROS \
+  build-camd43-hosted/bin/linux-x86_64/AROS/Libs/camd.library \
+  build-camd43-hosted/bin/linux-x86_64/AROS/Extras/aros-midihub/C/MIDIHubCAMDCompat \
+  /tmp/camd-task-death-hosted-main
+```
+
+Result:
+
+```text
+PASS forced termination creates all endpoint object kinds repeatedly
+PASS the private reaper withdraws each dead task's endpoint
+PASS watch, snapshot and signal slots recover after every death
+camdcompat: 3 passed, 0 failed, 0 skipped
+PASS abnormal-task-termination regression on AROS linux-hosted
+```
+
+Differential reproduction used the identical suite and system image with the
+previous CAMD 43 library. The child reached `TASK_DEATH_READY`, but its first
+forced removal produced no endpoint-departure event. The test stopped at round
+zero with 0 passes and 3 failures. This demonstrates the missing capability;
+the passing result is not merely a test that also passed before the patch.
+
+This is actual AROS runtime evidence. It is not described as QEMU or hardware
+validation. The initial sandboxed boot could not initialize the X display;
+the same copied image passed when Xvfb was allowed to create its display
+socket. No CAMD assertion failed in that discarded boot because the suite did
+not start.
+
 ## What this proves
 
 - The initial wire/core code is portable C and has no OS dependencies.
@@ -97,10 +136,12 @@ contract.
 
 - The protocol codec has not run inside AROS; only the coordinator ownership
   probe has.
-- No `camd.library` 43 binary was exercised by the new MIDI-CI test.
+- The MIDI-CI codec still has not run through `camd.library` 43; the separate
+  CAMD task-death runtime test exercises endpoint lifecycle, not MIDI-CI bytes.
 - No coordinator service or public IPC ABI is implemented. The native probe
-  validates logical lease ownership and natural task exit, not forced
-  `RemTask`, CAMD-handle cleanup, coordinator restart or MIDI-CI rediscovery.
+  validates logical lease ownership and natural task exit. Forced `RemTask`
+  and CAMD-handle cleanup are now covered by the separate CAMD regression, but
+  coordinator restart and MIDI-CI rediscovery are not.
 - The Initiator peer/discovery-round state machine, Profiles, Property
   Exchange and Process Inquiry are not implemented in the C engine.
 - There is no MIDI-CI 1.2.1 conformance claim. Management bytes were checked
@@ -130,7 +171,8 @@ contract.
 - offline/reconnect/retire/driver removal during partial SysEx and active
   transaction;
 - endpoint watch overflow and resnapshot;
-- forced client task termination and coordinator restart;
+- coordinator restart and dead-client lease recovery integrated with the
+  portable engine (CAMD forced client termination is covered separately);
 - memory ownership under MungWall/available AROS diagnostics;
 - CAMD 41/42 compatibility suite unchanged.
 
