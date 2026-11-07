@@ -10,6 +10,7 @@ include $(SRCDIR)/config/aros.cfg
 #MM      contrib-aros-midihub-selftest \
 #MM      contrib-aros-midihub-camdprobe \
 #MM      contrib-aros-midihub-camdcompat \
+#MM      contrib-aros-midihub-midicicoordprobe \
 #MM      contrib-aros-midihub-camdidentities \
 #MM      contrib-aros-midihub-netreload \
 #MM      contrib-aros-midihub-mcastjoin \
@@ -272,6 +273,13 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
     progname=MIDIHubCAMDCompat \
     files="$(MIDIHUB_ROOT)/ports/aros/camd_compat" \
     targetdir=$(MIDIHUB_PACKAGE)/C
+
+# Gate-2 experiment only: validates coordinator task ownership and recovery;
+# it is not a public midici.library service or ABI.
+%build_prog mmake=contrib-aros-midihub-midicicoordprobe \
+    progname=MIDICICoordProbe \
+    files="$(MIDIHUB_ROOT)/ports/aros/midici_coordinator_probe" \
+    targetdir=$(MIDIHUB_PACKAGE)/Tests
 
 # A deliberately slow loopback driver for the CAMD 41.1 wait regression.
 %build_prog mmake=contrib-aros-midihub-camdwaitdriver \
