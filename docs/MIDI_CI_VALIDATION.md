@@ -1,6 +1,6 @@
 # MIDI-CI validation record
 
-Last run: 2026-11-06. Results distinguish host execution from AROS runtime
+Last run: 2026-11-07. Results distinguish host execution from AROS runtime
 execution.
 
 ## Implemented test target
@@ -55,6 +55,31 @@ claimed.
 | Timeout | Caller-supplied monotonic deadline produces one timeout event | pass on host |
 | SysEx7 over UMP | Discovery packetized by canonical `ump_from_midi1`, reconstructed by canonical bounded `ump_to_midi1`, then decoded | pass on host |
 | Decoder bounds smoke test | 10,000 deterministic arbitrary buffers, length 0–80, through all Management decoders | pass on host and ASan/UBSan |
+| Function Block sized input | Canonical PR #2101 registry source with 104-byte two-record array; canonical records zero-fill appended fields | pass on host |
+| Function Block full input | 112-byte records round-trip MIDI-CI version 2 and five SysEx8 streams; 256 and inconsistent stride rejected | pass on host |
+| AROS coordinator ownership | Two independent Exec tasks contend; exactly one owns and one is busy | pass on raspi-aarch64 AROS/QEMU |
+| AROS coordinator cancellation | Exact owner/task/token cancellation releases the operation to a new task | pass on raspi-aarch64 AROS/QEMU |
+| AROS coordinator dead owner | Owner exits without cancellation; next request reaps it and succeeds | pass on raspi-aarch64 AROS/QEMU |
+| AROS coordinator shutdown | Remaining logical ownership cleared and public prototype port removed | pass on raspi-aarch64 AROS/QEMU |
+
+## AROS-native coordinator run
+
+The probe was built by AROS MetaMake as
+`AROS/Extras/aros-midihub/Tests/MIDICICoordProbe` and executed with:
+
+```sh
+tools/midici-coordinator-qemu.sh \
+  /home/jaime/aros-build-aarch64-core/bin/raspi-aarch64/AROS/Extras/aros-midihub/Tests/MIDICICoordProbe \
+  /home/jaime/aros-build-aarch64-core/bin/raspi-aarch64/AROS \
+  /tmp/midici-coord-run-2
+```
+
+Result: `MIDI-CI-COORDINATOR 10 checks, 0 failures` followed by
+`PROBE-DONE`. The first run found a real cancellation race: the client exited
+before its cancellation was consumed, so the coordinator correctly reaped it
+as dead and rejected the now-stale cancel. Keeping the client alive until the
+ACK removed that ambiguity; the passing behavior is the required service
+contract.
 
 ## What this proves
 
@@ -70,10 +95,12 @@ claimed.
 
 ## What this does not prove
 
-- No test in this record has run inside AROS.
+- The protocol codec has not run inside AROS; only the coordinator ownership
+  probe has.
 - No `camd.library` 43 binary was exercised by the new MIDI-CI test.
-- The coordinator/service, IPC behavior and abnormal process cleanup are not
-  implemented.
+- No coordinator service or public IPC ABI is implemented. The native probe
+  validates logical lease ownership and natural task exit, not forced
+  `RemTask`, CAMD-handle cleanup, coordinator restart or MIDI-CI rediscovery.
 - The Initiator peer/discovery-round state machine, Profiles, Property
   Exchange and Process Inquiry are not implemented in the C engine.
 - There is no MIDI-CI 1.2.1 conformance claim. Management bytes were checked
