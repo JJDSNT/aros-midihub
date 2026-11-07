@@ -37,3 +37,4 @@ camd-receive-ring-and-wait
 camd-endpoint-hold-and-drain
 camd-endpoint-surface
 camd-identity-functions
+camd-function-block-capabilities

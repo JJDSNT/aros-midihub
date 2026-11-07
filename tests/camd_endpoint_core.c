@@ -3,6 +3,7 @@
 #include "../prototypes/camd/provider_contract.h"
 
 #include <assert.h>
+#include <stddef.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -463,6 +464,82 @@ static struct CAMDFunctionBlockInfoV1 make_block(
     info.GroupCount = group_count;
     strcpy(info.Name, "Function Block");
     return info;
+}
+
+struct legacy_function_block_info_v1 {
+    uint32_t Size;
+    uint32_t Version;
+    struct CAMDEndpointIDV1 EndpointID;
+    uint32_t Number;
+    uint32_t Flags;
+    uint32_t FirstGroup;
+    uint32_t GroupCount;
+    char Name[CAMD_TOPOLOGY_NAME_BYTES];
+};
+
+static void test_function_block_size_compatibility(void)
+{
+    struct CAMDEndpointRegistry *registry = camd_registry_create();
+    struct registry_provider_context context;
+    struct CAMDEndpointInfoV1 endpoint = make_endpoint(70, "Block ABI");
+    struct CAMDGroupInfoV1 group = make_group(&endpoint, 0);
+    struct legacy_function_block_info_v1 legacy[2];
+    struct CAMDFunctionBlockInfoV1 current[2];
+    struct CAMDEndpointSnapshot *snapshot;
+    const struct CAMDEndpointInfoV1 *snapshot_endpoint;
+    const struct CAMDGroupInfoV1 *groups;
+    const struct CAMDFunctionBlockInfoV1 *blocks;
+    struct CAMDHandleV1 provider, owner;
+    size_t group_count, block_count;
+    unsigned int i;
+
+    assert(registry != NULL);
+    provider = register_test_provider(registry, &context);
+    memset(legacy, 0, sizeof(legacy));
+    for (i = 0; i < 2; ++i) {
+        legacy[i].Size = sizeof(legacy[i]);
+        legacy[i].Version = 1;
+        legacy[i].EndpointID = endpoint.ID;
+        legacy[i].Number = i;
+        legacy[i].FirstGroup = 0;
+        legacy[i].GroupCount = 1;
+        strcpy(legacy[i].Name, "Legacy block");
+    }
+    assert(camd_registry_publish(registry, provider, &endpoint, &group, 1,
+        (const struct CAMDFunctionBlockInfoV1 *)legacy, 2, &owner) ==
+        CAMD_REGISTRY_OK);
+    assert(camd_registry_snapshot(registry, &snapshot) == CAMD_REGISTRY_OK);
+    assert(camd_snapshot_endpoint(snapshot, 0, &snapshot_endpoint, &groups,
+        &group_count, &blocks, &block_count) == CAMD_REGISTRY_OK);
+    assert(block_count == 2 && blocks[0].Size == sizeof(blocks[0]));
+    assert(blocks[0].MIDICIVersion == 0 && blocks[0].MaxSysEx8Streams == 0);
+    camd_snapshot_destroy(snapshot);
+
+    current[0] = make_block(&endpoint, 0, 0, 1);
+    current[1] = make_block(&endpoint, 1, 0, 1);
+    current[0].MIDICIVersion = 2;
+    current[0].MaxSysEx8Streams = 5;
+    assert(camd_registry_replace(registry, owner, &endpoint, &group, 1,
+                                 current, 2) == CAMD_REGISTRY_OK);
+    assert(camd_registry_snapshot(registry, &snapshot) == CAMD_REGISTRY_OK);
+    assert(camd_snapshot_endpoint(snapshot, 0, &snapshot_endpoint, &groups,
+        &group_count, &blocks, &block_count) == CAMD_REGISTRY_OK);
+    assert(blocks[0].MIDICIVersion == 2 && blocks[0].MaxSysEx8Streams == 5);
+    camd_snapshot_destroy(snapshot);
+
+    current[0].MIDICIVersion = 256;
+    assert(camd_registry_replace(registry, owner, &endpoint, &group, 1,
+                                 current, 2) == CAMD_REGISTRY_INVALID);
+    current[0].MIDICIVersion = 2;
+    legacy[1].Size = sizeof(struct CAMDFunctionBlockInfoV1);
+    assert(camd_registry_replace(registry, owner, &endpoint, &group, 1,
+        (const struct CAMDFunctionBlockInfoV1 *)legacy, 2) ==
+        CAMD_REGISTRY_INVALID);
+
+    assert(camd_registry_retire(registry, owner) == CAMD_REGISTRY_OK);
+    assert(camd_registry_release(registry, owner) == CAMD_REGISTRY_OK);
+    retire_test_provider(registry, provider, &context);
+    camd_registry_destroy(registry);
 }
 
 static const struct CAMDEndpointInfoV1 *snapshot_first(
@@ -960,7 +1037,9 @@ int main(void)
     assert(sizeof(struct CAMDHandleV1) == 8);
     assert(sizeof(struct CAMDEndpointInfoV1) == 360);
     assert(sizeof(struct CAMDGroupInfoV1) == 100);
-    assert(sizeof(struct CAMDFunctionBlockInfoV1) == 104);
+    assert(sizeof(struct CAMDFunctionBlockInfoV1) == 112);
+    assert(offsetof(struct CAMDFunctionBlockInfoV1, MIDICIVersion) == 104);
+    assert(offsetof(struct CAMDFunctionBlockInfoV1, MaxSysEx8Streams) == 108);
     provider_owner = register_test_provider(registry, &provider_context);
 
     replacement = provider_owner;
@@ -1053,6 +1132,7 @@ int main(void)
     test_watches();
     test_provider_lifecycle();
     test_registry_sessions();
+    test_function_block_size_compatibility();
     puts("CAMD private endpoint core OK");
     return 0;
 }
