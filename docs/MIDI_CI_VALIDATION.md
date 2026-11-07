@@ -57,6 +57,9 @@ claimed.
 | Decoder bounds smoke test | 10,000 deterministic arbitrary buffers, length 0–80, through all Management decoders | pass on host and ASan/UBSan |
 | Function Block sized input | Canonical PR #2101 registry source with 104-byte two-record array; canonical records zero-fill appended fields | pass on host |
 | Function Block full input | 112-byte records round-trip MIDI-CI version 2 and five SysEx8 streams; 256 and inconsistent stride rejected | pass on host |
+| Function Block public header | `x86_64-aros-gcc` compile canary asserts 112-byte size and offsets 104/108 | pass for AROS Linux-hosted target |
+| Function Block public runtime | Old-header client publishes 104/112 records, guarded short output and known Stream vector | 8/8 on AROS Linux-hosted |
+| Function Block differential | Identical client against unpatched CAMD 43 reports size 104, rejects 112 input and lacks both values | expected 4 failures reproduced |
 | AROS coordinator ownership | Two independent Exec tasks contend; exactly one owns and one is busy | pass on raspi-aarch64 AROS/QEMU |
 | AROS coordinator cancellation | Exact owner/task/token cancellation releases the operation to a new task | pass on raspi-aarch64 AROS/QEMU |
 | AROS coordinator dead owner | Owner exits without cancellation; next request reaps it and succeeds | pass on raspi-aarch64 AROS/QEMU |
@@ -119,6 +122,47 @@ validation. The initial sandboxed boot could not initialize the X display;
 the same copied image passed when Xvfb was allowed to create its display
 socket. No CAMD assertion failed in that discarded boot because the suite did
 not start.
+
+## CAMD Function Block public-ABI run
+
+The candidate came from PR #2101 commit `4c1510f1d0` plus only
+`aros-camd-function-block-capabilities.patch`, in the persistent
+`/home/jaime/AROS-camd43-fb` worktree. The public-header canary was compiled
+against its installed headers with:
+
+```sh
+build-aros-linux/bin/linux-x86_64/tools/crosstools/x86_64-aros-gcc \
+  -c tests/camd_function_block_public_canary.c \
+  -Ibuild-camd43-fb-hosted/bin/linux-x86_64/AROS/Developer/include \
+  -Ibuild-camd43-fb-hosted/bin/linux-x86_64/gen/include \
+  -o /tmp/camd-function-block-public-canary.o
+```
+
+The runtime client was deliberately compiled against the unextended 104-byte
+header and executed with:
+
+```sh
+tools/camd-function-block-hosted.sh \
+  build-aros-linux/bin/linux-x86_64/AROS \
+  build-camd43-fb-hosted/bin/linux-x86_64/AROS/Libs/camd.library \
+  build-camd43-hosted/bin/linux-x86_64/AROS/Extras/aros-midihub/C/MIDIHubCAMDCompat \
+  /tmp/camd-function-block-hosted-main
+```
+
+Result: 8 passes, 0 failures. It accepts a legacy 104-byte publication and
+returns zero for absent appended fields; then projects the known UMP words
+`f0118037 05010205 00000000 00000000`, accepts the 112-byte record and returns
+MIDI-CI version 2 plus five SysEx8 streams. A 104-byte output surrounded by an
+eight-byte `0xa5` canary is not overwritten, while its `Size` is updated to
+112. The identical run with CAMD 43 lacking the proposal produces four
+expected failures, directly demonstrating the missing capability.
+
+The general CAMD contract, v42 and v43 sections pass 71/71, 38/38 and 229/229
+against the candidate. The aggregate runner also has one lifecycle expectation
+outside this patch: it observes one debug-driver load where it expects two.
+The unpatched baseline produces the identical result, so it is not attributed
+to the Function Block change. These are AROS Linux-hosted results only; no
+AArch64 or hardware validation is claimed.
 
 ## What this proves
 
