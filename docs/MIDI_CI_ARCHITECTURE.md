@@ -1,8 +1,8 @@
 # MIDI-CI architecture for AROS
 
-Status: Gate 1 evidence complete enough for a provisional component decision;
-Gate 2 service ABI remains open pending an AROS runtime concurrency/termination
-prototype.
+Status: Gate 1 evidence supports the component decision. The first Gate 2
+AROS runtime ownership prototype passes; the service ABI remains open pending
+engine-MUID binding, forced termination and coordinator-restart tests.
 
 ## Decision
 
@@ -136,17 +136,31 @@ one serialized context; exactly one obtains the transaction and seven receive
 `MIDICI_BUSY`. It proves the bounded arbitration rule under host concurrency,
 not AROS IPC, task-death cleanup or the final service design.
 
+`ports/aros/midici_coordinator_probe.c` is the first native experiment. One
+resident Exec task owns a named message port and keys a lease by both stable
+task ID and task pointer, plus a monotonically changing transaction token. On
+raspi-aarch64 AROS under QEMU, two independent tasks produced exactly one
+owner and one busy result, explicit cancellation released the lease, and a
+task that returned without cancelling was detected with `FindTaskByPID()` and
+reaped before the next grant. The request/reply storage remained parent-owned,
+so the coordinator never replied to a port belonging to a dead task.
+
+The experiment also established a required lifetime rule: a client issuing
+an explicit cancellation must remain alive until the coordinator ACKs it.
+Otherwise death reaping may legitimately win and make the cancel token stale.
+This rule must be hidden by `midici.library`, not imposed as an unsafe pointer
+lifetime on applications.
+
 ## Service gate still open
 
-Before publishing service vectors or an IPC wire format, an AROS runtime test
-must demonstrate:
+Before publishing service vectors or an IPC wire format, the remaining AROS
+runtime work must demonstrate:
 
-1. two tasks issue operations concurrently through the proposed library;
-2. only one coordinator engine owns the endpoint MUID;
-3. conflicting operations serialize and independent ones follow peer limits;
-4. killing one client leaves no CAMD session or permanent operation lease;
-5. killing/restarting the coordinator produces fresh MUIDs and rediscovery;
-6. service discovery and messages use supported Exec primitives on all target
+1. the proven single lease is bound to one coordinator engine/MUID;
+2. independent operations follow peer limits while conflicts remain exclusive;
+3. forced task removal, not only natural return, leaves no permanent lease;
+4. killing/restarting the coordinator produces fresh MUIDs and rediscovery;
+5. service discovery and messages use supported Exec primitives on all target
    architectures.
 
 Until that test exists, the service API is a reviewed architecture, not an

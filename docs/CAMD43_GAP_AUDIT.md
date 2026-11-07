@@ -33,10 +33,39 @@ Evidence: V43 exposes native UMP application publication, but
 driver and the loaded-driver adapter declares native MIDI 1.0 paths. The
 provider operations capable of UMP remain private.
 
-Owner and correction: CAMD plus individual drivers. Define the smallest
-optional driver-side native event block after proving the callback/lifetime
-contract with the in-memory driver. Do not expose the whole private provider
-registry. ABI is additive and must leave `MidiDeviceData` unchanged.
+Exact path: `camddevices.h` exposes byte pull/single-`UWORD` receive callbacks;
+`addmididevice.c` accepts only that record; `driver_endpoints.c` wraps every
+loaded/in-memory driver in `CAMDLegacyDriverOutputBackend` and hard-codes
+`CAMD_PROVIDER_PROTOCOL_MIDI1`. Conversely, private `provider_contract` and
+`legacy_driver_adapter` already validate and carry complete 1–4-word UMP
+records. No new application endpoint/session API is missing.
+
+Network MIDI 2.0 independently demonstrates the failure: its receive path in
+`transport_midi2.c` calls `ump_to_midi1()`, its transmit path calls
+`ump_from_midi1()`, and `netmididriver.c` publishes only `MidiDeviceData`.
+Original Groups, MIDI 2.0 precision/per-note messages, Stream messages,
+Data128/SysEx8 and packet boundaries cannot survive that boundary. A future
+Bluetooth UMP characteristic needs the same complete-record primitive, while
+the merged BLE MIDI 1.0 characteristic must remain unchanged.
+
+Smallest public correction: leave `MidiDeviceData` byte-for-byte unchanged.
+Add a flag and a sized/versioned extension immediately after it in a composite
+driver registration record. The extension provides per-port query/state/
+topology callbacks, complete `CAMDUMPEventV1` send, an attach callback through
+which CAMD supplies complete UMP submit and port-change operations, and a
+detach boundary. First-version submission is task-context only; interrupt
+drivers defer to a resident worker. CAMD continues owning validation, queues,
+fan-out and backpressure. `OpenMidiDevice()` validates the flagged tail inside
+the seglist; unchanged `AddMidiDevice()` can find the adjacent tail for an
+in-memory record. A new library vector is a fallback only if maintainers reject
+the adjacent-tail convention.
+
+Compatibility: old drivers and current BLE MIDI 1.0 take the exact legacy
+path; old applications and CAMD vectors are unchanged; new drivers should
+retain a safe MIDI 1.0 fallback when loaded by CAMD 41/42. Required proof is a
+canonical in-memory native driver exercising every MT size, two readers,
+isolated overflow, state/protocol/topology change and removal while pinned,
+followed by exact Network MIDI 2.0 and Bluetooth UMP transport round trips.
 
 ### C43-G2: Function Block MIDI-CI capability is not queryable
 
@@ -47,9 +76,27 @@ Evidence: `CAMDFunctionBlockInfoV1` ends at Group range and Name. Linux's
 documented UMP Block interface exposes both fields, independently confirming
 their topology role.
 
-Owner and correction: CAMD record populated by the UMP driver. Append reviewed
-fields before V43 ABI freeze. A test must decode a known Function Block Info
-Notification into the CAMD snapshot and verify zero/unknown behavior.
+[Official M2-104-UM v1.1.2](https://midi.org/midi-2-0-core-specification-collection)
+defines both fields; the [MIDI Association Function Block example](https://midi.org/building-a-usb-midi-2-0-device-part-2)
+states that Max SysEx8 Streams is zero when unsupported. [Linux UAPI](https://github.com/torvalds/linux/blob/master/include/uapi/sound/asound.h)
+also exposes `midi_ci_version` and `sysex8_streams` as independent 8-bit block
+metadata. They are topology facts, not MIDI-CI session policy.
+
+Owner and implemented proposal: CAMD record populated by the UMP driver.
+`patches/aros-camd-function-block-capabilities.patch` appends two `ULONG`
+fields at offsets 104 and 108, making the canonical record 112 bytes. Zero is
+unknown/no MIDI-CI and no SysEx8 support. `GetEndpointFunctionBlock()` already
+uses caller `Size`, so a 104-byte reader remains safe and receives full
+`Size == 112`.
+
+Input arrays required an additional ABI correction: existing publication code
+indexed with the newly compiled `sizeof`, which would skip through an old
+104-byte array incorrectly. The proposal uses the first record's `Size` as a
+homogeneous stride, accepts aligned records of at least 104 bytes, zero-fills
+missing appended fields, bounds present values to 8 bits and rejects mixed
+strides. Canonical PR-source host tests pass for two-record legacy and full
+arrays. Stream-message projection, public output canaries, topology watch and
+AROS multi-architecture builds remain before upstream submission.
 
 ### C43-G3: abnormal client death leaks endpoint objects
 
@@ -59,10 +106,30 @@ application termination.
 Evidence: the source comment quoted in the lifecycle row is an explicit
 negative behavior, not an inference.
 
-Owner and correction: the MIDI-CI architecture avoids the failure by placing
-CAMD handles in a resident coordinator whose requests expire. A generic CAMD
-task-death facility is separate work and is not required to put MIDI-CI policy
-inside CAMD.
+Exact path: `TaskOpenedCamd()` records opens and `OwnEndpointObject()` records
+objects, but cleanup only enters from `TaskClosedCamd()` via `CloseCamd()`.
+The leak can exhaust 32 snapshots, 64 receivers, 16 watches and 32 publishers.
+It also leaves `EndpointReceiver`, `EndpointWatcher` and `EndpointPublisher`
+task pointers available to later `Signal()` calls. A second bug is that
+`OwnEndpointObject()` silently returns on allocation failure, leaving a live
+untracked object even after a normal close.
+
+The PR baseline already supplies the generic mechanism: task.resource 1.4
+calls `TNA_REMOVED` before Exec removes a task. The hook may allocate and take
+semaphores but cannot wait for another task. Therefore no CAMD public API or
+Exec change is required. The smallest safe design registers one private hook,
+immediately neutralizes signal targets, marks matching owner records dead, and
+defers provider/session release to safe CAMD task context. Ownership
+registration becomes fallible; each creator rolls its new object back and
+returns `CAMD_RESULT_NOMEM` if it cannot be tracked. Session cleanup precedes
+publisher cleanup. This does not pretend to repair Exec's separate library
+open-count leak when a task omits `CloseLibrary()`.
+
+Required AROS regression: repeatedly terminate tasks holding each object type,
+prove capacity and statistics return to baseline, stale handles fail, healthy
+owners survive, no removed task is signalled, and ownership-allocation failure
+rolls back. Source proof is complete; the CAMD cleanup patch and runtime test
+remain in progress and are not reported as fixed yet.
 
 ## Midihub integration gaps exposed by the audit
 

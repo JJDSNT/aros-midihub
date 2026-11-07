@@ -61,7 +61,7 @@ minimum change, real dependencies and validation are identified;
   implementation remain required.
 - Upstream PR: engine-only.
 
-### CI04 — Function Block MIDI-CI metadata in CAMD 43 — ready for upstream API review
+### CI04 — Function Block MIDI-CI metadata in CAMD 43 — in progress
 
 - Objective: expose the MIDI-CI version and SysEx8 stream capacity already
   carried by UMP Function Block Info.
@@ -72,46 +72,82 @@ minimum change, real dependencies and validation are identified;
   `GetEndpointFunctionBlock`, sized output records.
 - Demonstrated missing behavior: neither value is representable; Linux and the
   UMP specification expose them as Function Block metadata.
-- Minimum change: append two fixed-width fields before ABI freeze, update
-  compile-time sizes/copy validation and populate from drivers.
+- Implemented proposal: append two fixed-width fields before ABI freeze and
+  make publication arrays use each record's `Size` as their stride. This
+  preserves 104-byte publisher arrays as well as short output readers. Patch:
+  `patches/aros-camd-function-block-capabilities.patch`.
 - Acceptance: old shorter record callers work; full record reports exact known
   values; zero/unknown is documented.
-- Tests: 32/64-bit record layout, short/equal/long Size, known Stream message,
-  topology update watch.
+- Tests: host canonical-source registry tests pass for 104-byte arrays,
+  112-byte values, offsets 104/108, invalid values and inconsistent strides.
+  A known Stream message, public short-output canary, topology watch and
+  multi-architecture builds remain.
 - Upstream PR: incorporate into draft #2101, not 43.1; isolate commit.
 
-### CI05 — Native UMP driver extension — blocked on callback contract proof
+### CI05 — Native UMP driver extension — ready for API review
 
 - Objective: let a loaded or resident CAMD driver publish/receive native UMP.
-- Dependencies: in-memory driver prototype proving callback residence,
-  interrupt/task legality, queue ownership, removal and backpressure.
+- Dependencies: maintainer review of the optional adjacent-tail extension;
+  then an in-memory driver prototype proving callback residence, task-context
+  submission, queue ownership, removal and backpressure.
 - Repository/component: AROS CAMD driver boundary; then Network MIDI 2.0/USB
   MIDI 2.0 drivers.
 - Existing interface: unchanged `MidiDeviceData` byte callbacks;
   `AddMidiDevice`; private provider operations; app-published UMP endpoint.
 - Demonstrated missing behavior: no public generic driver route to
   `CAMDUMPEventV1`.
-- Minimum change: optional versioned extension beside `MidiDeviceData`; do not
-  expose registry internals or change legacy struct layout.
+- Minimum change: leave `MidiDeviceData` byte-for-byte unchanged and add a
+  flagged, sized extension in an adjacent composite registration. It supplies
+  complete UMP send/submit, per-port query and change callbacks and adapts to
+  the existing private provider core. No new application vector is required.
 - Acceptance: legacy drivers unchanged; resident UMP loopback survives
   add/remove; complete events/backpressure/lifetime documented.
 - Tests: all MT sizes, SysEx7 sequence, concurrent clients, removal while
   pinned, m68k callback ABI.
 - Upstream PR: isolated CAMD commit, preferably folded into #2101 after review.
 
-### CI06 — AROS coordinator concurrency prototype — blocked on runtime test environment
+### CI05A — Reclaim endpoint objects after task death — in progress
+
+- Objective: prevent dead CAMD clients from exhausting endpoint object slots
+  or leaving stale task pointers as signal targets.
+- Dependencies: `task.resource` lifecycle notification contract present in the
+  PR #2101 baseline; real AROS task-removal stress environment.
+- Repository/component: AROS CAMD private endpoint owner/client lifecycle.
+- Existing interface/behavior: `endpoint_owner.c` only cleans on a task's last
+  `CloseLibrary()` and explicitly leaves objects when the task terminates;
+  `OwnEndpointObject()` also silently loses ownership on allocation failure.
+- Minimum change: no public API. Register one `TNA_REMOVED` hook, immediately
+  neutralize that task's signal targets, mark its owned objects dead and defer
+  provider/session cleanup to safe task context. Make ownership registration
+  fallible and roll back a newly created object on `NOMEM`.
+- Acceptance: repeated dead owners do not exhaust 16 watches, 32 snapshots,
+  64 receivers or 32 publishers; statistics return to baseline; stale handles
+  fail; healthy owners survive; ownership-allocation failure rolls back.
+- Tests: AROS runtime `RemTask`/natural-exit stress, including SMP where
+  available. Host registry tests cannot validate task-resource ordering.
+- Upstream PR: private CAMD lifecycle commit, separate from Function Block and
+  native-driver API patches.
+
+### CI06 — AROS coordinator concurrency prototype — in progress
 
 - Objective: validate hybrid ownership before freezing `midici.library`.
 - Dependencies: CAMD 43 runtime image, supported Exec IPC choice, CI03.
 - Repository/component: AROS test program/service prototype, not Midihub GUI.
-- Existing behavior: shared CAMD base/semaphores work; task-without-close leak
-  is known; no MIDI-CI service exists.
-- Minimum change: private resident coordinator with one endpoint context and
-  expiring client requests; no public library vectors yet.
+- Existing implementation: `MIDICICoordProbe` is a private resident Exec task
+  with one named message port, task-ID plus task-pointer ownership and exact
+  transaction tokens. It is deliberately not a service ABI.
+- Demonstrated on raspi-aarch64 AROS/QEMU: two independent tasks race one
+  operation (one owner/one busy); exact cancellation releases it; a task exits
+  without cancellation; the next request detects the dead owner and recovers;
+  shutdown drops remaining ownership. Ten checks passed.
 - Acceptance: two clients share one MUID; conflicting operation serializes;
   forced client death releases its logical lease; coordinator restart
   rediscoveries.
-- Tests: real AROS/QEMU test with forced task termination and captured events.
+- Remaining acceptance: bind the prototype to one engine MUID, exercise
+  coordinator restart/fresh MUID/rediscovery, and kill a task rather than only
+  letting it return abnormally.
+- Tests: `tools/midici-coordinator-qemu.sh`; real AROS/QEMU log recorded in
+  `MIDI_CI_VALIDATION.md`.
 - Upstream PR: none until the prototype selects a public contract.
 
 ### CI07 — Profile Configuration — blocked on CI03 and service gate
