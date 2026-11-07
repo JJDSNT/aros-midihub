@@ -1,5 +1,18 @@
 # AROS patches
 
+## Current mDNS IPv6 proposal
+
+[`aros-mdns-ipv6-core.patch`](aros-mdns-ipv6-core.patch) applies to AROS
+upstream `33a5178c2e322981fe0270dbf5d43e2fa59af7a7`. It adds the dual-stack
+socket, AAAA wire behavior, interface-index link identity and shared A/AAAA
+cache/query foundation to the canonical `workbench/network/mdns/` source.
+It intentionally does not copy the runtime into this repository or grow the
+legacy discovery event. Design, compatibility boundaries, remaining AROSTCP
+gap and validation are in the
+[2026-10-30 investigation](../docs/mdns-ipv6-investigation-2026-10-30.md).
+The matching upstream proposal is [AROS #1980](https://github.com/aros-development-team/AROS/pull/1980),
+commit `eeb75e39b4`.
+
 **Base:** AROS upstream `master` at `95a501ff47` (11 October 2026). The AROS
 tree used here is `~/AROS`, branch `midihub/upstream-2026-10-11`.
 
@@ -98,6 +111,8 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-endpoint-hardening.patch` | objects go with their task's last close of the library; temporary IDs and a full identity store; time-ordered session queues and timed SysEx; a bounded, really blocking drain; direction flags, snapshot generation, name checks, per-session SysEx limits and `GetPublishedEndpointStats()` |
 | `aros-camd-receive-ring-and-wait.patch` | historical combined patch: the receive overflow and realtime-ring fixes are upstream; its remaining `CamdWait()` fix is AROS PR [#1956](https://github.com/aros-development-team/AROS/pull/1956), commit `6c01b38b9` |
 | `aros-camd-endpoint-hold-and-drain.patch` | `CAMD_PUBLISH_HOLD_UNTIL_DUE` keeps clients' timed messages until they are due before a publisher can take them; `DrainEndpointSession()` is woken when a queue empties or its endpoint is withdrawn instead of polling |
+| `aros-camd-function-block-capabilities.patch` | append MIDI-CI version and maximum SysEx8 streams to the sized Function Block record while retaining 104-byte publication arrays |
+| `aros-camd-endpoint-task-death.patch` | follow-up to PR #2101 commit `4c1510f1d0`: private `task.resource`/`TNA_REMOVED` cleanup for watches, snapshots, sessions and publishers; signal targets are neutralized before Exec removes the task and a CAMD reaper performs blocking cleanup. Kept outside the older `camd-series` until that series carries the PR's final resident-driver commits |
 
 ```sh
 grep -v '^#' patches/camd-series | while read -r p; do
@@ -262,6 +277,17 @@ endpoint IDs are required; automatic driver publication and timestamp
 eligibility remain deliberately unconnected.
 
 ### Testing
+
+`tools/camd-task-death-hosted.sh` injects the proposal library and compatibility
+suite into a copied Linux-hosted AROS tree. Twenty clients are removed with
+`RemTask()` while each owns a library opener, signalled watch, snapshot,
+publisher and input session. The run requires the observer to see every
+endpoint withdrawn and proves watch/snapshot/signal capacity is reusable. The
+2026-11-07 run completed with 3 passes and no failures; this is AROS hosted
+runtime evidence, not a host-side model or QEMU result. Against the prior CAMD
+43 library the same client reached ready state but no departure event followed
+the first `RemTask()`, so the differential run stopped at round zero with all
+three checks failed.
 
 [`tools/camd-compat-qemu.sh`](../tools/camd-compat-qemu.sh) runs
 `MIDIHubCAMDCompat`, a suite of the CAMD 41.1 behaviour programs rely on,

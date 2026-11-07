@@ -16,7 +16,7 @@ links. Required tests that do not yet exist are not presented as validation.
 | Discovery | A client can enumerate stable endpoints, open bidirectional sessions, send complete SysEx or UMP and watch changes. | MIDI-CI broadcast/reply state is intentionally absent and belongs to the coordinator/engine. Native UMP discovery cannot reach hardware until the driver UMP path exists. | No MIDI-CI CAMD vectors. Coordinator enumerates/open sessions per endpoint; drivers publish UMP capability generically. Test MIDI 1.0 and UMP Discovery independently. |
 | Concurrency | Registry and queues use shared `SignalSemaphore` state. Multiple input sessions fan out; output sessions have reserved queues and explicit queue-full counters. | Transport concurrency is adequate. CAMD cannot decide which application owns the endpoint's MUID or serialize conflicting Profile/PE operations. That is a `midici` coordinator responsibility. | No CAMD change. Test two input sessions receive identical complete CI messages and one slow reader reports loss without corrupting the other. |
 | Ordering | Per-session queues preserve complete records; equal-time records preserve send order; enqueue batches reserve atomically. | There is no meaningful cross-application MIDI-CI transaction order. Multiple applications can independently send conflicting requests in a scheduler-dependent order. This is not a transport bug. | One coordinator output session per endpoint serializes CI operations. Keep application musical traffic independent. Test conflicting coordinator leases and unrelated application traffic. |
-| Lifecycle | Endpoint states include offline/retiring/retired; watches report changes; provider/session references block premature release. `RemoveMidiDevice` refuses while pinned. | Confirmed gap: [`endpoint_owner.c`](https://github.com/aros-development-team/AROS/blob/4c1510f1d08fad7efb1081b9d005734ef2557c28/workbench/libs/camd/endpoint_owner.c) states that a task ending without closing the library is not seen; its objects stay and pin the library. This affects all endpoint clients, not just MIDI-CI. | Do not make `midici.library` authoritative per caller. The service owns CAMD handles, and client requests have deadlines so a dead client cannot pin transport objects. Separately design an Exec-supported task-death cleanup for CAMD only if it benefits all clients. Test forced client termination on real AROS. |
+| Lifecycle | Endpoint states include offline/retiring/retired; watches report changes; provider/session references block premature release. `RemoveMidiDevice` refuses while pinned. | Confirmed and corrected gap: the baseline [`endpoint_owner.c`](https://github.com/aros-development-team/AROS/blob/4c1510f1d08fad7efb1081b9d005734ef2557c28/workbench/libs/camd/endpoint_owner.c) only observed `CloseLibrary()` and left all endpoint objects plus signal task pointers after abnormal termination. | `aros-camd-endpoint-task-death.patch` uses the baseline task.resource 1.4 notification contract privately: the hook neutralizes signals and marks ownership; a CAMD task releases objects in dependency order. No public ABI. Twenty forced deaths passed on AROS linux-hosted. Exec's separate library open count is intentionally out of scope. |
 | Routing | Complete SysEx/UMP records are copied per endpoint input session; legacy traffic remains on the existing graph. | CAMD provides no exclusive MIDI-CI claim or filter, so independent applications may all observe CI and may send their own requests. Adding CI routing policy to CAMD would violate the boundary. | Coordinator owns the system MUID/session; direct applications use the public MIDI-CI API or explicitly isolated engines. Test Note/SysEx application traffic remains byte-identical while CI runs. |
 | Notifications | Endpoint watch events report added/updated/offline/retired/lost with generations; overflow requires a new snapshot. | Sufficient generic notification. There is no field-level change mask, so the coordinator refreshes the endpoint/topology record on `UPDATED`. | No ABI change required. Test topology update, lost-event resnapshot, offline cancellation and reconnect rediscovery. |
 | ABI | V43 appends 33 vectors after the v42 boundary. Records are pointer-free, sized/versioned and compile-time size checked; old CAMD graph structures are unchanged. | The proposal is explicitly provisional and its own U01 checklist is not closed. Function Block fields and the native driver path should be settled before freezing. Host tests do not prove m68k/i386/AArch64/x86-64 ABI or AROS runtime cleanup. | Incorporate justified fields into PR 2101 rather than inventing 43.1. Preserve existing vector order. Required: four-architecture layout builds, old-header/short-record tests, stale handle tests and CAMD 41/42 regression suite. |
@@ -125,11 +125,34 @@ returns `CAMD_RESULT_NOMEM` if it cannot be tracked. Session cleanup precedes
 publisher cleanup. This does not pretend to repair Exec's separate library
 open-count leak when a task omits `CloseLibrary()`.
 
-Required AROS regression: repeatedly terminate tasks holding each object type,
-prove capacity and statistics return to baseline, stale handles fail, healthy
-owners survive, no removed task is signalled, and ownership-allocation failure
-rolls back. Source proof is complete; the CAMD cleanup patch and runtime test
-remain in progress and are not reported as fixed yet.
+Implemented correction: `patches/aros-camd-endpoint-task-death.patch` changes
+only CAMD-private structures and functions. `EndpointSignalSemaphore` covers
+the task/signal pair used by receiver, watcher and publisher callbacks. The
+`TNA_REMOVED` hook takes that lock before Exec removes the task, clears every
+matching pointer, marks owner records under `EndpointOwnerSemaphore`, and
+signals a private reaper. The reaper closes sessions first, then snapshots,
+watches and publishers in normal task context. Initialization and expunge
+register/remove the hook and synchronously stop the reaper. `OwnEndpointObject`
+and `TaskOpenedCamd` now return failure; every public object creator rolls back
+and returns `CAMD_RESULT_NOMEM` rather than leaving an untracked object.
+
+API/ABI impact: none. No vector, public record, `MidiDeviceData` field or
+application contract changes. Private `CamdBase_intern` grows and the private
+ownership helpers change return type. AmigaOS 4 retains last-close cleanup but
+does not compile the AROS task.resource hook.
+
+Validation: all changed canonical PR sources compiled and linked into a
+linux-x86_64 AROS `camd.library`. `MIDIHubCAMDCompat --v43-task-death`, run by
+`tools/camd-task-death-hosted.sh`, forcibly removed 20 independent tasks. Each
+task owned a library opener, signalled watch, snapshot, bidirectional published
+endpoint and signalled input session. A healthy observer saw every endpoint
+departure before the next round; fresh watches and snapshots remained
+allocatable. Result: 3 passes, 0 failures on AROS linux-hosted. The patch also
+applies cleanly to `4c1510f1d0`. The identical suite against the prior
+linux-hosted CAMD 43 reproduced the gap in the first round: after `RemTask`, no
+departure event arrived and all three checks failed. Allocation-failure injection, healthy-owner
+isolation under simultaneous death and SMP stress remain follow-up tests, not
+claimed passes.
 
 ## Midihub integration gaps exposed by the audit
 
