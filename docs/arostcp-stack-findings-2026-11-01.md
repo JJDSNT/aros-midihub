@@ -21,6 +21,12 @@ the daemon collector and validate the existing ioctls on Linux-hosted AROS.
 Any different generic stack gap discovered during that runtime work must be
 fixed in AROSTCP rather than worked around in DNS-SD.
 
+That runtime gate passed on 2026-11-09 in AROS proposal commit `0b64c38bb0`:
+the private collector used the existing ioctls and address-change tag to
+observe live IPv4 and IPv6 alias addition/removal on Linux-hosted AROS. An
+undersized snapshot was rejected atomically. No AROSTCP source or public API
+change was needed. Integration into the active daemon remains separate work.
+
 The result is that **MIDIHub needs one thing new from the stack: `SO_TIMESTAMP`**, now in aros-matter's group 4. The other items are either already there, already planned, or work outside AROSTCP.
 
 Revisions read: AROS upstream master `f04bb2c13e`. That includes AROSTCP 5.20 (#2005) and mdnsd's dual-stack core (#1980, merged 2026-10-31). AROS #2006 (5.21) was still in review.

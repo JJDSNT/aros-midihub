@@ -17,7 +17,7 @@ legal opinion.
 | Original Bonami source used by Midihub | `amigazen/Bonami` commit `540e93b2eae5bc35cef8fa05ac9a254174a29364` | Midihub gitlink `network/mdns/bonami` and `.gitmodules` URL |
 | Canonical AROS baseline | AROS `master` commit `8e32af0a425aea427fb5f85c8e849acea6fb890e`; mDNS subtree unchanged since `d95e177e53a9ef6da78c2209f6a569da739e1e63` | `workbench/network/mdns/` |
 | Rejected Bonami V2 proposal retained as evidence | branch `review/mdns-discovery-v2`, commit `bb650b3859a8cf7774d9a615130974603f28e2ba` | AROS PR #2123; not an implementation base |
-| Native canonical-model proposal | branch `proposal/dnssd-canonical-model`, commits `e812bd5be9` and `86a8e7cdc9` | Starts from AROS master `8e32af0a42`; no PR opened |
+| Native canonical-model proposal | branch `proposal/dnssd-canonical-model`, commits `e812bd5be9`, `86a8e7cdc9` and `0b64c38bb0` | Starts from AROS master `8e32af0a42`; no PR opened |
 | Native architecture work | Midihub branch `review/mdns-modernization-plan` | ADR, reuse audit, roadmap and D1 prototype |
 
 The original Bonami `LICENSE.md` and canonical AROS
@@ -57,6 +57,7 @@ statement in addition to, not instead of, the legal notices:
 | PR #2123 dual-stack event/cache changes | Jaime Dias commits `8715e6a67a` and `bb650b3859` on top of canonical AROS source | Reuse family-neutral cache extraction, deterministic sorting, multiple A/AAAA handling and tests. Do not carry `MDNSDiscoveryEvent2`, V1/V2 mode projection or public Bonami vectors into the native contract. |
 | canonical-model canary | New AROS proposal source `workbench/network/mdns/dnssd_model.*`, based on native requirements and not copied from PR #2123 or Bonami structures | BSD-2-Clause implementation at `e812bd5be9`; the temporary Midihub implementation copy was removed. |
 | canonical link/address inventory canary | New AROS proposal source `workbench/network/mdns/dnssd_link.*`, independently implemented from the native requirements rather than copied from Bonami or PR #2123 structures | BSD-2-Clause implementation at `86a8e7cdc9`; private daemon-engine state with no public compatibility contract. |
+| AROSTCP inventory collector | New AROS proposal source `workbench/network/mdns/dnssd_link_aros.*`, independently implemented against existing public AROSTCP ioctl/tag contracts | BSD-2-Clause implementation at `0b64c38bb0`; no copied Bonami collector and no new public ABI. |
 
 The table intentionally distinguishes current header evidence from inferred
 ancestry. A file lacking the original Bonami notice is not automatically

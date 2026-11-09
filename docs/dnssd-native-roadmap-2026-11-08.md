@@ -163,6 +163,13 @@ each family. No new AROSTCP vector is justified. The next patch must replace
 that collector and prove complete multi-address enumeration at AROS runtime;
 any newly demonstrated generic stack gap still belongs in AROSTCP.
 
+Commit `0b64c38bb0` now implements the bounded AROSTCP collector as private
+proposal code. Its MetaMake and Linux-hosted AROS test pass live IPv4/IPv6
+alias addition/removal, address-change signals, complete snapshots and atomic
+snapshot-limit failure. D2 is still incomplete: `mdns_net.c` must consume the
+canonical inventory and retire its collapsed `struct found` model before any
+read-only discovery snapshot or public library can depend on it.
+
 **Upstream PR:** dependency-ordered daemon-core proposals after authorization;
 no Bonami vectors and no public `dnssd.library` ABI mixed into core work.
 

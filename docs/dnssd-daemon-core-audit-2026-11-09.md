@@ -138,11 +138,24 @@ link/address specs, preserves IPv6 state, and reconciles only a complete
 snapshot. A future integration test must still prove this behavior at AROS
 runtime before the collector is accepted.
 
+AROS proposal commit `0b64c38bb0` implements and validates that private
+collector in `workbench/network/mdns/dnssd_link_aros.*`. It grows the IPv4
+and IPv6 ioctl buffers until neither snapshot can be truncated, applies a
+caller-selected upper limit, translates every address and relevant state,
+and reconciles only a complete snapshot. Bounded transient storage is
+released before returning.
+
+This collector is not a new AROSTCP facility and exports no public AROS ABI.
+The current production `mdns_net.c::find_interfaces()` remains active; the
+collector is independently runnable proposal code until the socket and packet
+paths consume the canonical inventory without retaining a second
+authoritative interface representation.
+
 ## Next implementation slice
 
-1. Replace `find_interfaces()` with the canonical collector at the daemon
-   rescan boundary, using the audited AROSTCP ioctls without collapsing
-   addresses.
+1. Make the daemon socket/rescan layer consume the canonical inventory and
+   retire `struct found`/`find_interfaces()` rather than maintaining two
+   authoritative interface models.
 2. Migrate one read-only discovery snapshot path to the canonical service
    model.
 3. Only then define the first `dnssd.library` canary vectors.

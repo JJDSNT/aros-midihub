@@ -184,3 +184,33 @@ multiple IPv4 and IPv6 addresses, observes the change notification, verifies
 the complete canonical snapshot, removes addresses and verifies the next
 revision. Buffer saturation must also produce an explicit overflow or a
 successful grow/retry, never a partial published snapshot.
+
+## D2 AROSTCP collector canary
+
+AROS proposal commit `0b64c38bb0` adds `dnssd_link_aros.*` and the MetaMake
+target `test-dnssd-link-aros-quick`. The Linux-hosted runner creates an
+isolated veth pair, starts AROSTCP with one static dual-stack interface and
+runs the native test inside AROS.
+
+The test proves complete initial enumeration, atomic rejection of an
+undersized snapshot, `SBTC_SIG_ADDRESS_CHANGE_MASK` notification for live
+IPv4 and IPv6 additions, presence of both exact addresses on the same stable
+interface index, and notification plus a later canonical revision after both
+addresses are removed.
+
+Results:
+
+- AROS MetaMake with `-Wall -Wextra -Werror`: passed; and
+- Linux-hosted AROS: `DNS-SD AROSTCP link collector: 0 failures`, evidence
+  under `/tmp/dnssd-arostcp-scan-runtime-20261109-v3`.
+
+Reproduction:
+
+```sh
+tools/dnssd-canary-hosted.sh AROS_TREE dnssdlinkarostest scan EVIDENCE_DIR
+```
+
+This is real AROS/AROSTCP runtime evidence, not a host fixture. It does not
+yet prove daemon socket rebinding, DNS packet publication, cache behavior or
+public `dnssd.library` ABI because the active daemon has not been migrated to
+the collector.
