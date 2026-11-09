@@ -210,7 +210,52 @@ Reproduction:
 tools/dnssd-canary-hosted.sh AROS_TREE dnssdlinkarostest scan EVIDENCE_DIR
 ```
 
-This is real AROS/AROSTCP runtime evidence, not a host fixture. It does not
-yet prove daemon socket rebinding, DNS packet publication, cache behavior or
-public `dnssd.library` ABI because the active daemon has not been migrated to
-the collector.
+This is real AROS/AROSTCP runtime evidence, not a host fixture. At collector
+commit `0b64c38bb0` it did not yet prove daemon socket rebinding, DNS packet
+publication, cache behavior or public `dnssd.library` ABI; the following
+increment adds the daemon evidence.
+
+## D2 canonical daemon socket/rescan integration
+
+AROS proposal commit `bb6b138b31` makes the inventory and collector active in
+the canonical `mdnsd`. It removes `struct found`/`find_interfaces()`, derives
+the socket set from stable interface indexes, and resets/restarts protocol
+state only after a successfully published inventory revision.
+
+Build and host-fixture results:
+
+- full Linux-hosted MetaMake target `workbench-network-mdnsd`: passed;
+- `test-dnssd-model-quick`, `test-dnssd-link-quick` and
+  `test-dnssd-link-aros-quick`: passed;
+- canonical responder fixture under ASan/UBSan: 42/42 passed;
+- canonical query fixture under ASan/UBSan: 15/15 passed; and
+- canonical discovery fixture under ASan/UBSan: 45/45 passed.
+
+The fixture harness now links the real `dnssd_link.c` and constructs canonical
+inventory snapshots. It no longer writes the removed `mi_Addr`/`mi_Addr6`
+projection. These remain host tests and are not represented as AROS runtime
+evidence.
+
+Linux-hosted AROS runtime was executed with the current proposal `mdnsd` and
+the current AROSTCP image, in the runner's `daemon` mode. That mode neither
+loads `bonami.library` nor starts the legacy `dnssd` client. An independently
+encoded Linux peer joined both mDNS groups, queried `arosbox.local`, and
+observed:
+
+```text
+AROS AAAA responses for arosbox.local: 2
+AROS A responses for arosbox.local: 3
+AROS packets with hop limit other than 255: []
+ok: daemon multicast exchange and hop-limit checks passed
+```
+
+Packet capture records IPv4 A `192.168.166.2` and IPv6 AAAA `fe80::2`
+announcements/responses on the same daemon run. Evidence is under
+`/tmp/dnssd-canonical-mdns-daemon-20261109-v2` on the validation host.
+
+This proves real AROS/AROSTCP enumeration, DAD-triggered rescan, derived socket
+creation and dual-stack DNS packet publication. It does not prove public
+`dnssd.library` ABI, hardware targets, or complete multi-address publication:
+the canonical inventory retains every address, while the current mature
+packet/event paths still choose the first usable address of each family per
+link.

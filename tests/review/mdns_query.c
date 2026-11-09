@@ -103,7 +103,7 @@ query_a(void)
     CHECK(event.re_Type == DNS_TYPE_A && event.re_Class == DNS_CLASS_IN);
     CHECK(event.re_TTL == 120 && event.re_DataLength == 4);
     CHECK(!memcmp(event.re_Data, address, sizeof(address)));
-    CHECK(ntohl(event.re_Interface) == daemon.md_Ifs[0].mi_Addr);
+    CHECK(ntohl(event.re_Interface) == mdnsNetAddress4(&daemon, 0));
     CHECK(read_record(ref, &event) == MDNSERR_NOTREADY);
     finish_query();
 }
@@ -121,7 +121,7 @@ query_aaaa(void)
     size_t at;
 
     init_query();
-    daemon.md_Ifs[0].mi_Addr = 0;
+    configure_links(&daemon, FALSE, FALSE, TRUE);
     ref = begin("peer", DNS_TYPE_AAAA, 3);
     mdnsQueryTick(&daemon);
     CHECK(packets == 1);

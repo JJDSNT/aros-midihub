@@ -166,9 +166,26 @@ any newly demonstrated generic stack gap still belongs in AROSTCP.
 Commit `0b64c38bb0` now implements the bounded AROSTCP collector as private
 proposal code. Its MetaMake and Linux-hosted AROS test pass live IPv4/IPv6
 alias addition/removal, address-change signals, complete snapshots and atomic
-snapshot-limit failure. D2 is still incomplete: `mdns_net.c` must consume the
+snapshot-limit failure. At that commit D2 was still incomplete:
+`mdns_net.c` had to consume the
 canonical inventory and retire its collapsed `struct found` model before any
 read-only discovery snapshot or public library can depend on it.
+
+Commit `bb6b138b31` completes that integration slice. The canonical inventory
+is now the daemon's only authoritative link/address state;
+`MDNSInterface` retains only a derived interface index and IPv4 socket, and
+all sockets are rebuilt on an atomic inventory revision. MetaMake, 42
+responder fixtures, 15 query fixtures, 45 discovery fixtures and a real
+Linux-hosted AROS dual-stack exchange pass. The runtime test uses no Bonami
+client or library and observes A plus AAAA publication with IPv6 hop-limit
+255. No AROSTCP or public API change was needed.
+
+D2 remains open for a narrower reason: mature host/service/query paths still
+project one usable IPv4 and one usable IPv6 address per link when producing
+legacy packet/event data. The inventory itself retains every address. The
+next implementation-ready slice is complete multi-address packet and native
+snapshot consumption; the public `dnssd.library` canary remains gated on that
+work, not on compatibility with Bonami.
 
 **Upstream PR:** dependency-ordered daemon-core proposals after authorization;
 no Bonami vectors and no public `dnssd.library` ABI mixed into core work.

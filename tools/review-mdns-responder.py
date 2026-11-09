@@ -48,7 +48,8 @@ def main():
         target = shim / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text('#include "mdns_exec_mock.h"\n')
-    sources = ("mdns_dns.c", "mdns_host.c", "mdns_reg.c", "mdns_packet.c")
+    sources = ("mdns_dns.c", "mdns_host.c", "mdns_reg.c", "mdns_packet.c",
+               "dnssd_link.c")
     ipc = source("mdns_ipc.h").decode()
     if "mi_TaskID" in ipc:
         sources += ("mdns_client.c",)
@@ -57,6 +58,7 @@ def main():
     if "MDNS_IPC_QUERY" in ipc:
         sources += ("mdns_query.c",)
     for name in (*sources, "mdns_dns.h", "mdnsd.h", "mdns_ipc.h",
+                 "dnssd_link.h",
                  "include/bonami/mdns.h", "include/libraries/bonamibase.h"):
         target = output / name
         target.parent.mkdir(parents=True, exist_ok=True)

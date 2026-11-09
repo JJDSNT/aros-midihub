@@ -264,11 +264,7 @@ static void invalid_record(int kind)
 static void multiple_links(void)
 {
     APTR ref;
-    init(); md.md_IfCount = 2;
-#ifdef MDNS_IPV6_CORE
-    md.md_Ifs[1].mi_Index = 2;
-#endif
-    md.md_Ifs[1].mi_Addr = 0xc0000302;
+    init(); configure_links(&md, TRUE, TRUE, FALSE);
     ref = begin(0, NULL); feed("Session", 15, 120, 9); expect_add(ref, "Session", 9);
     md.md_SendIf = 1; feed("Session", 15, 120, 10); expect_add(ref, "Session", 10);
     md.md_SendIf = 0; feed("Session", 8, 120, 11); expect_add(ref, "Session", 11);

@@ -146,16 +146,33 @@ and reconciles only a complete snapshot. Bounded transient storage is
 released before returning.
 
 This collector is not a new AROSTCP facility and exports no public AROS ABI.
-The current production `mdns_net.c::find_interfaces()` remains active; the
-collector is independently runnable proposal code until the socket and packet
-paths consume the canonical inventory without retaining a second
-authoritative interface representation.
+
+AROS proposal commit `bb6b138b31` completes the first daemon integration
+slice. `mdns_net.c::find_interfaces()` and its collapsed `struct found` were
+removed. The service task owns one `dnssd_link_inventory`; `md_Ifs` now stores
+only derived interface-index/socket bindings and is rebuilt after an atomic
+inventory revision. Host, registration, query, discovery and own-address
+checks read addresses through that inventory. `dnssd_link` and the AROSTCP
+collector are compiled into the canonical daemon target.
+
+No AROSTCP source or public API changed. The existing ioctl and address-change
+contracts were sufficient. No public DNS-SD ABI was introduced. The internal
+daemon limit grew from eight to 32 derived socket links and retains an
+explicit 256-address policy bound; a saturated input snapshot still fails
+atomically instead of publishing a partial view.
+
+The integration preserves every address in canonical state and uses all of
+them for own-address recognition. Current host/service packet builders still
+select the first usable address of each family per link because those paths
+have not yet been converted to emit a complete canonical address set. This is
+the remaining D2 projection, not an AROSTCP deficiency and not grounds for a
+new stack API.
 
 ## Next implementation slice
 
-1. Make the daemon socket/rescan layer consume the canonical inventory and
-   retire `struct found`/`find_interfaces()` rather than maintaining two
-   authoritative interface models.
+1. Migrate host/service publication and read-only discovery snapshots to the
+   complete canonical address/service model, removing the remaining
+   first-address projection.
 2. Migrate one read-only discovery snapshot path to the canonical service
    model.
 3. Only then define the first `dnssd.library` canary vectors.

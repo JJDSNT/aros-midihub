@@ -1,12 +1,14 @@
 #!/bin/sh
 # Exercise the proposed dual-stack mdnsd on a real Linux-hosted AROS image.
 #
-#   tools/review-mdns-ipv6-hosted.sh AROS_DIR WORK_DIR BUILD_DIR [dual]
+#   tools/review-mdns-ipv6-hosted.sh AROS_DIR WORK_DIR BUILD_DIR [dual] \
+#       [CLIENT_AROS_DIR]
 #
 # AROS_DIR must contain an IPv6-capable AROSTCP image. BUILD_DIR must be an
-# AROS build directory containing the bonami.library and mdnsd produced from
-# the proposal (the normal bin/linux-x86_64 layout or the review make-build
-# layout).
+# AROS build directory containing mdnsd from the proposal (the normal
+# bin/linux-x86_64 layout or the review make-build layout). The legacy query
+# modes additionally need bonami.library and a dnssd client image; daemon mode
+# deliberately exercises no Bonami API or runtime dependency.
 # The image is copied to WORK_DIR, so the original is not modified.
 #
 # The Linux end of the veth pair is fe80::1 on aroshost. The kernel's IPv6
@@ -21,8 +23,8 @@
 # - every IPv6 mDNS datagram received from AROS has hop limit 255.
 set -eu
 
-if test "$#" -lt 3 || test "$#" -gt 4; then
-    echo "usage: $0 AROS_DIR WORK_DIR BUILD_DIR [dual]" >&2
+if test "$#" -lt 3 || test "$#" -gt 5; then
+    echo "usage: $0 AROS_DIR WORK_DIR BUILD_DIR [dual] [CLIENT_AROS_DIR]" >&2
     exit 2
 fi
 
@@ -30,29 +32,45 @@ image=$(realpath "$1")
 work=$(realpath -m "$2")
 build=$(realpath "$3")
 mode=${4:-ipv6}
-test "$mode" = ipv6 || test "$mode" = dual
+test "$mode" = ipv6 || test "$mode" = dual || test "$mode" = daemon
 sys="$work/AROS"
 peer_if=aroshost
 aros_if=eth1
 
 test -x "$image/boot/linux/AROSBootstrap"
-test -f "$image/C/dnssd"
 test -f "$image/Devs/networks/eth.device" || \
     test -f "$image/Devs/Networks/eth.device"
-if test -f "$build/bin/linux-x86_64/AROS/Libs/bonami.library"; then
-    bonami="$build/bin/linux-x86_64/AROS/Libs/bonami.library"
+if test -f "$build/bin/linux-x86_64/AROS/System/Network/Services/mdnsd"; then
     mdnsd="$build/bin/linux-x86_64/AROS/System/Network/Services/mdnsd"
 else
-    bonami="$build/make-build/AROS/Libs/bonami.library"
     mdnsd="$build/make-build/System/Network/Services/mdnsd"
 fi
-test -f "$bonami"
 test -f "$mdnsd"
+if test "$mode" != daemon; then
+    client_image=$(realpath "${5:-$image}")
+    if test -f "$client_image/C/dnssd"; then
+        dnssd="$client_image/C/dnssd"
+    else
+        dnssd="$client_image/Extras/aros-midihub/C/dnssd"
+    fi
+    if test -f "$build/bin/linux-x86_64/AROS/Libs/bonami.library"; then
+        bonami="$build/bin/linux-x86_64/AROS/Libs/bonami.library"
+    else
+        bonami="$build/make-build/AROS/Libs/bonami.library"
+    fi
+    test -f "$dnssd"
+    test -f "$bonami"
+fi
 test ! -e "$sys"
 
 mkdir -p "$work"
 cp -a --reflink=auto "$image" "$sys"
-cp "$bonami" "$sys/Libs/bonami.library"
+if test "$mode" != daemon; then
+    if test "$dnssd" != "$image/C/dnssd"; then
+        cp "$dnssd" "$sys/C/dnssd"
+    fi
+    cp "$bonami" "$sys/Libs/bonami.library"
+fi
 cp "$mdnsd" "$sys/System/Network/Services/mdnsd"
 
 if ! ip link show "$peer_if" >/dev/null 2>&1; then
@@ -65,7 +83,7 @@ sudo sysctl -qw "net.ipv6.conf.$aros_if.disable_ipv6=1"
 sudo sysctl -qw "net.ipv6.conf.$peer_if.disable_ipv6=0"
 sudo ip -6 addr flush dev "$peer_if" scope link
 sudo ip -6 addr add fe80::1/64 dev "$peer_if" nodad
-if test "$mode" = dual; then
+if test "$mode" = dual || test "$mode" = daemon; then
     sudo ip addr replace 192.168.166.1/24 dev "$peer_if"
 fi
 # Hosted eth.device sees frames before Linux has filled deferred checksums.
@@ -74,7 +92,7 @@ sudo ethtool -K "$aros_if" tx off >/dev/null
 sudo setcap cap_net_raw,cap_net_admin+ep "$sys/boot/linux/AROSBootstrap"
 
 db="$sys/System/Network/AROSTCP/db"
-if test "$mode" = dual; then
+if test "$mode" = dual || test "$mode" = daemon; then
     echo "$aros_if DEV=DEVS:networks/eth.device UNIT=1 IP=192.168.166.2 NETMASK=255.255.255.0 IP6=fe80::2 PREFIXLEN=64 UP" \
         >> "$db/interfaces"
 else
@@ -93,9 +111,16 @@ Path C S ADD QUIET
 Run >NIL: QUIET AROSTCP
 WaitForPort AROSTCP
 Wait 10
+C:Status >SYS:status6.log
 C:ifconfig -a >SYS:ifconfig6.log
 C:netstat -rn >SYS:routes6.log
+RUNEOF
+if test "$mode" != daemon; then
+    cat >> "$sys/S/mdns-ipv6-run" <<'RUNEOF'
 Run >SYS:query6.log C:dnssd -q peer.local AAAA
+RUNEOF
+fi
+cat >> "$sys/S/mdns-ipv6-run" <<'RUNEOF'
 Wait 18
 Break `Status COMMAND=C:dnssd` C
 Wait 2
@@ -207,11 +232,19 @@ sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_RECVHOPLIMIT, 1)
 sock.bind(('::', 5353))
 
 sock4 = None
-if mode == 'dual':
+if mode in ('dual', 'daemon'):
     sock4 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock4.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if hasattr(socket, 'SO_REUSEPORT'):
+        sock4.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    sock4.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+                     socket.inet_aton('224.0.0.251') +
+                     socket.inet_aton('192.168.166.1'))
     sock4.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
                      socket.inet_aton('192.168.166.1'))
-    sock4.bind(('192.168.166.1', 0))
+    sock4.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
+    sock4.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+    sock4.bind(('', 5353))
 
 deadline = time.monotonic() + 38
 next_question = time.monotonic()
@@ -241,7 +274,8 @@ while time.monotonic() < deadline:
         except (UnicodeDecodeError, ValueError, struct.error):
             records = []
             is_response = False
-        if is_response and struct.unpack_from('!H', packet)[0] == 0x4a71 and any(
+        if is_response and (mode == 'daemon' or
+                struct.unpack_from('!H', packet)[0] == 0x4a71) and any(
                 section == 0 and owner.startswith('arosbox') and
                 owner.endswith('.local') and kind == 1 and
                 data == socket.inet_aton('192.168.166.2')
@@ -276,12 +310,12 @@ while time.monotonic() < deadline:
 print('AROS IPv6 sources:', ', '.join(sorted(sources)) or '(none)')
 print('AROS AAAA queries for peer.local:', peer_queries)
 print('AROS AAAA responses for arosbox.local:', aros_answers)
-if mode == 'dual':
+if mode in ('dual', 'daemon'):
     print('AROS A responses for arosbox.local:', aros_answers4)
 print('AROS packets with hop limit other than 255:',
       sorted(set(bad_hops)))
-if (peer_queries < 1 or aros_answers < 1 or bad_hops or
-        (mode == 'dual' and aros_answers4 < 1)):
+if ((mode != 'daemon' and peer_queries < 1) or aros_answers < 1 or bad_hops or
+        (mode in ('dual', 'daemon') and aros_answers4 < 1)):
     raise SystemExit(1)
 PY
 peer=$!
@@ -299,12 +333,14 @@ cp "$sys/ifconfig6.log" "$work/ifconfig6.log" 2>/dev/null || true
 cp "$sys/routes6.log" "$work/routes6.log" 2>/dev/null || true
 
 status=$peer_status
-if grep -Eiq 'peer\.local.*type 28.*fe800000000000000000000000000001' \
-        "$work/query6.log" 2>/dev/null; then
-    echo 'ok: AROS queried and received the Linux peer AAAA record'
-else
-    echo 'FAILED: AROS did not report the Linux peer AAAA record'
-    status=1
+if test "$mode" != daemon; then
+    if grep -Eiq 'peer\.local.*type 28.*fe800000000000000000000000000001' \
+            "$work/query6.log" 2>/dev/null; then
+        echo 'ok: AROS queried and received the Linux peer AAAA record'
+    else
+        echo 'FAILED: AROS did not report the Linux peer AAAA record'
+        status=1
+    fi
 fi
 if grep -Ei 'ALERT|Guru Meditation|Software Failure|UNHANDLED|SIGSEGV|tried to free' \
         "$work/serial.log"; then

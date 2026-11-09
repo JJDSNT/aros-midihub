@@ -75,11 +75,114 @@ LONG Stricmp(const char *a, const char *b) { return strcasecmp(a, b); }
 LONG Strnicmp(const char *a, const char *b, LONG n) { return strncasecmp(a, b, (size_t)n); }
 ULONG mdnsTicks(void) { return ticks; }
 ULONG mdnsNow(void) { return ticks / 50; }
+
+static void configure_links(struct MDNSDaemon *md, BOOL second, BOOL ipv4,
+                            BOOL ipv6)
+{
+    struct dnssd_link_spec links[2];
+    struct dnssd_address_spec addresses[4];
+    size_t link_count = second ? 2u : 1u;
+    size_t address_count = 0u;
+
+    memset(links, 0, sizeof(links));
+    memset(addresses, 0, sizeof(addresses));
+    links[0].interface_index = 1;
+    links[0].flags = DNSSD_LINK_UP | DNSSD_LINK_MULTICAST;
+    links[0].name_length = 4;
+    memcpy(links[0].name, "eth0", 4);
+    if (ipv4) {
+        addresses[address_count].interface_index = 1;
+        addresses[address_count].family = DNSSD_ADDRESS_IPV4;
+        addresses[address_count].length = 4;
+        addresses[address_count].bytes[0] = 192;
+        addresses[address_count].bytes[1] = 0;
+        addresses[address_count].bytes[2] = 2;
+        addresses[address_count].bytes[3] = 2;
+        ++address_count;
+    }
+    if (second) {
+        links[1].interface_index = 2;
+        links[1].flags = DNSSD_LINK_UP | DNSSD_LINK_MULTICAST;
+        links[1].name_length = 4;
+        memcpy(links[1].name, "eth1", 4);
+        addresses[address_count].interface_index = 2;
+        addresses[address_count].family = DNSSD_ADDRESS_IPV4;
+        addresses[address_count].length = 4;
+        addresses[address_count].bytes[0] = 198;
+        addresses[address_count].bytes[1] = 51;
+        addresses[address_count].bytes[2] = 100;
+        addresses[address_count].bytes[3] = 2;
+        ++address_count;
+    }
+    if (ipv6) {
+        addresses[address_count].interface_index = 1;
+        addresses[address_count].scope_id = 1;
+        addresses[address_count].family = DNSSD_ADDRESS_IPV6;
+        addresses[address_count].length = 16;
+        addresses[address_count].bytes[0] = 0xfe;
+        addresses[address_count].bytes[1] = 0x80;
+        addresses[address_count].bytes[15] = 2;
+        ++address_count;
+    }
+    if (dnssd_link_inventory_reconcile(&md->md_LinkInventory,
+            links, link_count, addresses, address_count) != DNSSD_LINK_OK)
+        abort();
+    md->md_IfCount = (LONG)link_count;
+    md->md_Ifs[0].mi_Index = 1;
+    if (second)
+        md->md_Ifs[1].mi_Index = 2;
+}
+
+ULONG mdnsNetAddress4(const struct MDNSDaemon *md, LONG slot)
+{
+    uint32_t index;
+    size_t i;
+
+    if (slot < 0 || slot >= md->md_IfCount)
+        return 0;
+    index = md->md_Ifs[slot].mi_Index;
+    for (i = 0; i < md->md_LinkInventory.address_count; ++i) {
+        const struct dnssd_address_entry *entry =
+            &md->md_LinkInventory.addresses[i];
+
+        if (entry->value.interface_index == index &&
+            entry->value.family == DNSSD_ADDRESS_IPV4)
+            return ((ULONG)entry->value.bytes[0] << 24) |
+                   ((ULONG)entry->value.bytes[1] << 16) |
+                   ((ULONG)entry->value.bytes[2] << 8) |
+                   (ULONG)entry->value.bytes[3];
+    }
+    return 0;
+}
+
+BOOL mdnsNetAddress6(const struct MDNSDaemon *md, LONG slot,
+                     struct in6_addr *address)
+{
+    uint32_t index;
+    size_t i;
+
+    memset(address, 0, sizeof(*address));
+    if (slot < 0 || slot >= md->md_IfCount)
+        return FALSE;
+    index = md->md_Ifs[slot].mi_Index;
+    for (i = 0; i < md->md_LinkInventory.address_count; ++i) {
+        const struct dnssd_address_entry *entry =
+            &md->md_LinkInventory.addresses[i];
+
+        if (entry->value.interface_index == index &&
+            entry->value.family == DNSSD_ADDRESS_IPV6) {
+            memcpy(address, entry->value.bytes, sizeof(*address));
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 BOOL mdnsNetIsOwn(struct MDNSDaemon *md, ULONG address)
 {
     LONG i;
     for (i = 0; i < md->md_IfCount; ++i)
-        if (md->md_Ifs[i].mi_Addr == address)
+        if (mdnsNetAddress4(md, i) == address)
             return TRUE;
     return FALSE;
 }
@@ -87,10 +190,13 @@ BOOL mdnsNetIsOwn(struct MDNSDaemon *md, ULONG address)
 BOOL mdnsNetIsOwn6(struct MDNSDaemon *md, const struct in6_addr *address)
 {
     LONG i;
-    for (i = 0; i < md->md_IfCount; ++i)
-        if (!IN6_IS_ADDR_UNSPECIFIED(&md->md_Ifs[i].mi_Addr6) &&
-            !memcmp(&md->md_Ifs[i].mi_Addr6, address, sizeof(*address)))
+    for (i = 0; i < md->md_IfCount; ++i) {
+        struct in6_addr own;
+
+        if (mdnsNetAddress6(md, i, &own) &&
+            !memcmp(&own, address, sizeof(*address)))
             return TRUE;
+    }
     return FALSE;
 }
 #endif
@@ -225,11 +331,12 @@ static struct MDNSRegisteredService *setup(struct MDNSDaemon *md, ULONG ttl)
     struct MDNSRegisteredService *service;
     memset(md, 0, sizeof(*md));
     NEWLIST(&md->md_Services);
-    md->md_IfCount = 1;
-#ifdef MDNS_IPV6_CORE
-    md->md_Ifs[0].mi_Index = 1;
-#endif
-    md->md_Ifs[0].mi_Addr = 0xc0000202;
+    if (dnssd_link_inventory_init(&md->md_LinkInventory,
+            md->md_Links, md->md_LinkScratch, MDNS_IFS_MAX,
+            md->md_Addresses, md->md_AddressScratch,
+            MDNS_ADDRESS_MAX) != DNSSD_LINK_OK)
+        abort();
+    configure_links(md, FALSE, TRUE, FALSE);
     md->md_HostAddr = 0xc0000202;
     md->md_Socket = 0;
     md->md_SendIf = 0;
@@ -287,10 +394,7 @@ static void flush(struct MDNSDaemon *md)
 #ifdef MDNS_IPV6_CORE
 static void enable_ipv6(struct MDNSDaemon *md)
 {
-    static const UBYTE address[16] = {
-        0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2
-    };
-    memcpy(&md->md_Ifs[0].mi_Addr6, address, sizeof(address));
+    configure_links(md, FALSE, TRUE, TRUE);
 }
 #endif
 
@@ -568,8 +672,7 @@ int main(int argc, char **argv)
         printf("shared browse after one second: responses=%u\n", packets);
         failure |= packets != 1;
     } else if (!strcmp(argv[1], "shared-interface")) {
-        md.md_IfCount = 2;
-        md.md_Ifs[1].mi_Addr = 0xc6336402;
+        configure_links(&md, TRUE, TRUE, FALSE);
         md.md_SendIf = 0;
         mdnsRegAnnounceAll(&md);
         packets = answer_records = announcements = 0;
@@ -616,8 +719,7 @@ int main(int argc, char **argv)
                packets);
         failure |= packets != 1;
     } else if (!strcmp(argv[1], "types-interface")) {
-        md.md_IfCount = 2;
-        md.md_Ifs[1].mi_Addr = 0xc6336402;
+        configure_links(&md, TRUE, TRUE, FALSE);
         md.md_SendIf = 0;
         at = question_name(packet, "_services._dns-sd._udp.local",
             DNS_TYPE_PTR, DNS_CLASS_IN, 0);
