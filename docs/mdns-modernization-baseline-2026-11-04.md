@@ -1,5 +1,13 @@
 # AROS mDNSd/Bonami modernization baseline — 2026-11-04
 
+> **Architecture update, 2026-11-08:** this remains the evidence baseline for
+> canonical `mdnsd`, but Bonami is no longer the target public architecture.
+> The native direction and migration are defined in the
+> [DNS-SD ADR](dnssd-native-architecture-decision.md),
+> [reuse audit](dnssd-reuse-audit-2026-11-08.md) and
+> [roadmap](dnssd-native-roadmap-2026-11-08.md). Bonami-specific API proposals
+> remain compatibility evidence, not the new library ABI.
+
 ## Purpose and evidence boundary
 
 This is the reconciled G0 baseline for the next mDNSd/Bonami work. It records

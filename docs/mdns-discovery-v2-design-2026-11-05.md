@@ -1,5 +1,11 @@
 # Bonami dual-stack discovery event design — 2026-11-05
 
+> **Disposition, 2026-11-08:** retained as implementation evidence and a
+> Bonami compatibility proposal, not as the native AROS DNS-SD ABI. The new
+> library is intentionally free of Bonami vector, tag and structure
+> constraints; see the
+> [native DNS-SD ADR](dnssd-native-architecture-decision.md).
+
 ## Verified baseline
 
 The implementation source is AROS `workbench/network/mdns/`, with the DNS-SD

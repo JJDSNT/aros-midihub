@@ -1,5 +1,11 @@
 # AROS mDNSd/Bonami definitive grouped backlog — 2026-11-04
 
+> **Superseded as target architecture on 2026-11-08.** Completed evidence and
+> accepted `mdnsd` work remain valid. New implementation ordering is in the
+> [native DNS-SD roadmap](dnssd-native-roadmap-2026-11-08.md), based on the
+> [ADR](dnssd-native-architecture-decision.md). Extending the Bonami ABI is no
+> longer the default path to a native AROS DNS-SD API.
+
 ## Rules
 
 This backlog begins at the reconciled baseline in
