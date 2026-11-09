@@ -108,6 +108,43 @@ query_a(void)
     finish_query();
 }
 
+#ifdef MDNS_IPV6_CORE
+static void
+query_aaaa(void)
+{
+    static const UBYTE address[] = {
+        0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9
+    };
+    struct in6_addr source;
+    struct MDNSRecordEvent event;
+    APTR ref;
+    size_t at;
+
+    init_query();
+    daemon.md_Ifs[0].mi_Addr = 0;
+    ref = begin("peer", DNS_TYPE_AAAA, 3);
+    mdnsQueryTick(&daemon);
+    CHECK(packets == 1);
+    memset(query_packet, 0, sizeof(query_packet));
+    put16(query_packet + 2, DNS_FLAG_QR | DNS_FLAG_AA);
+    put16(query_packet + 6, 1);
+    at = record(query_packet, 12, "peer.local", DNS_TYPE_AAAA,
+        DNS_CLASS_IN_FLUSH, 120, address, sizeof(address));
+    memset(&source, 0, sizeof(source));
+    source.s6_addr[0] = 0xfe;
+    source.s6_addr[1] = 0x80;
+    source.s6_addr[15] = 1;
+    mdnsHandlePacket6(&daemon, query_packet, (LONG)at, &source,
+        MDNS_DNS_PORT);
+    CHECK(read_record(ref, &event) == MDNS_OK);
+    CHECK(event.re_Type == DNS_TYPE_AAAA && event.re_DataLength == 16);
+    CHECK(!memcmp(event.re_Data, address, sizeof(address)));
+    CHECK(event.re_Interface == 0);
+    CHECK(event.re_InterfaceIndex == daemon.md_Ifs[0].mi_Index);
+    finish_query();
+}
+#endif
+
 static void
 query_own_host(void)
 {
@@ -364,6 +401,9 @@ main(int argc, char **argv)
         return 2;
     }
     if (!strcmp(argv[1], "query-a")) query_a();
+#ifdef MDNS_IPV6_CORE
+    else if (!strcmp(argv[1], "query-aaaa")) query_aaaa();
+#endif
     else if (!strcmp(argv[1], "query-own-host")) query_own_host();
     else if (!strcmp(argv[1], "query-local-service")) query_local_service();
     else if (!strcmp(argv[1], "query-ptr-compressed")) query_ptr_compressed();

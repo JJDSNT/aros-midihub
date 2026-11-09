@@ -1,5 +1,11 @@
 # System mDNS for AROS
 
+> **Source of truth:** the merged implementation is now AROS upstream
+> `workbench/network/mdns/`. The `aros/` tree below is an early historical
+> prototype and must not be used as a parallel runtime or as the base for new
+> fixes. Current proposals are patches against upstream; see the
+> [IPv6 investigation](../../docs/mdns-ipv6-investigation-2026-10-30.md).
+
 This directory holds the proposed system-wide mDNS/DNS-SD service for AROS,
 currently derived from Bonami and running above `bsdsocket.library`. The
 priority is protocol conformance and functional AROS integration. The proposed
@@ -9,8 +15,9 @@ original Bonami can be considered separately.
 
 ## Contents
 
-- `aros/` is the service: `mdnsd`, `bonami.library`, the command-line tools
-  and the commodity, ported from Bonami. Its
+- `aros/` is the historical prototype of the service: `mdnsd`,
+  `bonami.library`, the command-line tools and the commodity, ported from
+  Bonami. Its
   [README](aros/README.md) is the reference for how it works, what it does of
   the protocol, how it is tested and what it lacks.
 - `bonami/` pins [amigazen Bonami](https://github.com/amigazen/Bonami) as a

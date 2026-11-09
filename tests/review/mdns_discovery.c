@@ -10,6 +10,7 @@ static UBYTE packet[MDNS_MAX_PACKET], data[512];
 /* the service type records are fed for */
 static const char *feed_type = "_midi2._udp.local";
 static const UBYTE txt[] = { 5, 'a','=','b',0,'c', 4,'X','=',' ','\\' };
+static UWORD feed_priority, feed_weight;
 
 static size_t key(UBYTE *out, size_t at, const char *instance, int host)
 {
@@ -25,7 +26,11 @@ static size_t key(UBYTE *out, size_t at, const char *instance, int host)
 static size_t rr(size_t at, const char *instance, UWORD type, UWORD cls,
                  ULONG ttl, const UBYTE *rdata, size_t len)
 {
-    at = key(packet, at, instance, type == DNS_TYPE_A);
+    at = key(packet, at, instance, type == DNS_TYPE_A
+#ifdef MDNS_IPV6_CORE
+        || type == DNS_TYPE_AAAA
+#endif
+        );
     put16(packet + at, type); put16(packet + at + 2, cls);
     put32(packet + at + 4, ttl); put16(packet + at + 8, len);
     memcpy(packet + at + 10, rdata, len);
@@ -43,7 +48,8 @@ static void feed_records(const char *instance, unsigned mask, ULONG ttl,
         at = rr(at, NULL, DNS_TYPE_PTR, 1, ttl, data, len); ++count;
     }
     if (mask & 2) {
-        memset(data, 0, 6); put16(data + 4, 5504);
+        memset(data, 0, 6); put16(data, feed_priority);
+        put16(data + 2, feed_weight); put16(data + 4, 5504);
         len = key(data, 6, NULL, 1);
         at = rr(at, instance, DNS_TYPE_SRV, 0x8001, ttl, data, len); ++count;
     }
@@ -54,6 +60,13 @@ static void feed_records(const char *instance, unsigned mask, ULONG ttl,
         const UBYTE addr[] = {203,0,113,ip};
         at = rr(at, NULL, DNS_TYPE_A, 0x8001, ttl, addr, sizeof(addr)); ++count;
     }
+#ifdef MDNS_IPV6_CORE
+    if (mask & 16) {
+        UBYTE addr[16] = {0xfe, 0x80};
+        addr[15] = ip;
+        at = rr(at, NULL, DNS_TYPE_AAAA, 0x8001, ttl, addr, sizeof(addr)); ++count;
+    }
+#endif
     put16(packet + 6, count);
     mdnsHandlePacket(&md, packet, at, 0xcb007101, 5353);
     if (tick) mdnsDiscoveryTick(&md);
@@ -70,19 +83,32 @@ static LONG call(struct MDNSIPCMsg *msg, UWORD command, APTR ref, ULONG ownerID,
     mdnsClientMessage(&md, msg);
     return msg->mi_Result;
 }
-static APTR begin_type(int resolve, const char *instance, const char *type)
+static APTR begin_type_mode(int resolve, const char *instance,
+                           const char *type, UWORD eventMode)
 {
     struct MDNSIPCMsg msg = {0};
     strcpy(msg.mi_ServiceType, type);
     if (instance) strcpy(msg.mi_Name, instance);
+    msg.mi_EventMode = eventMode;
     CHECK(call(&msg, resolve ? MDNS_IPC_RESOLVE : MDNS_IPC_BROWSE, NULL, 1, 0) == MDNS_OK);
     CHECK(msg.mi_DaemonID == 77);
     return msg.mi_Handle;
+}
+static APTR begin_type(int resolve, const char *instance, const char *type)
+{
+    return begin_type_mode(resolve, instance, type, MDNS_EVENT_QUEUE);
 }
 static APTR begin(int resolve, const char *instance)
 {
     return begin_type(resolve, instance, "_midi2._udp");
 }
+#ifdef MDNS_EVENT_QUEUE_V2
+static APTR begin_v2(int resolve, const char *instance)
+{
+    return begin_type_mode(resolve, instance, "_midi2._udp",
+                           MDNS_EVENT_QUEUE_V2);
+}
+#endif
 static LONG read_event(APTR ref, struct MDNSDiscoveryEvent *out)
 {
     struct MDNSIPCMsg msg = {0};
@@ -90,9 +116,33 @@ static LONG read_event(APTR ref, struct MDNSDiscoveryEvent *out)
     if (rc == MDNS_OK) *out = msg.mi_Event;
     return rc;
 }
+#ifdef MDNS_EVENT_QUEUE_V2
+static LONG read_event2(APTR ref, struct MDNSDiscoveryEvent2 *out)
+{
+    struct MDNSIPCMsg msg = {0};
+    LONG rc = call(&msg, MDNS_IPC_READ2, ref, 1, 77);
+    if (rc == MDNS_OK) *out = msg.mi_Event2;
+    return rc;
+}
+static void expect_address(const struct MDNSDiscoveryEvent2 *event,
+                           UWORD at, UWORD family, UBYTE last)
+{
+    CHECK(at < event->de_AddressCount);
+    CHECK(event->de_Addresses[at].da_Family == family);
+    if (family == MDNS_DISCOVERY_ADDR_IPV4) {
+        const UBYTE expected[] = {203, 0, 113, last};
+        CHECK(!memcmp(event->de_Addresses[at].da_Address, expected, 4));
+    } else {
+        UBYTE expected[16] = {0xfe, 0x80};
+        expected[15] = last;
+        CHECK(!memcmp(event->de_Addresses[at].da_Address, expected, 16));
+    }
+}
+#endif
 static void init(void)
 {
     ticks = 5000; live_task_id = 1; packets = 0; feed_type = "_midi2._udp.local";
+    feed_priority = feed_weight = 0;
     setup(&md, 0); md.md_DaemonID = 77;
     mdnsRegFree(&md);
 }
@@ -235,7 +285,11 @@ static void invalid_record(int kind)
 static void multiple_links(void)
 {
     APTR ref;
-    init(); md.md_IfCount = 2; md.md_Ifs[1].mi_Addr = 0xc0000302;
+    init(); md.md_IfCount = 2;
+#ifdef MDNS_IPV6_CORE
+    md.md_Ifs[1].mi_Index = 2;
+#endif
+    md.md_Ifs[1].mi_Addr = 0xc0000302;
     ref = begin(0, NULL); feed("Session", 15, 120, 9); expect_add(ref, "Session", 9);
     md.md_SendIf = 1; feed("Session", 15, 120, 10); expect_add(ref, "Session", 10);
     md.md_SendIf = 0; feed("Session", 8, 120, 11); expect_add(ref, "Session", 11);
@@ -331,6 +385,196 @@ static void a_before_srv(void)
     feed("Session", 8, 120, 9); expect_add(ref, "Session", 9);
     finish();
 }
+
+#ifdef MDNS_IPV6_CORE
+static void aaaa_before_a(void)
+{
+    struct MDNSDiscoveryEvent event;
+    APTR ref;
+
+    init();
+    ref = begin(0, NULL);
+    feed("IPv6", 16, 120, 42);
+    feed("IPv6", 7, 120, 42);
+    CHECK(read_event(ref, &event) == MDNSERR_NOTREADY);
+    feed("IPv6", 8, 120, 42);
+    expect_add(ref, "IPv6", 42);
+    finish();
+}
+
+/* Once either address family makes a host reachable, ask once for the
+ * other family but do not keep treating an intentionally absent family as
+ * a missing service component. The legacy discovery event still needs A;
+ * AAAA remains available through QueryRecordA(). */
+static void single_address_family(void)
+{
+    struct MDNSDiscoveryEvent event;
+    unsigned questions;
+    APTR ref;
+
+    init();
+    ref = begin(0, NULL);
+    feed("IPv4Only", 15, 120, 42);
+    expect_add(ref, "IPv4Only", 42);
+    CHECK(aaaa_questions == 1);
+    questions = aaaa_questions;
+    ticks += 50;
+    mdnsDiscoveryTick(&md);
+    CHECK(aaaa_questions == questions);
+    finish();
+
+    init();
+    ref = begin(0, NULL);
+    feed("IPv6Only", 23, 120, 43);
+    CHECK(read_event(ref, &event) == MDNSERR_NOTREADY);
+    CHECK(a_questions == 1);
+    questions = a_questions;
+    ticks += 50;
+    mdnsDiscoveryTick(&md);
+    CHECK(a_questions == questions);
+    /* A arriving later still completes the backward-compatible event. */
+    feed("IPv6Only", 8, 120, 43);
+    expect_add(ref, "IPv6Only", 43);
+    finish();
+}
+
+#ifdef MDNS_EVENT_QUEUE_V2
+static void v2_ipv6_only(void)
+{
+    struct MDNSDiscoveryEvent legacy;
+    struct MDNSDiscoveryEvent2 event;
+    struct MDNSIPCMsg msg = {0};
+    APTR oldRef, newRef;
+
+    init();
+    oldRef = begin(0, NULL);
+    newRef = begin_v2(0, NULL);
+    feed_priority = 7;
+    feed_weight = 11;
+    feed("IPv6Only", 23, 120, 42);
+    CHECK(read_event(oldRef, &legacy) == MDNSERR_NOTREADY);
+    CHECK(call(&msg, MDNS_IPC_READ2, oldRef, 1, 77) == MDNSERR_BADPARAM);
+    CHECK(call(&msg, MDNS_IPC_READ, newRef, 1, 77) == MDNSERR_BADPARAM);
+    CHECK(read_event2(newRef, &event) == MDNS_OK);
+    CHECK(event.de_Code == MEVENT_ADD);
+    CHECK(!strcmp(event.de_Name, "IPv6Only"));
+    CHECK(event.de_InterfaceIndex == md.md_Ifs[0].mi_Index);
+    CHECK(event.de_Priority == 7);
+    CHECK(event.de_Weight == 11);
+    CHECK(event.de_AddressCount == 1);
+    expect_address(&event, 0, MDNS_DISCOVERY_ADDR_IPV6, 42);
+    finish();
+
+    init();
+    newRef = begin_v2(1, "IPv6Resolve");
+    feed("IPv6Resolve", 22, 120, 43);
+    CHECK(read_event2(newRef, &event) == MDNS_OK);
+    CHECK(event.de_Code == MEVENT_RESOLVED);
+    CHECK(event.de_AddressCount == 1);
+    expect_address(&event, 0, MDNS_DISCOVERY_ADDR_IPV6, 43);
+    finish();
+}
+
+static void v2_addresses_before_srv(void)
+{
+    struct MDNSDiscoveryEvent2 event;
+    APTR ref;
+
+    init();
+    ref = begin_v2(0, NULL);
+    feed("Many", 8, 120, 44);
+    feed("Many", 16, 120, 45);
+    feed("Many", 8, 120, 42);
+    feed("Many", 16, 120, 43);
+    feed("Many", 7, 120, 1);
+    CHECK(read_event2(ref, &event) == MDNS_OK);
+    CHECK(event.de_AddressCount == 4);
+    expect_address(&event, 0, MDNS_DISCOVERY_ADDR_IPV4, 42);
+    expect_address(&event, 1, MDNS_DISCOVERY_ADDR_IPV4, 44);
+    expect_address(&event, 2, MDNS_DISCOVERY_ADDR_IPV6, 43);
+    expect_address(&event, 3, MDNS_DISCOVERY_ADDR_IPV6, 45);
+    CHECK(!(event.de_Flags & MDNS_DISCOVERY_ADDRESSES_TRUNCATED));
+    finish();
+}
+
+static void v2_link_isolation(void)
+{
+    struct MDNSDiscoveryEvent2 first, second;
+    APTR ref;
+
+    init();
+    md.md_IfCount = 2;
+    md.md_Ifs[1].mi_Index = 2;
+    md.md_Ifs[1].mi_Addr = 0xc0000302;
+    ref = begin_v2(0, NULL);
+    md.md_SendIf = 0;
+    feed("Scoped", 23, 120, 41);
+    md.md_SendIf = 1;
+    feed("Scoped", 23, 120, 42);
+    CHECK(read_event2(ref, &first) == MDNS_OK);
+    CHECK(read_event2(ref, &second) == MDNS_OK);
+    CHECK(first.de_InterfaceIndex != second.de_InterfaceIndex);
+    CHECK(first.de_AddressCount == 1 && second.de_AddressCount == 1);
+    if (first.de_InterfaceIndex == md.md_Ifs[0].mi_Index) {
+        expect_address(&first, 0, MDNS_DISCOVERY_ADDR_IPV6, 41);
+        expect_address(&second, 0, MDNS_DISCOVERY_ADDR_IPV6, 42);
+    } else {
+        expect_address(&first, 0, MDNS_DISCOVERY_ADDR_IPV6, 42);
+        expect_address(&second, 0, MDNS_DISCOVERY_ADDR_IPV6, 41);
+    }
+    finish();
+}
+
+static void v2_address_truncation(void)
+{
+    struct MDNSDiscoveryEvent2 event;
+    APTR ref;
+    UBYTE i;
+
+    init();
+    ref = begin_v2(0, NULL);
+    feed("Crowded", 7, 120, 1);
+    for (i = 9; i != 0; i--) {
+        feed("Crowded", 8, 120, i);
+    }
+    CHECK(read_event2(ref, &event) == MDNS_OK);
+    CHECK(event.de_AddressCount == MDNS_DISCOVERY_ADDRESS_MAX);
+    CHECK(event.de_Flags & MDNS_DISCOVERY_ADDRESSES_TRUNCATED);
+    for (i = 0; i < MDNS_DISCOVERY_ADDRESS_MAX; i++) {
+        expect_address(&event, i, MDNS_DISCOVERY_ADDR_IPV4, i + 1);
+    }
+    finish();
+}
+
+static void v1_v2_address_transition(void)
+{
+    struct MDNSDiscoveryEvent oldEvent;
+    struct MDNSDiscoveryEvent2 newEvent;
+    APTR oldRef, newRef;
+
+    init();
+    oldRef = begin(0, NULL);
+    newRef = begin_v2(0, NULL);
+    feed("Changing", 23, 120, 42);
+    CHECK(read_event(oldRef, &oldEvent) == MDNSERR_NOTREADY);
+    CHECK(read_event2(newRef, &newEvent) == MDNS_OK);
+    feed("Changing", 8, 120, 42);
+    expect_add(oldRef, "Changing", 42);
+    CHECK(read_event2(newRef, &newEvent) == MDNS_OK);
+    CHECK(newEvent.de_AddressCount == 2);
+    feed("Changing", 8, 0, 42);
+    ticks += 50;
+    mdnsDiscoveryTick(&md);
+    CHECK(read_event(oldRef, &oldEvent) == MDNS_OK);
+    CHECK(oldEvent.de_Code == MEVENT_REMOVE);
+    CHECK(read_event2(newRef, &newEvent) == MDNS_OK);
+    CHECK(newEvent.de_Code == MEVENT_ADD);
+    CHECK(newEvent.de_AddressCount == 1);
+    expect_address(&newEvent, 0, MDNS_DISCOVERY_ADDR_IPV6, 42);
+    finish();
+}
+#endif
+#endif
 #endif
 #ifdef MDNS_IPC_NOTIFY
 /* Lent requests: the device I/O contract of RequestMDNSEvent(). */
@@ -516,6 +760,7 @@ static void enumerate_types(void)
         struct MDNSIPCMsg msg = {0};
         strcpy(msg.mi_ServiceType, "_services._dns-sd._udp");
         strcpy(msg.mi_Name, "x");
+        msg.mi_EventMode = MDNS_EVENT_QUEUE;
         CHECK(call(&msg, MDNS_IPC_RESOLVE, NULL, 1, 0) == MDNSERR_BADTYPE);
     }
     finish();
@@ -631,6 +876,17 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "evict-unwanted")) evict_unwanted();
     else if (!strcmp(argv[1], "views-scoped")) views_scoped();
     else if (!strcmp(argv[1], "a-before-srv")) a_before_srv();
+#ifdef MDNS_IPV6_CORE
+    else if (!strcmp(argv[1], "aaaa-before-a")) aaaa_before_a();
+    else if (!strcmp(argv[1], "single-address-family")) single_address_family();
+#ifdef MDNS_EVENT_QUEUE_V2
+    else if (!strcmp(argv[1], "v2-ipv6-only")) v2_ipv6_only();
+    else if (!strcmp(argv[1], "v2-addresses-before-srv")) v2_addresses_before_srv();
+    else if (!strcmp(argv[1], "v2-link-isolation")) v2_link_isolation();
+    else if (!strcmp(argv[1], "v2-address-truncation")) v2_address_truncation();
+    else if (!strcmp(argv[1], "v1-v2-address-transition")) v1_v2_address_transition();
+#endif
+#endif
 #endif
 #ifdef MDNS_IPC_NOTIFY
     else if (!strcmp(argv[1], "notify-pending")) notify_pending();
