@@ -42,7 +42,7 @@ test-components:
 test-discovery:
 	CC='$(CC)' tools/test-discovery-fixtures.sh
 
-test: test-components test-discovery build/config-test build/protocol-test build/applemidi-test build/blemidi-class-test build/routes-test build/ump-test build/midici-test build/midici-concurrency-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test build/camd-identity-file-test build/camd-identity-store-recovery-test build/camd-legacy-identity-set-test build/camd-app-endpoint-test
+test: test-components test-discovery build/config-test build/protocol-test build/applemidi-test build/blemidi-class-test build/routes-test build/ump-test build/midici-test build/midici-concurrency-test build/dnssd-coordinator-test build/netmidi2-test build/camd-endpoint-core-test build/camd-provider-contract-test build/camd-legacy-driver-adapter-test build/camd-legacy-port-refs-test build/camd-native-event-queue-test build/camd-native-event-pump-test build/camd-native-event-worker-test build/camd-native-worker-fanout-test build/camd-legacy-output-backend-test build/camd-identity-map-test build/camd-identity-file-test build/camd-identity-store-recovery-test build/camd-legacy-identity-set-test build/camd-app-endpoint-test
 	./build/protocol-test
 	./build/applemidi-test
 	./build/config-test
@@ -51,6 +51,7 @@ test: test-components test-discovery build/config-test build/protocol-test build
 	./build/ump-test
 	./build/midici-test
 	./build/midici-concurrency-test
+	./build/dnssd-coordinator-test
 	./build/netmidi2-test
 	./build/camd-endpoint-core-test
 	./build/camd-provider-contract-test
@@ -66,6 +67,13 @@ test: test-components test-discovery build/config-test build/protocol-test build
 	./build/camd-identity-store-recovery-test
 	./build/camd-legacy-identity-set-test
 	./build/camd-app-endpoint-test
+
+build/dnssd-coordinator-test: tests/dnssd_coordinator.c \
+                              prototypes/dnssd/coordinator.c \
+                              prototypes/dnssd/coordinator.h
+	mkdir -p build
+	$(CC) $(CFLAGS) -Iprototypes/dnssd -o $@ \
+		tests/dnssd_coordinator.c prototypes/dnssd/coordinator.c -pthread
 
 check-patches:
 	tools/check-camd-patches.sh
