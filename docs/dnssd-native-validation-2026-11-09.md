@@ -127,3 +127,44 @@ Results:
 The Midihub implementation copy was removed after the source moved to AROS;
 only the Linux-hosted runner remains here. This validates model parsing and
 layout on AROS, but not daemon IPC, network interoperability or public ABI.
+
+## D2 canonical link/address inventory canary
+
+AROS commit `86a8e7cdc9` on the same proposal branch adds the private
+`dnssd_link` inventory and `dnssdlinktest`. The test validates:
+
+- unordered and duplicate link/address input converges to one deterministic
+  snapshot;
+- multiple IPv4 and IPv6 addresses remain attached to stable interface
+  indexes, with IPv6 link-local scope validated;
+- unchanged rescans preserve revision and link generations;
+- address deprecation and link availability alter usability without changing
+  identity;
+- observed link removal and re-addition produces a new generation;
+- stale entries beyond a reduced active count are cleared;
+- conflicting duplicates, unknown flags, invalid scope and unknown links are
+  rejected without changing active state; and
+- capacity exhaustion reports the required link/address counts without
+  partially publishing the new snapshot.
+
+Results:
+
+- host build with `-Wall -Wextra -Werror`: passed;
+- AddressSanitizer/UndefinedBehaviorSanitizer: `DNS-SD link inventory: 0
+  failures`;
+- AROS MetaMake target `test-dnssd-link-quick`: built successfully; and
+- Linux-hosted AROS runtime: `DNS-SD link inventory: 0 failures`, with
+  evidence under `/tmp/dnssd-link-runtime-20261109`.
+
+The former model-specific runner was replaced by one runner for both D2
+canaries. Reproduction after building the corresponding MetaMake targets:
+
+```sh
+tools/dnssd-canary-hosted.sh AROS_TREE dnssdmodeltest model EVIDENCE_DIR
+tools/dnssd-canary-hosted.sh AROS_TREE dnssdlinktest link EVIDENCE_DIR
+```
+
+This is AROS runtime validation of the inventory state machine. It is not yet
+validation of AROSTCP interface enumeration, socket rebinding, packet I/O,
+daemon integration or public ABI. No AROSTCP limitation was bypassed in this
+slice.

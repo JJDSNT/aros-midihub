@@ -120,9 +120,10 @@ native dual-stack model while preserving validated protocol behavior.
 
 **Dependencies/blockers:** D1 accepted.
 
-**Repository/component/files:** AROS `mdnsd.h`, `mdnsd.c`, `mdns_net.c`,
-`mdns_client.c`, `mdns_ipc.h`, `mdns_reg.c`, `mdns_discovery.c`,
-`mdns_query.c`, and packet/host modules where the new model requires it.
+**Repository/component/files:** AROS `dnssd_model.*`, `dnssd_link.*`,
+`mdnsd.h`, `mdnsd.c`, `mdns_net.c`, `mdns_client.c`, `mdns_ipc.h`,
+`mdns_reg.c`, `mdns_discovery.c`, `mdns_query.c`, and packet/host modules
+where the new model requires it.
 
 **Existing behavior/gap:** Bonami public definitions enter `mdnsd.h`; fixed
 legacy arrays and pointer-shaped handles define registrations; discovery and
@@ -148,7 +149,13 @@ browse, query and restart canaries; D1 contention/termination cases.
 `proposal/dnssd-canonical-model`. Host ASan/UBSan, AROS MetaMake and
 Linux-hosted AROS runtime pass for sized pointer-free messages, binary TXT,
 wire names, multi-address ordering/deduplication and malformed fields. This
-completes the model-canary slice, not D2 daemon integration.
+completes the model-canary slice, not D2 daemon integration. Commit
+`86a8e7cdc9` adds the link/address-inventory slice: host sanitizers, MetaMake
+and Linux-hosted AROS pass deterministic dual-stack reconciliation, stable
+generations, state changes, removal/re-addition, malformed input and atomic
+capacity failure. The next dependency is the real AROSTCP-to-inventory rescan
+path; any missing generic enumeration facility must be fixed in AROSTCP, not
+emulated inside DNS-SD.
 
 **Upstream PR:** dependency-ordered daemon-core proposals after authorization;
 no Bonami vectors and no public `dnssd.library` ABI mixed into core work.

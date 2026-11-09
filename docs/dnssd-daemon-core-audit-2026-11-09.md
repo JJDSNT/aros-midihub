@@ -78,11 +78,37 @@ commit `e812bd5be9`, under `workbench/network/mdns/dnssd_model.*`; its test is u
 removed. It remains a private model canary, not daemon integration or public
 ABI.
 
+## Link/address inventory gate
+
+AROS proposal commit `86a8e7cdc9` adds the next private D2 canary in
+`workbench/network/mdns/dnssd_link.*`, with its regression test beside the
+model test under `developer/debug/test/dnssd/`. It is still daemon-engine
+state, not a public `dnssd.library` structure.
+
+The inventory establishes these minimum native properties:
+
+- stable interface indexes and explicit per-observation generations;
+- multiple independent IPv4/IPv6 addresses per link, including IPv6 scope;
+- one deterministic ordering and deduplication path for both families;
+- explicit up, multicast, loopback and address-usability state;
+- validation before publication, using caller-supplied scratch storage so a
+  bad or oversized rescan cannot partially replace active state;
+- explicit required counts when policy capacity is insufficient; and
+- service-task ownership instead of embedded locks or public-library state.
+
+It does not enumerate interfaces, open sockets or infer AROSTCP behavior.
+Consequently it proves no AROSTCP gap and implements no DNS-SD workaround for
+one. The integration gate must feed this model from the actual AROSTCP
+interface/address facilities and demonstrate every address on every relevant
+link. If that generic input is missing or lossy, the minimum fix belongs in
+AROSTCP and precedes daemon integration.
+
 ## Next implementation slice
 
-1. Introduce the link/address inventory independently of registration and
-   discovery.
-2. Migrate one read-only discovery snapshot path to the canonical model.
+1. Connect the canonical inventory to the daemon rescan boundary and audit
+   the exact AROSTCP enumeration path without collapsing addresses.
+2. Migrate one read-only discovery snapshot path to the canonical service
+   model.
 3. Only then define the first `dnssd.library` canary vectors.
 
 No upstream PR is opened or updated without explicit authorization.
