@@ -1,0 +1,1056 @@
+diff --git a/compiler/include/midi/camddevices.h b/compiler/include/midi/camddevices.h
+index 7e32feb54a..d44225fd84 100644
+--- a/compiler/include/midi/camddevices.h
++++ b/compiler/include/midi/camddevices.h
+@@ -19,6 +19,75 @@ struct MidiPortData{
+ 	void (* ASM ActivateXmit)(APTR REG(a2) userdata,ULONG REG(d0) portnum);
+ };
+ 
++struct CAMDUMPEventV1;
++struct CAMDGroupInfoV1;
++struct CAMDFunctionBlockInfoV1;
++
++#define CAMD_UMP_DRIVER_OK              0
++#define CAMD_UMP_DRIVER_INVALID         1
++#define CAMD_UMP_DRIVER_UNSUPPORTED     2
++#define CAMD_UMP_DRIVER_BUSY            3
++#define CAMD_UMP_DRIVER_OFFLINE         4
++#define CAMD_UMP_DRIVER_FAILED          5
++
++/* Information copied by CAMD for one port. The topology pointers are
++ * borrowed only for the duration of QueryPort(). */
++struct MidiUMPDriverPortInfoV1 {
++  ULONG Size;
++  ULONG Version;
++  ULONG Directions;
++  ULONG State;
++  ULONG ProtocolCapabilities;
++  ULONG CurrentProtocol;
++  CONST_STRPTR ProductInstance;
++  struct CAMDGroupInfoV1 *Groups;
++  ULONG GroupCount;
++  struct CAMDFunctionBlockInfoV1 *FunctionBlocks;
++  ULONG FunctionBlockCount;
++};
++
++struct MidiUMPDriverHostV1 {
++  ULONG Size;
++  ULONG Version;
++  LONG (ASM *SubmitUMP)(REG(a0) APTR hostcontext, REG(d0) ULONG portnum,
++                        REG(a1) const struct CAMDUMPEventV1 *events,
++                        REG(d1) ULONG eventcount, REG(a2) ULONG *dropped);
++  LONG (ASM *SetPortState)(REG(a0) APTR hostcontext, REG(d0) ULONG portnum,
++                           REG(d1) ULONG state);
++  LONG (ASM *SetPortTopology)(REG(a0) APTR hostcontext,
++                              REG(d0) ULONG portnum,
++                              REG(a1) struct CAMDGroupInfoV1 *groups,
++                              REG(d1) ULONG groupcount,
++                              REG(a2) struct CAMDFunctionBlockInfoV1 *blocks,
++                              REG(d2) ULONG blockcount);
++  void (ASM *OutputReady)(REG(a0) APTR hostcontext, REG(d0) ULONG portnum);
++};
++
++/* Optional record immediately following MidiDeviceData when Flags contains
++ * MDD_F_UMP_EXTENSION. It is not part of MidiDeviceData: CAMD 41/42 keep
++ * seeing the exact legacy record and may use the fallback callbacks. All
++ * calls are task-context in version 1. */
++struct MidiUMPDriverExtensionV1 {
++  ULONG Size;
++  ULONG Version;
++  ULONG Flags;
++  CONST_STRPTR Transport;
++  APTR DriverContext;
++  LONG (ASM *Attach)(REG(a0) APTR drivercontext,
++                      REG(a1) const struct MidiUMPDriverHostV1 *host,
++                      REG(a2) APTR hostcontext);
++  void (ASM *Detach)(REG(a0) APTR drivercontext);
++  LONG (ASM *OpenPortUMP)(REG(a0) APTR drivercontext,
++                          REG(d0) ULONG portnum, REG(d1) ULONG direction);
++  void (ASM *ClosePortUMP)(REG(a0) APTR drivercontext,
++                           REG(d0) ULONG portnum, REG(d1) ULONG direction);
++  LONG (ASM *SendUMP)(REG(a0) APTR drivercontext, REG(d0) ULONG portnum,
++                      REG(a1) const struct CAMDUMPEventV1 *events,
++                      REG(d1) ULONG eventcount);
++  LONG (ASM *QueryPort)(REG(a0) APTR drivercontext, REG(d0) ULONG portnum,
++                        REG(a1) struct MidiUMPDriverPortInfoV1 *info);
++};
++
+ struct MidiDeviceData{
+   ULONG Magic;
+   
+@@ -54,10 +123,22 @@ struct MidiDeviceData{
+   /* Number of ports. Cam be set in the Init-function if prefered. */
+   UBYTE NPorts;
+ 
+-  /* 0=Old format, 1=new. Aros only supports the new format, so set this flag (ie. Flags=1) for now. */
++  /* MDD_F_* below. AROS requires MDD_F_NEW_FORMAT. */
+   UBYTE Flags;
+ };
+ 
++#define MDD_F_NEW_FORMAT       (1u << 0)
++#define MDD_F_UMP_EXTENSION    (1u << 1)
++
++struct MidiDeviceDataUMPV1 {
++  struct MidiDeviceData Device;
++  struct MidiUMPDriverExtensionV1 UMP;
++};
++
++#define MDD_UMP_EXTENSION(data) \
++  ((struct MidiUMPDriverExtensionV1 *)((UBYTE *)(data) + \
++                                        sizeof(struct MidiDeviceData)))
++
+ 
+ #define MDD_Magic ((ULONG)'M'<<24|(ULONG)'D'<<16|'E'<<8|'V')
+ 
+diff --git a/workbench/libs/camd/camd_intern.h b/workbench/libs/camd/camd_intern.h
+index 042235d99a..13c1b87a05 100644
+--- a/workbench/libs/camd/camd_intern.h
++++ b/workbench/libs/camd/camd_intern.h
+@@ -118,6 +118,7 @@ struct MyMidiCluster{
+ };
+ 
+ struct CAMDAppEndpoint;
++struct CAMDUMPDriverBackend;
+ 
+ struct DriverData{
+ 	struct Node outnode;								// Used for the outcluster's receiverlist
+@@ -224,6 +225,8 @@ struct Drivers{
+ 	/* Private endpoint publication of the ports; NULL when not published. */
+ 	struct CAMDLegacyDriverOutputBackend *EndpointBackend;
+ 	struct CAMDLegacyDriverAdapter *EndpointAdapter;
++	struct CAMDUMPDriverBackend *EndpointUMPBackend;
++	APTR EndpointUMPHost;
+ };
+ 
+ 
+diff --git a/workbench/libs/camd/driver_endpoints.c b/workbench/libs/camd/driver_endpoints.c
+index 3ecb0f93ef..c34af2c24d 100644
+--- a/workbench/libs/camd/driver_endpoints.c
++++ b/workbench/libs/camd/driver_endpoints.c
+@@ -10,6 +10,7 @@
+ #include <exec/memory.h>
+ #include <proto/exec.h>
+ 
++#include <limits.h>
+ #include <string.h>
+ 
+ #include "camd_intern.h"
+@@ -17,6 +18,7 @@
+ #include "legacy_driver_adapter.h"
+ #include "legacy_driver_output_backend.h"
+ #include "legacy_identity_set.h"
++#include "ump_driver_backend.h"
+ 
+ #  undef DEBUG
+ #  define DEBUG 1
+@@ -30,14 +32,300 @@ static void show_id(const char *label, long index,
+           (unsigned long)id->word[2], (unsigned long)id->word[3]));
+ }
+ 
++struct ump_driver_host;
++struct ump_driver_port {
++    struct ump_driver_host *host;
++    struct DriverData *driver_data;
++    ULONG index;
++};
++
++struct ump_driver_host {
++    struct MidiUMPDriverExtensionV1 *extension;
++    struct CAMDUMPDriverBackend *backend;
++    struct CAMDLegacyDriverAdapter *adapter;
++    struct CamdBase *camd_base;
++    ULONG port_count;
++    BOOL attached;
++    struct ump_driver_port ports[1];
++};
++
++static enum CAMDProviderResult driver_result(LONG result)
++{
++    if (result == CAMD_UMP_DRIVER_OK) return CAMD_PROVIDER_OK;
++    if (result == CAMD_UMP_DRIVER_INVALID) return CAMD_PROVIDER_INVALID;
++    if (result == CAMD_UMP_DRIVER_UNSUPPORTED) return CAMD_PROVIDER_UNSUPPORTED;
++    if (result == CAMD_UMP_DRIVER_BUSY) return CAMD_PROVIDER_QUEUE_FULL;
++    if (result == CAMD_UMP_DRIVER_OFFLINE) return CAMD_PROVIDER_RETIRED;
++    return CAMD_PROVIDER_CALLBACK_FAILED;
++}
++
++static LONG public_result(enum CAMDProviderResult result)
++{
++    if (result == CAMD_PROVIDER_OK) return CAMD_UMP_DRIVER_OK;
++    if (result == CAMD_PROVIDER_INVALID) return CAMD_UMP_DRIVER_INVALID;
++    if (result == CAMD_PROVIDER_UNSUPPORTED) return CAMD_UMP_DRIVER_UNSUPPORTED;
++    if (result == CAMD_PROVIDER_QUEUE_FULL) return CAMD_UMP_DRIVER_BUSY;
++    if (result == CAMD_PROVIDER_RETIRED) return CAMD_UMP_DRIVER_OFFLINE;
++    return CAMD_UMP_DRIVER_FAILED;
++}
++
++static LONG registry_driver_result(enum CAMDRegistryResult result)
++{
++    if (result == CAMD_REGISTRY_OK) return CAMD_UMP_DRIVER_OK;
++    if (result == CAMD_REGISTRY_INVALID || result == CAMD_REGISTRY_RANGE)
++        return CAMD_UMP_DRIVER_INVALID;
++    if (result == CAMD_REGISTRY_UNSUPPORTED)
++        return CAMD_UMP_DRIVER_UNSUPPORTED;
++    if (result == CAMD_REGISTRY_BUSY || result == CAMD_REGISTRY_QUEUE_FULL)
++        return CAMD_UMP_DRIVER_BUSY;
++    if (result == CAMD_REGISTRY_RETIRED || result == CAMD_REGISTRY_STALE)
++        return CAMD_UMP_DRIVER_OFFLINE;
++    return CAMD_UMP_DRIVER_FAILED;
++}
++
++static enum CAMDProviderResult ump_acquire(void *context, uint32_t direction)
++{
++    struct ump_driver_port *port = context;
++    return driver_result(port->host->extension->OpenPortUMP(
++        port->host->extension->DriverContext, port->index, direction));
++}
++
++static enum CAMDProviderResult ump_release(void *context, uint32_t direction)
++{
++    struct ump_driver_port *port = context;
++    port->host->extension->ClosePortUMP(
++        port->host->extension->DriverContext, port->index, direction);
++    return CAMD_PROVIDER_OK;
++}
++
++static enum CAMDProviderResult ump_submit(void *context,
++    const struct CAMDUMPEventV1 *events, size_t count)
++{
++    struct ump_driver_port *port = context;
++    if (count > (size_t)ULONG_MAX) return CAMD_PROVIDER_INVALID;
++    return driver_result(port->host->extension->SendUMP(
++        port->host->extension->DriverContext, port->index, events,
++        (ULONG)count));
++}
++
++static void ump_drained(void *context)
++{
++    struct ump_driver_port *port = context;
++    NotifyEndpointDrained(port->host->camd_base);
++}
++
++static LONG ASM ump_host_submit(REG(a0) APTR context, REG(d0) ULONG port,
++    REG(a1) const struct CAMDUMPEventV1 *events, REG(d1) ULONG count,
++    REG(a2) ULONG *dropped)
++{
++    struct ump_driver_host *host = context;
++    enum CAMDProviderResult valid;
++    uint32_t lost = 0;
++    if (!host || port >= host->port_count || !host->backend)
++        return CAMD_UMP_DRIVER_INVALID;
++    valid = camd_provider_validate_ump(events, count);
++    if (valid == CAMD_PROVIDER_OK)
++        valid = camd_ump_driver_backend_receive(host->backend, port, events,
++                                                count, &lost);
++    if (dropped) *dropped = lost;
++    return public_result(valid);
++}
++
++static LONG ASM ump_host_state(REG(a0) APTR context, REG(d0) ULONG port,
++    REG(d1) ULONG state)
++{
++    struct ump_driver_host *host = context;
++    if (!host || !host->adapter || port >= host->port_count)
++        return CAMD_UMP_DRIVER_BUSY;
++    return registry_driver_result(camd_legacy_driver_adapter_set_state(
++        host->adapter, port, state));
++}
++
++static LONG ASM ump_host_topology(REG(a0) APTR context, REG(d0) ULONG port,
++    REG(a1) struct CAMDGroupInfoV1 *groups, REG(d1) ULONG group_count,
++    REG(a2) struct CAMDFunctionBlockInfoV1 *blocks,
++    REG(d2) ULONG block_count)
++{
++    struct ump_driver_host *host = context;
++    if (!host || !host->adapter || port >= host->port_count)
++        return CAMD_UMP_DRIVER_BUSY;
++    return registry_driver_result(camd_legacy_driver_adapter_set_topology(
++        host->adapter, port, groups, group_count, blocks, block_count));
++}
++
++static void ASM ump_host_ready(REG(a0) APTR context, REG(d0) ULONG port)
++{
++    struct ump_driver_host *host = context;
++    uint32_t woken;
++    if (host && port < host->port_count)
++        camd_native_worker_fanout_wake_all(
++            host->ports[port].driver_data->EndpointOutputFanout, &woken);
++}
++
++static const struct MidiUMPDriverHostV1 ump_host_ops = {
++    sizeof(struct MidiUMPDriverHostV1), 1, ump_host_submit, ump_host_state,
++    ump_host_topology, ump_host_ready
++};
++
++static BOOL valid_ump_extension(struct MidiUMPDriverExtensionV1 *extension)
++{
++    return extension && extension->Size == sizeof(*extension) &&
++           extension->Version == 1 && extension->Transport &&
++           extension->Transport[0] && extension->Attach && extension->Detach &&
++           extension->OpenPortUMP && extension->ClosePortUMP &&
++           extension->SendUMP && extension->QueryPort;
++}
++
++static BOOL publish_ump_driver(struct Drivers *driver,
++    const struct CAMDEndpointIDV1 *provider_id,
++    struct CAMDEndpointIDV1 *ids, uint32_t kind,
++    struct CamdBase *CamdBase)
++{
++    struct MidiUMPDriverExtensionV1 *extension =
++        MDD_UMP_EXTENSION(driver->mididevicedata);
++    struct ump_driver_host *host = NULL;
++    struct CAMDUMPBackendPortV1 *backend_ports = NULL;
++    struct CAMDLegacyPortDescriptorV1 *ports = NULL;
++    struct MidiUMPDriverPortInfoV1 *info = NULL;
++    struct CAMDUMPBackendConfigV1 backend_config;
++    struct CAMDLegacyDriverDescriptorV1 descriptor;
++    struct CAMDLegacyDriverAdapter *adapter = NULL;
++    struct CAMDUMPDriverBackend *backend = NULL;
++    enum CAMDRegistryResult published;
++    ULONG count = driver->numports, i;
++    ULONG protocol = 0, capabilities = 0;
++    size_t host_size;
++    char name[256];
++
++    if (!valid_ump_extension(extension) ||
++        strlen(extension->Transport) >= CAMD_ENDPOINT_TRANSPORT_BYTES)
++        return FALSE;
++    host_size = sizeof(*host) + (count - 1) * sizeof(host->ports[0]);
++    host = AllocVec(host_size, MEMF_ANY | MEMF_CLEAR);
++    backend_ports = AllocVec(count * sizeof(*backend_ports),
++                             MEMF_ANY | MEMF_CLEAR);
++    ports = AllocVec(count * sizeof(*ports), MEMF_ANY | MEMF_CLEAR);
++    info = AllocVec(count * sizeof(*info), MEMF_ANY | MEMF_CLEAR);
++    if (!host || !backend_ports || !ports || !info) goto fail;
++    host->extension = extension;
++    host->camd_base = CamdBase;
++    host->port_count = count;
++    for (i = 0; i < count; ++i) {
++        info[i].Size = sizeof(info[i]);
++        info[i].Version = 1;
++        if (extension->QueryPort(extension->DriverContext, i, &info[i]) !=
++                CAMD_UMP_DRIVER_OK ||
++            info[i].Size != sizeof(info[i]) || info[i].Version != 1 ||
++            info[i].Directions == 0 ||
++            (info[i].Directions & ~CAMD_PROVIDER_DIRECTION_ALL) != 0 ||
++            (info[i].State != CAMD_ENDPOINT_AVAILABLE &&
++             info[i].State != CAMD_ENDPOINT_OFFLINE) ||
++            (info[i].CurrentProtocol != CAMD_PROVIDER_PROTOCOL_MIDI1 &&
++             info[i].CurrentProtocol != CAMD_PROVIDER_PROTOCOL_MIDI2) ||
++            (info[i].ProtocolCapabilities & info[i].CurrentProtocol) == 0 ||
++            (info[i].ProtocolCapabilities &
++             ~(CAMD_PROVIDER_PROTOCOL_MIDI1 |
++               CAMD_PROVIDER_PROTOCOL_MIDI2)) != 0 ||
++            (i && info[i].CurrentProtocol != protocol) ||
++            (info[i].ProductInstance &&
++             strlen(info[i].ProductInstance) >= CAMD_ENDPOINT_PRODUCT_BYTES))
++            goto fail;
++        protocol = info[i].CurrentProtocol;
++        capabilities |= info[i].ProtocolCapabilities;
++        host->ports[i].host = host;
++        host->ports[i].driver_data = driver->driverdatas[i];
++        host->ports[i].index = i;
++        backend_ports[i].Size = sizeof(backend_ports[i]);
++        backend_ports[i].Version = 1;
++        backend_ports[i].EndpointID = ids[i];
++        backend_ports[i].Context = &host->ports[i];
++        backend_ports[i].CapacityFanout =
++            driver->driverdatas[i]->EndpointOutputFanout;
++        ports[i].Size = sizeof(ports[i]);
++        ports[i].Version = 1;
++        ports[i].EndpointID = ids[i];
++        ports[i].Directions = info[i].Directions;
++        mysprintf(CamdBase, name, "%s.%ld", driver->mididevicedata->Name,
++                  (long)i);
++        name[sizeof(ports[i].Name) - 1] = '\0';
++        strcpy(ports[i].Name, name);
++        if (info[i].ProductInstance)
++            strcpy(ports[i].ProductInstance, info[i].ProductInstance);
++    }
++    memset(&backend_config, 0, sizeof(backend_config));
++    backend_config.Size = sizeof(backend_config);
++    backend_config.Version = 1;
++    backend_config.Callbacks.Size = sizeof(backend_config.Callbacks);
++    backend_config.Callbacks.Version = 1;
++    backend_config.Callbacks.Acquire = ump_acquire;
++    backend_config.Callbacks.Release = ump_release;
++    backend_config.Callbacks.Submit = ump_submit;
++    backend_config.Callbacks.Drained = ump_drained;
++    backend_config.Ports = backend_ports;
++    backend_config.PortCount = count;
++    backend_config.Protocol = protocol;
++    backend_config.MaxQueueCapacity = ENDPOINT_OUTPUT_QUEUE;
++    backend_config.WorkerItemBudget = ENDPOINT_OUTPUT_BUDGET;
++    if (camd_ump_driver_backend_create(&backend_config, &backend) !=
++        CAMD_PROVIDER_OK) goto fail;
++    host->backend = backend;
++    if (extension->Attach(extension->DriverContext, &ump_host_ops, host) !=
++        CAMD_UMP_DRIVER_OK) goto fail;
++    host->attached = TRUE;
++    memset(&descriptor, 0, sizeof(descriptor));
++    descriptor.Size = sizeof(descriptor);
++    descriptor.Version = 1;
++    descriptor.ProviderID = *provider_id;
++    descriptor.IdentityKind = kind;
++    descriptor.ProtocolCapabilities = capabilities;
++    descriptor.BackendContext = camd_ump_driver_backend_context(backend);
++    descriptor.BackendOps = camd_ump_driver_backend_ops(backend);
++    descriptor.Ports = ports;
++    descriptor.PortCount = count;
++    descriptor.Transport = extension->Transport;
++    descriptor.DataFormat = CAMD_PROVIDER_FORMAT_UMP;
++    descriptor.Protocol = protocol;
++    published = camd_legacy_driver_adapter_create(
++        CB(CamdBase)->EndpointRegistry, &descriptor, &adapter);
++    if (published != CAMD_REGISTRY_OK) goto fail;
++    host->adapter = adapter;
++    for (i = 0; i < count; ++i) {
++        if ((info[i].GroupCount || info[i].FunctionBlockCount) &&
++            camd_legacy_driver_adapter_set_topology(
++                adapter, i, info[i].Groups, info[i].GroupCount,
++                info[i].FunctionBlocks, info[i].FunctionBlockCount) !=
++                    CAMD_REGISTRY_OK)
++            D(bug("camd.library: %s.%ld native topology refused\n",
++                  driver->mididevicedata->Name, (long)i));
++        if (info[i].State == CAMD_ENDPOINT_OFFLINE &&
++            camd_legacy_driver_adapter_set_state(adapter, i,
++                CAMD_ENDPOINT_OFFLINE) != CAMD_REGISTRY_OK)
++            D(bug("camd.library: %s.%ld native state refused\n",
++                  driver->mididevicedata->Name, (long)i));
++    }
++    driver->EndpointAdapter = adapter;
++    driver->EndpointUMPBackend = backend;
++    driver->EndpointUMPHost = host;
++    FreeVec(info); FreeVec(ports); FreeVec(backend_ports);
++    D(bug("camd.library: %s published %ld native UMP endpoints\n",
++          driver->mididevicedata->Name, (long)count));
++    return TRUE;
++
++fail:
++    if (host && host->attached) extension->Detach(extension->DriverContext);
++    if (backend) camd_ump_driver_backend_destroy(backend);
++    FreeVec(info); FreeVec(ports); FreeVec(backend_ports); FreeVec(host);
++    return FALSE;
++}
++
+ /* Must not hold CLSemaphore. */
+ void PublishDriverEndpoints(struct Drivers *driver, char *path,
+                             struct CamdBase *CamdBase)
+ {
+     struct CAMDIdentityMap *map;
+     struct CAMDEndpointIDV1 provider_id, *ids;
+-    struct CAMDLegacyDriverOutputPortV1 *outputs;
+-    struct CAMDLegacyPortDescriptorV1 *ports;
++    struct CAMDLegacyDriverOutputPortV1 *outputs = NULL;
++    struct CAMDLegacyPortDescriptorV1 *ports = NULL;
+     struct CAMDLegacyDriverOutputConfigV1 config;
+     struct CAMDLegacyDriverDescriptorV1 descriptor;
+     struct CAMDLegacyDriverOutputBackend *backend = NULL;
+@@ -54,9 +342,7 @@ void PublishDriverEndpoints(struct Drivers *driver, char *path,
+         return;
+ 
+     ids = AllocVec(count * sizeof(*ids), MEMF_ANY | MEMF_CLEAR);
+-    outputs = AllocVec(count * sizeof(*outputs), MEMF_ANY | MEMF_CLEAR);
+-    ports = AllocVec(count * sizeof(*ports), MEMF_ANY | MEMF_CLEAR);
+-    if (!ids || !outputs || !ports)
++    if (!ids)
+         goto done;
+ 
+     resolved = camd_legacy_identity_set_resolve(map, path, count,
+@@ -74,6 +360,17 @@ void PublishDriverEndpoints(struct Drivers *driver, char *path,
+         goto done;
+     }
+ 
++    if ((driver->mididevicedata->Flags & MDD_F_UMP_EXTENSION) != 0 &&
++        publish_ump_driver(driver, &provider_id, ids, kind, CamdBase)) {
++        show_id("provider", 0, &provider_id);
++        for (i = 0; i < count; ++i) show_id("endpoint", (long)i, &ids[i]);
++        goto done;
++    }
++
++    outputs = AllocVec(count * sizeof(*outputs), MEMF_ANY | MEMF_CLEAR);
++    ports = AllocVec(count * sizeof(*ports), MEMF_ANY | MEMF_CLEAR);
++    if (!outputs || !ports) goto done;
++
+     for (i = 0; i < count; ++i) {
+         outputs[i].Size = sizeof(outputs[i]);
+         outputs[i].Version = 1;
+@@ -155,6 +452,8 @@ done:
+ BOOL UnpublishDriverEndpoints(struct Drivers *driver,
+                               struct CamdBase *CamdBase)
+ {
++    struct ump_driver_host *ump_host = driver->EndpointUMPHost;
++
+     (void)CamdBase;
+ 
+     if (driver->EndpointAdapter != NULL) {
+@@ -166,6 +465,19 @@ BOOL UnpublishDriverEndpoints(struct Drivers *driver,
+             return FALSE;
+         }
+         driver->EndpointAdapter = NULL;
++        if (ump_host) ump_host->adapter = NULL;
++    }
++    if (driver->EndpointUMPBackend != NULL) {
++        if (ump_host && ump_host->attached) {
++            ump_host->extension->Detach(ump_host->extension->DriverContext);
++            ump_host->attached = FALSE;
++        }
++        if (camd_ump_driver_backend_destroy(driver->EndpointUMPBackend) !=
++            CAMD_PROVIDER_OK)
++            return FALSE;
++        driver->EndpointUMPBackend = NULL;
++        driver->EndpointUMPHost = NULL;
++        FreeVec(ump_host);
+     }
+     if (driver->EndpointBackend != NULL) {
+         ULONG i;
+diff --git a/workbench/libs/camd/mmakefile.src b/workbench/libs/camd/mmakefile.src
+index a969dc791b..b2ff69c4de 100644
+--- a/workbench/libs/camd/mmakefile.src
++++ b/workbench/libs/camd/mmakefile.src
+@@ -8,7 +8,7 @@ FILES :=    drivers clusters init camdwait mididistr midifromdriver \
+ 	    unlinkmidilink getmidilinkfromownernode camdclock endpoint_registry \
+ 	    provider_contract legacy_driver_adapter native_event_queue \
+ 	    native_event_pump native_event_worker legacy_port_refs \
+-	    native_worker_fanout legacy_output_backend \
++	    native_worker_fanout legacy_output_backend ump_driver_backend \
+ 	    legacy_driver_output_backend identity_map identity_file \
+ 	    identity_store_recovery identity_store_aros legacy_identity_key \
+ 	    legacy_identity_set driver_endpoints endpoint_client \
+diff --git a/workbench/libs/camd/openmididevice.c b/workbench/libs/camd/openmididevice.c
+index e50c8038c0..7e44c3f281 100644
+--- a/workbench/libs/camd/openmididevice.c
++++ b/workbench/libs/camd/openmididevice.c
+@@ -20,6 +20,41 @@
+ 
+ BOOL isPointerInSeglist(APTR pointer,BPTR seglist,ULONG minsize);
+ 
++static BOOL stringInSeglist(CONST_STRPTR string, BPTR seglist, ULONG limit)
++{
++    ULONG i;
++
++    if (string == NULL) return FALSE;
++    for (i = 0; i < limit; ++i) {
++        if (!isPointerInSeglist((APTR)(string + i), seglist, 1)) return FALSE;
++        if (string[i] == '\0') return i != 0;
++    }
++    return FALSE;
++}
++
++static BOOL umpExtensionInSeglist(struct MidiDeviceData *device, BPTR seglist)
++{
++    struct MidiUMPDriverExtensionV1 *extension;
++
++    if ((device->Flags & MDD_F_UMP_EXTENSION) == 0)
++        return TRUE;
++    extension = MDD_UMP_EXTENSION(device);
++    if (!isPointerInSeglist(extension, seglist, sizeof(*extension)) ||
++        extension->Size != sizeof(*extension) || extension->Version != 1 ||
++        !stringInSeglist(extension->Transport, seglist,
++                         CAMD_ENDPOINT_TRANSPORT_BYTES) ||
++        extension->Attach == NULL || extension->Detach == NULL ||
++        extension->OpenPortUMP == NULL || extension->ClosePortUMP == NULL ||
++        extension->SendUMP == NULL || extension->QueryPort == NULL)
++        return FALSE;
++    return isPointerInSeglist((APTR)extension->Attach, seglist, 4) &&
++           isPointerInSeglist((APTR)extension->Detach, seglist, 4) &&
++           isPointerInSeglist((APTR)extension->OpenPortUMP, seglist, 4) &&
++           isPointerInSeglist((APTR)extension->ClosePortUMP, seglist, 4) &&
++           isPointerInSeglist((APTR)extension->SendUMP, seglist, 4) &&
++           isPointerInSeglist((APTR)extension->QueryPort, seglist, 4);
++}
++
+ /*****************************************************************************
+ 
+     NAME */
+@@ -157,7 +192,8 @@ BOOL isPointerInSeglist(APTR pointer,BPTR seglist,ULONG minsize);
+ 			    )
+ 			   &&
+ 			   mididevicedata->IDString!=NULL &&
+-			   isPointerInSeglist(mididevicedata->IDString,seglist,4)
++			   isPointerInSeglist(mididevicedata->IDString,seglist,4) &&
++			   umpExtensionInSeglist(mididevicedata,seglist)
+ 
+ 			   )
+ 			  {
+diff --git a/workbench/libs/camd/ump_driver_backend.c b/workbench/libs/camd/ump_driver_backend.c
+new file mode 100644
+index 0000000000..b2dc539f11
+--- /dev/null
++++ b/workbench/libs/camd/ump_driver_backend.c
+@@ -0,0 +1,416 @@
++#include "ump_driver_backend.h"
++
++#include <limits.h>
++#include <string.h>
++
++#ifdef __AROS__
++#include <exec/memory.h>
++#include <exec/semaphores.h>
++#include <proto/exec.h>
++#else
++#include <pthread.h>
++#include <stdlib.h>
++#endif
++
++struct ump_lock {
++#ifdef __AROS__
++    struct SignalSemaphore semaphore;
++#else
++    pthread_mutex_t mutex;
++#endif
++};
++
++struct CAMDUMPDriverBackend;
++struct ump_session {
++    struct CAMDUMPDriverBackend *backend;
++    struct CAMDUMPBackendPortV1 *port;
++    uint32_t direction;
++    struct CAMDNativeEventQueue *queue;
++    struct CAMDNativeEventPump *pump;
++    struct CAMDNativeEventWorker *worker;
++    struct CAMDNativeWorkerFanoutHandleV1 fanout;
++    int fanout_attached;
++    int acquired;
++    struct ump_session *next_input;
++    struct CAMDProviderReceiveSinkV1 sink;
++    int receiving;
++};
++
++struct CAMDUMPDriverBackend {
++    struct ump_lock lock;
++    struct CAMDUMPBackendCallbacksV1 callbacks;
++    struct CAMDUMPBackendPortV1 *ports;
++    struct ump_session **inputs;
++    size_t port_count;
++    uint32_t protocol;
++    uint32_t capacity;
++    uint32_t budget;
++    uint32_t active;
++    int retiring;
++    struct CAMDProviderOpsV1 ops;
++};
++
++static void *ualloc(size_t size)
++{
++#ifdef __AROS__
++    return size <= (size_t)ULONG_MAX ? AllocVec((ULONG)size,
++                                                MEMF_ANY | MEMF_CLEAR) : NULL;
++#else
++    return calloc(1, size);
++#endif
++}
++
++static void ufree(void *p)
++{
++#ifdef __AROS__
++    if (p) FreeVec(p);
++#else
++    free(p);
++#endif
++}
++
++static int lock_init(struct ump_lock *lock)
++{
++#ifdef __AROS__
++    InitSemaphore(&lock->semaphore); return 1;
++#else
++    return pthread_mutex_init(&lock->mutex, NULL) == 0;
++#endif
++}
++static void lock_done(struct ump_lock *lock)
++{
++#ifndef __AROS__
++    pthread_mutex_destroy(&lock->mutex);
++#else
++    (void)lock;
++#endif
++}
++static void lock_get(struct ump_lock *lock)
++{
++#ifdef __AROS__
++    ObtainSemaphore(&lock->semaphore);
++#else
++    pthread_mutex_lock(&lock->mutex);
++#endif
++}
++static void lock_put(struct ump_lock *lock)
++{
++#ifdef __AROS__
++    ReleaseSemaphore(&lock->semaphore);
++#else
++    pthread_mutex_unlock(&lock->mutex);
++#endif
++}
++
++static int id_equal(const struct CAMDEndpointIDV1 *a,
++                    const struct CAMDEndpointIDV1 *b)
++{ return memcmp(a, b, sizeof(*a)) == 0; }
++
++static struct CAMDUMPBackendPortV1 *find_port(
++    struct CAMDUMPDriverBackend *backend, const struct CAMDEndpointIDV1 *id)
++{
++    size_t i;
++    for (i = 0; i < backend->port_count; ++i)
++        if (id_equal(&backend->ports[i].EndpointID, id)) return &backend->ports[i];
++    return NULL;
++}
++
++static enum CAMDProviderResult qresult(enum CAMDNativeQueueResult result)
++{
++    if (result == CAMD_NATIVE_QUEUE_OK) return CAMD_PROVIDER_OK;
++    if (result == CAMD_NATIVE_QUEUE_FULL) return CAMD_PROVIDER_QUEUE_FULL;
++    if (result == CAMD_NATIVE_QUEUE_INVALID ||
++        result == CAMD_NATIVE_QUEUE_WRONG_FORMAT ||
++        result == CAMD_NATIVE_QUEUE_RANGE) return CAMD_PROVIDER_INVALID;
++    return CAMD_PROVIDER_STATE;
++}
++
++static enum CAMDProviderResult pump_submit(void *context,
++    const struct CAMDUMPEventV1 *events, size_t count)
++{
++    struct ump_session *session = context;
++    return session->backend->callbacks.Submit(session->port->Context,
++                                               events, count);
++}
++
++static void release_active(struct CAMDUMPDriverBackend *backend)
++{ lock_get(&backend->lock); --backend->active; lock_put(&backend->lock); }
++
++static void destroy_pipeline(struct ump_session *session)
++{
++    size_t cancelled;
++    if (session->worker) {
++        camd_native_worker_stop(session->worker);
++        camd_native_worker_destroy(session->worker);
++    }
++    if (session->queue) camd_native_queue_cancel(session->queue, &cancelled);
++    if (session->pump) camd_native_pump_destroy(session->pump);
++    if (session->queue) camd_native_queue_destroy(session->queue);
++    session->worker = NULL; session->pump = NULL; session->queue = NULL;
++}
++
++static enum CAMDProviderResult open_session(void *context,
++    const struct CAMDProviderOpenRequestV1 *request,
++    struct CAMDProviderOpenResultV1 *result)
++{
++    struct CAMDUMPDriverBackend *backend = context;
++    struct CAMDUMPBackendPortV1 *port;
++    struct ump_session *session;
++    struct CAMDNativeQueueConfigV1 qc;
++    struct CAMDNativePumpConfigV1 pc;
++    struct CAMDNativeWorkerConfigV1 wc;
++    struct CAMDProviderReceiveSinkV1 sink;
++    enum CAMDProviderResult acquired;
++    size_t index;
++
++    if (!backend || !request || !result ||
++        request->DataFormat != CAMD_PROVIDER_FORMAT_UMP ||
++        request->Protocol != backend->protocol || request->QueueCapacity == 0 ||
++        request->QueueCapacity > backend->capacity ||
++        (request->Direction != CAMD_PROVIDER_DIRECTION_INPUT &&
++         request->Direction != CAMD_PROVIDER_DIRECTION_OUTPUT))
++        return CAMD_PROVIDER_UNSUPPORTED;
++    port = find_port(backend, &request->EndpointID);
++    if (!port) return CAMD_PROVIDER_INVALID;
++    lock_get(&backend->lock);
++    if (backend->retiring || backend->active == UINT32_MAX) {
++        lock_put(&backend->lock);
++        return backend->retiring ? CAMD_PROVIDER_RETIRED : CAMD_PROVIDER_STATE;
++    }
++    ++backend->active;
++    lock_put(&backend->lock);
++    session = ualloc(sizeof(*session));
++    if (!session) { release_active(backend); return CAMD_PROVIDER_CALLBACK_FAILED; }
++    session->backend = backend; session->port = port;
++    session->direction = request->Direction;
++    acquired = backend->callbacks.Acquire(port->Context, request->Direction);
++    if (acquired != CAMD_PROVIDER_OK) goto fail;
++    session->acquired = 1;
++    if (request->Direction == CAMD_PROVIDER_DIRECTION_INPUT) {
++        index = (size_t)(port - backend->ports);
++        lock_get(&backend->lock);
++        session->next_input = backend->inputs[index];
++        backend->inputs[index] = session;
++        lock_put(&backend->lock);
++    } else {
++        memset(&qc, 0, sizeof(qc)); qc.Size = sizeof(qc); qc.Version = 1;
++        qc.DataFormat = CAMD_PROVIDER_FORMAT_UMP;
++        qc.Capacity = request->QueueCapacity;
++        if (camd_native_queue_create(&qc, &session->queue) != CAMD_NATIVE_QUEUE_OK)
++            goto fail;
++        memset(&sink, 0, sizeof(sink)); sink.Size = sizeof(sink); sink.Version = 1;
++        sink.Context = session; sink.SubmitUMP = pump_submit;
++        memset(&pc, 0, sizeof(pc)); pc.Size = sizeof(pc); pc.Version = 1;
++        pc.DataFormat = CAMD_PROVIDER_FORMAT_UMP;
++        pc.MaxBatchRecords = request->QueueCapacity;
++        if (camd_native_pump_create(session->queue, &pc, &sink,
++                                    &session->pump) != CAMD_NATIVE_PUMP_OK) goto fail;
++        memset(&wc, 0, sizeof(wc)); wc.Size = sizeof(wc); wc.Version = 1;
++        wc.ItemBudget = backend->budget;
++        if (backend->callbacks.Drained) {
++            wc.Idle = backend->callbacks.Drained; wc.IdleContext = port->Context;
++        }
++        if (camd_native_worker_create(session->pump, &wc,
++                                      &session->worker) != CAMD_NATIVE_WORKER_OK) goto fail;
++        if (camd_native_worker_fanout_attach(port->CapacityFanout,
++                                             session->worker, &session->fanout) !=
++            CAMD_NATIVE_WORKER_FANOUT_OK) goto fail;
++        session->fanout_attached = 1;
++    }
++    result->SessionContext = session;
++    result->EffectiveQueueCapacity = request->QueueCapacity;
++    result->MaxSysExBytes = 0;
++    return CAMD_PROVIDER_OK;
++fail:
++    if (session->fanout_attached)
++        camd_native_worker_fanout_detach(port->CapacityFanout, session->fanout);
++    destroy_pipeline(session);
++    if (session->acquired) backend->callbacks.Release(port->Context,
++                                                       request->Direction);
++    ufree(session); release_active(backend); return CAMD_PROVIDER_CALLBACK_FAILED;
++}
++
++static enum CAMDProviderResult start_receive(void *context, void *session_context,
++    const struct CAMDProviderReceiveSinkV1 *sink)
++{
++    struct CAMDUMPDriverBackend *backend = context;
++    struct ump_session *session = session_context;
++    if (!backend || !session || session->backend != backend ||
++        session->direction != CAMD_PROVIDER_DIRECTION_INPUT || !sink ||
++        sink->Size != sizeof(*sink) || sink->Version != 1 || !sink->SubmitUMP)
++        return CAMD_PROVIDER_INVALID;
++    lock_get(&backend->lock);
++    if (session->receiving) { lock_put(&backend->lock); return CAMD_PROVIDER_STATE; }
++    session->sink = *sink; session->receiving = 1;
++    lock_put(&backend->lock); return CAMD_PROVIDER_OK;
++}
++
++static enum CAMDProviderResult stop_receive(void *context, void *session_context)
++{
++    struct CAMDUMPDriverBackend *backend = context;
++    struct ump_session *session = session_context;
++    if (!backend || !session || session->backend != backend ||
++        session->direction != CAMD_PROVIDER_DIRECTION_INPUT) return CAMD_PROVIDER_INVALID;
++    lock_get(&backend->lock); session->receiving = 0; lock_put(&backend->lock);
++    return CAMD_PROVIDER_OK;
++}
++
++static enum CAMDProviderResult close_session(void *context, void *session_context)
++{
++    struct CAMDUMPDriverBackend *backend = context;
++    struct ump_session *session = session_context;
++    struct ump_session **link;
++    enum CAMDProviderResult released;
++    if (!backend || !session || session->backend != backend) return CAMD_PROVIDER_INVALID;
++    if (session->direction == CAMD_PROVIDER_DIRECTION_INPUT) {
++        lock_get(&backend->lock);
++        link = &backend->inputs[session->port - backend->ports];
++        while (*link && *link != session) link = &(*link)->next_input;
++        if (*link) *link = session->next_input;
++        session->receiving = 0; lock_put(&backend->lock);
++    } else {
++        if (session->fanout_attached) {
++            if (camd_native_worker_fanout_detach(session->port->CapacityFanout,
++                                                 session->fanout) !=
++                CAMD_NATIVE_WORKER_FANOUT_OK) return CAMD_PROVIDER_STATE;
++            session->fanout_attached = 0;
++        }
++        destroy_pipeline(session);
++    }
++    released = backend->callbacks.Release(session->port->Context,
++                                           session->direction);
++    if (released != CAMD_PROVIDER_OK) return released;
++    ufree(session); release_active(backend); return CAMD_PROVIDER_OK;
++}
++
++static enum CAMDProviderResult send_ump(void *context, void *session_context,
++    const struct CAMDUMPEventV1 *events, size_t count)
++{
++    struct CAMDUMPDriverBackend *backend = context;
++    struct ump_session *session = session_context;
++    enum CAMDNativeQueueResult result;
++    if (!backend || !session || session->backend != backend ||
++        session->direction != CAMD_PROVIDER_DIRECTION_OUTPUT)
++        return CAMD_PROVIDER_INVALID;
++    result = camd_native_queue_enqueue_ump(session->queue, events, count);
++    if (result != CAMD_NATIVE_QUEUE_OK) return qresult(result);
++    camd_native_worker_wake(session->worker); return CAMD_PROVIDER_OK;
++}
++
++static enum CAMDProviderResult drain_session(void *context, void *session_context)
++{
++    struct CAMDUMPDriverBackend *backend = context;
++    struct ump_session *session = session_context;
++    struct CAMDNativeQueueStatsV1 stats;
++    if (!backend || !session || session->backend != backend ||
++        session->direction != CAMD_PROVIDER_DIRECTION_OUTPUT) return CAMD_PROVIDER_INVALID;
++    memset(&stats, 0, sizeof(stats)); stats.Size = sizeof(stats); stats.Version = 1;
++    if (camd_native_queue_stats(session->queue, &stats) != CAMD_NATIVE_QUEUE_OK)
++        return CAMD_PROVIDER_STATE;
++    if (stats.PendingRecords == 0) return CAMD_PROVIDER_OK;
++    camd_native_worker_wake(session->worker); return CAMD_PROVIDER_QUEUE_FULL;
++}
++
++static enum CAMDProviderResult cancel_session(void *context, void *session_context)
++{
++    struct CAMDUMPDriverBackend *backend = context;
++    struct ump_session *session = session_context; size_t cancelled;
++    if (!backend || !session || session->backend != backend ||
++        session->direction != CAMD_PROVIDER_DIRECTION_OUTPUT) return CAMD_PROVIDER_INVALID;
++    return qresult(camd_native_queue_cancel(session->queue, &cancelled));
++}
++
++static enum CAMDProviderResult begin_shutdown(void *context)
++{
++    struct CAMDUMPDriverBackend *backend = context;
++    if (!backend) return CAMD_PROVIDER_INVALID;
++    lock_get(&backend->lock); backend->retiring = 1; lock_put(&backend->lock);
++    return CAMD_PROVIDER_OK;
++}
++static int shutdown_ready(void *context)
++{
++    struct CAMDUMPDriverBackend *backend = context; int ready;
++    if (!backend) return 0;
++    lock_get(&backend->lock); ready = backend->retiring && backend->active == 0;
++    lock_put(&backend->lock); return ready;
++}
++
++enum CAMDProviderResult camd_ump_driver_backend_receive(
++    struct CAMDUMPDriverBackend *backend, size_t port,
++    const struct CAMDUMPEventV1 *events, size_t count, uint32_t *dropped)
++{
++    struct ump_session *session; uint32_t lost = 0;
++    if (dropped) *dropped = 0;
++    if (!backend || port >= backend->port_count || !events || count == 0)
++        return CAMD_PROVIDER_INVALID;
++    lock_get(&backend->lock);
++    for (session = backend->inputs[port]; session; session = session->next_input)
++        if (session->receiving &&
++            session->sink.SubmitUMP(session->sink.Context, events, count) !=
++                CAMD_PROVIDER_OK) ++lost;
++    lock_put(&backend->lock); if (dropped) *dropped = lost;
++    return CAMD_PROVIDER_OK;
++}
++
++static int valid_config(const struct CAMDUMPBackendConfigV1 *config)
++{
++    size_t i;
++    if (!config || config->Size != sizeof(*config) || config->Version != 1 ||
++        config->Callbacks.Size != sizeof(config->Callbacks) ||
++        config->Callbacks.Version != 1 || !config->Callbacks.Acquire ||
++        !config->Callbacks.Release || !config->Callbacks.Submit ||
++        !config->Ports || config->PortCount == 0 || config->MaxQueueCapacity == 0 ||
++        config->WorkerItemBudget == 0 ||
++        (config->Protocol != CAMD_PROVIDER_PROTOCOL_MIDI1 &&
++         config->Protocol != CAMD_PROVIDER_PROTOCOL_MIDI2)) return 0;
++    for (i = 0; i < config->PortCount; ++i)
++        if (config->Ports[i].Size != sizeof(config->Ports[i]) ||
++            config->Ports[i].Version != 1 || !config->Ports[i].CapacityFanout)
++            return 0;
++    return 1;
++}
++
++enum CAMDProviderResult camd_ump_driver_backend_create(
++    const struct CAMDUMPBackendConfigV1 *config,
++    struct CAMDUMPDriverBackend **out)
++{
++    struct CAMDUMPDriverBackend *backend;
++    if (!out)
++        return CAMD_PROVIDER_INVALID;
++    *out = NULL;
++    if (!valid_config(config)) return CAMD_PROVIDER_INVALID;
++    backend = ualloc(sizeof(*backend)); if (!backend) return CAMD_PROVIDER_CALLBACK_FAILED;
++    if (!lock_init(&backend->lock)) { ufree(backend); return CAMD_PROVIDER_CALLBACK_FAILED; }
++    backend->ports = ualloc(config->PortCount * sizeof(*backend->ports));
++    backend->inputs = ualloc(config->PortCount * sizeof(*backend->inputs));
++    if (!backend->ports || !backend->inputs) {
++        ufree(backend->inputs); ufree(backend->ports); lock_done(&backend->lock);
++        ufree(backend); return CAMD_PROVIDER_CALLBACK_FAILED;
++    }
++    memcpy(backend->ports, config->Ports, config->PortCount * sizeof(*backend->ports));
++    backend->callbacks = config->Callbacks; backend->port_count = config->PortCount;
++    backend->protocol = config->Protocol; backend->capacity = config->MaxQueueCapacity;
++    backend->budget = config->WorkerItemBudget;
++    backend->ops.Size = sizeof(backend->ops); backend->ops.Version = 1;
++    backend->ops.Open = open_session; backend->ops.Close = close_session;
++    backend->ops.SendUMP = send_ump; backend->ops.StartReceive = start_receive;
++    backend->ops.StopReceive = stop_receive; backend->ops.Drain = drain_session;
++    backend->ops.Cancel = cancel_session; backend->ops.BeginShutdown = begin_shutdown;
++    backend->ops.ShutdownReady = shutdown_ready; *out = backend;
++    return CAMD_PROVIDER_OK;
++}
++
++const struct CAMDProviderOpsV1 *camd_ump_driver_backend_ops(
++    struct CAMDUMPDriverBackend *backend) { return backend ? &backend->ops : NULL; }
++void *camd_ump_driver_backend_context(struct CAMDUMPDriverBackend *backend)
++{ return backend; }
++
++enum CAMDProviderResult camd_ump_driver_backend_destroy(
++    struct CAMDUMPDriverBackend *backend)
++{
++    if (!backend) return CAMD_PROVIDER_INVALID;
++    lock_get(&backend->lock);
++    if (backend->active) { lock_put(&backend->lock); return CAMD_PROVIDER_STATE; }
++    lock_put(&backend->lock); ufree(backend->inputs); ufree(backend->ports);
++    lock_done(&backend->lock); ufree(backend); return CAMD_PROVIDER_OK;
++}
+diff --git a/workbench/libs/camd/ump_driver_backend.h b/workbench/libs/camd/ump_driver_backend.h
+new file mode 100644
+index 0000000000..217a504b4c
+--- /dev/null
++++ b/workbench/libs/camd/ump_driver_backend.h
+@@ -0,0 +1,53 @@
++#ifndef CAMD_UMP_DRIVER_BACKEND_H
++#define CAMD_UMP_DRIVER_BACKEND_H
++
++#include "native_worker_fanout.h"
++
++typedef enum CAMDProviderResult (*CAMDUMPPortFnV1)(void *context,
++                                                    uint32_t direction);
++typedef enum CAMDProviderResult (*CAMDUMPSubmitFnV1)(
++    void *context, const struct CAMDUMPEventV1 *events, size_t count);
++
++struct CAMDUMPBackendCallbacksV1 {
++    uint32_t Size;
++    uint32_t Version;
++    CAMDUMPPortFnV1 Acquire;
++    CAMDUMPPortFnV1 Release;
++    CAMDUMPSubmitFnV1 Submit;
++    void (*Drained)(void *context);
++};
++
++struct CAMDUMPBackendPortV1 {
++    uint32_t Size;
++    uint32_t Version;
++    struct CAMDEndpointIDV1 EndpointID;
++    void *Context;
++    struct CAMDNativeWorkerFanout *CapacityFanout;
++};
++
++struct CAMDUMPBackendConfigV1 {
++    uint32_t Size;
++    uint32_t Version;
++    struct CAMDUMPBackendCallbacksV1 Callbacks;
++    const struct CAMDUMPBackendPortV1 *Ports;
++    size_t PortCount;
++    uint32_t Protocol;
++    uint32_t MaxQueueCapacity;
++    uint32_t WorkerItemBudget;
++};
++
++struct CAMDUMPDriverBackend;
++
++enum CAMDProviderResult camd_ump_driver_backend_create(
++    const struct CAMDUMPBackendConfigV1 *config,
++    struct CAMDUMPDriverBackend **backend);
++const struct CAMDProviderOpsV1 *camd_ump_driver_backend_ops(
++    struct CAMDUMPDriverBackend *backend);
++void *camd_ump_driver_backend_context(struct CAMDUMPDriverBackend *backend);
++enum CAMDProviderResult camd_ump_driver_backend_receive(
++    struct CAMDUMPDriverBackend *backend, size_t port,
++    const struct CAMDUMPEventV1 *events, size_t count, uint32_t *dropped);
++enum CAMDProviderResult camd_ump_driver_backend_destroy(
++    struct CAMDUMPDriverBackend *backend);
++
++#endif

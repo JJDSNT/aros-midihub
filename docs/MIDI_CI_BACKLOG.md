@@ -61,7 +61,7 @@ minimum change, real dependencies and validation are identified;
   implementation remain required.
 - Upstream PR: engine-only.
 
-### CI04 — Function Block MIDI-CI metadata in CAMD 43 — hosted-validated
+### CI04 — Function Block MIDI-CI metadata — integrated in AROS PR #2101
 
 - Objective: expose the MIDI-CI version and SysEx8 stream capacity already
   carried by UMP Function Block Info.
@@ -88,31 +88,36 @@ minimum change, real dependencies and validation are identified;
   sections pass 71/38/229; the aggregate debug-driver reload check fails
   identically in the baseline. No AArch64 result is claimed per current scope;
   a dedicated topology-watch assertion is a non-blocking follow-up.
-- Upstream PR: incorporate into draft #2101, not 43.1; isolate commit.
+- Upstream PR: commit `74dcc7c928` in draft #2101, not a CAMD 43.1 change.
 
-### CI05 — Native UMP driver extension — ready for API review
+### CI05 — Native UMP driver extension — integrated in AROS PR #2101
 
 - Objective: let a loaded or resident CAMD driver publish/receive native UMP.
 - Dependencies: maintainer review of the optional adjacent-tail extension;
-  then an in-memory driver prototype proving callback residence, task-context
-  submission, queue ownership, removal and backpressure.
+  real Network MIDI 2.0 and Bluetooth UMP drivers remain downstream.
 - Repository/component: AROS CAMD driver boundary; then Network MIDI 2.0/USB
   MIDI 2.0 drivers.
 - Existing interface: unchanged `MidiDeviceData` byte callbacks;
   `AddMidiDevice`; private provider operations; app-published UMP endpoint.
 - Demonstrated missing behavior: no public generic driver route to
   `CAMDUMPEventV1`.
-- Minimum change: leave `MidiDeviceData` byte-for-byte unchanged and add a
-  flagged, sized extension in an adjacent composite registration. It supplies
-  complete UMP send/submit, per-port query and change callbacks and adapts to
-  the existing private provider core. No new application vector is required.
+- Implemented minimum change: leave `MidiDeviceData` byte-for-byte unchanged
+  and add a flagged, sized extension in an adjacent composite registration.
+  It supplies complete UMP send/submit, per-port query/change callbacks and
+  adapts to the existing private queue/pump/worker core. No application vector
+  was added. Patch: `patches/aros-camd-native-ump-driver-extension.patch`.
 - Acceptance: legacy drivers unchanged; resident UMP loopback survives
   add/remove; complete events/backpressure/lifetime documented.
-- Tests: all MT sizes, SysEx7 sequence, concurrent clients, removal while
-  pinned, m68k callback ABI.
-- Upstream PR: isolated CAMD commit, preferably folded into #2101 after review.
+- Tests: the resident reference driver passes 7/7 on AROS Linux-hosted:
+  publication, independent sessions, exact four-word Data128 delivery,
+  removal while pinned and detach/recovery. The portable backend compiles with
+  warnings as errors. Deterministic `BUSY`/`OutputReady`, all MT sizes, SysEx7
+  sequence, two-reader overflow and real transport round trips remain; no
+  AArch64 or m68k result is claimed.
+- Upstream PR: commit `e82edc9287` in draft #2101; public boundary remains
+  provisional pending maintainer review and remaining transport tests.
 
-### CI05A — Reclaim endpoint objects after task death — implemented; upstream review pending
+### CI05A — Reclaim endpoint objects after task death — integrated in AROS PR #2101
 
 - Objective: prevent dead CAMD clients from exhausting endpoint object slots
   or leaving stale task pointers as signal targets.
@@ -138,8 +143,8 @@ minimum change, real dependencies and validation are identified;
   reproducing the missing cleanup. Allocation-failure injection,
   healthy-owner isolation and SMP stress remain P1 validation work; host
   registry tests cannot validate task-resource ordering.
-- Upstream PR: private CAMD lifecycle commit, separate from Function Block and
-  native-driver API patches. Patch:
+- Upstream PR: private lifecycle commit `bd9cc81bb0` in draft #2101, separate
+  from the Function Block and native-driver commits. Standalone review patch:
   `patches/aros-camd-endpoint-task-death.patch`.
 
 ### CI06 — AROS coordinator concurrency prototype — in progress

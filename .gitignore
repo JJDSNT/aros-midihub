@@ -2,6 +2,7 @@
 /build-aros-linux/
 /build-camd43-hosted/
 /build-camd43-fb-hosted/
+/build-camd43-ump-hosted/
 # Specifications under the MIDI Association's copyright: kept locally, never committed.
 /docs/*.pdf
 __pycache__/

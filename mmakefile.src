@@ -274,6 +274,12 @@ BONAMI_CX := $(BONAMI_AROS)/commodity
     files="$(MIDIHUB_ROOT)/ports/aros/camd_compat" \
     targetdir=$(MIDIHUB_PACKAGE)/C
 
+# Proposal-only reference client/driver for the optional CAMD 43 UMP tail.
+%build_prog mmake=contrib-aros-midihub-camdumpdriverprobe \
+progname=MIDIHubUMPDriverProbe \
+files="$(MIDIHUB_ROOT)/ports/aros/camd_ump_driver_probe" \
+targetdir=$(MIDIHUB_PACKAGE)/C
+
 # Gate-2 experiment only: validates coordinator task ownership and recovery;
 # it is not a public midici.library service or ABI.
 %build_prog mmake=contrib-aros-midihub-midicicoordprobe \
