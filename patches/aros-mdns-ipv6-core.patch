@@ -1,0 +1,1793 @@
+diff --git a/workbench/network/mdns/DISCOVERY.md b/workbench/network/mdns/DISCOVERY.md
+index c2cff3e881..68d835096a 100644
+--- a/workbench/network/mdns/DISCOVERY.md
++++ b/workbench/network/mdns/DISCOVERY.md
+@@ -1,6 +1,6 @@
+ # Queued DNS-SD discovery
+ 
+-bonami.library and mdnsd implement IPv4 service browse and asynchronous
++bonami.library and mdnsd implement service browse and asynchronous
+ resolve, without running client hooks in mdnsd or starting dispatch
+ processes. Each operation has one event queue, read in the
+ caller's own task. A caller either reads it from a loop it already runs, or
+@@ -19,6 +19,13 @@ version only, a caller that can run with 41.2 must require a version later than
+ record query is a new AROS interface, not a published original-BonAmi vector,
+ so it is queue-native and has no unused Hook argument.
+ 
++Library revision 41.6 accepts and publishes AAAA records through the same
++generic query interface. `MDNSRecordEvent.re_Interface` remains the IPv4
++interface address in network byte order (zero on an IPv6-only link), and the
++existing reserved `UWORD` is named `re_InterfaceIndex` and contains the
++receiving link's scope/interface index. The structure size and old binaries
++are unchanged.
++
+ ## Calls and ownership
+ 
+ ```c
+@@ -195,7 +202,8 @@ after an `MDNS_OK` reply, drain with `ReadMDNSRecordEvent()` instead. Query
+ references have the same task ownership as browse and resolve references.
+ 
+ `MDNSRecordEvent` contains the owner name, type, class without the cache-flush
+-bit, remaining TTL, receiving interface and at most 512 bytes of RDATA. PTR
++bit, remaining TTL, receiving interface address and index, and at most 512
++bytes of RDATA. PTR
+ targets and the target following the first six bytes of SRV data are expanded
+ to uncompressed DNS wire labels, so no compression pointer refers to a packet
+ the caller cannot see. Other RDATA remains in wire byte order.
+@@ -224,9 +232,9 @@ Instances containing embedded NUL cannot be represented and are rejected.
+ 
+ The cache is keyed by interface, owner/type and data, and holds only what an
+ active operation can reach: the PTRs of a browsed type, the SRV and TXT of an
+-instance of a browsed type or of an instance being resolved, and the A of a
++instance of a browsed type or of an instance being resolved, and the A/AAAA of a
+ host such an SRV names. Records of services nobody asked for are not cached,
+-refreshed or queried for (RFC 6762 section 5.2). An A record that arrives
++refreshed or queried for (RFC 6762 section 5.2). An address record that arrives
+ before any SRV naming its host is held for one second (eight at most) and
+ cached when that SRV comes; an older one is asked for again by the
+ missing-record query. When the cache is full, the oldest
+@@ -263,7 +271,10 @@ each interface. A browse, resolve, service-type enumeration or record query
+ therefore sees local and remote services through the same event structures.
+ Registration announcements, updates and goodbyes keep those local views in
+ step; starting or refreshing an operation also replays the current local
+-records without relying on multicast loopback. IPv6, passive
++records without relying on multicast loopback. IPv6 sockets, AAAA
++publication/query and shared per-link A/AAAA caching are implemented. The
++legacy discovery event cannot represent an IPv6 endpoint, so IPv6-only
++browse/resolve remains for an appended, size-safe event API. Passive
+ duplicate-question suppression, negative caching/NSEC and continuation of
+ oversized known-answer lists are not implemented. The parent service's other
+ RFC limitations still apply.
+diff --git a/workbench/network/mdns/README.md b/workbench/network/mdns/README.md
+index 8a5f6e23fb..fb7a5c74be 100644
+--- a/workbench/network/mdns/README.md
++++ b/workbench/network/mdns/README.md
+@@ -1,6 +1,6 @@
+ # mdnsd and bonami.library
+ 
+-`mdnsd` is a multicast DNS responder (RFC 6762) for AROSTCP. It answers for
++`mdnsd` is a dual-stack multicast DNS responder (RFC 6762) for AROSTCP. It answers for
+ the host's name in the mDNS domain, `<hostname>.local`, on every interface
+ that can multicast, so that other machines on the link find this one by name
+ without a DNS server: `ping amiga.local`, `ssh amiga.local`.
+@@ -27,15 +27,16 @@ It can also list the service types present on the link (RFC 6763 section
+   `name-2`, then `name-3`, and probes for that. When two hosts probe for the
+   same name at the same moment, the one whose address sorts earlier waits a
+   second and probes again (section 8.2).
+-- **Answers.** An `A` or `ANY` question for the name is answered with the
+-  address of the interface it came in on. A question from another port than
++- **Answers.** An `A`, `AAAA` or `ANY` question for the name is answered with
++  the addresses of the interface it came in on. A question from another port than
+   5353, from a resolver that knows plain DNS, is answered to that port alone
+   with its ID and question, a time to live of ten seconds and no cache-flush
+   bit (section 6.7). A question with the unicast-response bit is answered to
+   the asker alone when the group had the record within the last 30 seconds,
+   and to the group otherwise (section 5.4).
+-- **Interfaces.** One UDP 5353 socket for each interface that is up, can
+-  multicast and has an IPv4 address, bound to it with `SO_BINDTODEVICE`. The
++- **Interfaces.** IPv4 and IPv6 UDP 5353 sockets for each interface that is
++  up, can multicast and has an IPv4 and/or IPv6 link-local address, bound to
++  it with `SO_BINDTODEVICE`. The
+   interfaces are looked at every three seconds; one that came, went or
+   changed its address makes mdnsd probe again.
+ - **Goodbye.** When it stops, or lets go of the stack, it withdraws the
+@@ -97,6 +98,9 @@ Version 41.3 also provides `LookupHostA()` and queued generic record queries:
+ `RequestMDNSEvent()` wakeup. See `DISCOVERY.md` for ownership, record format,
+ bounds and restart behavior. Hook delivery remains deliberately unavailable;
+ queries do not execute client code in mdnsd.
++Version 41.6 adds AAAA answers to generic queries. `MDNSRecordEvent` keeps
++the IPv4 interface address in `re_Interface` (zero on an IPv6-only link) and
++uses its existing reserved word as `re_InterfaceIndex`, the IPv6 scope ID.
+ The queued browse, resolve and generic query APIs include services registered
+ with this same mdnsd. Their canonical PTR, SRV, TXT, address and service-type
+ records are reflected internally per interface; the daemon does not depend on
+@@ -179,15 +183,20 @@ Started by hand it runs until Ctrl-C.
+ 
+ ## Limits
+ 
+-- IPv4 only: no `AAAA` record, and nothing is sent to `ff02::fb`.
++- The legacy `MDNSDiscoveryEvent` still contains one IPv4 endpoint and IPv4
++  interface address. AAAA records are cached and available through
++  `QueryRecordA()`, but an IPv6-only service does not complete legacy
++  browse/resolve until a compatible extended event API is added.
++- One IPv6 link-local address is selected per interface. AROSTCP's public
++  address enumeration does not yet expose tentative/deprecated flags.
+ - The number after a name that was lost is not remembered when mdnsd
+   restarts: it starts from the system's name again.
+ - At most eight interfaces.
+ - A service's text is at most 256 characters, its instance name 63 bytes.
+ - Known answers that come in a second packet are not waited for.
+-- It needs a stack that delivers IPv4 multicast to a socket that joined a
+-  group, and a SANA-II driver that accepts `S2_ADDMULTICASTADDRESS` and
+-  `S2_MULTICAST`.
++- It needs a stack that delivers IPv4/IPv6 multicast to sockets that joined
++  their groups, and a SANA-II driver that accepts the corresponding multicast
++  MAC registrations.
+ 
+ ## Files
+ 
+diff --git a/workbench/network/mdns/include/bonami/mdns.h b/workbench/network/mdns/include/bonami/mdns.h
+index 9f6918c020..7002db5ad5 100644
+--- a/workbench/network/mdns/include/bonami/mdns.h
++++ b/workbench/network/mdns/include/bonami/mdns.h
+@@ -29,7 +29,7 @@
+ /* Library identity (subsystem name, not API prefix) */
+ 
+ #define BONAMI_LIB_VERSION   41
+-#define BONAMI_LIB_REVISION  5
++#define BONAMI_LIB_REVISION  6
+ 
+ /*------------------------------------------------------------------------*/
+ /* DNS-SD well-known values */
+@@ -101,7 +101,8 @@ struct MDNSDiscoveryEvent
+ 
+ /* One answer to QueryRecordA(). Names in PTR and SRV RDATA are expanded
+  * into uncompressed DNS wire labels, so the event never refers to the
+- * received packet. Interface is an IPv4 address in network byte order. */
++ * received packet. Interface is an IPv4 address in network byte order (zero
++ * on an IPv6-only link); InterfaceIndex is the scope/interface index. */
+ #define MDNS_RECORD_DATA_MAX   512
+ struct MDNSRecordEvent
+ {
+@@ -115,6 +116,7 @@ struct MDNSRecordEvent
+     char  re_Name[256];
+     UBYTE re_Data[MDNS_RECORD_DATA_MAX];
+ };
++#define re_InterfaceIndex re_Reserved
+ 
+ /* Optional wakeup for a queue: a message the caller lends to mdnsd with
+  * RequestMDNSEvent(). The caller sets er_Msg.mn_ReplyPort and mn_Length;
+diff --git a/workbench/network/mdns/library/bonami.conf b/workbench/network/mdns/library/bonami.conf
+index 0ac115bded..a1906e34f9 100644
+--- a/workbench/network/mdns/library/bonami.conf
++++ b/workbench/network/mdns/library/bonami.conf
+@@ -2,7 +2,7 @@
+ basename Bonami
+ libbase BonamiBase
+ libbasetype struct BonamiIntern
+-version 41.5
++version 41.6
+ ##end config
+ 
+ ##begin cdef
+diff --git a/workbench/network/mdns/mdns_discovery.c b/workbench/network/mdns/mdns_discovery.c
+index 6faaa62d5d..bf5ad9db83 100644
+--- a/workbench/network/mdns/mdns_discovery.c
++++ b/workbench/network/mdns/mdns_discovery.c
+@@ -21,7 +21,7 @@
+ #define DISC_SESSIONS 16
+ #define DISC_QUEUE 8
+ #define DISC_TTL_MAX 4500
+-#define DISC_PENDING 8      /* A records held for an SRV yet to come */
++#define DISC_PENDING 8      /* A/AAAA records held for an SRV yet to come */
+ #define DISC_PENDING_TICKS 50
+ 
+ struct DiscoveryRecord
+@@ -36,8 +36,8 @@ struct DiscoveryRecord
+ struct PendingAddress
+ {
+     UBYTE key[256];
+-    UBYTE data[4];
+-    UWORD rclass;
++    UBYTE data[16];
++    UWORD type, length, rclass;
+     ULONG link, ttl, received;
+ };
+ struct DiscoveryView
+@@ -298,7 +298,7 @@ static struct DiscoveryRecord *find_record(struct MDNSDiscovery *d,
+ /*
+  * What an active operation can reach, and so what is cached, refreshed and
+  * asked for: the PTRs of a browsed type; the SRV and TXT of an instance of
+- * a browsed type, or of an instance being resolved; the A of a host that
++ * a browsed type, or of an instance being resolved; the A/AAAA of a host that
+  * such an SRV names. Everything else on the network is left alone
+  * (RFC 6762 section 5.2 asks for queries only for what someone wants).
+  */
+@@ -356,6 +356,7 @@ static BOOL wanted(const struct MDNSDiscovery *d, UWORD type, const UBYTE *key,
+     case DNS_TYPE_TXT:
+         return wanted_instance(d, key);
+     case DNS_TYPE_A:
++    case DNS_TYPE_AAAA:
+         return wanted_host(d, key, link, now);
+     }
+     return FALSE;
+@@ -375,6 +376,7 @@ static void mark_wanted_records(const struct MDNSDiscovery *d, ULONG now,
+         const struct DiscoveryRecord *r = &d->records[i];
+ 
+         if (r->type != 0 && r->type != DNS_TYPE_A &&
++            r->type != DNS_TYPE_AAAA &&
+             !due(now, r->expires) &&
+             wanted(d, r->type, r->key, r->link, now)) {
+             marked[i] = TRUE;
+@@ -389,7 +391,8 @@ static void mark_wanted_records(const struct MDNSDiscovery *d, ULONG now,
+         for (j = 0; j < DISC_RECORDS; j++) {
+             const struct DiscoveryRecord *addr = &d->records[j];
+ 
+-            if (addr->type == DNS_TYPE_A && addr->link == srv->link &&
++            if ((addr->type == DNS_TYPE_A || addr->type == DNS_TYPE_AAAA) &&
++                addr->link == srv->link &&
+                 !due(now, addr->expires) &&
+                 same_key(addr->key, srv->data + 6)) {
+                 marked[j] = TRUE;
+@@ -405,7 +408,7 @@ static void fail_wanting(struct MDNSDiscovery *d, UWORD type, const UBYTE *key,
+ {
+     LONG i;
+ 
+-    if (type == DNS_TYPE_A) {
++    if (type == DNS_TYPE_A || type == DNS_TYPE_AAAA) {
+         for (i = 0; i < DISC_RECORDS; i++) {
+             const struct DiscoveryRecord *r = &d->records[i];
+ 
+@@ -429,8 +432,20 @@ static void fail_wanting(struct MDNSDiscovery *d, UWORD type, const UBYTE *key,
+     }
+ }
+ 
+-static BOOL snapshot(struct MDNSDiscovery *d, const UBYTE *key, ULONG link,
+-    struct MDNSDiscoveryEvent *out, ULONG now)
++static ULONG interface_address4(const struct MDNSDaemon *md, ULONG link)
++{
++    LONG i;
++
++    for (i = 0; i < md->md_IfCount; i++) {
++        if (md->md_Ifs[i].mi_Index == link) {
++            return md->md_Ifs[i].mi_Addr;
++        }
++    }
++    return 0;
++}
++
++static BOOL snapshot(const struct MDNSDaemon *md, struct MDNSDiscovery *d,
++    const UBYTE *key, ULONG link, struct MDNSDiscoveryEvent *out, ULONG now)
+ {
+     const struct DiscoveryRecord *srv = find_record(d, key, link, DNS_TYPE_SRV, now);
+     const struct DiscoveryRecord *txt = find_record(d, key, link, DNS_TYPE_TXT, now);
+@@ -456,7 +471,7 @@ static BOOL snapshot(struct MDNSDiscovery *d, const UBYTE *key, ULONG link,
+     memcpy(out->de_Type + n + 1, type + n + 2, 4);
+     out->de_Port = ((UWORD)srv->data[4] << 8) | srv->data[5];
+     memcpy(&out->de_Address, addr->data, 4);
+-    out->de_Interface = htonl(link);
++    out->de_Interface = htonl(interface_address4(md, link));
+     out->de_TXTLength = txt->length;
+     memcpy(out->de_TXT, txt->data, txt->length);
+     return TRUE;
+@@ -485,8 +500,8 @@ static BOOL valid_type(const UBYTE *key)
+ }
+ 
+ /* What a type found by enumeration is told as: its type, no instance. */
+-static void type_event(const UBYTE *key, ULONG link,
+-    struct MDNSDiscoveryEvent *out)
++static void type_event(const struct MDNSDaemon *md, const UBYTE *key,
++    ULONG link, struct MDNSDiscoveryEvent *out)
+ {
+     LONG n = key[0];
+ 
+@@ -494,7 +509,7 @@ static void type_event(const UBYTE *key, ULONG link,
+     memcpy(out->de_Type, key + 1, n);
+     out->de_Type[n] = '.';
+     memcpy(out->de_Type + n + 1, key + n + 2, 4);
+-    out->de_Interface = htonl(link);
++    out->de_Interface = htonl(interface_address4(md, link));
+ }
+ 
+ static BOOL valid_instance(const UBYTE *key)
+@@ -517,8 +532,9 @@ static BOOL discovering(const struct MDNSDiscovery *d)
+     }
+     return FALSE;
+ }
+-static void hold_address(struct MDNSDiscovery *d, UWORD rclass, ULONG ttl,
+-    const UBYTE *key, const UBYTE *data, ULONG link, ULONG now)
++static void hold_address(struct MDNSDiscovery *d, UWORD type, UWORD rclass,
++    ULONG ttl, const UBYTE *key, const UBYTE *data, UWORD length,
++    ULONG link, ULONG now)
+ {
+     struct PendingAddress *slot = &d->pending[0];
+     LONG i;
+@@ -526,7 +542,7 @@ static void hold_address(struct MDNSDiscovery *d, UWORD rclass, ULONG ttl,
+     for (i = 0; i < DISC_PENDING; i++) {
+         struct PendingAddress *a = &d->pending[i];
+ 
+-        if (a->link == link && same_key(a->key, key)) {
++        if (a->type == type && a->link == link && same_key(a->key, key)) {
+             slot = a;
+             break;
+         }
+@@ -536,7 +552,9 @@ static void hold_address(struct MDNSDiscovery *d, UWORD rclass, ULONG ttl,
+         }
+     }
+     memcpy(slot->key, key, 256);
+-    memcpy(slot->data, data, 4);
++    memcpy(slot->data, data, length);
++    slot->type = type;
++    slot->length = length;
+     slot->rclass = rclass;
+     slot->ttl = ttl;
+     slot->link = link;
+@@ -586,8 +604,9 @@ static void cache(struct MDNSDiscovery *d, UWORD type, UWORD rclass, ULONG ttl,
+     /* A record already held is renewed; a new one only when an operation
+      * can reach it. */
+     if (slot == NULL && !wanted(d, type, key, link, now)) {
+-        if (type == DNS_TYPE_A && discovering(d)) {
+-            hold_address(d, rclass, ttl, key, data, link, now);
++        if ((type == DNS_TYPE_A || type == DNS_TYPE_AAAA) && discovering(d)) {
++            hold_address(d, type, rclass, ttl, key, data, (UWORD)size,
++                link, now);
+         }
+         return;
+     }
+@@ -641,8 +660,8 @@ static void cache(struct MDNSDiscovery *d, UWORD type, UWORD rclass, ULONG ttl,
+                 struct PendingAddress held = *a;
+ 
+                 memset(a, 0, sizeof(*a));
+-                cache(d, DNS_TYPE_A, held.rclass, held.ttl, held.key, held.data,
+-                      4, held.link, now);
++                cache(d, held.type, held.rclass, held.ttl, held.key,
++                      held.data, held.length, held.link, now);
+             }
+         }
+     }
+@@ -655,7 +674,7 @@ void mdnsDiscoveryRecord(struct MDNSDaemon *md, const struct MDNSRecord *record,
+     UBYTE key[256] = {0}, data[512] = {0};
+     LONG size = record->rdlength, consumed;
+     ULONG now = mdnsTicks();
+-    ULONG link = md->md_SendIf >= 0 ? md->md_Ifs[md->md_SendIf].mi_Addr : 0;
++    ULONG link = md->md_SendIf >= 0 ? md->md_Ifs[md->md_SendIf].mi_Index : 0;
+ 
+     md->md_DiscoveryRecords++;
+     if (record->type == DNS_TYPE_PTR) {
+@@ -704,6 +723,11 @@ void mdnsDiscoveryRecord(struct MDNSDaemon *md, const struct MDNSRecord *record,
+             return;
+         }
+         memcpy(data, record->rdata, 4);
++    } else if (record->type == DNS_TYPE_AAAA) {
++        if (size != 16) {
++            return;
++        }
++        memcpy(data, record->rdata, 16);
+     } else {
+         return;
+     }
+@@ -722,7 +746,7 @@ static void send_question(struct MDNSDaemon *md, const UBYTE *key, UWORD type, U
+ 
+     if (link == 0) {
+         for (i = 0; i < md->md_IfCount; i++) {
+-            send_question(md, key, type, md->md_Ifs[i].mi_Addr);
++            send_question(md, key, type, md->md_Ifs[i].mi_Index);
+         }
+         return;
+     }
+@@ -767,7 +791,7 @@ static void send_question(struct MDNSDaemon *md, const UBYTE *key, UWORD type, U
+     pkt[6] = answers >> 8;
+     pkt[7] = answers;
+     for (i = 0; i < md->md_IfCount; i++) {
+-        if (link == 0 || md->md_Ifs[i].mi_Addr == link) {
++        if (link == 0 || md->md_Ifs[i].mi_Index == link) {
+             mdnsNetSendOn(md, i, pkt, pos);
+         }
+     }
+@@ -874,10 +898,10 @@ static void refresh_views(struct MDNSDaemon *md, ULONG now)
+             continue;
+         }
+         if (v->type) {
+-            type_event(v->key, v->link, &event);
++            type_event(md, v->key, v->link, &event);
+             present = TRUE;
+         } else {
+-            present = snapshot(d, v->key, v->link, &event, now);
++            present = snapshot(md, d, v->key, v->link, &event, now);
+         }
+         if (v->present && (!present || memcmp(&event, &v->event, sizeof(event)) != 0)) {
+             notify(md, v, MEVENT_REMOVE);
+@@ -928,7 +952,8 @@ void mdnsDiscoveryTick(struct MDNSDaemon *md)
+             struct MDNSDiscoveryEvent event;
+ 
+             for (j = 0; rebuild && j < md->md_IfCount; j++) {
+-                if (snapshot(d, s->key, md->md_Ifs[j].mi_Addr, &event, now)) {
++                if (snapshot(md, d, s->key, md->md_Ifs[j].mi_Index,
++                        &event, now)) {
+                     event.de_Code = MEVENT_RESOLVED;
+                     enqueue(md, s, &event);
+                     s->resolved = TRUE;
+@@ -996,10 +1021,15 @@ void mdnsDiscoveryTick(struct MDNSDaemon *md)
+                 send_question(md, r->data, DNS_TYPE_TXT, r->link);
+                 missing = TRUE;
+             }
+-        } else if (r->type == DNS_TYPE_SRV &&
+-            find_record(d, r->data + 6, r->link, DNS_TYPE_A, now) == NULL) {
+-            send_question(md, r->data + 6, DNS_TYPE_A, r->link);
+-            missing = TRUE;
++        } else if (r->type == DNS_TYPE_SRV) {
++            if (find_record(d, r->data + 6, r->link, DNS_TYPE_A, now) == NULL) {
++                send_question(md, r->data + 6, DNS_TYPE_A, r->link);
++                missing = TRUE;
++            }
++            if (find_record(d, r->data + 6, r->link, DNS_TYPE_AAAA, now) == NULL) {
++                send_question(md, r->data + 6, DNS_TYPE_AAAA, r->link);
++                missing = TRUE;
++            }
+         }
+         if (!missing) {
+             r->missingInterval = 50;
+diff --git a/workbench/network/mdns/mdns_dns.h b/workbench/network/mdns/mdns_dns.h
+index 1dd88e6f3d..fd70987fad 100644
+--- a/workbench/network/mdns/mdns_dns.h
++++ b/workbench/network/mdns/mdns_dns.h
+@@ -9,6 +9,7 @@
+ 
+ #define MDNS_DNS_PORT           5353
+ #define MDNS_MCAST_ADDR         "224.0.0.251"
++#define MDNS_MCAST_ADDR6        "ff02::fb"
+ #define MDNS_MAX_PACKET         8972
+ #define MDNS_DEFAULT_TTL        120
+ /* RFC 6762 section 10: records that name a host live two minutes, the
+@@ -19,6 +20,7 @@
+ #define DNS_TYPE_A              1
+ #define DNS_TYPE_PTR            12
+ #define DNS_TYPE_TXT            16
++#define DNS_TYPE_AAAA           28
+ #define DNS_TYPE_SRV            33
+ #define DNS_TYPE_ANY            255
+ #define DNS_CLASS_IN            1
+diff --git a/workbench/network/mdns/mdns_host.c b/workbench/network/mdns/mdns_host.c
+index a95eb63c46..1aa0cd919b 100644
+--- a/workbench/network/mdns/mdns_host.c
++++ b/workbench/network/mdns/mdns_host.c
+@@ -47,6 +47,20 @@ mdnsAddrData(ULONG addr, UBYTE *data)
+     data[3] = (UBYTE)(addr & 0xFF);
+ }
+ 
++void
++mdnsAddr6Data(const struct in6_addr *addr, UBYTE *data)
++{
++    memcpy(data, addr, 16);
++}
++
++BOOL
++mdnsReplyIsUnicast(const struct MDNSDaemon *md)
++{
++    /* md_ReplyAddr fallback keeps host fixtures for the IPv4-only daemon
++     * source-compatible while the family field is private. */
++    return md->md_ReplyFamily != 0 || md->md_ReplyAddr != 0;
++}
++
+ /*
+  * Starts a response in pkt and returns where its records begin. An answer
+  * for a resolver that speaks plain DNS repeats the ID and the question it
+@@ -58,7 +72,7 @@ mdnsResponseBegin(struct MDNSDaemon *md, UBYTE *pkt)
+     struct MDNSHeader *hdr = (struct MDNSHeader *)pkt;
+     LONG pos;
+ 
+-    if (md->md_ReplyAddr != 0 && md->md_ReplyLegacy &&
++    if (mdnsReplyIsUnicast(md) && md->md_ReplyLegacy &&
+         md->md_ReplyQuestion != NULL &&
+         mdnsBuildQuery(pkt, (LONG)MDNS_MAX_PACKET, md->md_ReplyId,
+             md->md_ReplyQuestion->qname, md->md_ReplyQuestion->qtype,
+@@ -79,7 +93,7 @@ host_send_probe(struct MDNSDaemon *md)
+     UBYTE *pkt = md->md_TxBuf;
+     struct MDNSHeader *hdr = (struct MDNSHeader *)pkt;
+     char fqdn[256];
+-    UBYTE addrdata[4];
++    UBYTE addrdata[16];
+     LONG pos, i;
+     UWORD nscount;
+ 
+@@ -91,10 +105,21 @@ host_send_probe(struct MDNSDaemon *md)
+                     (md->md_HostStep == 0 ? DNS_QU_BIT : 0)), &pos) != 0) {
+             return;
+         }
+-        mdnsAddrData(md->md_Ifs[i].mi_Addr, addrdata);
+-        if (mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &nscount, fqdn,
+-                DNS_TYPE_A, DNS_CLASS_IN, MDNS_TTL_HOST, addrdata, 4) != 0) {
+-            return;
++        if (md->md_Ifs[i].mi_Addr != 0) {
++            mdnsAddrData(md->md_Ifs[i].mi_Addr, addrdata);
++            if (mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &nscount,
++                    fqdn, DNS_TYPE_A, DNS_CLASS_IN, MDNS_TTL_HOST,
++                    addrdata, 4) != 0) {
++                return;
++            }
++        }
++        if (!IN6_IS_ADDR_UNSPECIFIED(&md->md_Ifs[i].mi_Addr6)) {
++            mdnsAddr6Data(&md->md_Ifs[i].mi_Addr6, addrdata);
++            if (mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &nscount,
++                    fqdn, DNS_TYPE_AAAA, DNS_CLASS_IN, MDNS_TTL_HOST,
++                    addrdata, 16) != 0) {
++                return;
++            }
+         }
+         hdr->nscount = htons(nscount);
+         mdnsNetSendOn(md, i, pkt, pos);
+@@ -109,13 +134,13 @@ host_send_probe(struct MDNSDaemon *md)
+  * bit, which it would read as another class.
+  */
+ static void
+-host_send_addr(struct MDNSDaemon *md, BOOL goodbye)
++host_send_addr(struct MDNSDaemon *md, BOOL goodbye, UWORD qtype)
+ {
+     UBYTE *pkt = md->md_TxBuf;
+     struct MDNSHeader *hdr = (struct MDNSHeader *)pkt;
+-    BOOL legacy = md->md_ReplyAddr != 0 && md->md_ReplyLegacy;
++    BOOL legacy = mdnsReplyIsUnicast(md) && md->md_ReplyLegacy;
+     char fqdn[256];
+-    UBYTE addrdata[4];
++    UBYTE addrdata[16];
+     LONG pos, i;
+     UWORD ancount;
+ 
+@@ -126,17 +151,34 @@ host_send_addr(struct MDNSDaemon *md, BOOL goodbye)
+         }
+         pos = mdnsResponseBegin(md, pkt);
+         ancount = 0;
+-        mdnsAddrData(md->md_Ifs[i].mi_Addr, addrdata);
+-        if (mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount, fqdn,
+-                DNS_TYPE_A,
+-                (UWORD)(legacy ? DNS_CLASS_IN : DNS_CLASS_IN_FLUSH),
+-                goodbye ? 0 : (legacy ? 10 : MDNS_TTL_HOST), addrdata,
+-                4) != 0) {
++        if ((qtype == DNS_TYPE_ANY || qtype == DNS_TYPE_A) &&
++            md->md_Ifs[i].mi_Addr != 0) {
++            mdnsAddrData(md->md_Ifs[i].mi_Addr, addrdata);
++            if (mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount,
++                    fqdn, DNS_TYPE_A,
++                    (UWORD)(legacy ? DNS_CLASS_IN : DNS_CLASS_IN_FLUSH),
++                    goodbye ? 0 : (legacy ? 10 : MDNS_TTL_HOST), addrdata,
++                    4) != 0) {
++                continue;
++            }
++        }
++        if ((qtype == DNS_TYPE_ANY || qtype == DNS_TYPE_AAAA) &&
++            !IN6_IS_ADDR_UNSPECIFIED(&md->md_Ifs[i].mi_Addr6)) {
++            mdnsAddr6Data(&md->md_Ifs[i].mi_Addr6, addrdata);
++            if (mdnsAppendRecord(pkt, (LONG)MDNS_MAX_PACKET, &pos, &ancount,
++                    fqdn, DNS_TYPE_AAAA,
++                    (UWORD)(legacy ? DNS_CLASS_IN : DNS_CLASS_IN_FLUSH),
++                    goodbye ? 0 : (legacy ? 10 : MDNS_TTL_HOST), addrdata,
++                    16) != 0) {
++                continue;
++            }
++        }
++        if (ancount == 0) {
+             continue;
+         }
+         hdr->ancount = htons(ancount);
+         mdnsNetSendOn(md, i, pkt, pos);
+-        if (md->md_ReplyAddr == 0 && !goodbye) {
++        if (!mdnsReplyIsUnicast(md) && !goodbye) {
+             md->md_HostMulticast = mdnsNow();
+         }
+     }
+@@ -164,7 +206,7 @@ void
+ mdnsHostGoodbye(struct MDNSDaemon *md)
+ {
+     if (md->md_Socket >= 0 && md->md_HostState == MDNS_NAME_ANNOUNCED) {
+-        host_send_addr(md, TRUE);
++        host_send_addr(md, TRUE, DNS_TYPE_ANY);
+     }
+ }
+ 
+@@ -194,7 +236,7 @@ mdnsHostTick(struct MDNSDaemon *md)
+                 md->md_HostState = MDNS_NAME_ANNOUNCED;
+                 md->md_HostStep = 1;
+                 md->md_HostNextTick = now + 50;
+-                host_send_addr(md, FALSE);
++                host_send_addr(md, FALSE, DNS_TYPE_ANY);
+                 mdnsRegAnnounceAll(md);
+             }
+         }
+@@ -203,7 +245,7 @@ mdnsHostTick(struct MDNSDaemon *md)
+     if (md->md_HostStep < MDNS_ANNOUNCE_COUNT &&
+         (LONG)(now - md->md_HostNextTick) >= 0) {
+         md->md_HostStep++;
+-        host_send_addr(md, FALSE);
++        host_send_addr(md, FALSE, DNS_TYPE_ANY);
+     }
+     return FALSE;
+ }
+@@ -225,7 +267,8 @@ mdnsHostHandleQuery(struct MDNSDaemon *md, struct MDNSQuestion *q)
+     BOOL legacy, direct;
+ 
+     if (md->md_IfCount == 0 || md->md_HostState != MDNS_NAME_ANNOUNCED ||
+-        (q->qtype != DNS_TYPE_ANY && q->qtype != DNS_TYPE_A)) {
++        (q->qtype != DNS_TYPE_ANY && q->qtype != DNS_TYPE_A &&
++         q->qtype != DNS_TYPE_AAAA)) {
+         return;
+     }
+     mdnsHostFqdn(md, fqdn, (LONG)sizeof(fqdn));
+@@ -237,13 +280,18 @@ mdnsHostHandleQuery(struct MDNSDaemon *md, struct MDNSQuestion *q)
+         md->md_HostMulticast != 0 &&
+         mdnsNow() - md->md_HostMulticast <= MDNS_UNICAST_SECONDS;
+     if (legacy || direct) {
++        md->md_ReplyFamily = md->md_QueryFamily != 0 ?
++            md->md_QueryFamily : AF_INET;
+         md->md_ReplyAddr = md->md_QueryAddr;
++        md->md_ReplyAddr6 = md->md_QueryAddr6;
+         md->md_ReplyPort = legacy ? md->md_QueryPort : MDNS_DNS_PORT;
+         md->md_ReplyLegacy = legacy;
+         md->md_ReplyQuestion = q;
+     }
+-    host_send_addr(md, FALSE);
++    host_send_addr(md, FALSE, q->qtype);
++    md->md_ReplyFamily = 0;
+     md->md_ReplyAddr = 0;
++    memset(&md->md_ReplyAddr6, 0, sizeof(md->md_ReplyAddr6));
+     md->md_ReplyQuestion = NULL;
+ }
+ 
+@@ -262,9 +310,13 @@ void
+ mdnsHostHandleProbe(struct MDNSDaemon *md, const struct MDNSRecord *theirs,
+     LONG count)
+ {
++    struct AddressRecord {
++        UWORD type;
++        UWORD length;
++        UBYTE data[16];
++    } mine[2], other[MDNS_PROPOSED_MAX];
+     char fqdn[256];
+-    UBYTE mine[4];
+-    LONG i, index;
++    LONG i, j, index, mineCount = 0, otherCount = 0, difference = 0;
+ 
+     if (md->md_HostState != MDNS_NAME_PROBING || md->md_HostStep == 0 ||
+         md->md_IfCount == 0) {
+@@ -272,18 +324,63 @@ mdnsHostHandleProbe(struct MDNSDaemon *md, const struct MDNSRecord *theirs,
+     }
+     index = md->md_SendIf >= 0 ? md->md_SendIf : 0;
+     mdnsHostFqdn(md, fqdn, (LONG)sizeof(fqdn));
+-    mdnsAddrData(md->md_Ifs[index].mi_Addr, mine);
++    if (md->md_Ifs[index].mi_Addr != 0) {
++        mine[mineCount].type = DNS_TYPE_A;
++        mine[mineCount].length = 4;
++        mdnsAddrData(md->md_Ifs[index].mi_Addr, mine[mineCount++].data);
++    }
++    if (!IN6_IS_ADDR_UNSPECIFIED(&md->md_Ifs[index].mi_Addr6)) {
++        mine[mineCount].type = DNS_TYPE_AAAA;
++        mine[mineCount].length = 16;
++        mdnsAddr6Data(&md->md_Ifs[index].mi_Addr6,
++            mine[mineCount++].data);
++    }
+     for (i = 0; i < count; i++) {
+-        /* same class and type, so the data decides */
+         if (Stricmp(theirs[i].name, fqdn) == 0 &&
+-            theirs[i].type == DNS_TYPE_A &&
+             (theirs[i].rclass & 0x7fff) == DNS_CLASS_IN &&
+-            theirs[i].rdlength == 4 &&
+-            memcmp(mine, theirs[i].rdata, 4) < 0) {
+-            host_probe_from(md, 50);
+-            return;
++            ((theirs[i].type == DNS_TYPE_A && theirs[i].rdlength == 4) ||
++             (theirs[i].type == DNS_TYPE_AAAA &&
++              theirs[i].rdlength == 16)) &&
++            otherCount < MDNS_PROPOSED_MAX) {
++            other[otherCount].type = theirs[i].type;
++            other[otherCount].length = theirs[i].rdlength;
++            memcpy(other[otherCount].data, theirs[i].rdata,
++                theirs[i].rdlength);
++            otherCount++;
++        }
++    }
++    /* Canonical RR ordering is class, type, then RDATA. The class is IN
++     * for every record retained above. */
++    for (i = 0; i < otherCount; i++) {
++        for (j = i + 1; j < otherCount; j++) {
++            if (other[j].type < other[i].type ||
++                (other[j].type == other[i].type &&
++                 memcmp(other[j].data, other[i].data,
++                    other[i].length) < 0)) {
++                struct AddressRecord swap;
++
++                swap = other[i];
++                other[i] = other[j];
++                other[j] = swap;
++            }
++        }
++    }
++    for (i = 0; i < mineCount && i < otherCount; i++) {
++        difference = (LONG)mine[i].type - (LONG)other[i].type;
++        if (difference == 0) {
++            difference = (LONG)memcmp(mine[i].data, other[i].data,
++                mine[i].length);
++        }
++        if (difference != 0) {
++            break;
+         }
+     }
++    if (difference == 0) {
++        difference = mineCount - otherCount;
++    }
++    if (otherCount > 0 && difference < 0) {
++        host_probe_from(md, 50);
++    }
+ }
+ 
+ /*
+@@ -298,18 +395,28 @@ mdnsHostHandleRecord(struct MDNSDaemon *md, const struct MDNSRecord *r)
+     char fqdn[256];
+     ULONG addr;
+ 
+-    if (md->md_IfCount == 0 || r->type != DNS_TYPE_A || r->rdlength != 4 ||
+-        r->ttl == 0) {
++    if (md->md_IfCount == 0 || r->ttl == 0 ||
++        !((r->type == DNS_TYPE_A && r->rdlength == 4) ||
++          (r->type == DNS_TYPE_AAAA && r->rdlength == 16))) {
+         return;
+     }
+     mdnsHostFqdn(md, fqdn, (LONG)sizeof(fqdn));
+     if (Stricmp(fqdn, r->name) != 0) {
+         return;
+     }
+-    addr = ((ULONG)r->rdata[0] << 24) | ((ULONG)r->rdata[1] << 16) |
+-           ((ULONG)r->rdata[2] << 8) | (ULONG)r->rdata[3];
+-    if (mdnsNetIsOwn(md, addr)) {
+-        return;
++    if (r->type == DNS_TYPE_A) {
++        addr = ((ULONG)r->rdata[0] << 24) | ((ULONG)r->rdata[1] << 16) |
++               ((ULONG)r->rdata[2] << 8) | (ULONG)r->rdata[3];
++        if (mdnsNetIsOwn(md, addr)) {
++            return;
++        }
++    } else {
++        struct in6_addr addr6;
++
++        memcpy(&addr6, r->rdata, sizeof(addr6));
++        if (mdnsNetIsOwn6(md, &addr6)) {
++            return;
++        }
+     }
+     md->md_HostSuffix = md->md_HostSuffix == 0 ? 2 : md->md_HostSuffix + 1;
+     mdnsNetNameHost(md);
+diff --git a/workbench/network/mdns/mdns_net.c b/workbench/network/mdns/mdns_net.c
+index 75490b65b3..365964d278 100644
+--- a/workbench/network/mdns/mdns_net.c
++++ b/workbench/network/mdns/mdns_net.c
+@@ -3,24 +3,25 @@
+  * Copyright 2026 amigazen project
+  * Copyright 2026 Jaime Dias
+  *
+- * mdns_net.c - one UDP 5353 socket for each interface (bsdsocket.library)
++ * mdns_net.c - IPv4/IPv6 UDP 5353 sockets for each interface
+  *
+  * mDNS is a protocol of the link: what is heard on an interface is answered
+  * there, and an address record carries the address of the interface it is
+  * sent on. Each interface that is up, can multicast and has an IPv4 address
+- * gets a socket bound to it with SO_BINDTODEVICE.
++ * and/or an IPv6 link-local address gets sockets bound with SO_BINDTODEVICE.
+  */
+ 
+ #include <exec/types.h>
+ #include <string.h>
++#include <sys/socket.h>
+ 
+ #include <proto/exec.h>
+ #include <proto/bsdsocket.h>
+-#include <sys/socket.h>
+ #include <sys/ioctl.h>
+ #include <sys/sockio.h>
+ #include <net/if.h>
+ #include <netinet/in.h>
++#include <netinet/in_var.h>
+ #include <arpa/inet.h>
+ 
+ #include "mdnsd.h"
+@@ -28,65 +29,140 @@
+ struct found
+ {
+     char    name[IFNAMSIZ + 1];
++    ULONG   index;
+     ULONG   addr;               /* 0xAABBCCDD == A.B.C.D */
++    struct in6_addr addr6;
+ };
+ 
++static struct found *
++found_interface(struct found *out, LONG *count, LONG max, const char *name)
++{
++    LONG i;
++
++    for (i = 0; i < *count; i++) {
++        if (strncmp(out[i].name, name, IFNAMSIZ) == 0) {
++            return &out[i];
++        }
++    }
++    if (*count >= max) {
++        return NULL;
++    }
++    memset(&out[*count], 0, sizeof(out[*count]));
++    memcpy(out[*count].name, name, IFNAMSIZ);
++    return &out[(*count)++];
++}
++
++static BOOL
++usable_interface(int sock, const char *name, ULONG *index)
++{
++    struct ifreq ifr;
++
++    memset(&ifr, 0, sizeof(ifr));
++    memcpy(ifr.ifr_name, name, IFNAMSIZ);
++    if (IoctlSocket(sock, SIOCGIFFLAGS, (char *)&ifr) != 0 ||
++        (ifr.ifr_flags & (IFF_UP | IFF_MULTICAST | IFF_LOOPBACK)) !=
++            (IFF_UP | IFF_MULTICAST)) {
++        return FALSE;
++    }
++    memset(&ifr, 0, sizeof(ifr));
++    memcpy(ifr.ifr_name, name, IFNAMSIZ);
++    if (IoctlSocket(sock, SIOCGIFINDEX, (char *)&ifr) != 0 ||
++        ifr.ifr_index <= 0) {
++        return FALSE;
++    }
++    *index = (ULONG)ifr.ifr_index;
++    return TRUE;
++}
++
+ /* The interfaces mDNS can use now. Returns how many were written. */
+ static LONG
+ find_interfaces(struct Library *SocketBase, struct found *out, LONG max)
+ {
+     char buf[2048];
+     struct ifconf ifc;
+-    struct ifreq *ifr, *end, flags;
++    struct ifreq *ifr;
+     LONG count = 0;
+-    int sock;
++    int sock, sock6;
++
++    memset(out, 0, sizeof(*out) * max);
+ 
+     sock = socket(AF_INET, SOCK_DGRAM, 0);
+-    if (sock < 0) {
+-        return 0;
++    if (sock >= 0) {
++        ifc.ifc_len = sizeof(buf);
++        ifc.ifc_buf = buf;
+     }
+-    ifc.ifc_len = sizeof(buf);
+-    ifc.ifc_buf = buf;
+-    if (IoctlSocket(sock, SIOCGIFCONF, (char *)&ifc) < 0) {
+-        CloseSocket(sock);
+-        return 0;
+-    }
+-
+-    ifr = ifc.ifc_req;
+-    end = (struct ifreq *)&ifc.ifc_buf[ifc.ifc_len];
+-    while (ifr < end && count < max) {
+-        struct sockaddr *sa = &ifr->ifr_addr;
+-
+-        if (sa->sa_family == AF_INET) {
+-            ULONG addr = (ULONG)ntohl((unsigned long)
+-                ((struct sockaddr_in *)sa)->sin_addr.s_addr);
+-
+-            memset(&flags, 0, sizeof(flags));
+-            memcpy(flags.ifr_name, ifr->ifr_name, IFNAMSIZ);
+-            if (addr != 0 &&
+-                IoctlSocket(sock, SIOCGIFFLAGS, (char *)&flags) == 0 &&
+-                (flags.ifr_flags & (IFF_UP | IFF_MULTICAST | IFF_LOOPBACK)) ==
+-                    (IFF_UP | IFF_MULTICAST)) {
+-                /* ifr_name need not end with a NUL; name[] is one longer */
+-                memset(out[count].name, 0, sizeof(out[count].name));
+-                memcpy(out[count].name, ifr->ifr_name, IFNAMSIZ);
+-                out[count].addr = addr;
+-                count++;
++    if (sock >= 0 && IoctlSocket(sock, SIOCGIFCONF, (char *)&ifc) == 0) {
++        struct ifreq *end;
++
++        ifr = ifc.ifc_req;
++        end = (struct ifreq *)&ifc.ifc_buf[ifc.ifc_len];
++        while (ifr < end && count < max) {
++            struct sockaddr *sa = &ifr->ifr_addr;
++
++            if (sa->sa_family == AF_INET) {
++                ULONG addr = (ULONG)ntohl((unsigned long)
++                    ((struct sockaddr_in *)sa)->sin_addr.s_addr);
++                ULONG index;
++
++                if (addr != 0 && usable_interface(sock, ifr->ifr_name,
++                        &index)) {
++                    struct found *item = found_interface(out, &count, max,
++                        ifr->ifr_name);
++
++                    if (item != NULL) {
++                        item->index = index;
++                        item->addr = addr;
++                    }
++                }
++            }
++            /* an entry is the name and an address of at least sockaddr's size */
++            if (sa->sa_len < sizeof(*sa)) {
++                ifr = (struct ifreq *)((char *)sa + sizeof(*sa));
++            } else {
++                ifr = (struct ifreq *)((char *)sa + sa->sa_len);
+             }
+         }
+-        /* an entry is the name and an address of at least sockaddr's size */
+-        if (sa->sa_len < sizeof(*sa)) {
+-            ifr = (struct ifreq *)((char *)sa + sizeof(*sa));
+-        } else {
+-            ifr = (struct ifreq *)((char *)sa + sa->sa_len);
++    }
++    if (sock >= 0) {
++        CloseSocket(sock);
++    }
++
++    /* AROSTCP enumerates IPv6 addresses separately. Keep one link-local
++     * address for each link; it is the address usable with ff02::fb. */
++    sock6 = socket(AF_INET6, SOCK_DGRAM, 0);
++    if (sock6 >= 0) {
++        struct in6_ifreq req[32];
++        struct in6_ifconf ifc6;
++
++        memset(req, 0, sizeof(req));
++        ifc6.ifc6_buf = (char *)req;
++        ifc6.ifc6_len = sizeof(req);
++        if (IoctlSocket(sock6, SIOCGLIFADDR, (char *)&ifc6) == 0) {
++            LONG i, n;
++
++            n = ifc6.ifc6_len / (LONG)sizeof(req[0]);
++            for (i = 0; i < n; i++) {
++                ULONG index;
++                struct found *item;
++
++                if (!IN6_IS_ADDR_LINKLOCAL(&req[i].ifr6_addr.sin6_addr) ||
++                    !usable_interface(sock6, req[i].ifr_name, &index)) {
++                    continue;
++                }
++                item = found_interface(out, &count, max, req[i].ifr_name);
++                if (item != NULL && IN6_IS_ADDR_UNSPECIFIED(&item->addr6)) {
++                    item->index = index;
++                    item->addr6 = req[i].ifr6_addr.sin6_addr;
++                }
++            }
+         }
++        CloseSocket(sock6);
+     }
+-    CloseSocket(sock);
+     return count;
+ }
+ 
+ static LONG
+-open_socket(struct Library *SocketBase, const char *name, ULONG addr)
++open_socket4(struct Library *SocketBase, const char *name, ULONG addr)
+ {
+     struct sockaddr_in sin;
+     struct ip_mreq mreq;
+@@ -146,11 +222,69 @@ open_socket(struct Library *SocketBase, const char *name, ULONG addr)
+     return (LONG)sock;
+ }
+ 
++static LONG
++open_socket6(struct Library *SocketBase, const char *name, ULONG index)
++{
++    static const UBYTE group_bytes[16] = {
++        0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xfb
++    };
++    struct sockaddr_in6 sin6;
++    struct ipv6_mreq mreq;
++    int on, sock;
++
++    sock = socket(AF_INET6, SOCK_DGRAM, 0);
++    if (sock < 0) {
++        return -1;
++    }
++    on = 1;
++    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char *)&on, sizeof(on));
++#ifdef SO_REUSEPORT
++    setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, (char *)&on, sizeof(on));
++#endif
++    setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, (char *)name,
++        (int)mdnsTextLength(name, IFNAMSIZ));
++    setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&on, sizeof(on));
++
++    memset(&sin6, 0, sizeof(sin6));
++    sin6.sin6_len = sizeof(sin6);
++    sin6.sin6_family = AF_INET6;
++    sin6.sin6_port = htons(MDNS_DNS_PORT);
++    if (bind(sock, (struct sockaddr *)&sin6, sizeof(sin6)) < 0) {
++        CloseSocket(sock);
++        return -1;
++    }
++
++    memset(&mreq, 0, sizeof(mreq));
++    memcpy(&mreq.ipv6mr_multiaddr, group_bytes, sizeof(group_bytes));
++    mreq.ipv6mr_interface = (unsigned int)index;
++    if (setsockopt(sock, IPPROTO_IPV6, IPV6_JOIN_GROUP, (char *)&mreq,
++            sizeof(mreq)) < 0) {
++        CloseSocket(sock);
++        return -1;
++    }
++    setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_IF, (char *)&index,
++        sizeof(index));
++    on = 255;
++    setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, (char *)&on,
++        sizeof(on));
++    on = 0;
++    setsockopt(sock, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, (char *)&on,
++        sizeof(on));
++    return (LONG)sock;
++}
++
+ static void
+ set_primary(struct Library *SocketBase, struct MDNSDaemon *md)
+ {
+-    md->md_Socket = md->md_IfCount > 0 ? md->md_Ifs[0].mi_Socket : -1;
+-    md->md_HostAddr = md->md_IfCount > 0 ? md->md_Ifs[0].mi_Addr : 0;
++    LONG i;
++
++    md->md_Socket = md->md_IfCount > 0 ?
++        (md->md_Ifs[0].mi_Socket >= 0 ? md->md_Ifs[0].mi_Socket :
++            md->md_Ifs[0].mi_Socket6) : -1;
++    md->md_HostAddr = 0;
++    for (i = 0; i < md->md_IfCount && md->md_HostAddr == 0; i++) {
++        md->md_HostAddr = md->md_Ifs[i].mi_Addr;
++    }
+ 
+     {
+         char base[MDNS_MAX_HOST + 1];
+@@ -226,34 +360,50 @@ mdnsNetRescan(struct MDNSDaemon *md)
+ 
+     for (i = 0; i < md->md_IfCount; ) {
+         for (k = 0; k < count; k++) {
+-            if (now[k].addr == md->md_Ifs[i].mi_Addr &&
++            if (now[k].index == md->md_Ifs[i].mi_Index &&
++                now[k].addr == md->md_Ifs[i].mi_Addr &&
++                memcmp(&now[k].addr6, &md->md_Ifs[i].mi_Addr6,
++                    sizeof(now[k].addr6)) == 0 &&
+                 strcmp(now[k].name, md->md_Ifs[i].mi_Name) == 0) {
+                 break;
+             }
+         }
+         if (k < count) {
+-            now[k].addr = 0;        /* kept */
++            now[k].index = 0;        /* kept */
+             i++;
+             continue;
+         }
+-        CloseSocket((int)md->md_Ifs[i].mi_Socket);
++        if (md->md_Ifs[i].mi_Socket >= 0) {
++            CloseSocket((int)md->md_Ifs[i].mi_Socket);
++        }
++        if (md->md_Ifs[i].mi_Socket6 >= 0) {
++            CloseSocket((int)md->md_Ifs[i].mi_Socket6);
++        }
+         md->md_Ifs[i] = md->md_Ifs[--md->md_IfCount];
+         changed = TRUE;
+     }
+     for (k = 0; k < count; k++) {
+-        LONG sock;
++        LONG sock = -1, sock6 = -1;
+ 
+-        if (now[k].addr == 0 || md->md_IfCount >= MDNS_IFS_MAX) {
++        if (now[k].index == 0 || md->md_IfCount >= MDNS_IFS_MAX) {
+             continue;
+         }
+-        sock = open_socket(SocketBase, now[k].name, now[k].addr);
+-        if (sock < 0) {
++        if (now[k].addr != 0) {
++            sock = open_socket4(SocketBase, now[k].name, now[k].addr);
++        }
++        if (!IN6_IS_ADDR_UNSPECIFIED(&now[k].addr6)) {
++            sock6 = open_socket6(SocketBase, now[k].name, now[k].index);
++        }
++        if (sock < 0 && sock6 < 0) {
+             continue;       /* tried again at the next look */
+         }
+         mdnsTextCopy(md->md_Ifs[md->md_IfCount].mi_Name,
+             (LONG)sizeof(md->md_Ifs[0].mi_Name), now[k].name);
++        md->md_Ifs[md->md_IfCount].mi_Index = now[k].index;
+         md->md_Ifs[md->md_IfCount].mi_Addr = now[k].addr;
++        md->md_Ifs[md->md_IfCount].mi_Addr6 = now[k].addr6;
+         md->md_Ifs[md->md_IfCount].mi_Socket = sock;
++        md->md_Ifs[md->md_IfCount].mi_Socket6 = sock6;
+         md->md_IfCount++;
+         changed = TRUE;
+     }
+@@ -268,7 +418,14 @@ static void
+ close_sockets(struct Library *SocketBase, struct MDNSDaemon *md)
+ {
+     while (md->md_IfCount > 0) {
+-        CloseSocket((int)md->md_Ifs[--md->md_IfCount].mi_Socket);
++        struct MDNSInterface *mi = &md->md_Ifs[--md->md_IfCount];
++
++        if (mi->mi_Socket >= 0) {
++            CloseSocket((int)mi->mi_Socket);
++        }
++        if (mi->mi_Socket6 >= 0) {
++            CloseSocket((int)mi->mi_Socket6);
++        }
+     }
+ }
+ 
+@@ -297,17 +454,37 @@ mdnsNetIsOwn(struct MDNSDaemon *md, ULONG addr)
+     return FALSE;
+ }
+ 
+-/* Sends on one interface: to the mDNS group, or to the one who asked when
+- * md_ReplyAddr names one. */
++BOOL
++mdnsNetIsOwn6(struct MDNSDaemon *md, const struct in6_addr *addr)
++{
++    LONG i;
++
++    for (i = 0; i < md->md_IfCount; i++) {
++        if (!IN6_IS_ADDR_UNSPECIFIED(&md->md_Ifs[i].mi_Addr6) &&
++            memcmp(&md->md_Ifs[i].mi_Addr6, addr, sizeof(*addr)) == 0) {
++            return TRUE;
++        }
++    }
++    return FALSE;
++}
++
++/* Sends on one interface: to the mDNS groups, or to the one who asked. */
+ static BOOL
+-send_on(struct Library *SocketBase, struct MDNSDaemon *md, LONG index,
++send_on4(struct Library *SocketBase, struct MDNSDaemon *md, LONG index,
+     const UBYTE *pkt, LONG pktlen)
+ {
+     struct sockaddr_in sin;
+ 
++    if (md->md_Ifs[index].mi_Socket < 0 ||
++        (!mdnsReplyIsUnicast(md) && md->md_SendFamily != 0 &&
++         md->md_SendFamily != AF_INET) ||
++        (mdnsReplyIsUnicast(md) && md->md_ReplyFamily != 0 &&
++         md->md_ReplyFamily != AF_INET)) {
++        return FALSE;
++    }
+     memset(&sin, 0, sizeof(sin));
+     sin.sin_family = AF_INET;
+-    if (md->md_ReplyAddr != 0) {
++    if (mdnsReplyIsUnicast(md)) {
+         /* an answer for the one who asked */
+         sin.sin_port = htons(md->md_ReplyPort);
+         sin.sin_addr.s_addr = htonl(md->md_ReplyAddr);
+@@ -323,6 +500,40 @@ send_on(struct Library *SocketBase, struct MDNSDaemon *md, LONG index,
+     return TRUE;
+ }
+ 
++static BOOL
++send_on6(struct Library *SocketBase, struct MDNSDaemon *md, LONG index,
++    const UBYTE *pkt, LONG pktlen)
++{
++    static const UBYTE group_bytes[16] = {
++        0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xfb
++    };
++    struct sockaddr_in6 sin6;
++
++    if (md->md_Ifs[index].mi_Socket6 < 0 ||
++        (!mdnsReplyIsUnicast(md) && md->md_SendFamily != 0 &&
++         md->md_SendFamily != AF_INET6) ||
++        (mdnsReplyIsUnicast(md) && md->md_ReplyFamily != AF_INET6)) {
++        return FALSE;
++    }
++    memset(&sin6, 0, sizeof(sin6));
++    sin6.sin6_len = sizeof(sin6);
++    sin6.sin6_family = AF_INET6;
++    sin6.sin6_scope_id = md->md_Ifs[index].mi_Index;
++    if (mdnsReplyIsUnicast(md)) {
++        sin6.sin6_port = htons(md->md_ReplyPort);
++        sin6.sin6_addr = md->md_ReplyAddr6;
++    } else {
++        sin6.sin6_port = htons(MDNS_DNS_PORT);
++        memcpy(&sin6.sin6_addr, group_bytes, sizeof(group_bytes));
++    }
++    if (sendto((int)md->md_Ifs[index].mi_Socket6, (char *)pkt,
++            (int)pktlen, 0, (struct sockaddr *)&sin6, sizeof(sin6)) < 0) {
++        return FALSE;
++    }
++    md->md_TxPackets++;
++    return TRUE;
++}
++
+ BOOL
+ mdnsNetSendOn(struct MDNSDaemon *md, LONG index, const UBYTE *pkt,
+     LONG pktlen)
+@@ -331,7 +542,12 @@ mdnsNetSendOn(struct MDNSDaemon *md, LONG index, const UBYTE *pkt,
+         pktlen <= 0 || index < 0 || index >= md->md_IfCount) {
+         return FALSE;
+     }
+-    return send_on(md->md_SocketBase, md, index, pkt, pktlen);
++    {
++        BOOL sent4 = send_on4(md->md_SocketBase, md, index, pkt, pktlen);
++        BOOL sent6 = send_on6(md->md_SocketBase, md, index, pkt, pktlen);
++
++        return sent4 || sent6;
++    }
+ }
+ 
+ /* Sends a packet that is the same on every link: to the interface a
+diff --git a/workbench/network/mdns/mdns_packet.c b/workbench/network/mdns/mdns_packet.c
+index 833112e63e..1e927c5663 100644
+--- a/workbench/network/mdns/mdns_packet.c
++++ b/workbench/network/mdns/mdns_packet.c
+@@ -25,9 +25,10 @@ static struct MDNSRecord record;
+ /* what the sender of a probe says it is about to publish */
+ static struct MDNSRecord proposed[MDNS_PROPOSED_MAX];
+ 
+-void
+-mdnsHandlePacket(struct MDNSDaemon *md, const UBYTE *pkt, LONG pktlen,
+-    ULONG srcaddr, UWORD srcport)
++static void
++handle_packet(struct MDNSDaemon *md, const UBYTE *pkt, LONG pktlen,
++    UWORD family, ULONG srcaddr, const struct in6_addr *srcaddr6,
++    UWORD srcport)
+ {
+     const struct MDNSHeader *hdr;
+     struct MDNSQuestion q;
+@@ -38,7 +39,8 @@ mdnsHandlePacket(struct MDNSDaemon *md, const UBYTE *pkt, LONG pktlen,
+         return;
+     }
+     /* The group's traffic may be looped back to the sender. */
+-    if (mdnsNetIsOwn(md, srcaddr)) {
++    if ((family == AF_INET && mdnsNetIsOwn(md, srcaddr)) ||
++        (family == AF_INET6 && mdnsNetIsOwn6(md, srcaddr6))) {
+         return;
+     }
+ 
+@@ -117,6 +119,10 @@ mdnsHandlePacket(struct MDNSDaemon *md, const UBYTE *pkt, LONG pktlen,
+         md->md_PacketSerial++;
+         /* who asked, for an answer that goes back to the asker alone */
+         md->md_QueryAddr = srcaddr;
++        md->md_QueryFamily = family;
++        if (family == AF_INET6) {
++            md->md_QueryAddr6 = *srcaddr6;
++        }
+         md->md_QueryPort = srcport;
+         md->md_ReplyId = ntohs(hdr->id);
+         for (i = 0; i < nq; i++) {
+@@ -124,6 +130,8 @@ mdnsHandlePacket(struct MDNSDaemon *md, const UBYTE *pkt, LONG pktlen,
+             mdnsRegHandleQuery(md, &questions[i], known, nknown);
+         }
+         md->md_QueryAddr = 0;
++        md->md_QueryFamily = 0;
++        memset(&md->md_QueryAddr6, 0, sizeof(md->md_QueryAddr6));
+         md->md_QueryPort = 0;
+         return;
+     }
+@@ -156,6 +164,22 @@ mdnsHandlePacket(struct MDNSDaemon *md, const UBYTE *pkt, LONG pktlen,
+     }
+ }
+ 
++void
++mdnsHandlePacket(struct MDNSDaemon *md, const UBYTE *pkt, LONG pktlen,
++    ULONG srcaddr, UWORD srcport)
++{
++    handle_packet(md, pkt, pktlen, AF_INET, srcaddr, NULL, srcport);
++}
++
++void
++mdnsHandlePacket6(struct MDNSDaemon *md, const UBYTE *pkt, LONG pktlen,
++    const struct in6_addr *srcaddr, UWORD srcport)
++{
++    if (srcaddr != NULL) {
++        handle_packet(md, pkt, pktlen, AF_INET6, 0, srcaddr, srcport);
++    }
++}
++
+ /* Feed records produced by this daemon to its discovery/query clients.
+  * Multicast loopback is deliberately ignored by mdnsHandlePacket(), so local
+  * registrations otherwise exist on the wire but not in the local API view. */
+diff --git a/workbench/network/mdns/mdns_query.c b/workbench/network/mdns/mdns_query.c
+index b2185ab579..60cfd2335a 100644
+--- a/workbench/network/mdns/mdns_query.c
++++ b/workbench/network/mdns/mdns_query.c
+@@ -93,7 +93,9 @@ wake(struct QuerySession *session, LONG result)
+ static BOOL
+ same_record(const struct MDNSRecordEvent *a, const struct MDNSRecordEvent *b)
+ {
+-    return a->re_Interface == b->re_Interface && a->re_Type == b->re_Type &&
++    return a->re_Interface == b->re_Interface &&
++        a->re_InterfaceIndex == b->re_InterfaceIndex &&
++        a->re_Type == b->re_Type &&
+         a->re_Class == b->re_Class && a->re_DataLength == b->re_DataLength &&
+         Stricmp(a->re_Name, b->re_Name) == 0 &&
+         memcmp(a->re_Data, b->re_Data, a->re_DataLength) == 0;
+@@ -146,27 +148,44 @@ send_question(struct MDNSDaemon *md, const struct QuerySession *session)
+ static void
+ answer_own_host(struct MDNSDaemon *md, struct QuerySession *session)
+ {
+-    struct MDNSRecordEvent event;
+     char host[MDNS_MAX_HOST + 8];
++    LONG i;
+ 
+-    if ((session->type != DNS_TYPE_A && session->type != DNS_TYPE_ANY) ||
+-        md->md_HostAddr == 0 || md->md_HostState != MDNS_NAME_ANNOUNCED) {
++    if ((session->type != DNS_TYPE_A && session->type != DNS_TYPE_AAAA &&
++         session->type != DNS_TYPE_ANY) ||
++        md->md_HostState != MDNS_NAME_ANNOUNCED) {
+         return;
+     }
+     mdnsHostFqdn(md, host, sizeof(host));
+     if (Stricmp(host, session->name) != 0) {
+         return;
+     }
+-    memset(&event, 0, sizeof(event));
+-    event.re_Code = MEVENT_RECORD;
+-    event.re_Interface = htonl(md->md_HostAddr);
+-    event.re_TTL = MDNS_TTL_HOST;
+-    event.re_Type = DNS_TYPE_A;
+-    event.re_Class = DNS_CLASS_IN;
+-    event.re_DataLength = 4;
+-    mdnsTextCopy(event.re_Name, sizeof(event.re_Name), host);
+-    mdnsAddrData(md->md_HostAddr, event.re_Data);
+-    enqueue(session, &event);
++    for (i = 0; i < md->md_IfCount; i++) {
++        struct MDNSRecordEvent event;
++
++        memset(&event, 0, sizeof(event));
++        event.re_Code = MEVENT_RECORD;
++        event.re_Interface = htonl(md->md_Ifs[i].mi_Addr);
++        event.re_InterfaceIndex = (UWORD)md->md_Ifs[i].mi_Index;
++        event.re_TTL = MDNS_TTL_HOST;
++        event.re_Class = DNS_CLASS_IN;
++        mdnsTextCopy(event.re_Name, sizeof(event.re_Name), host);
++        if ((session->type == DNS_TYPE_A || session->type == DNS_TYPE_ANY) &&
++            md->md_Ifs[i].mi_Addr != 0) {
++            event.re_Type = DNS_TYPE_A;
++            event.re_DataLength = 4;
++            mdnsAddrData(md->md_Ifs[i].mi_Addr, event.re_Data);
++            enqueue(session, &event);
++        }
++        if ((session->type == DNS_TYPE_AAAA ||
++             session->type == DNS_TYPE_ANY) &&
++            !IN6_IS_ADDR_UNSPECIFIED(&md->md_Ifs[i].mi_Addr6)) {
++            event.re_Type = DNS_TYPE_AAAA;
++            event.re_DataLength = 16;
++            mdnsAddr6Data(&md->md_Ifs[i].mi_Addr6, event.re_Data);
++            enqueue(session, &event);
++        }
++    }
+ }
+ 
+ static LONG
+@@ -213,6 +232,7 @@ deliver_record(struct MDNSDaemon *md, const struct MDNSRecord *record,
+     struct MDNSQueryState *state = md->md_Query;
+     struct MDNSRecordEvent event;
+     ULONG link;
++    UWORD linkIndex;
+     LONG i;
+     BOOL filled = FALSE;
+ 
+@@ -221,6 +241,7 @@ deliver_record(struct MDNSDaemon *md, const struct MDNSRecord *record,
+         return;
+     }
+     link = md->md_Ifs[md->md_SendIf].mi_Addr;
++    linkIndex = (UWORD)md->md_Ifs[md->md_SendIf].mi_Index;
+     for (i = 0; i < QUERY_SESSIONS; i++) {
+         struct QuerySession *session = &state->sessions[i];
+ 
+@@ -235,6 +256,7 @@ deliver_record(struct MDNSDaemon *md, const struct MDNSRecord *record,
+             memset(&event, 0, sizeof(event));
+             event.re_Code = MEVENT_RECORD;
+             event.re_Interface = htonl(link);
++            event.re_InterfaceIndex = linkIndex;
+             event.re_TTL = record->ttl;
+             event.re_Type = record->type;
+             event.re_Class = (UWORD)(record->rclass & 0x7fff);
+diff --git a/workbench/network/mdns/mdns_reg.c b/workbench/network/mdns/mdns_reg.c
+index 8b1fa05ec7..020c9023c3 100644
+--- a/workbench/network/mdns/mdns_reg.c
++++ b/workbench/network/mdns/mdns_reg.c
+@@ -134,7 +134,7 @@ txt_data(const struct MDNSRegisteredService *rs, UBYTE *data, LONG size)
+ static BOOL
+ reply_legacy(const struct MDNSDaemon *md)
+ {
+-    return md->md_ReplyAddr != 0 && md->md_ReplyLegacy;
++    return mdnsReplyIsUnicast(md) && md->md_ReplyLegacy;
+ }
+ 
+ static ULONG
+@@ -147,7 +147,10 @@ reply_ttl(const struct MDNSDaemon *md, ULONG ttl)
+ static void
+ reply_to_asker(struct MDNSDaemon *md, struct MDNSQuestion *q, BOOL legacy)
+ {
++    md->md_ReplyFamily = md->md_QueryFamily != 0 ?
++        md->md_QueryFamily : AF_INET;
+     md->md_ReplyAddr = md->md_QueryAddr;
++    md->md_ReplyAddr6 = md->md_QueryAddr6;
+     md->md_ReplyPort = legacy ? md->md_QueryPort : MDNS_DNS_PORT;
+     md->md_ReplyLegacy = legacy;
+     md->md_ReplyQuestion = q;
+@@ -156,7 +159,9 @@ reply_to_asker(struct MDNSDaemon *md, struct MDNSQuestion *q, BOOL legacy)
+ static void
+ reply_to_group(struct MDNSDaemon *md)
+ {
++    md->md_ReplyFamily = 0;
+     md->md_ReplyAddr = 0;
++    memset(&md->md_ReplyAddr6, 0, sizeof(md->md_ReplyAddr6));
+     md->md_ReplyPort = 0;
+     md->md_ReplyLegacy = FALSE;
+     md->md_ReplyQuestion = NULL;
+@@ -228,6 +233,18 @@ service_append(struct MDNSDaemon *md, const struct MDNSRegisteredService *rs,
+             return FALSE;
+         }
+     }
++    if (!rs->rs_Proxy && withAddr && !goodbye &&
++        !IN6_IS_ADDR_UNSPECIFIED(&md->md_Ifs[ifindex].mi_Addr6)) {
++        char target[256];
++
++        target_fqdn(md, rs, target, (LONG)sizeof(target));
++        mdnsAddr6Data(&md->md_Ifs[ifindex].mi_Addr6, data);
++        if (mdnsAppendRecord(pkt, MDNS_RESPONSE_MAX, &pos, &ancount, target,
++                DNS_TYPE_AAAA, unique, reply_ttl(md, MDNS_TTL_HOST), data,
++                16) != 0) {
++            return FALSE;
++        }
++    }
+ 
+     *posp = pos;
+     *ancountp = ancount;
+@@ -332,11 +349,11 @@ service_send(struct MDNSDaemon *md, struct MDNSRegisteredService *rs,
+         if (service_append(md, rs, goodbye, i, pkt, &pos, &ancount, TRUE)) {
+             hdr->ancount = htons(ancount);
+             mdnsNetSendOn(md, i, pkt, pos);
+-            if (md->md_ReplyAddr == 0 && !goodbye) {
++            if (!mdnsReplyIsUnicast(md) && !goodbye) {
+                 rs->rs_Multicast = mdnsNow();
+                 rs->rs_MulticastTick[i] = mdnsTicks();
+             }
+-            if (md->md_ReplyAddr == 0) {
++            if (!mdnsReplyIsUnicast(md)) {
+                 mdnsReflectPacket(md, pkt, pos, i,
+                     MDNS_REFLECT_DISCOVERY | MDNS_REFLECT_QUERY, NULL);
+                 type_reflect(md, rs, goodbye, i,
+@@ -376,6 +393,32 @@ answer_delay(const struct MDNSDaemon *md)
+     return 2 + ((seed >> 16) % 5);
+ }
+ 
++#define ANSWER_FAMILY4 1
++#define ANSWER_FAMILY6 2
++
++static UWORD
++answer_family(const struct MDNSDaemon *md)
++{
++    return md->md_SendFamily == AF_INET6 ? ANSWER_FAMILY6 : ANSWER_FAMILY4;
++}
++
++static void
++send_delayed(struct MDNSDaemon *md, LONG ifindex, const UBYTE *pkt, LONG length,
++    UWORD families)
++{
++    UWORD saved = md->md_SendFamily;
++
++    if (families & ANSWER_FAMILY4) {
++        md->md_SendFamily = AF_INET;
++        mdnsNetSendOn(md, ifindex, pkt, length);
++    }
++    if (families & ANSWER_FAMILY6) {
++        md->md_SendFamily = AF_INET6;
++        mdnsNetSendOn(md, ifindex, pkt, length);
++    }
++    md->md_SendFamily = saved;
++}
++
+ static void
+ answers_flush(struct MDNSDaemon *md, ULONG now)
+ {
+@@ -412,6 +455,7 @@ answers_flush(struct MDNSDaemon *md, ULONG now)
+     for (i = 0; i < md->md_IfCount; i++) {
+         LONG pos = (LONG)sizeof(struct MDNSHeader);
+         UWORD ancount = 0;
++        UWORD families = 0;
+         BOOL addrDone = FALSE;
+ 
+         mdnsInitHeader(hdr, DNS_FLAG_QR | DNS_FLAG_AA, 0);
+@@ -424,17 +468,19 @@ answers_flush(struct MDNSDaemon *md, ULONG now)
+                 sent_recently(rs->rs_MulticastTick[i], now)) {
+                 continue;
+             }
++            families |= rs->rs_AnswerFamilies;
+             /* the host's address once; a stand-in's host has its own */
+             if (!service_append(md, rs, FALSE, i, pkt, &pos, &ancount,
+                     rs->rs_Proxy || !addrDone)) {
+                 /* full: send what there is and start another */
+                 if (ancount != 0) {
+                     hdr->ancount = htons(ancount);
+-                    mdnsNetSendOn(md, i, pkt, pos);
++                    send_delayed(md, i, pkt, pos, families);
+                 }
+                 mdnsInitHeader(hdr, DNS_FLAG_QR | DNS_FLAG_AA, 0);
+                 pos = (LONG)sizeof(struct MDNSHeader);
+                 ancount = 0;
++                families = rs->rs_AnswerFamilies;
+                 addrDone = FALSE;
+                 if (!service_append(md, rs, FALSE, i, pkt, &pos, &ancount,
+                         TRUE)) {
+@@ -449,19 +495,34 @@ answers_flush(struct MDNSDaemon *md, ULONG now)
+         }
+         if (ancount != 0) {
+             hdr->ancount = htons(ancount);
+-            mdnsNetSendOn(md, i, pkt, pos);
++            send_delayed(md, i, pkt, pos, families);
+         }
+         if (types && (md->md_TypesAnswerIf < 0 ||
+                 md->md_TypesAnswerIf == i)) {
+-            types_send(md, i, TRUE);
++            UWORD saved = md->md_SendFamily;
++
++            if (md->md_TypesAnswerFamilies ==
++                    (ANSWER_FAMILY4 | ANSWER_FAMILY6)) {
++                md->md_SendFamily = 0;
++                types_send(md, i, TRUE);
++            } else if (md->md_TypesAnswerFamilies & ANSWER_FAMILY4) {
++                md->md_SendFamily = AF_INET;
++                types_send(md, i, TRUE);
++            } else if (md->md_TypesAnswerFamilies & ANSWER_FAMILY6) {
++                md->md_SendFamily = AF_INET6;
++                types_send(md, i, TRUE);
++            }
++            md->md_SendFamily = saved;
+         }
+     }
+     FOR_SERVICES(md, n) {
+         struct MDNSRegisteredService *rs = (struct MDNSRegisteredService *)n;
+ 
+         rs->rs_AnswerTick = 0;
++        rs->rs_AnswerFamilies = 0;
+     }
+     md->md_TypesAnswerTick = 0;
++    md->md_TypesAnswerFamilies = 0;
+     md->md_AnswerPending = FALSE;
+ }
+ 
+@@ -513,10 +574,12 @@ mdnsRegRestartAll(struct MDNSDaemon *md)
+         rs->rs_Step = 0;
+         rs->rs_NextTick = mdnsTicks();
+         rs->rs_AnswerTick = 0;
++        rs->rs_AnswerFamilies = 0;
+         memset(rs->rs_MulticastTick, 0, sizeof(rs->rs_MulticastTick));
+         memset(rs->rs_TypeTick, 0, sizeof(rs->rs_TypeTick));
+     }
+     md->md_TypesAnswerTick = 0;
++    md->md_TypesAnswerFamilies = 0;
+     md->md_AnswerPending = FALSE;
+ }
+ 
+@@ -980,6 +1043,7 @@ types_schedule(struct MDNSDaemon *md)
+     } else if (md->md_TypesAnswerIf != md->md_SendIf) {
+         md->md_TypesAnswerIf = -1;
+     }
++    md->md_TypesAnswerFamilies |= answer_family(md);
+     md->md_AnswerPending = TRUE;
+ }
+ 
+@@ -1112,6 +1176,7 @@ mdnsRegHandleQuery(struct MDNSDaemon *md, struct MDNSQuestion *q,
+             } else if (rs->rs_AnswerIf != md->md_SendIf) {
+                 rs->rs_AnswerIf = -1;
+             }
++            rs->rs_AnswerFamilies |= answer_family(md);
+             md->md_AnswerPending = TRUE;
+         } else {
+             /* a question for this one name: nobody else answers it */
+diff --git a/workbench/network/mdns/mdnsd.c b/workbench/network/mdns/mdnsd.c
+index 0c04186e4a..fbe60eed9e 100644
+--- a/workbench/network/mdns/mdnsd.c
++++ b/workbench/network/mdns/mdnsd.c
+@@ -21,12 +21,12 @@
+ #include <exec/ports.h>
+ #include <dos/dos.h>
+ #include <string.h>
++#include <sys/socket.h>
+ 
+ #include <proto/exec.h>
+ #include <proto/dos.h>
+ #include <proto/bsdsocket.h>
+ #include <libraries/bsdsocket.h>
+-#include <sys/socket.h>
+ #include <netinet/in.h>
+ 
+ #include "mdnsd.h"
+@@ -110,12 +110,9 @@ static ULONG
+ wait_and_receive(struct MDNSDaemon *md, ULONG sigmask, BOOL probing)
+ {
+     struct Library *SocketBase = md->md_SocketBase;
+-    struct sockaddr_in from;
+     struct timeval tv;
+-    socklen_t fromlen;
+     fd_set readfds;
+-    LONG i, sock, top = -1;
+-    int got;
++    LONG i, top = -1;
+ 
+     if (SocketBase == NULL) {
+         /* Between "reconfigure begin" and "end" there is no stack to ask. */
+@@ -126,10 +123,18 @@ wait_and_receive(struct MDNSDaemon *md, ULONG sigmask, BOOL probing)
+     tv.tv_sec = (probing || md->md_AnswerPending) ? 0 : 1;
+     tv.tv_usec = md->md_AnswerPending ? 20000 : probing ? 250000 : 0;
+     for (i = 0; i < md->md_IfCount; i++) {
+-        sock = md->md_Ifs[i].mi_Socket;
+-        FD_SET(sock, &readfds);
+-        if (sock > top) {
+-            top = sock;
++        LONG sockets[2];
++        LONG n;
++
++        sockets[0] = md->md_Ifs[i].mi_Socket;
++        sockets[1] = md->md_Ifs[i].mi_Socket6;
++        for (n = 0; n < 2; n++) {
++            if (sockets[n] >= 0) {
++                FD_SET(sockets[n], &readfds);
++                if (sockets[n] > top) {
++                    top = sockets[n];
++                }
++            }
+         }
+     }
+     if (WaitSelect(top + 1, top >= 0 ? &readfds : NULL, NULL, NULL, &tv,
+@@ -138,21 +143,43 @@ wait_and_receive(struct MDNSDaemon *md, ULONG sigmask, BOOL probing)
+     }
+ 
+     for (i = 0; i < md->md_IfCount; i++) {
+-        sock = md->md_Ifs[i].mi_Socket;
+-        if (!FD_ISSET(sock, &readfds)) {
+-            continue;
++        LONG sock = md->md_Ifs[i].mi_Socket;
++
++        if (sock >= 0 && FD_ISSET(sock, &readfds)) {
++            struct sockaddr_in from;
++            socklen_t fromlen = sizeof(from);
++            int got = recvfrom(sock, (char *)md->md_RxBuf, MDNS_MAX_PACKET,
++                0, (struct sockaddr *)&from, &fromlen);
++
++            if (got > 0) {
++                md->md_RxPackets++;
++                md->md_SendIf = i;
++                md->md_SendFamily = AF_INET;
++                mdnsHandlePacket(md, md->md_RxBuf, (LONG)got,
++                    (ULONG)ntohl((unsigned long)from.sin_addr.s_addr),
++                    (UWORD)ntohs(from.sin_port));
++                md->md_SendIf = -1;
++                md->md_SendFamily = 0;
++            }
+         }
+-        fromlen = sizeof(from);
+-        got = recvfrom(sock, (char *)md->md_RxBuf, MDNS_MAX_PACKET, 0,
+-            (struct sockaddr *)&from, &fromlen);
+-        if (got > 0) {
+-            md->md_RxPackets++;
+-            /* what this packet causes to be sent goes back to its link */
+-            md->md_SendIf = i;
+-            mdnsHandlePacket(md, md->md_RxBuf, (LONG)got,
+-                (ULONG)ntohl((unsigned long)from.sin_addr.s_addr),
+-                (UWORD)ntohs(from.sin_port));
+-            md->md_SendIf = -1;
++        sock = md->md_Ifs[i].mi_Socket6;
++        if (sock >= 0 && FD_ISSET(sock, &readfds)) {
++            struct sockaddr_in6 from6;
++            socklen_t fromlen = sizeof(from6);
++            int got = recvfrom(sock, (char *)md->md_RxBuf, MDNS_MAX_PACKET,
++                0, (struct sockaddr *)&from6, &fromlen);
++
++            if (got > 0) {
++                md->md_RxPackets++;
++                /* What this packet causes to be sent goes back to its link
++                 * and, for unicast, its address family. */
++                md->md_SendIf = i;
++                md->md_SendFamily = AF_INET6;
++                mdnsHandlePacket6(md, md->md_RxBuf, (LONG)got,
++                    &from6.sin6_addr, (UWORD)ntohs(from6.sin6_port));
++                md->md_SendIf = -1;
++                md->md_SendFamily = 0;
++            }
+         }
+     }
+     return sigmask;
+diff --git a/workbench/network/mdns/mdnsd.h b/workbench/network/mdns/mdnsd.h
+index 7cb09869d6..1ea8b1ae53 100644
+--- a/workbench/network/mdns/mdnsd.h
++++ b/workbench/network/mdns/mdnsd.h
+@@ -14,6 +14,8 @@
+ #include <exec/lists.h>
+ #include <exec/ports.h>
+ #include <exec/tasks.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
+ 
+ #include <bonami/mdns.h>
+ 
+@@ -26,8 +28,11 @@
+ struct MDNSInterface
+ {
+     char    mi_Name[20];
++    ULONG   mi_Index;           /* stack interface index: link identity */
+     ULONG   mi_Addr;            /* 0xAABBCCDD == A.B.C.D */
+-    LONG    mi_Socket;
++    struct in6_addr mi_Addr6;   /* link-local address, network byte order */
++    LONG    mi_Socket;          /* IPv4, or -1 */
++    LONG    mi_Socket6;         /* IPv6, or -1 */
+ };
+ 
+ /* A name is asked for three times, 250 ms apart, before it is announced
+@@ -74,6 +79,7 @@ struct MDNSRegisteredService
+     ULONG           rs_AnswerTick;  /* when an answer to a browse question
+                                      * is due, or 0 for none */
+     LONG            rs_AnswerIf;    /* to which interface, or -1 for all */
++    UWORD           rs_AnswerFamilies; /* pending AF_INET/AF_INET6 bit mask */
+ };
+ 
+ /* Known PTR answers retain their owner and remaining lifetime. */
+@@ -97,6 +103,8 @@ struct MDNSDaemon
+     LONG                    md_IfCount;
+     LONG                    md_SendIf;      /* interface of the packet being
+                                              * handled, or -1 */
++    UWORD                   md_SendFamily;  /* AF_INET/AF_INET6, or 0 */
++    UWORD                   md_SendPad;
+     UBYTE                  *md_RxBuf;       /* MDNS_MAX_PACKET bytes each */
+     UBYTE                  *md_TxBuf;
+     ULONG                   md_HostAddr;    /* the first interface's */
+@@ -122,18 +130,24 @@ struct MDNSDaemon
+ 
+     /*
+      * Where the answer being sent goes when it is not for the group: to
+-     * the one who asked (RFC 6762 sections 5.4 and 6.7). md_ReplyAddr is 0
+-     * for the group. md_ReplyLegacy: the question came from another port
++     * the one who asked (RFC 6762 sections 5.4 and 6.7). md_ReplyFamily is
++     * zero for the group. md_ReplyLegacy: the question came from another port
+      * than 5353, from a resolver that knows plain DNS only, and the answer
+      * repeats its ID and question, lives ten seconds at most and has no
+      * cache-flush bit.
+      */
++    UWORD                   md_ReplyFamily; /* AF_INET or AF_INET6; 0=group */
++    UWORD                   md_ReplyPad;
+     ULONG                   md_ReplyAddr;   /* 0xAABBCCDD == A.B.C.D */
++    struct in6_addr         md_ReplyAddr6;
+     UWORD                   md_ReplyPort;
+     UWORD                   md_ReplyId;
+     BOOL                    md_ReplyLegacy;
+     struct MDNSQuestion    *md_ReplyQuestion;
++    UWORD                   md_QueryFamily; /* family of the query in hand */
++    UWORD                   md_QueryPad;
+     ULONG                   md_QueryAddr;   /* who sent the query in hand */
++    struct in6_addr         md_QueryAddr6;
+     UWORD                   md_QueryPort;
+ 
+     struct MDNSDiscovery   *md_Discovery;
+@@ -148,6 +162,8 @@ struct MDNSDaemon
+                                             /* delayed type-enumeration reply */
+     LONG                    md_TypesAnswerIf;
+                                             /* its interface, or -1 for all */
++    UWORD                   md_TypesAnswerFamilies;
++                                            /* pending address-family mask */
+ };
+ 
+ /* Text of at most max characters: its length, and a copy that always ends
+@@ -220,6 +236,7 @@ void mdnsdServiceClose(void);
+ BOOL mdnsNetRescan(struct MDNSDaemon *md);
+ void mdnsNetClose(struct MDNSDaemon *md);
+ BOOL mdnsNetIsOwn(struct MDNSDaemon *md, ULONG addr);
++BOOL mdnsNetIsOwn6(struct MDNSDaemon *md, const struct in6_addr *addr);
+ BOOL mdnsNetSendOn(struct MDNSDaemon *md, LONG index, const UBYTE *pkt,
+     LONG pktlen);
+ void mdnsNetSendAll(struct MDNSDaemon *md, const UBYTE *pkt, LONG pktlen);
+@@ -235,7 +252,9 @@ void mdnsHostHandleProbe(struct MDNSDaemon *md,
+ void mdnsHostHandleRecord(struct MDNSDaemon *md, const struct MDNSRecord *r);
+ void mdnsHostFqdn(const struct MDNSDaemon *md, char *buf, LONG buflen);
+ void mdnsAddrData(ULONG addr, UBYTE *data);
++void mdnsAddr6Data(const struct in6_addr *addr, UBYTE *data);
+ LONG mdnsResponseBegin(struct MDNSDaemon *md, UBYTE *pkt);
++BOOL mdnsReplyIsUnicast(const struct MDNSDaemon *md);
+ 
+ /* mdns_reg.c */
+ LONG mdnsRegAdd(struct MDNSDaemon *md, struct MDNSIPCMsg *msg);
+@@ -264,6 +283,8 @@ void mdnsClientReap(struct MDNSDaemon *md);
+ /* mdns_packet.c */
+ void mdnsHandlePacket(struct MDNSDaemon *md, const UBYTE *pkt, LONG pktlen,
+     ULONG srcaddr, UWORD srcport);
++void mdnsHandlePacket6(struct MDNSDaemon *md, const UBYTE *pkt, LONG pktlen,
++    const struct in6_addr *srcaddr, UWORD srcport);
+ #define MDNS_REFLECT_DISCOVERY  1
+ #define MDNS_REFLECT_QUERY      2
+ void mdnsReflectPacket(struct MDNSDaemon *md, const UBYTE *pkt, LONG pktlen,

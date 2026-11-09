@@ -15,7 +15,7 @@
 #   dnssd -V                           the library's version
 #   dnssd -B _services._dns-sd._udp    both types listed
 #   dnssd -B _http._tcp                the instance, address, port and text
-#   dnssd -Z _http._tcp                PTR/SRV/TXT/A with the real SRV target
+#   dnssd -Z _http._tcp                PTR/SRV/TXT/A/AAAA, real SRV target
 #   dnssd -q arospeer.local A          the queued generic record query
 #   dnssd -G v4 arospeer.local         the bounded IPv4 host lookup
 #   dnssd -L, Handshake                "Host Web" resolved
@@ -193,7 +193,8 @@ if awk -F '\t' '
         split($3, fields, " "); target = fields[4]
     }
     $2 == "A" && $1 == target && $3 == "192.168.166.1" { good = 1 }
-    END { exit !good }
+    $2 == "AAAA" && $1 == target && $3 ~ /^fe80::/ { good6 = 1 }
+    END { exit !(good && good6) }
 ' "$work/zone.log"; then
     zone_complete=yes
 fi
@@ -212,8 +213,8 @@ check "dnssd -V names bonami.library 41" \
 check "dnssd -B _services._dns-sd._udp listed _http._tcp and _ssh._tcp" \
     "grep -q '^TYPE  *_http._tcp' '$work/types.log' && grep -q '^TYPE  *_ssh._tcp' '$work/types.log'"
 check "dnssd -B _http._tcp saw Host Web at 192.168.166.1 port 8080 with path=/" \
-    "grep '^ADD  *Host Web  *_http._tcp' '$work/browse.log' | grep -q '192.168.166.1  *8080  *path=/'"
-check "dnssd -Z printed PTR/SRV/TXT/A with the real host, distinct from the instance" \
+    "grep '^ADD  *Host Web  *_http._tcp' '$work/browse.log' | grep -q '192.168.166.1  *8080  *path=/' && grep -q 'fe80::1%' '$work/browse.log'"
+check "dnssd -Z printed PTR/SRV/TXT/A/AAAA with the real host, distinct from the instance" \
     "test '$zone_complete' = yes && grep -qP '^_http._tcp.local.\\tPTR\\tHost Web._http._tcp.local.' '$work/zone.log' && grep -qP '^Host Web._http._tcp.local.\\tTXT\\tpath=/' '$work/zone.log'"
 check "dnssd -G resolved the explicitly published IPv4 host" \
     "grep -q '^arospeer.local  192.168.166.1$' '$work/lookup.log'"
@@ -222,7 +223,7 @@ check "dnssd -q read an A record through the queued record API" \
 check "Nearby with no type listed the web server and SSH kinds" \
     "grep -q 'Web server (HTTP)' '$work/kinds.log' && grep -q 'SSH login' '$work/kinds.log'"
 check "Nearby web PORTS showed Host Web, port 8080 and its info" \
-    "grep -q 'Host Web  *port 8080  (192.168.166.1)' '$work/web.log' && grep -q 'info: path=/' '$work/web.log'"
+    "grep -q 'Host Web at .* port 8080' '$work/web.log' && grep -q 'address: 192.168.166.1' '$work/web.log' && grep -q 'address: fe80::1%' '$work/web.log' && grep -q 'info: path=/' '$work/web.log'"
 check "dnssd -L resolved Host Web" \
     "grep '^RESOLVED Host Web' '$work/resolve.log' | grep -q '192.168.166.1  *8080'"
 check "Handshake reached Host Web" \
@@ -244,6 +245,6 @@ check "Share rejected port zero before registration" \
 check "the host's Avahi saw Share's AmigaShare with its text, a space kept" \
     "grep '^=;aroshost;IPv4;AmigaShare\\\\032[0-9][0-9]*;_http._tcp;' '$work/avahi-http.log' | grep -q '192.168.166.2;8081;.*\"note=a b\"' && grep '^=;aroshost;IPv4;AmigaShare\\\\032[0-9][0-9]*;_http._tcp;' '$work/avahi-http.log' | grep -q '\"path=/x\"'"
 check "the host's Avahi saw dnssd -R's AROS Printer" \
-    "grep '^=;aroshost;IPv4;AROS\\\\032Printer\\\\032[0-9][0-9]*;_ipp._tcp;' '$work/avahi-ipp.log' | grep -q '192.168.166.2;631;\"rp=printer\"'"
+    "grep '^=;aroshost;[^;]*;AROS\\\\032Printer\\\\032[0-9][0-9]*;_ipp._tcp;' '$work/avahi-ipp.log' | grep -q '192.168.166.2;631;\"rp=printer\"'"
 echo "logs: $work"
 exit $status
