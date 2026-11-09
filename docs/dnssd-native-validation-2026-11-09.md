@@ -168,3 +168,19 @@ This is AROS runtime validation of the inventory state machine. It is not yet
 validation of AROSTCP interface enumeration, socket rebinding, packet I/O,
 daemon integration or public ABI. No AROSTCP limitation was bypassed in this
 slice.
+
+### AROSTCP input audit status
+
+Source inspection after the inventory run confirms that the stack already
+offers complete IPv4/IPv6 enumeration, stable indexes, interface flags,
+per-IPv6-address state and address-change notification through its existing
+ioctls and `SocketBaseTags()` contract. The current daemon subscribes to the
+notification but collapses the enumerated data in
+`mdns_net.c::find_interfaces()`.
+
+This is source-level gap localization, not new runtime evidence. Acceptance
+of the replacement collector requires a Linux-hosted AROS test that adds
+multiple IPv4 and IPv6 addresses, observes the change notification, verifies
+the complete canonical snapshot, removes addresses and verifies the next
+revision. Buffer saturation must also produce an explicit overflow or a
+successful grow/retry, never a partial published snapshot.

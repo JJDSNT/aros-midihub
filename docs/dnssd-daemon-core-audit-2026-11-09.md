@@ -103,10 +103,46 @@ interface/address facilities and demonstrate every address on every relevant
 link. If that generic input is missing or lossy, the minimum fix belongs in
 AROSTCP and precedes daemon integration.
 
+## AROSTCP enumeration audit
+
+The source audit found the generic facilities needed by the canonical
+inventory already present in the selected AROS baseline:
+
+| Required input/event | AROSTCP source/API evidence | Finding |
+|---|---|---|
+| every IPv4 address | `SIOCGIFCONF`; `bsdsocket/net/if.c::ifconf()` walks every `if_addrlist` entry | Available; caller controls buffer size. |
+| every IPv6 address | `SIOCGLIFADDR`; `bsdsocket/netinet6/in6.c::in6_ifconf()` walks the complete `in6_ifaddr` list | Available; one `in6_ifreq` per address. |
+| stable link identity and flags | `SIOCGIFINDEX` and `SIOCGIFFLAGS` in `bsdsocket/net/if.c` | Available per interface name. |
+| IPv6 address lifecycle state | `SIOCGIFAFLAG_IN6`, documented and tested by `cunit-net-addrflags6.c` | Available per address, including tentative, duplicated, detached and deprecated state. |
+| rescan trigger | `SBTC_SIG_ADDRESS_CHANGE_MASK`, tested by `cunit-net-addrsig.c` and already subscribed in `mdnsd.c::net_up()` | Available for IPv4/IPv6 add/remove and IPv6 DAD completion. |
+
+The ioctls use caller-sized buffers and return bytes written rather than a
+required-size query. That is not a DNS-SD-specific stack gap: the daemon can
+grow and retry a saturated snapshot before reconciliation, with an explicit
+upper policy limit and a reported overflow. Races are resolved by the next
+address-change notification and atomic inventory reconcile.
+
+The confirmed loss is local to `mdns_net.c::find_interfaces()`:
+
+- a fixed 2048-byte IPv4 buffer and 32-entry IPv6 buffer are not checked for
+  saturation;
+- `MDNS_IFS_MAX` caps the result at eight links;
+- `struct found` has storage for only one IPv4 and one IPv6 address; and
+- later addresses overwrite the IPv4 field or are discarded after the first
+  IPv6 link-local address.
+
+Therefore this slice demonstrates no need for a new AROSTCP vector or
+contract. The minimum correction is a daemon-side collector that grows and
+retries saturated ioctl snapshots, translates every entry into canonical
+link/address specs, preserves IPv6 state, and reconciles only a complete
+snapshot. A future integration test must still prove this behavior at AROS
+runtime before the collector is accepted.
+
 ## Next implementation slice
 
-1. Connect the canonical inventory to the daemon rescan boundary and audit
-   the exact AROSTCP enumeration path without collapsing addresses.
+1. Replace `find_interfaces()` with the canonical collector at the daemon
+   rescan boundary, using the audited AROSTCP ioctls without collapsing
+   addresses.
 2. Migrate one read-only discovery snapshot path to the canonical service
    model.
 3. Only then define the first `dnssd.library` canary vectors.

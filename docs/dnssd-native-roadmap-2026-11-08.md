@@ -154,8 +154,14 @@ completes the model-canary slice, not D2 daemon integration. Commit
 and Linux-hosted AROS pass deterministic dual-stack reconciliation, stable
 generations, state changes, removal/re-addition, malformed input and atomic
 capacity failure. The next dependency is the real AROSTCP-to-inventory rescan
-path; any missing generic enumeration facility must be fixed in AROSTCP, not
-emulated inside DNS-SD.
+path. The source audit now confirms `SIOCGIFCONF`, `SIOCGLIFADDR`,
+`SIOCGIFINDEX`, `SIOCGIFFLAGS`, `SIOCGIFAFLAG_IN6` and
+`SBTC_SIG_ADDRESS_CHANGE_MASK` supply the required generic inputs and change
+notification. The confirmed truncation is `mdns_net.c::find_interfaces()`
+collapsing those results into fixed buffers, eight links and one address of
+each family. No new AROSTCP vector is justified. The next patch must replace
+that collector and prove complete multi-address enumeration at AROS runtime;
+any newly demonstrated generic stack gap still belongs in AROSTCP.
 
 **Upstream PR:** dependency-ordered daemon-core proposals after authorization;
 no Bonami vectors and no public `dnssd.library` ABI mixed into core work.

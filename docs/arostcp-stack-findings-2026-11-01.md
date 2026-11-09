@@ -2,6 +2,25 @@
 
 This note comes from aros-matter. aros-matter is completing the AROSTCP stack through grouped upstream PRs; the plan is in aros-matter's `AI_context/research/2026-10-31-arostcp-pr-groups-plan.md`. While planning those groups, MIDIHub's network items were checked against the stack.
 
+## 2026-11-09 native DNS-SD reconciliation
+
+The historical findings below predate merged AROSTCP group 5b and the current
+native `dnssd.library` direction. In the audited master:
+
+- `SIOCGIFCONF` and `SIOCGLIFADDR` expose every IPv4/IPv6 address;
+- `SIOCGIFINDEX`, `SIOCGIFFLAGS` and `SIOCGIFAFLAG_IN6` expose the link and
+  per-address state needed by a native daemon;
+- `SBTC_SIG_ADDRESS_CHANGE_MASK` covers address add/remove and IPv6 DAD
+  completion; and
+- current `mdnsd` already subscribes to that signal.
+
+The remaining multi-address loss is the fixed, collapsed representation in
+`mdns_net.c::find_interfaces()`, not a missing AROSTCP contract. The native
+DNS-SD plan therefore does not add a stack API for this slice. It will replace
+the daemon collector and validate the existing ioctls on Linux-hosted AROS.
+Any different generic stack gap discovered during that runtime work must be
+fixed in AROSTCP rather than worked around in DNS-SD.
+
 The result is that **MIDIHub needs one thing new from the stack: `SO_TIMESTAMP`**, now in aros-matter's group 4. The other items are either already there, already planned, or work outside AROSTCP.
 
 Revisions read: AROS upstream master `f04bb2c13e`. That includes AROSTCP 5.20 (#2005) and mdnsd's dual-stack core (#1980, merged 2026-10-31). AROS #2006 (5.21) was still in review.
