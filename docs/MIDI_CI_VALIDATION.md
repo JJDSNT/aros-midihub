@@ -67,6 +67,9 @@ claimed.
 | CAMD abnormal client termination | 20 `RemTask()` rounds; each owns opener, signalled watch, snapshot, publisher and signalled input session | pass on AROS linux-hosted |
 | CAMD dead-owner reaper | Healthy observer receives every endpoint departure before capacity reuse | pass on AROS linux-hosted |
 | CAMD stale signal/capacity recovery | Fresh watch and snapshot succeed after every forced death; no crash or exhaustion | pass on AROS linux-hosted |
+| Native UMP resident driver | Adjacent extension publishes UMP/MIDI 2.0 and opens independent input/output sessions | pass on AROS linux-hosted |
+| Native UMP exact delivery | Four-word Data128 looped through driver callbacks without MIDI 1.0 conversion | pass on AROS linux-hosted |
+| Native UMP removal | First removal refused while sessions pin provider; detach succeeds after close | pass on AROS linux-hosted |
 
 ## AROS-native coordinator run
 
@@ -89,16 +92,16 @@ contract.
 
 ## CAMD abnormal-client-termination run
 
-The proposal library and compatibility client were built from PR #2101 commit
-`4c1510f1d0` plus `aros-camd-endpoint-task-death.patch` using the
-linux-x86_64 AROS toolchain, then injected into a copied hosted system:
+The final combined library and compatibility client were rebuilt from PR
+#2101 head `e82edc9287` in `/home/jaime/AROS-camd43` using the existing
+Linux-hosted build `build-camd43-hosted`, then injected into a copied system:
 
 ```sh
 tools/camd-task-death-hosted.sh \
   build-aros-linux/bin/linux-x86_64/AROS \
   build-camd43-hosted/bin/linux-x86_64/AROS/Libs/camd.library \
   build-camd43-hosted/bin/linux-x86_64/AROS/Extras/aros-midihub/C/MIDIHubCAMDCompat \
-  /tmp/camd-task-death-hosted-main
+  /tmp/camd43-pr-task-death-20261108
 ```
 
 Result:
@@ -125,10 +128,10 @@ not start.
 
 ## CAMD Function Block public-ABI run
 
-The candidate came from PR #2101 commit `4c1510f1d0` plus only
-`aros-camd-function-block-capabilities.patch`, in the persistent
-`/home/jaime/AROS-camd43-fb` worktree. The public-header canary was compiled
-against its installed headers with:
+The isolated patch was first validated against `4c1510f1d0`. Final integration
+was repeated from PR #2101 head `e82edc9287` in the canonical
+`/home/jaime/AROS-camd43` worktree. The public-header canary was compiled
+against the proposal headers with:
 
 ```sh
 build-aros-linux/bin/linux-x86_64/tools/crosstools/x86_64-aros-gcc \
@@ -163,6 +166,38 @@ outside this patch: it observes one debug-driver load where it expects two.
 The unpatched baseline produces the identical result, so it is not attributed
 to the Function Block change. These are AROS Linux-hosted results only; no
 AArch64 or hardware validation is claimed.
+
+## CAMD native UMP driver-extension run
+
+The independently reviewable patch remains
+`patches/aros-camd-native-ump-driver-extension.patch`; its implementation is
+now commit `e82edc9287` in PR #2101. Final integration used the single
+canonical worktree and `build-camd43-hosted`. `MIDIHubUMPDriverProbe` is a resident one-port driver
+whose `MidiDeviceDataUMPV1` retains valid MIDI 1.0 fallback callbacks and adds
+the optional UMP tail. It was run with:
+
+```sh
+tools/camd-ump-driver-hosted.sh \
+  build-aros-linux/bin/linux-x86_64/AROS \
+  build-camd43-hosted/bin/linux-x86_64/AROS/Libs/camd.library \
+  build-camd43-hosted/bin/linux-x86_64/AROS/Extras/aros-midihub/C/MIDIHubUMPDriverProbe \
+  /tmp/camd43-pr-native-ump-20261108
+```
+
+Result: 7 passes, 0 failures. The endpoint snapshot reports native UMP,
+current MIDI 2.0 protocol and the reference transport; separate input and
+output sessions open; a Data128 event arrives with the same four words; and
+`RemoveMidiDevice()` is refused until both sessions close, after which detach
+succeeds. This is AROS Linux-hosted runtime evidence.
+
+The first runtime attempt trapped immediately after successful publication.
+Moving the legacy allocations below the native branch had left their cleanup
+pointers uninitialized; the success path reached `FreeVec()` on indeterminate
+values. Initializing both to `NULL` fixed the defect, and the final run above
+uses that correction. Not yet validated: deterministic driver backpressure
+and `OutputReady`, every UMP MT class, per-reader overflow isolation, loaded
+DEVS:Midi reference-module scanning, or actual Network MIDI 2.0/Bluetooth UMP
+transport integration.
 
 ## What this proves
 

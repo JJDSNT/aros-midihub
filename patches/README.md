@@ -111,8 +111,9 @@ The modified AROS sources are covered by [AROS-LICENSE](AROS-LICENSE).
 | `aros-camd-endpoint-hardening.patch` | objects go with their task's last close of the library; temporary IDs and a full identity store; time-ordered session queues and timed SysEx; a bounded, really blocking drain; direction flags, snapshot generation, name checks, per-session SysEx limits and `GetPublishedEndpointStats()` |
 | `aros-camd-receive-ring-and-wait.patch` | historical combined patch: the receive overflow and realtime-ring fixes are upstream; its remaining `CamdWait()` fix is AROS PR [#1956](https://github.com/aros-development-team/AROS/pull/1956), commit `6c01b38b9` |
 | `aros-camd-endpoint-hold-and-drain.patch` | `CAMD_PUBLISH_HOLD_UNTIL_DUE` keeps clients' timed messages until they are due before a publisher can take them; `DrainEndpointSession()` is woken when a queue empties or its endpoint is withdrawn instead of polling |
-| `aros-camd-function-block-capabilities.patch` | append MIDI-CI version and maximum SysEx8 streams to the sized Function Block record while retaining 104-byte publication arrays |
-| `aros-camd-endpoint-task-death.patch` | follow-up to PR #2101 commit `4c1510f1d0`: private `task.resource`/`TNA_REMOVED` cleanup for watches, snapshots, sessions and publishers; signal targets are neutralized before Exec removes the task and a CAMD reaper performs blocking cleanup. Kept outside the older `camd-series` until that series carries the PR's final resident-driver commits |
+| `aros-camd-function-block-capabilities.patch` | append MIDI-CI version and maximum SysEx8 streams to the sized Function Block record while retaining 104-byte publication arrays; integrated as PR #2101 commit `74dcc7c928` |
+| `aros-camd-endpoint-task-death.patch` | private `task.resource`/`TNA_REMOVED` cleanup for watches, snapshots, sessions and publishers; integrated as PR #2101 commit `bd9cc81bb0` |
+| `aros-camd-native-ump-driver-extension.patch` | optional sized native-UMP tail adjacent to unchanged `MidiDeviceData`; no application vector, bounded CAMD queues/workers, task-context callbacks and loaded-seglist validation; integrated as PR #2101 commit `e82edc9287` |
 
 ```sh
 grep -v '^#' patches/camd-series | while read -r p; do
@@ -298,6 +299,14 @@ Linux-hosted, the known Function Block Info words
 104-byte output pass 8/8. The same client against CAMD 43 without the patch
 fails the four capability-specific checks. The general CAMD contract/v42/v43
 sections pass 71/38/229; no AArch64 result is claimed for this increment.
+
+`tools/camd-ump-driver-hosted.sh` injects the separately reviewable native-UMP
+proposal plus `MIDIHubUMPDriverProbe` into a copied AROS Linux-hosted system.
+The resident composite driver publishes one UMP/MIDI 2.0 endpoint and loops an
+exact four-word Data128 message through independent CAMD sessions. Removal is
+refused while the provider is pinned and succeeds after close. The final run
+passes 7/7. This proves the generic publication/delivery boundary, not yet the
+Network MIDI 2.0 or Bluetooth UMP transport integrations.
 
 [`tools/camd-compat-qemu.sh`](../tools/camd-compat-qemu.sh) runs
 `MIDIHubCAMDCompat`, a suite of the CAMD 41.1 behaviour programs rely on,

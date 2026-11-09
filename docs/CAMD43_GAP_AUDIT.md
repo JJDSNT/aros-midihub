@@ -1,14 +1,16 @@
 # CAMD 43 MIDI-CI gap audit
 
-Audited draft: AROS PR #2101 at `4c1510f1d08fad7efb1081b9d005734ef2557c28`.
-CAMD 42 dependency: `a0ca679f44`. Source links below are immutable commit
-links. Required tests that do not yet exist are not presented as validation.
+Original audited draft: AROS PR #2101 at
+`4c1510f1d08fad7efb1081b9d005734ef2557c28`. The three confirmed corrections
+are integrated in the same PR at `e82edc928704dcbcc1a231615b38fc0cc1e335ec`.
+CAMD 42 dependency: `a0ca679f44`. Baseline source links below remain immutable.
+Required tests that do not yet exist are not presented as validation.
 
 ## Source-level matrix
 
 | Area | Existing implementation and behavior | Gap and ownership | Minimum correction, ABI and validation |
 | --- | --- | --- | --- |
-| UMP | `CAMDUMPEventV1` carries one complete 1–4 word message. [`camd_provider_validate_ump`](https://github.com/aros-development-team/AROS/blob/4c1510f1d08fad7efb1081b9d005734ef2557c28/workbench/libs/camd/provider_contract.c) checks the MT word count; native UMP queues preserve records. | Sufficient generic message boundary for MIDI-CI SysEx7. It deliberately validates size, not every status-specific field. That deeper check belongs to the consuming UMP/MIDI-CI layer. Blocking driver gap: the public resident `MidiDeviceData` path is still MIDI 1.0 and the native provider contract is private, so a real driver cannot yet publish UMP through the generic driver API. | Keep `CAMDUMPEventV1`. Specify and test the smallest optional driver-side UMP callbacks before public exposure. No MIDI-CI state in CAMD. ABI: additive driver extension, not a `MidiDeviceData` layout change. Test all 16 MT size classes, malformed counts, and a resident native-UMP loopback. |
+| UMP | `CAMDUMPEventV1` carries one complete 1–4 word message. [`camd_provider_validate_ump`](https://github.com/aros-development-team/AROS/blob/4c1510f1d08fad7efb1081b9d005734ef2557c28/workbench/libs/camd/provider_contract.c) checks the MT word count; native UMP queues preserve records. PR head `e82edc9287` adds the optional driver-side UMP tail without changing `MidiDeviceData`. | The generic publication gap is corrected. The reference driver proves exact Data128 delivery; status-specific validation remains in the UMP/MIDI-CI consumer. Actual Network MIDI 2.0 and Bluetooth UMP drivers, all MT classes and deterministic backpressure are still unvalidated. | Keep `CAMDUMPEventV1` and the additive driver extension. No MIDI-CI state in CAMD. Complete the remaining driver and transport tests before freezing the provisional ABI. |
 | SysEx | MIDI 1.0 endpoint sessions use `PutEndpointSysEx`/`GetEndpointMidi` with complete bounded messages up to 64 KiB. UMP sessions carry each SysEx7 Data64 packet intact. | No CAMD gap for MIDI 1.0 MIDI-CI. UMP SysEx7 reconstruction spans several UMP records and belongs to `midici.library`, because CAMD must not reinterpret generic UMP. Existing MIDI 1.0 validation checks F0/F7 but does not reject embedded status bytes; the MIDI-CI decoder still validates every data byte. | No CAMD API change. The implemented host test reconstructs byte-exact Discovery through existing UMP helpers. Add CAMD 43 runtime loopback and malformed Start/Continue/End tests. |
 | Endpoints | Stable 128-bit CAMD endpoint ID, provider ID, state, data formats, protocol capability/current protocol, product instance and transport are exposed in immutable snapshots. | Sufficient identity handle for coordinator keys. A CAMD ID is not a MIDI-CI MUID and must never be substituted for one. | No change for MUIDs. Test reconnect retains CAMD ID while the coordinator invalidates/re-discovers the correct MUID scope. |
 | Function Blocks | `CAMDGroupInfoV1` and `CAMDFunctionBlockInfoV1` expose Group range, direction, active/static/UI and MIDI 1.0 flags; topology replacement is atomic. | Confirmed metadata omission: UMP Function Block Info also conveys MIDI-CI version and maximum SysEx8 streams. The draft explicitly deferred these fields. This is CAMD topology metadata, not MIDI-CI policy. | Implemented proposal appends `MIDICIVersion` and `MaxSysEx8Streams` through the existing sized-record policy. A known Stream fixture, legacy/full publication and guarded short output pass on AROS Linux-hosted; the unpatched library fails the four new capability checks. If v43 freezes first, use a V2 record/query instead. |
@@ -16,7 +18,7 @@ links. Required tests that do not yet exist are not presented as validation.
 | Discovery | A client can enumerate stable endpoints, open bidirectional sessions, send complete SysEx or UMP and watch changes. | MIDI-CI broadcast/reply state is intentionally absent and belongs to the coordinator/engine. Native UMP discovery cannot reach hardware until the driver UMP path exists. | No MIDI-CI CAMD vectors. Coordinator enumerates/open sessions per endpoint; drivers publish UMP capability generically. Test MIDI 1.0 and UMP Discovery independently. |
 | Concurrency | Registry and queues use shared `SignalSemaphore` state. Multiple input sessions fan out; output sessions have reserved queues and explicit queue-full counters. | Transport concurrency is adequate. CAMD cannot decide which application owns the endpoint's MUID or serialize conflicting Profile/PE operations. That is a `midici` coordinator responsibility. | No CAMD change. Test two input sessions receive identical complete CI messages and one slow reader reports loss without corrupting the other. |
 | Ordering | Per-session queues preserve complete records; equal-time records preserve send order; enqueue batches reserve atomically. | There is no meaningful cross-application MIDI-CI transaction order. Multiple applications can independently send conflicting requests in a scheduler-dependent order. This is not a transport bug. | One coordinator output session per endpoint serializes CI operations. Keep application musical traffic independent. Test conflicting coordinator leases and unrelated application traffic. |
-| Lifecycle | Endpoint states include offline/retiring/retired; watches report changes; provider/session references block premature release. `RemoveMidiDevice` refuses while pinned. | Confirmed and corrected gap: the baseline [`endpoint_owner.c`](https://github.com/aros-development-team/AROS/blob/4c1510f1d08fad7efb1081b9d005734ef2557c28/workbench/libs/camd/endpoint_owner.c) only observed `CloseLibrary()` and left all endpoint objects plus signal task pointers after abnormal termination. | `aros-camd-endpoint-task-death.patch` uses the baseline task.resource 1.4 notification contract privately: the hook neutralizes signals and marks ownership; a CAMD task releases objects in dependency order. No public ABI. Twenty forced deaths passed on AROS linux-hosted. Exec's separate library open count is intentionally out of scope. |
+| Lifecycle | Endpoint states include offline/retiring/retired; watches report changes; provider/session references block premature release. `RemoveMidiDevice` refuses while pinned. | Corrected in PR commit `bd9cc81bb0`: the baseline [`endpoint_owner.c`](https://github.com/aros-development-team/AROS/blob/4c1510f1d08fad7efb1081b9d005734ef2557c28/workbench/libs/camd/endpoint_owner.c) only observed `CloseLibrary()` and left all endpoint objects plus signal task pointers after abnormal termination. | The private task.resource 1.4 hook neutralizes signals and marks ownership; a CAMD task releases objects in dependency order. No public ABI. Twenty forced deaths and the final 3/3 focused regression passed on AROS Linux-hosted. Exec's separate library open count is intentionally out of scope. |
 | Routing | Complete SysEx/UMP records are copied per endpoint input session; legacy traffic remains on the existing graph. | CAMD provides no exclusive MIDI-CI claim or filter, so independent applications may all observe CI and may send their own requests. Adding CI routing policy to CAMD would violate the boundary. | Coordinator owns the system MUID/session; direct applications use the public MIDI-CI API or explicitly isolated engines. Test Note/SysEx application traffic remains byte-identical while CI runs. |
 | Notifications | Endpoint watch events report added/updated/offline/retired/lost with generations; overflow requires a new snapshot. | Sufficient generic notification. There is no field-level change mask, so the coordinator refreshes the endpoint/topology record on `UPDATED`. | No ABI change required. Test topology update, lost-event resnapshot, offline cancellation and reconnect rediscovery. |
 | ABI | V43 appends 33 vectors after the v42 boundary. Records are pointer-free, sized/versioned and compile-time size checked; old CAMD graph structures are unchanged. | The proposal is explicitly provisional and its own U01 checklist is not closed. Function Block fields and the native driver path should be settled before freezing. | Incorporate justified fields into PR 2101 rather than inventing 43.1. Preserve existing vector order. The requested Linux-hosted scope now proves the 104/112 Function Block boundary and public offsets; no non-x86-64 runtime result is claimed. Stale-handle and CAMD 41/42 regression coverage remains mandatory. |
@@ -48,24 +50,37 @@ Data128/SysEx8 and packet boundaries cannot survive that boundary. A future
 Bluetooth UMP characteristic needs the same complete-record primitive, while
 the merged BLE MIDI 1.0 characteristic must remain unchanged.
 
-Smallest public correction: leave `MidiDeviceData` byte-for-byte unchanged.
-Add a flag and a sized/versioned extension immediately after it in a composite
-driver registration record. The extension provides per-port query/state/
-topology callbacks, complete `CAMDUMPEventV1` send, an attach callback through
-which CAMD supplies complete UMP submit and port-change operations, and a
-detach boundary. First-version submission is task-context only; interrupt
-drivers defer to a resident worker. CAMD continues owning validation, queues,
-fan-out and backpressure. `OpenMidiDevice()` validates the flagged tail inside
-the seglist; unchanged `AddMidiDevice()` can find the adjacent tail for an
-in-memory record. A new library vector is a fallback only if maintainers reject
-the adjacent-tail convention.
+Implemented proposal: `patches/aros-camd-native-ump-driver-extension.patch`
+leaves `MidiDeviceData` byte-for-byte unchanged. It assigns a second bit in the
+existing `Flags` byte and defines a sized/versioned record immediately after
+the legacy record in `MidiDeviceDataUMPV1`. No application vector is added.
+The tail supplies attach/detach, per-port open/close/query, complete
+`CAMDUMPEventV1` send and a CAMD host table for input submission, state,
+topology and output-ready notification. `OpenMidiDevice()` bounds the tail,
+transport string and callbacks inside a loaded driver's seglist; unchanged
+`AddMidiDevice()` discovers the same tail for a resident driver.
+
+The new private `ump_driver_backend` reuses CAMD's bounded native queue, pump,
+worker and per-port fan-out. Output is committed only after the driver accepts
+it; `BUSY` keeps it queued until `OutputReady`. Input validates complete 1–4
+word UMPs and fans them out to independent sessions. Version 1 callbacks are
+task-context only, so an interrupt-driven USB/Bluetooth implementation must
+relay through its resident task. The adapter requires homogeneous current
+protocol across a driver's fixed ports; a future need for mixed protocols must
+be demonstrated before widening the record.
 
 Compatibility: old drivers and current BLE MIDI 1.0 take the exact legacy
-path; old applications and CAMD vectors are unchanged; new drivers should
-retain a safe MIDI 1.0 fallback when loaded by CAMD 41/42. Required proof is a
-canonical in-memory native driver exercising every MT size, two readers,
-isolated overflow, state/protocol/topology change and removal while pinned,
-followed by exact Network MIDI 2.0 and Bluetooth UMP transport round trips.
+path; `sizeof(MidiDeviceData)`, old applications and CAMD vectors are
+unchanged. CAMD 41/42 ignore the extra flag and use the mandatory MIDI 1.0
+fallback callbacks. `MIDIHubUMPDriverProbe` registered a resident composite
+record on AROS Linux-hosted, published `umpref.0` as UMP/MIDI 2.0, opened
+independent input/output sessions, looped a four-word Data128 event without
+conversion, refused removal while sessions pinned the provider and detached
+after close: 7 passes, 0 failures. The first run found and the proposal fixed
+an uninitialized legacy-cleanup pointer after the native publication branch.
+Deterministic blocked-output retry, every MT class, two slow/fast readers and
+actual Network MIDI 2.0/Bluetooth UMP integrations remain follow-up evidence;
+they are not claimed by the reference loopback.
 
 ### C43-G2: Function Block MIDI-CI capability is not queryable
 
