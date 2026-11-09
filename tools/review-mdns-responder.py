@@ -96,8 +96,9 @@ def main():
                   "local-rename", "reject-instance", "proxy-own-name",
                   "restart-probes", "task-ids", "update-ttl")
     if ipv6_core:
-        cases += ("host-aaaa", "host-conflict-aaaa", "service-aaaa",
-                  "shared-ipv6-family")
+        cases += ("host-aaaa", "host-multiple-addresses",
+                  "service-multiple-addresses", "host-conflict-aaaa",
+                  "service-aaaa", "shared-ipv6-family")
     if subtype_core:
         cases += ("subtype-announce", "subtype-query", "subtype-goodbye",
                   "subtype-validation")
@@ -125,7 +126,8 @@ def main():
         if "MDNS_IPC_STATUS" in ipc:
             cases += ("status-counters",)
     if args.query:
-        cases = ("query-a", "query-own-host", "query-local-service",
+        cases = ("query-a", "query-own-host", "query-own-host-multiple",
+                 "query-local-service",
                  "query-ptr-compressed",
                  "query-coalesce", "query-overflow", "query-timeout",
                  "query-notify-stop", "query-owner-restart",

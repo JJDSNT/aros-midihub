@@ -180,12 +180,17 @@ Linux-hosted AROS dual-stack exchange pass. The runtime test uses no Bonami
 client or library and observes A plus AAAA publication with IPv6 hop-limit
 255. No AROSTCP or public API change was needed.
 
-D2 remains open for a narrower reason: mature host/service/query paths still
-project one usable IPv4 and one usable IPv6 address per link when producing
-legacy packet/event data. The inventory itself retains every address. The
-next implementation-ready slice is complete multi-address packet and native
-snapshot consumption; the public `dnssd.library` canary remains gated on that
-work, not on compatibility with Bonami.
+Commit `d18246e864` removes that ordinal-zero projection from host probes and
+answers, service additional records, tie-break input and local record
+queries. Two A plus two AAAA records on one link pass the canonical responder
+and query fixtures; Linux-hosted AROS publishes both its configured and
+autoconfigured IPv6 link-local addresses in the same A/AAAA RRset.
+
+D2 remains open for bounded multi-packet behavior when a complete RRset does
+not fit `MDNS_MAX_PACKET`/`MDNS_RESPONSE_MAX`, and for a native read-only
+service snapshot that does not store or project Bonami public events. The
+public `dnssd.library` canary remains gated on those semantics, not on
+compatibility with Bonami.
 
 **Upstream PR:** dependency-ordered daemon-core proposals after authorization;
 no Bonami vectors and no public `dnssd.library` ABI mixed into core work.

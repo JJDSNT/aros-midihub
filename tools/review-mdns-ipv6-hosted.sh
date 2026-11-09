@@ -252,6 +252,7 @@ next_question4 = next_question
 peer_queries = 0
 aros_answers = 0
 aros_answers4 = 0
+aros_addresses6 = set()
 bad_hops = []
 sources = set()
 while time.monotonic() < deadline:
@@ -306,16 +307,23 @@ while time.monotonic() < deadline:
             ipaddress.IPv6Address(data).is_link_local
             for section, owner, kind, rclass, ttl, data in records):
         aros_answers += 1
+        aros_addresses6.update(str(ipaddress.IPv6Address(data))
+            for section, owner, kind, rclass, ttl, data in records
+            if section == 0 and owner.startswith('arosbox') and
+            owner.endswith('.local') and kind == 28 and len(data) == 16)
 
 print('AROS IPv6 sources:', ', '.join(sorted(sources)) or '(none)')
 print('AROS AAAA queries for peer.local:', peer_queries)
 print('AROS AAAA responses for arosbox.local:', aros_answers)
+print('AROS AAAA addresses for arosbox.local:',
+      ', '.join(sorted(aros_addresses6)) or '(none)')
 if mode in ('dual', 'daemon'):
     print('AROS A responses for arosbox.local:', aros_answers4)
 print('AROS packets with hop limit other than 255:',
       sorted(set(bad_hops)))
 if ((mode != 'daemon' and peer_queries < 1) or aros_answers < 1 or bad_hops or
-        (mode in ('dual', 'daemon') and aros_answers4 < 1)):
+        (mode in ('dual', 'daemon') and aros_answers4 < 1) or
+        (mode == 'daemon' and len(aros_addresses6) < 2)):
     raise SystemExit(1)
 PY
 peer=$!

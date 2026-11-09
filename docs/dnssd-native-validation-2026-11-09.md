@@ -254,8 +254,43 @@ announcements/responses on the same daemon run. Evidence is under
 `/tmp/dnssd-canonical-mdns-daemon-20261109-v2` on the validation host.
 
 This proves real AROS/AROSTCP enumeration, DAD-triggered rescan, derived socket
-creation and dual-stack DNS packet publication. It does not prove public
-`dnssd.library` ABI, hardware targets, or complete multi-address publication:
-the canonical inventory retains every address, while the current mature
-packet/event paths still choose the first usable address of each family per
-link.
+creation and dual-stack DNS packet publication. At commit `bb6b138b31` it did
+not yet prove public `dnssd.library` ABI, hardware targets, or complete
+multi-address publication; the following increment adds the latter evidence.
+
+## D2 multi-address publication
+
+AROS proposal commit `d18246e864` adds an internal ordinal iterator over the
+canonical inventory and converts host probes/answers, service additional
+records, host tie-break input and local record queries to consume every usable
+A and AAAA entry on the selected link. It introduces no public API and does
+not modify AROSTCP.
+
+Updated host fixtures compile the canonical AROS sources and reconcile two A
+plus two AAAA addresses on one link. Results:
+
+- responder/RFC fixture: 44/44 passed, including one four-address host answer
+  and one service response containing PTR, SRV, TXT, two A and two AAAA;
+- query fixture: 16/16 passed, including four distinct local host events; and
+- discovery fixture: 45/45 passed unchanged.
+
+The Linux-hosted AROS daemon test now requires two distinct AAAA answers for
+`arosbox.local`. AROSTCP supplies the configured `fe80::2` and its
+autoconfigured link-local address after DAD; the independent peer observed:
+
+```text
+AROS AAAA addresses for arosbox.local: fe80::2, fe80::8018:65ff:fe83:7dd8
+AROS A responses for arosbox.local: 3
+AROS packets with hop limit other than 255: []
+ok: daemon multicast exchange and hop-limit checks passed
+```
+
+The capture shows both AAAA records and A `192.168.166.2` in the same
+cache-flush RRset on IPv4 and IPv6. Evidence is under
+`/tmp/dnssd-canonical-mdns-multi-20261109-v2` on the validation host.
+
+This closes the demonstrated first-address publication loss. It does not yet
+validate RRset continuation when enough addresses exceed the 8972-byte host
+packet limit or the 1400-byte service response policy; those bounded paths
+currently reject the oversized set instead of silently projecting one
+address. Native service snapshots and hardware targets also remain pending.

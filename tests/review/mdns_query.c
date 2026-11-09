@@ -162,6 +162,28 @@ query_own_host(void)
 }
 
 static void
+query_own_host_multiple(void)
+{
+    struct MDNSRecordEvent event;
+    APTR ref;
+    unsigned a = 0, aaaa = 0, i;
+
+    init_query();
+    configure_multiple_addresses(&daemon);
+    ref = begin("AROSBOX", DNS_TYPE_ANY, 3);
+    for (i = 0; i < 4; ++i) {
+        CHECK(read_record(ref, &event) == MDNS_OK);
+        if (event.re_Type == DNS_TYPE_A)
+            ++a;
+        else if (event.re_Type == DNS_TYPE_AAAA)
+            ++aaaa;
+    }
+    CHECK(a == 2 && aaaa == 2);
+    CHECK(read_record(ref, &event) == MDNSERR_NOTREADY);
+    finish_query();
+}
+
+static void
 query_local_service(void)
 {
     struct MDNSRegisteredService *second, *service;
@@ -434,6 +456,8 @@ main(int argc, char **argv)
     else if (!strcmp(argv[1], "query-aaaa")) query_aaaa();
 #endif
     else if (!strcmp(argv[1], "query-own-host")) query_own_host();
+    else if (!strcmp(argv[1], "query-own-host-multiple"))
+        query_own_host_multiple();
     else if (!strcmp(argv[1], "query-local-service")) query_local_service();
 #ifdef MDNS_SUBTYPE_CORE
     else if (!strcmp(argv[1], "query-local-subtype")) query_local_subtype();

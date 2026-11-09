@@ -162,19 +162,24 @@ explicit 256-address policy bound; a saturated input snapshot still fails
 atomically instead of publishing a partial view.
 
 The integration preserves every address in canonical state and uses all of
-them for own-address recognition. Current host/service packet builders still
-select the first usable address of each family per link because those paths
-have not yet been converted to emit a complete canonical address set. This is
-the remaining D2 projection, not an AROSTCP deficiency and not grounds for a
-new stack API.
+them for own-address recognition. Follow-up commit `d18246e864` removes the
+ordinal-zero projection from host probes/answers, service additional records,
+probe tie-break input and local record queries. Those paths now iterate every
+usable A and AAAA entry on the selected link. Proxy registrations retain their
+intentional single externally supplied IPv4 address.
+
+The next limit is packet/queue capacity, not address discovery: a complete RR
+set that exceeds `MDNS_MAX_PACKET`, `MDNS_RESPONSE_MAX` or the private query
+queue is rejected by the existing bounded path rather than fragmented or
+streamed. A native snapshot also remains to replace the legacy public event
+projection. Neither limitation demonstrates an AROSTCP gap.
 
 ## Next implementation slice
 
-1. Migrate host/service publication and read-only discovery snapshots to the
-   complete canonical address/service model, removing the remaining
-   first-address projection.
+1. Define bounded multi-packet/continuation behavior for canonical RR sets
+   that do not fit one response, with explicit loss/resync results.
 2. Migrate one read-only discovery snapshot path to the canonical service
-   model.
+   model without a Bonami event projection.
 3. Only then define the first `dnssd.library` canary vectors.
 
 No upstream PR is opened or updated without explicit authorization.

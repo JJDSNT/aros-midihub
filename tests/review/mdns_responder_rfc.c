@@ -12,6 +12,7 @@
 
 static ULONG ticks = 5000;
 static unsigned packets, answer_records, announcements, zero_host_addresses;
+static unsigned host_a_records;
 #ifdef MDNS_IPV6_CORE
 static unsigned host_aaaa_records;
 static unsigned ipv4_packets, ipv6_packets, dual_packets;
@@ -133,69 +134,129 @@ static void configure_links(struct MDNSDaemon *md, BOOL second, BOOL ipv4,
         md->md_Ifs[1].mi_Index = 2;
 }
 
-ULONG mdnsNetAddress4(const struct MDNSDaemon *md, LONG slot)
+static void configure_multiple_addresses(struct MDNSDaemon *md)
+{
+    struct dnssd_link_spec link;
+    struct dnssd_address_spec addresses[4];
+
+    memset(&link, 0, sizeof(link));
+    memset(addresses, 0, sizeof(addresses));
+    link.interface_index = 1;
+    link.flags = DNSSD_LINK_UP | DNSSD_LINK_MULTICAST;
+    link.name_length = 4;
+    memcpy(link.name, "eth0", 4);
+    addresses[0].interface_index = 1;
+    addresses[0].family = DNSSD_ADDRESS_IPV4;
+    addresses[0].length = 4;
+    memcpy(addresses[0].bytes, "\xc0\x00\x02\x02", 4);
+    addresses[1] = addresses[0];
+    addresses[1].bytes[3] = 3;
+    addresses[2].interface_index = 1;
+    addresses[2].scope_id = 1;
+    addresses[2].family = DNSSD_ADDRESS_IPV6;
+    addresses[2].length = 16;
+    addresses[2].bytes[0] = 0xfe;
+    addresses[2].bytes[1] = 0x80;
+    addresses[2].bytes[15] = 2;
+    addresses[3] = addresses[2];
+    addresses[3].bytes[15] = 3;
+    if (dnssd_link_inventory_reconcile(&md->md_LinkInventory, &link, 1u,
+            addresses, 4u) != DNSSD_LINK_OK)
+        abort();
+    md->md_IfCount = 1;
+    md->md_Ifs[0].mi_Index = 1;
+}
+
+const struct dnssd_address_entry *mdnsNetAddressAt(
+    const struct MDNSDaemon *md, LONG slot, UWORD family, size_t ordinal)
 {
     uint32_t index;
     size_t i;
 
     if (slot < 0 || slot >= md->md_IfCount)
-        return 0;
+        return NULL;
     index = md->md_Ifs[slot].mi_Index;
     for (i = 0; i < md->md_LinkInventory.address_count; ++i) {
         const struct dnssd_address_entry *entry =
             &md->md_LinkInventory.addresses[i];
 
         if (entry->value.interface_index == index &&
-            entry->value.family == DNSSD_ADDRESS_IPV4)
-            return ((ULONG)entry->value.bytes[0] << 24) |
-                   ((ULONG)entry->value.bytes[1] << 16) |
-                   ((ULONG)entry->value.bytes[2] << 8) |
-                   (ULONG)entry->value.bytes[3];
+            entry->value.family == family) {
+            if (ordinal == 0u)
+                return entry;
+            --ordinal;
+        }
     }
-    return 0;
+    return NULL;
+}
+
+ULONG mdnsNetAddress4(const struct MDNSDaemon *md, LONG slot)
+{
+    const struct dnssd_address_entry *entry =
+        mdnsNetAddressAt(md, slot, DNSSD_ADDRESS_IPV4, 0u);
+
+    if (entry == NULL)
+        return 0;
+    return ((ULONG)entry->value.bytes[0] << 24) |
+           ((ULONG)entry->value.bytes[1] << 16) |
+           ((ULONG)entry->value.bytes[2] << 8) |
+           (ULONG)entry->value.bytes[3];
 }
 
 BOOL mdnsNetAddress6(const struct MDNSDaemon *md, LONG slot,
                      struct in6_addr *address)
 {
-    uint32_t index;
-    size_t i;
+    const struct dnssd_address_entry *entry =
+        mdnsNetAddressAt(md, slot, DNSSD_ADDRESS_IPV6, 0u);
 
     memset(address, 0, sizeof(*address));
-    if (slot < 0 || slot >= md->md_IfCount)
+    if (entry == NULL)
         return FALSE;
-    index = md->md_Ifs[slot].mi_Index;
-    for (i = 0; i < md->md_LinkInventory.address_count; ++i) {
-        const struct dnssd_address_entry *entry =
-            &md->md_LinkInventory.addresses[i];
-
-        if (entry->value.interface_index == index &&
-            entry->value.family == DNSSD_ADDRESS_IPV6) {
-            memcpy(address, entry->value.bytes, sizeof(*address));
-            return TRUE;
-        }
-    }
-    return FALSE;
+    memcpy(address, entry->value.bytes, sizeof(*address));
+    return TRUE;
 }
 
 BOOL mdnsNetIsOwn(struct MDNSDaemon *md, ULONG address)
 {
-    LONG i;
-    for (i = 0; i < md->md_IfCount; ++i)
-        if (mdnsNetAddress4(md, i) == address)
-            return TRUE;
+    LONG slot;
+
+    for (slot = 0; slot < md->md_IfCount; ++slot) {
+        size_t ordinal;
+
+        for (ordinal = 0u; ; ++ordinal) {
+            const struct dnssd_address_entry *entry = mdnsNetAddressAt(md,
+                slot, DNSSD_ADDRESS_IPV4, ordinal);
+            ULONG own;
+
+            if (entry == NULL)
+                break;
+            own = ((ULONG)entry->value.bytes[0] << 24) |
+                  ((ULONG)entry->value.bytes[1] << 16) |
+                  ((ULONG)entry->value.bytes[2] << 8) |
+                  (ULONG)entry->value.bytes[3];
+            if (own == address)
+                return TRUE;
+        }
+    }
     return FALSE;
 }
 #ifdef MDNS_IPV6_CORE
 BOOL mdnsNetIsOwn6(struct MDNSDaemon *md, const struct in6_addr *address)
 {
-    LONG i;
-    for (i = 0; i < md->md_IfCount; ++i) {
-        struct in6_addr own;
+    LONG slot;
 
-        if (mdnsNetAddress6(md, i, &own) &&
-            !memcmp(&own, address, sizeof(*address)))
-            return TRUE;
+    for (slot = 0; slot < md->md_IfCount; ++slot) {
+        size_t ordinal;
+
+        for (ordinal = 0u; ; ++ordinal) {
+            const struct dnssd_address_entry *entry = mdnsNetAddressAt(md,
+                slot, DNSSD_ADDRESS_IPV6, ordinal);
+
+            if (entry == NULL)
+                break;
+            if (!memcmp(entry->value.bytes, address, sizeof(*address)))
+                return TRUE;
+        }
     }
     return FALSE;
 }
@@ -241,8 +302,11 @@ BOOL mdnsNetSendOn(struct MDNSDaemon *md, LONG index, const UBYTE *packet, LONG 
         struct MDNSRecord record;
         if (mdnsParseRecord(packet, length, offset, &record, &consumed))
             abort();
-        if (record.type == DNS_TYPE_A && !strcmp(record.name, "arosbox.local") && !record.ttl)
-            ++zero_host_addresses;
+        if (record.type == DNS_TYPE_A && !strcmp(record.name, "arosbox.local")) {
+            ++host_a_records;
+            if (!record.ttl)
+                ++zero_host_addresses;
+        }
 #ifdef MDNS_IPV6_CORE
         if (record.type == DNS_TYPE_AAAA &&
             !strcmp(record.name, "arosbox.local"))
@@ -359,6 +423,7 @@ static struct MDNSRegisteredService *setup(struct MDNSDaemon *md, ULONG ttl)
     service->rs_State = MDNS_NAME_ANNOUNCED;
     service->rs_Step = MDNS_ANNOUNCE_COUNT;
     packets = answer_records = announcements = zero_host_addresses = 0;
+    host_a_records = 0;
 #ifdef MDNS_IPV6_CORE
     host_aaaa_records = 0;
     ipv4_packets = ipv6_packets = dual_packets = 0;
@@ -427,6 +492,22 @@ int main(int argc, char **argv)
         printf("AAAA host query: packets=%u, AAAA records=%u\n",
             packets, host_aaaa_records);
         failure = packets != 1 || host_aaaa_records != 1;
+    } else if (!strcmp(argv[1], "host-multiple-addresses")) {
+        configure_multiple_addresses(&md);
+        at = question_name(packet, "arosbox.local", DNS_TYPE_ANY,
+            DNS_CLASS_IN, 0);
+        receive(&md, packet, at);
+        printf("multi-address host: packets=%u A=%u AAAA=%u\n",
+            packets, host_a_records, host_aaaa_records);
+        failure = packets != 1 || host_a_records != 2 ||
+            host_aaaa_records != 2 || answer_records != 4;
+    } else if (!strcmp(argv[1], "service-multiple-addresses")) {
+        configure_multiple_addresses(&md);
+        mdnsRegAnnounceAll(&md);
+        printf("multi-address service: packets=%u records=%u A=%u AAAA=%u\n",
+            packets, answer_records, host_a_records, host_aaaa_records);
+        failure = packets != 1 || answer_records != 7 ||
+            host_a_records != 2 || host_aaaa_records != 2;
     } else if (!strcmp(argv[1], "host-conflict-aaaa")) {
         static const UBYTE peer[16] = {
             0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99
