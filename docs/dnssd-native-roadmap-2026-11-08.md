@@ -21,6 +21,11 @@ Bonami compatibility and supported coexistence are not deliverables. Existing
 Bonami tests are retained only when they exercise reusable protocol behavior;
 consumer tests are migrated directly to `dnssd.library`.
 
+Canonical master is the traceable base, not an architectural restriction.
+Files, structures and module boundaries may be replaced, including by a
+clean-core implementation, when the required behavior and validation are
+preserved.
+
 AROSTCP is the network and managed-service reference. A demonstrated generic
 gap in socket metadata, multicast, IPv6/interface state or change notification
 blocks the dependent DNS-SD item. The correction and regression belong to an
@@ -33,7 +38,7 @@ DNS-SD workaround satisfies acceptance.
 |---:|---|---|---|
 | 0 | D0 — decision, audit and evidence | P0 | accepted; provenance inventory complete |
 | 1 | D1 — executable lifecycle contract | P0 | validated on Linux-hosted AROS |
-| 2 | D2 — canonical model and neutral daemon boundary | P0 | D1 accepted; source/consumer inventory reconciled |
+| 2 | D2 — canonical daemon core and service boundary | P0 | D1 accepted; source/consumer inventory reconciled |
 | 3 | D3 — `dnssd.library` ABI canary/skeleton | P0 | D1/D2 |
 | 4 | D4 — registration and binary TXT | P0 | D3 ABI gate |
 | 5 | D5 — browse/resolve/multi-address events | P0 | D3; retain current cache |
@@ -108,34 +113,45 @@ operations, exact cancellation and recovery. See
 
 **Upstream PR:** none for prototype; a generic Exec change would be separate.
 
-## D2 — canonical model and library-neutral `mdnsd` boundary
+## D2 — canonical daemon core and library-neutral service boundary
 
-**Priority/objective:** P0; replace Bonami-shaped daemon operations and IPC
-without changing validated DNS packet behavior.
+**Priority/objective:** P0; redesign daemon state and operations around one
+native dual-stack model while preserving validated protocol behavior.
 
 **Dependencies/blockers:** D1 accepted.
 
-**Repository/component/files:** AROS `mdns_client.c`, `mdns_ipc.h`, `mdnsd.h`,
-`mdns_reg.c`, `mdns_discovery.c`, `mdns_query.c`, `mdnsd.c`.
+**Repository/component/files:** AROS `mdnsd.h`, `mdnsd.c`, `mdns_net.c`,
+`mdns_client.c`, `mdns_ipc.h`, `mdns_reg.c`, `mdns_discovery.c`,
+`mdns_query.c`, and packet/host modules where the new model requires it.
 
-**Existing behavior/gap:** one fixed `MDNSIPCMsg` embeds Bonami public events
-and pointer-shaped handles. The daemon has no canonical internal service,
-address, TXT, session or event model independent of that public API.
+**Existing behavior/gap:** Bonami public definitions enter `mdnsd.h`; fixed
+legacy arrays and pointer-shaped handles define registrations; discovery and
+query queues store public events; one fixed `MDNSIPCMsg` embeds all commands;
+and each interface collapses to one IPv4 plus one IPv6 link-local address.
 
-**Expected implementation:** canonical family-neutral internal records; typed
-operations; daemon-issued session and operation IDs; sized command-specific
-payloads; neutral private service protocol; unchanged packet/cache algorithms.
-There is no legacy adapter or duplicate V1/V2 representation.
+**Expected implementation:** canonical link/address inventory; DNS record and
+service snapshots; counted binary TXT and wire names; typed operations;
+daemon-issued session/operation IDs; sized command payloads; neutral private
+protocol; migrated packet/cache algorithms. Existing daemon files may be
+reorganized or replaced where ownership is wrong. There is no legacy adapter
+or duplicate V1/V2 representation.
 
-**Acceptance:** packet/RFC behavior remains unchanged; malformed length,
-version and command are rejected; no Bonami public type is present in the
-canonical model or IPC; restart rejects stale IDs deterministically.
+**Acceptance:** retained packet/RFC fixtures remain correct; multiple
+addresses/interfaces need no projection; malformed lengths, versions and
+commands are rejected; no Bonami public type is present in the daemon core or
+IPC; restart rejects stale IDs deterministically.
 
 **Tests:** canonical packet/cache fixtures; malformed IPC; native registration,
 browse, query and restart canaries; D1 contention/termination cases.
 
-**Upstream PR:** one focused daemon-internal refactor after authorization; no
-public vectors.
+**Current evidence:** the canonical-model canary now lives only in AROS branch
+`proposal/dnssd-canonical-model`. Host ASan/UBSan, AROS MetaMake and
+Linux-hosted AROS runtime pass for sized pointer-free messages, binary TXT,
+wire names, multi-address ordering/deduplication and malformed fields. This
+completes the model-canary slice, not D2 daemon integration.
+
+**Upstream PR:** dependency-ordered daemon-core proposals after authorization;
+no Bonami vectors and no public `dnssd.library` ABI mixed into core work.
 
 ## D3 — native library ABI canary and skeleton
 
@@ -267,12 +283,15 @@ runtime code without coupling infrastructure to Midihub.
 **Dependencies/blockers:** D4/D5 for Midihub, D6 for query tools.
 
 **Repository/component/files:** `ports/aros/midihub/discovery.c`,
-`ports/aros/mdns_probe.c`, AROS tools, public includes and build descriptions.
+`ports/aros/mdns_probe.c`, AROS tools, `workbench/devs/ipp/dnssd.*`, IPP
+consumers, public includes and build descriptions.
 
 **Expected implementation:** migrate Midihub in its own commit; add a native
 diagnostic tool; migrate useful tools by capability; remove Bonami consumers,
-public headers/library and build entries after their native replacements pass.
-Preserve notices, history and reusable fixtures, not the compatibility API.
+public headers/library and build entries after their native replacements pass;
+migrate IPP printer discovery/resolution away from its private IPv4-only,
+non-reentrant socket implementation. Preserve notices, history and reusable
+fixtures, not compatibility or duplicate mDNS runtimes.
 
 **Acceptance/tests:** Midihub publishes/browses both MIDI types natively; the
 production image contains no Bonami requirement or parallel local daemon; no
@@ -305,7 +324,8 @@ reviewable and requires explicit authorization before submission.
 
 ## Immediate next gate
 
-D0 policy is accepted and D1 is validated. Complete the provenance/upstream
-inventory, then audit and design D2's canonical internal model from the active
-AROS proposal branch. Do not freeze public vectors before that model is proven,
-and do not create a Bonami adapter while doing so.
+D0 policy is accepted and D1 is validated. D2 starts from canonical AROS
+`upstream/master`, not PR #2123. Audit and redesign the daemon around one
+native link/address, record, service and operation model; use #2123 only as
+evidence of the V1/V2 failure mode. Do not freeze public vectors before the
+core is proven, and do not create a Bonami adapter while doing so.

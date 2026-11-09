@@ -10,9 +10,10 @@ migration from `bonami.library`.
 
 AROS will have one native, system-wide DNS-SD facility. Applications use the
 shared library **`dnssd.library`**, and the library talks
-to the existing system `mdnsd`. The daemon remains the only owner of mDNS
-sockets, protocol state, caches, probes, registrations and network-interface
-state.
+to the system `mdnsd`. The daemon remains the only owner of mDNS sockets,
+protocol state, caches, probes, registrations and network-interface state.
+This ownership boundary does not preserve its present internal structures:
+`mdnsd` may be substantially redesigned around the canonical native model.
 
 ```text
 AROS applications
@@ -63,12 +64,27 @@ compatibility is not.
 
 ## Evidence behind the decision
 
-The audited AROS source is upstream `master` at
-`d95e177e53a9ef6da78c2209f6a569da739e1e63`, under
-`workbench/network/mdns/`.
+The current audited AROS source is upstream `master` at
+`8e32af0a425aea427fb5f85c8e849acea6fb890e`, under
+`workbench/network/mdns/`; that subtree is unchanged from the earlier
+`d95e177e53a9ef6da78c2209f6a569da739e1e63` audit baseline.
 
-The existing `mdnsd` is not a minimal responder that needs replacement. It
-already owns:
+This master implementation is our AROS evolution, not an untouched external
+Bonami component. The subtree history contains twenty Jaime Dias commits and
+one later build fix by Nick Andrews, while derived files correctly retain the
+amigazen/Bonami notices. The redesign evolves our upstream work and preserves
+its complete provenance.
+
+### The master baseline is not a design constraint
+
+`upstream/master` is the traceable starting point and the source of accepted
+behavior, not an obligation to retain files, structures, module boundaries,
+limits or control flow. Any part of the daemon may be reorganized, replaced or
+removed when the native design is demonstrably better. The actual constraints
+are RFC 6762/6763 behavior, AROSTCP and Exec contracts, native lifecycle and
+resource correctness, provenance/license preservation and reproducible tests.
+
+The existing `mdnsd` contains mature behavior worth preserving selectively:
 
 - IPv4 and IPv6 multicast transport, per-link identity and AROSTCP address
   change notification (`mdns_net.c`, `mdnsd.c`);
@@ -80,22 +96,31 @@ already owns:
   (`mdns_reg.c`); and
 - task-scoped ownership and stale-client reaping (`mdns_client.c`).
 
-The main legacy coupling is above that engine: `include/bonami/mdns.h` exposes
-fixed IPv4-oriented structures and limits; `library/bonami.conf` preserves an
-inherited vector table and compatibility stubs; `mdns_ipc.h` names the port
-`"BonAmi"`, embeds Bonami structures and passes all commands through one fixed
-message; and `library/bonami_*.c` translates inherited calls into that IPC.
+The daemon is not an architecture-neutral engine. Its shared header includes
+Bonami public definitions; registrations use Bonami fixed text/TXT limits and
+pointer-shaped client references; discovery and record-query queues store
+public Bonami event structures; one fixed `MDNSIPCMsg` drives every operation;
+and the network model collapses each interface to at most one IPv4 and one
+IPv6 link-local address. These constraints justify redesigning daemon state,
+not merely placing a new facade around it.
 
-This makes a new native facade and a library-neutral daemon protocol smaller
-and safer than a protocol rewrite. The native boundary replaces the
-Bonami-shaped boundary; it is not installed beside it as a permanent or
-transitional compatibility layer.
+The coupling continues through the client boundary: `include/bonami/mdns.h`
+exposes fixed IPv4-oriented structures and limits; `library/bonami.conf`
+preserves an inherited vector table and compatibility stubs; `mdns_ipc.h`
+names the port `"BonAmi"`, embeds Bonami structures and passes all commands
+through one fixed message; and `library/bonami_*.c` translates inherited calls
+into that IPC.
+
+The target preserves verified packet algorithms and AROSTCP integration, not
+the current object layout. The native boundary and canonical engine model
+replace the Bonami-shaped daemon structures; they are not installed beside
+them as a permanent or transitional compatibility layer.
 
 ## Responsibility boundaries
 
 ### `mdnsd`
 
-`mdnsd` is authoritative for all state shared by applications:
+The redesigned `mdnsd` is authoritative for all state shared by applications:
 
 - UDP 5353 sockets, multicast memberships and interface/address lifecycle;
 - packet encoding, parsing, retransmission and RFC timing;
@@ -272,8 +297,15 @@ historical tests may preserve evidence without creating a supported API.
 engines or relies on unsupported shared-state assumptions, duplicates port
 5353 ownership and cannot coordinate conflicts globally.
 
-**Rewrite `mdnsd`:** rejected without new evidence. Its protocol and
-dual-stack state already exist; refactoring the client boundary is smaller.
+**Preserve the current `mdnsd` structure and change only the facade:**
+rejected. Bonami constraints occur in registrations, discovery/query queues,
+interface/address state, ownership and IPC.
+
+**Treat a clean-sheet daemon as forbidden:** rejected. A complete replacement
+is allowed if the evidence supports it. Reusing packet codecs, timing,
+probing, conflict handling or AROSTCP integration is an engineering choice,
+not a compatibility requirement. Redesign is organized by responsibility and
+evidence, not by file age or origin.
 
 **Use Midihub as the service process:** rejected. DNS-SD is OS infrastructure
 and must work without a MIDI application or GUI.
@@ -282,14 +314,16 @@ and must work without a MIDI application or GUI.
 
 1. Inventory consumers, provenance, reusable algorithms and packet-level
    behavior before moving or deleting source.
-2. Define canonical daemon records and operation IDs independent of all
-   Bonami public structures, then replace the Bonami-shaped IPC boundary.
-3. Implement `dnssd.library` directly on the neutral boundary.
-4. Migrate Midihub and system tools directly to `dnssd.library`, in separately
+2. Define canonical interface/address, DNS record, service, cache, operation
+   and ownership models independent of all Bonami public structures.
+3. Migrate verified packet/network algorithms into that model and replace the
+   Bonami-shaped IPC boundary.
+4. Implement `dnssd.library` directly on the neutral boundary.
+5. Migrate Midihub and system tools directly to `dnssd.library`, in separately
    reviewable consumer commits.
-5. Remove `bonami.library`, its public headers and Bonami-only tools from the
+6. Remove `bonami.library`, its public headers and Bonami-only tools from the
    production build once the native replacements meet their acceptance tests.
-6. Retain required copyright/license notices, lineage documentation and useful
+7. Retain required copyright/license notices, lineage documentation and useful
    protocol fixtures; do not retain a runtime compatibility implementation.
 
 The historical `network/mdns/aros/` copy is not a second production

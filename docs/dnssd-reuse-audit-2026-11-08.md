@@ -9,7 +9,8 @@ public API.
 Source evidence:
 
 - AROS upstream `master`
-  `d95e177e53a9ef6da78c2209f6a569da739e1e63`;
+  `8e32af0a425aea427fb5f85c8e849acea6fb890e`; the mDNS subtree is unchanged
+  from `d95e177e53a9ef6da78c2209f6a569da739e1e63`;
 - canonical source `workbench/network/mdns/`;
 - Midihub branch `review/mdns-modernization-plan`;
 - Midihub consumers under `ports/aros/` and historical local source under
@@ -22,37 +23,49 @@ validation.
 
 ## Executive result
 
-The reusable asset is the **AROS `mdnsd` engine**, not the Bonami public
-contract. The daemon already contains most mDNS and DNS-SD mechanics needed
-by a native service. The smallest coherent path is to separate its client
-operations from `MDNSIPCMsg`/Bonami structures and place a new AROS-native
-library on that boundary.
+The reusable assets are the verified **mDNS/DNS-SD algorithms and AROSTCP
+integration** in the AROS daemon, not its current object model and not the
+Bonami public contract. Bonami structures and limits reach into registration,
+discovery, record-query, ownership, IPC and network-interface state.
 
-No evidence justifies a responder rewrite. Bonami API/ABI compatibility is
-explicitly out of scope, including transitional compatibility. Its public
-constraints therefore have no standing in the `dnssd.library` design.
+This justifies redesigning `mdnsd` around a canonical native model while
+reusing algorithms that remain correct. It does not require a blind
+clean-sheet protocol rewrite. Bonami API/ABI compatibility is explicitly out
+of scope, including transitional compatibility.
+
+The code being redesigned is predominantly our own upstream AROS work. The
+canonical subtree history has twenty Jaime Dias commits and one later build
+fix by Nick Andrews. Existing amigazen notices identify the original lineage
+of derived code; they do not make the present daemon an externally imposed
+architecture.
+
+The master tree is an evidence baseline, not a design ceiling. No current
+file, data structure, fixed limit, module boundary or control flow is retained
+merely because it is merged. Even a full daemon replacement is permissible if
+it produces a simpler correct system and passes the protocol, AROSTCP, Exec,
+resource and interoperability gates.
 
 The requested four-way disposition is:
 
 | Class | Result |
 |---|---|
 | Existing | dual-stack mDNS transport, host/service lifecycle, registration, subtypes, browse/resolve cache, record queries, local reflection and bounded queues |
-| Reusable | the canonical daemon protocol engine, AROSTCP integration, service-manager lifecycle, codecs and protocol fixtures |
-| Absent | native session/operation ABI, neutral daemon IPC, family-neutral service events, binary TXT registration, first-class restart/loss recovery and native consumer integration |
+| Reusable | packet codecs, RFC timing/probing/conflict algorithms, AROSTCP socket and service-manager integration, cache algorithms and protocol fixtures after source review |
+| Absent | canonical daemon state model, native session/operation ABI, neutral IPC, multi-address interface model, family-neutral service events, binary TXT registration, restart/loss recovery and native consumer integration |
 | Obsolete for new development | Bonami-shaped public/event design as the target, the `"BonAmi"` private protocol as the only daemon boundary, and the historical local daemon copy as a runtime source |
 
 ## Source inventory and disposition
 
 | Source | Current responsibility | Native disposition |
 |---|---|---|
-| `mdnsd.c` | daemon loop, IPC port, socket receive, timers and stack lifecycle | **Reuse/refactor.** Keep daemon ownership; replace the Bonami-shaped client boundary with a neutral, versioned service layer. |
-| `mdns_net.c` | interface enumeration, multicast sockets and scoped output | **Reuse.** Preserve dual-stack network behavior; expose limits/capabilities before changing them. |
+| `mdnsd.c` | daemon loop, IPC port, socket receive, timers and stack lifecycle | **Redesign around canonical state.** Reuse lifecycle sequencing and single-daemon ownership; replace Bonami port/message assumptions. |
+| `mdns_net.c` | interface enumeration, multicast sockets and scoped output | **Reuse algorithms, redesign state.** Keep AROSTCP integration; represent multiple addresses independently. |
 | `mdns_dns.c`, `mdns_packet.c` | wire codec and packet dispatch | **Reuse.** Add bounds/fuzz cases rather than replace the codec. |
 | `mdns_host.c` | host probing, announce, conflict and goodbye | **Reuse.** Preserve packet behavior. |
-| `mdns_reg.c` | service registration, subtypes, TXT/SRV/PTR/address publication | **Reuse/refactor.** Replace `MDNSIPCMsg` inputs and client references with typed internal requests and daemon IDs. |
-| `mdns_discovery.c` | browse/resolve cache and bounded event queues | **Reuse/refactor.** Preserve cache; emit native events with all addresses, target and interface metadata. |
-| `mdns_query.c` | generic long-lived record queries | **Reuse/refactor.** Use the common native operation/event model. |
-| `mdns_client.c` | Bonami IPC dispatch and stale-owner reaping | **Replace boundary, reuse behavior.** Generalize sessions and validate task-death notification versus fallback reaping. |
+| `mdns_reg.c` | service registration, subtypes, TXT/SRV/PTR/address publication | **Redesign state/API, reuse protocol behavior.** Use counted wire TXT/names, typed requests and daemon IDs. |
+| `mdns_discovery.c` | browse/resolve cache and bounded event queues | **Redesign stored model, reuse cache algorithms.** No public event structure is internal state. |
+| `mdns_query.c` | generic long-lived record queries | **Redesign stored model.** Use the common canonical record/event and operation model. |
+| `mdns_client.c` | Bonami IPC dispatch and stale-owner reaping | **Replace.** Keep validated lifecycle semantics, not the single-message dispatcher or polling model. |
 | `mdns_ipc.h` | fixed library/daemon message layout | **Replace.** Port `"BonAmi"`, IPC versions and embedded public events must not define the native protocol. |
 | `library/bonami_*.c`, `bonami.conf` | inherited ABI and thin client | **Retire from production.** Reuse implementation fragments only when independently suitable and with attribution. |
 | `include/bonami/*`, `include/libraries/bonamibase.h` | Bonami public types/tags/errors | **Retire from production.** Native public headers include none of them. |
@@ -65,6 +78,17 @@ reconfigure-begin and reconfigure-end signals. `mdnsd.c` binds its own
 `bsdsocket.library` base to the daemon task and subscribes through
 `SBTC_SIG_ADDRESS_CHANGE_MASK`. This lifecycle remains authoritative; the new
 library does not create sockets or a competing service process.
+
+### Confirmed daemon-core constraints
+
+| Current source behavior | Why it is not the native target | Required direction |
+|---|---|---|
+| `mdnsd.h` includes `<bonami/mdns.h>` and `mdns_ipc.h` | Public legacy limits/types define daemon storage and prototypes | Split protocol/core/client headers; no Bonami public include in the core. |
+| `MDNSRegisteredService` stores fixed character arrays, escaped TXT, `APTR rs_ClientRef` and task ID | Registration truth is shaped by the old call ABI | Counted wire names/TXT, daemon IDs, session ownership and explicit resource bounds. |
+| discovery and query sessions store public Bonami events | Internal truth changes whenever a public structure changes | Canonical record/service snapshots; projection only at the native library boundary. |
+| one `MDNSIPCMsg` embeds every request and output | Every capability grows one fixed message and couples client/daemon builds | Sized envelope plus typed command/event payloads. |
+| `MDNSInterface` holds one IPv4 and one IPv6 link-local address; `MDNS_IFS_MAX` is eight | Multiple addresses are collapsed and the bound is silent policy | Separate link and address objects with explicit limits/overflow. |
+| stable task-ID polling and lent client request messages | Cleanup depends on legacy request lifetime rules | D1 sessions/operations, `TNA_REMOVED`, daemon queues and stale-token rejection. |
 
 ### Source anchors
 
@@ -163,6 +187,13 @@ a separate consumer commit. There is no intermediate adapter requirement.
 The historical `network/mdns/aros/` copy must not become a parallel runtime.
 AROS `workbench/network/mdns/` remains canonical.
 
+Current AROS master also contains `workbench/devs/ipp/dnssd.c`, added by
+`ca74751ce6`, with its own IPv4-only DNS codec, multicast query sockets,
+static 96-record cache and serialized/non-reentrant calls. It is a known
+native-library migration consumer, not a second architectural reference. Its
+printer scenarios should become interoperability tests; the duplicate
+implementation is retired after `dnssd.library` covers them.
+
 ## Comparison matrix
 
 | Concern | Bonjour/mDNSResponder | Avahi | Native AROS direction |
@@ -230,8 +261,9 @@ mechanism.
 
 ## Conclusion
 
-Proceed with an internal service-boundary refactor and executable native API
-prototype. Do not begin by renaming Bonami symbols, wrapping its vectors or
-copying the daemon into `dnssd.library`. Do not call the public API
-implementation-ready until operation/event and task-termination prototypes
-establish ownership and cancellation behavior.
+Proceed with a canonical daemon-core design, not a facade-only refactor. Reuse
+packet, timing, conflict and AROSTCP code only after mapping each algorithm to
+the new link/address, record, service and operation models. Do not begin by
+renaming Bonami symbols, wrapping its vectors or copying the daemon into
+`dnssd.library`. Public API work remains gated on the redesigned core and the
+already validated D1 lifecycle contract.

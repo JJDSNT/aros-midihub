@@ -91,3 +91,39 @@ tree to its evidence directory before installing and running the probe.
 - No hardware AROS runtime was tested; Linux-hosted AROS is the required D1
   runtime platform.
 - No Bonami compatibility or coexistence behavior was tested or is required.
+
+## D2 canonical-model exploratory canary
+
+The private canary at AROS commit `e812bd5be9` on branch
+`proposal/dnssd-canonical-model` tests a
+canonical representation before daemon integration or public ABI selection.
+Its source is `workbench/network/mdns/dnssd_model.*`, with the runtime test in
+`developer/debug/test/dnssd/`. It is independent of the current `mdnsd`
+structures and of PR #2123.
+
+The host test validates:
+
+- a 96-byte fixed-width, pointer-free envelope and 24-byte address records;
+- size negotiation without partial output;
+- daemon incarnation, session, operation and sequence correlation;
+- counted instance data preserving dots and backslashes;
+- DNS wire names for type, domain and SRV target;
+- counted binary TXT including zero and non-ASCII bytes;
+- deterministic IPv4/IPv6 ordering and duplicate elimination;
+- stable interface index carried with every address; and
+- rejection of unknown version, header references, overlapping fields,
+  malformed DNS names/TXT, inconsistent address extents and out-of-range
+  address access.
+
+Results:
+
+- normal host build: `DNS-SD canonical model: 0 failures`;
+- AddressSanitizer/UndefinedBehaviorSanitizer: passed with leak detection
+  disabled for the traced environment; and
+- AROS MetaMake target `test-dnssd-model-quick`: built successfully; and
+- Linux-hosted AROS runtime: `DNS-SD canonical model: 0 failures`, with
+  evidence under `/tmp/dnssd-model-runtime-20261109`.
+
+The Midihub implementation copy was removed after the source moved to AROS;
+only the Linux-hosted runner remains here. This validates model parsing and
+layout on AROS, but not daemon IPC, network interoperability or public ABI.
