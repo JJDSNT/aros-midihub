@@ -212,6 +212,35 @@ query_local_service(void)
     finish_query();
 }
 
+#ifdef MDNS_SUBTYPE_CORE
+static void
+query_local_subtype(void)
+{
+    struct MDNSRegisteredService *service;
+    struct MDNSRecordEvent event;
+    struct MDNSIPCMsg msg = {0};
+    char expanded[256];
+    APTR ref;
+
+    init_query();
+    service = (struct MDNSRegisteredService *)daemon.md_Services.lh_Head;
+    service->rs_SubtypeCount = 1;
+    strcpy(service->rs_Subtypes[0], "_L3840");
+    ref = begin("_L3840._sub._midi2._udp.local", DNS_TYPE_PTR, 0);
+    CHECK(read_record(ref, &event) == MDNS_OK);
+    CHECK(event.re_Type == DNS_TYPE_PTR && event.re_TTL == 4500);
+    CHECK(mdnsWireToName(event.re_Data, event.re_DataLength, 0,
+        event.re_Data, event.re_DataLength, expanded, sizeof(expanded)) >= 0);
+    CHECK(!strcmp(expanded, "Session._midi2._udp.local"));
+    msg.mi_Handle = service->rs_ClientRef;
+    own_message(&msg);
+    mdnsRegRemove(&daemon, &msg);
+    CHECK(read_record(ref, &event) == MDNS_OK);
+    CHECK(event.re_Type == DNS_TYPE_PTR && event.re_TTL == 0);
+    finish_query();
+}
+#endif
+
 static void
 query_ptr_compressed(void)
 {
@@ -406,6 +435,9 @@ main(int argc, char **argv)
 #endif
     else if (!strcmp(argv[1], "query-own-host")) query_own_host();
     else if (!strcmp(argv[1], "query-local-service")) query_local_service();
+#ifdef MDNS_SUBTYPE_CORE
+    else if (!strcmp(argv[1], "query-local-subtype")) query_local_subtype();
+#endif
     else if (!strcmp(argv[1], "query-ptr-compressed")) query_ptr_compressed();
     else if (!strcmp(argv[1], "query-coalesce")) query_coalesce();
     else if (!strcmp(argv[1], "query-overflow")) query_overflow();

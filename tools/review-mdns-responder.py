@@ -72,6 +72,9 @@ def main():
     ipv6_core = b"MDNS_MCAST_ADDR6" in (output / "mdns_dns.h").read_bytes()
     if ipv6_core:
         flags.append("-DMDNS_IPV6_CORE")
+    subtype_core = b"MDNS_ServiceSubtype" in (output / "include/bonami/mdns.h").read_bytes()
+    if subtype_core:
+        flags.append("-DMDNS_SUBTYPE_CORE")
     if reap:
         flags.append("-DMDNS_DISCOVERY_REAP")
     fixture = ("mdns_query.c" if args.query else
@@ -93,6 +96,9 @@ def main():
     if ipv6_core:
         cases += ("host-aaaa", "host-conflict-aaaa", "service-aaaa",
                   "shared-ipv6-family")
+    if subtype_core:
+        cases += ("subtype-announce", "subtype-query", "subtype-goodbye",
+                  "subtype-validation")
     if args.discovery:
         cases = ("labels-order-txt", "expire-ptr", "expire-srv", "expire-txt", "expire-a",
                  "goodbye", "rescue", "update", "lifecycle", "overflow", "resolve",
@@ -106,6 +112,9 @@ def main():
                       "a-before-srv")
             if ipv6_core:
                 cases += ("aaaa-before-a", "single-address-family")
+            if subtype_core:
+                cases += ("subtype-browse", "subtype-membership",
+                          "subtype-local")
         if "MDNS_IPC_NOTIFY" in ipc:
             cases += ("notify-pending", "notify-stop", "notify-event-then-stop",
                       "notify-refused", "notify-overflow", "notify-shutdown",
@@ -122,6 +131,8 @@ def main():
                  "query-wrong-class", "query-wrong-port", "query-invalid")
         if ipv6_core:
             cases += ("query-aaaa",)
+        if subtype_core:
+            cases += ("query-local-subtype",)
     failures = 0
     env = dict(os.environ, ASAN_OPTIONS="detect_leaks=0:halt_on_error=1")
     print("Revision:", revision, flush=True)

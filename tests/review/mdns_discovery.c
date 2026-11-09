@@ -73,6 +73,24 @@ static void feed(const char *instance, unsigned mask, ULONG ttl, UBYTE ip)
 {
     feed_records(instance, mask, ttl, ip, 1);
 }
+
+#ifdef MDNS_SUBTYPE_CORE
+static void feed_subtype(const char *subtype, const char *instance, ULONG ttl)
+{
+    char owner[160];
+    size_t at = 12, len;
+
+    memset(packet, 0, sizeof(packet));
+    put16(packet + 2, 0x8400);
+    put16(packet + 6, 1);
+    len = key(data, 0, instance, 0);
+    snprintf(owner, sizeof(owner), "%s._sub.%s", subtype, feed_type);
+    at = record(packet, at, owner, DNS_TYPE_PTR, DNS_CLASS_IN, ttl,
+        data, len);
+    mdnsHandlePacket(&md, packet, at, 0xcb007101, 5353);
+    mdnsDiscoveryTick(&md);
+}
+#endif
 static LONG call(struct MDNSIPCMsg *msg, UWORD command, APTR ref, ULONG ownerID, ULONG epoch)
 {
     msg->mi_Command = command; msg->mi_Handle = ref;
@@ -399,6 +417,77 @@ static void single_address_family(void)
     finish();
 }
 #endif
+
+#ifdef MDNS_SUBTYPE_CORE
+static void subtype_browse(void)
+{
+    struct MDNSDiscoveryEvent event;
+    APTR ref;
+
+    init();
+    ref = begin_type(0, NULL, "_L3840._sub._midi2._udp");
+    feed_subtype("_L3840", "Matter", 120);
+    feed("Matter", 14, 120, 44);
+    expect_add(ref, "Matter", 44);
+    feed_subtype("_L3840", "Matter", 0);
+    ticks += 50;
+    mdnsDiscoveryTick(&md);
+    CHECK(read_event(ref, &event) == MDNS_OK);
+    CHECK(event.de_Code == MEVENT_REMOVE);
+    CHECK(!strcmp(event.de_Name, "Matter"));
+    finish();
+}
+
+static void subtype_membership(void)
+{
+    struct MDNSDiscoveryEvent event;
+    APTR discriminator, instance;
+
+    init();
+    discriminator = begin_type(0, NULL, "_L3840._sub._midi2._udp");
+    instance = begin_type(0, NULL, "_I001122._sub._midi2._udp");
+    feed_subtype("_L3840", "Matter", 120);
+    feed("Matter", 14, 120, 45);
+    expect_add(discriminator, "Matter", 45);
+    CHECK(read_event(instance, &event) == MDNSERR_NOTREADY);
+    feed_subtype("_I001122", "Matter", 120);
+    expect_add(instance, "Matter", 45);
+    feed_subtype("_L3840", "Matter", 0);
+    ticks += 50;
+    mdnsDiscoveryTick(&md);
+    CHECK(read_event(discriminator, &event) == MDNS_OK);
+    CHECK(event.de_Code == MEVENT_REMOVE);
+    CHECK(read_event(instance, &event) == MDNSERR_NOTREADY);
+    finish();
+}
+
+static void subtype_local(void)
+{
+    struct MDNSRegisteredService *service;
+    struct MDNSDiscoveryEvent event;
+    struct MDNSIPCMsg msg = {0};
+    APTR ref;
+
+    init_local();
+    service = (struct MDNSRegisteredService *)md.md_Services.lh_Head;
+    service->rs_SubtypeCount = 1;
+    strcpy(service->rs_Subtypes[0], "_L3840");
+    ref = begin_type(0, NULL, "_L3840._sub._midi2._udp");
+    mdnsDiscoveryTick(&md);
+    CHECK(read_event(ref, &event) == MDNS_OK);
+    CHECK(event.de_Code == MEVENT_ADD);
+    CHECK(!strcmp(event.de_Name, "Session"));
+    CHECK(ntohl(event.de_Address) == 0xc0000202u);
+    msg.mi_Handle = service->rs_ClientRef;
+    own_message(&msg);
+    mdnsRegRemove(&md, &msg);
+    ticks += 50;
+    mdnsDiscoveryTick(&md);
+    CHECK(read_event(ref, &event) == MDNS_OK);
+    CHECK(event.de_Code == MEVENT_REMOVE);
+    finish();
+}
+#endif
 #endif
 #ifdef MDNS_IPC_NOTIFY
 /* Lent requests: the device I/O contract of RequestMDNSEvent(). */
@@ -702,6 +791,11 @@ int main(int argc, char **argv)
 #ifdef MDNS_IPV6_CORE
     else if (!strcmp(argv[1], "aaaa-before-a")) aaaa_before_a();
     else if (!strcmp(argv[1], "single-address-family")) single_address_family();
+#endif
+#ifdef MDNS_SUBTYPE_CORE
+    else if (!strcmp(argv[1], "subtype-browse")) subtype_browse();
+    else if (!strcmp(argv[1], "subtype-membership")) subtype_membership();
+    else if (!strcmp(argv[1], "subtype-local")) subtype_local();
 #endif
 #endif
 #ifdef MDNS_IPC_NOTIFY

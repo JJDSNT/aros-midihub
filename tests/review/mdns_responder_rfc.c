@@ -16,6 +16,9 @@ static unsigned packets, answer_records, announcements, zero_host_addresses;
 static unsigned host_aaaa_records;
 static unsigned ipv4_packets, ipv6_packets, dual_packets;
 #endif
+#ifdef MDNS_SUBTYPE_CORE
+static unsigned subtype_ptr_records, subtype_goodbyes;
+#endif
 static unsigned a_questions, aaaa_questions, srv_questions, txt_questions;
 static struct Task owner;
 static ULONG live_task_id = 1;
@@ -139,6 +142,15 @@ BOOL mdnsNetSendOn(struct MDNSDaemon *md, LONG index, const UBYTE *packet, LONG 
             !strcmp(record.name, "arosbox.local"))
             ++host_aaaa_records;
 #endif
+#ifdef MDNS_SUBTYPE_CORE
+        if (record.type == DNS_TYPE_PTR &&
+            (!strcmp(record.name, "_L3840._sub._midi2._udp.local") ||
+             !strcmp(record.name, "_I001122._sub._midi2._udp.local"))) {
+            ++subtype_ptr_records;
+            if (record.ttl == 0)
+                ++subtype_goodbyes;
+        }
+#endif
         offset += consumed;
     }
     return TRUE;
@@ -244,6 +256,9 @@ static struct MDNSRegisteredService *setup(struct MDNSDaemon *md, ULONG ttl)
     host_aaaa_records = 0;
     ipv4_packets = ipv6_packets = dual_packets = 0;
 #endif
+#ifdef MDNS_SUBTYPE_CORE
+    subtype_ptr_records = subtype_goodbyes = 0;
+#endif
     a_questions = aaaa_questions = srv_questions = txt_questions = 0;
     return service;
 }
@@ -276,6 +291,15 @@ static void enable_ipv6(struct MDNSDaemon *md)
         0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2
     };
     memcpy(&md->md_Ifs[0].mi_Addr6, address, sizeof(address));
+}
+#endif
+
+#ifdef MDNS_SUBTYPE_CORE
+static void enable_subtypes(struct MDNSRegisteredService *service)
+{
+    service->rs_SubtypeCount = 2;
+    strcpy(service->rs_Subtypes[0], "_L3840");
+    strcpy(service->rs_Subtypes[1], "_I001122");
 }
 #endif
 
@@ -330,6 +354,54 @@ int main(int argc, char **argv)
             ipv4_packets, ipv6_packets, dual_packets);
         failure = packets != 1 || ipv4_packets != 0 || ipv6_packets != 1 ||
             dual_packets != 0;
+    } else
+#endif
+#ifdef MDNS_SUBTYPE_CORE
+    if (!strcmp(argv[1], "subtype-announce")) {
+        enable_subtypes(service);
+        mdnsRegAnnounceAll(&md);
+        printf("subtype announcement: packets=%u, subtype PTRs=%u\n",
+            packets, subtype_ptr_records);
+        failure = packets != 2 || subtype_ptr_records != 2;
+    } else if (!strcmp(argv[1], "subtype-query")) {
+        enable_subtypes(service);
+        at = question_name(packet, "_L3840._sub._midi2._udp.local",
+            DNS_TYPE_PTR, DNS_CLASS_IN, 0);
+        receive(&md, packet, at);
+        flush(&md);
+        printf("subtype query: packets=%u, subtype PTRs=%u\n",
+            packets, subtype_ptr_records);
+        failure = packets != 2 || subtype_ptr_records != 1;
+    } else if (!strcmp(argv[1], "subtype-goodbye")) {
+        struct MDNSIPCMsg message = {0};
+
+        enable_subtypes(service);
+        message.mi_Handle = service->rs_ClientRef;
+        own_message(&message);
+        mdnsRegRemove(&md, &message);
+        printf("subtype goodbye: PTRs=%u, zero TTL=%u\n",
+            subtype_ptr_records, subtype_goodbyes);
+        failure = subtype_ptr_records != 2 || subtype_goodbyes != 2;
+        service = NULL;
+    } else if (!strcmp(argv[1], "subtype-validation")) {
+        struct MDNSIPCMsg message = {0};
+        LONG invalid, duplicate;
+
+        strcpy(message.mi_Name, "Other");
+        strcpy(message.mi_ServiceType, "_midi2._udp");
+        message.mi_Port = 6000;
+        message.mi_SubtypeCount = 1;
+        strcpy(message.mi_Subtypes[0], "bad.label");
+        own_message(&message);
+        invalid = mdnsRegAdd(&md, &message);
+        strcpy(message.mi_Subtypes[0], "_L3840");
+        message.mi_SubtypeCount = 2;
+        strcpy(message.mi_Subtypes[1], "_l3840");
+        duplicate = mdnsRegAdd(&md, &message);
+        printf("subtype validation: invalid=%ld duplicate=%ld\n",
+            (long)invalid, (long)duplicate);
+        failure = invalid != MDNSERR_BADPARAM ||
+            duplicate != MDNSERR_BADPARAM;
     } else
 #endif
     if (!strcmp(argv[1], "known-short") || !strcmp(argv[1], "known-expiring") ||
