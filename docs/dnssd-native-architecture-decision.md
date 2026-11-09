@@ -1,15 +1,15 @@
 # ADR: native DNS-SD service for AROS
 
-**Status:** Proposed for review; component boundaries are selected, public ABI
-and final library name are not frozen.
-**Date:** 2026-11-08.
+**Status:** Accepted architecture; the public ABI remains subject to its
+implementation canary and review gate.
+**Date:** 2026-11-09.
 **Scope:** system-wide DNS-SD API, daemon boundary, client concurrency and
 migration from `bonami.library`.
 
 ## Decision
 
-AROS will have one native, system-wide DNS-SD facility. Applications use a
-shared library, provisionally named **`dnssd.library`**, and the library talks
+AROS will have one native, system-wide DNS-SD facility. Applications use the
+shared library **`dnssd.library`**, and the library talks
 to the existing system `mdnsd`. The daemon remains the only owner of mDNS
 sockets, protocol state, caches, probes, registrations and network-interface
 state.
@@ -33,17 +33,33 @@ extension of Bonami. It does not inherit Bonami's vector order, tag values,
 fixed text limits, IPv4-only event layout, hook semantics, public handles or
 private IPC format.
 
-Bonami remains useful as evidence of already implemented behavior, a source
-of BSD-2-Clause code where technically sound, an interoperability/regression
-surface during migration, and a possible compatibility adapter implemented
-above the native API. It is not an internal layer of `dnssd.library` and
-cannot constrain its public contract. No second mDNS responder will be added
-to the library.
+Bonami remains useful only as source evidence, protocol-test material and a
+source of BSD-2-Clause code where technically sound. It is not an internal
+layer of `dnssd.library`, a required migration surface or a compatibility
+target. No Bonami adapter, V1/V2 projection or parallel Bonami runtime is part
+of the target or transition. No second mDNS responder will be added to the
+library.
 
-The working name `dnssd.library` communicates the intended system service and
-is used throughout the design. Naming review must finish before the public
-library skeleton is merged; changing the name before that gate has no ABI
-cost.
+`dnssd.library` is the selected public component name. Function names, LVOs
+and public record layouts remain unfrozen until their implementation canaries
+pass; that ABI review does not reopen the component identity or Bonami
+compatibility policy.
+
+### Compatibility and provenance policy
+
+There is no API or binary compatibility requirement with `bonami.library`,
+including during migration. Existing consumers are migrated directly to the
+native API and the Bonami public library, headers and Bonami-shaped private
+IPC are removed from the production path when their replacements satisfy the
+recorded acceptance tests. Temporary source branches may exist to make review
+and recovery safe, but they do not create a supported runtime coexistence
+mode.
+
+This freedom does not weaken attribution. Derived files retain applicable
+copyright and BSD-2-Clause notices, Git history is preserved where practical,
+and the project documentation records the Bonami -> AROS mDNS/DNS-SD ->
+`dnssd.library` lineage. Provenance is a legal and historical obligation;
+compatibility is not.
 
 ## Evidence behind the decision
 
@@ -71,8 +87,9 @@ inherited vector table and compatibility stubs; `mdns_ipc.h` names the port
 message; and `library/bonami_*.c` translates inherited calls into that IPC.
 
 This makes a new native facade and a library-neutral daemon protocol smaller
-and safer than a protocol rewrite, without making Bonami compatibility a
-permanent system contract.
+and safer than a protocol rewrite. The native boundary replaces the
+Bonami-shaped boundary; it is not installed beside it as a permanent or
+transitional compatibility layer.
 
 ## Responsibility boundaries
 
@@ -110,8 +127,27 @@ Midihub is one consumer, not the service owner.
 
 AROSTCP supplies sockets, multicast, scoped IPv6, interface indices and
 network-change signals. DNS-SD policy and caches do not move into AROSTCP.
-Stack changes require a demonstrated generic socket capability missing from
-`mdnsd`.
+`netservices.library` is the lifecycle reference: `mdnsd` remains an
+AROSTCP-managed service, releases `bsdsocket.library` on reconfigure-begin,
+reopens it on reconfigure-end, and consumes the stack's address-change signal.
+
+### AROSTCP dependency rule
+
+The DNS-SD layer must not privately emulate or work around a missing generic
+network-stack capability. If correct implementation requires socket metadata,
+multicast behavior, IPv6 scope/address state, interface enumeration or a
+network-change notification that AROSTCP does not provide, work stops at this
+boundary:
+
+1. reproduce the missing generic capability independently of DNS-SD;
+2. define and test the minimum AROSTCP correction;
+3. submit that stack change as an independent proposal; and
+4. consume the accepted facility from `mdnsd` afterwards.
+
+Fallback polling may protect against a lost notification, but cannot become a
+substitute for a known missing stack event. Packet or address heuristics in
+`dnssd.library` are not an acceptable compatibility layer. This rule does not
+move DNS-SD protocol policy into AROSTCP.
 
 ## Native public contract (design constraints)
 
@@ -213,6 +249,11 @@ objects. The AROS-specific difference is Exec integration: tasks, message
 ports and library conventions replace descriptors, dispatch, D-Bus and
 foreign main loops.
 
+Within AROS, AROSTCP is the primary integration reference, ahead of the
+MIDI-CI coordinator prototype. MIDI-CI contributes only evidence for the
+`TNA_REMOVED` cleanup pattern; it does not define DNS-SD service, network or
+public-API architecture.
+
 ## Alternatives rejected
 
 **Continue extending `bonami.library`:** rejected as the target. It preserves
@@ -221,6 +262,11 @@ Bonami-named IPC as permanent contracts.
 
 **Embed or fork Bonami inside `dnssd.library`:** rejected. It would make the
 new library a compatibility wrapper and retain the constraints being removed.
+
+**Keep a temporary Bonami adapter or supported coexistence mode:** rejected.
+It would force the neutral daemon boundary and validation matrix to preserve
+two representations with no consumer requirement. Recovery branches and
+historical tests may preserve evidence without creating a supported API.
 
 **Put the mDNS engine in the shared library:** rejected. It creates per-process
 engines or relies on unsupported shared-state assumptions, duplicates port
@@ -234,15 +280,17 @@ and must work without a MIDI application or GUI.
 
 ## Migration policy
 
-1. Keep current `mdnsd` and `bonami.library` behavior operational.
-2. Introduce library-neutral daemon operation IDs and IPC behind adapters,
-   with regression tests proving no packet behavior changes.
-3. Add `dnssd.library` as a second client of that internal protocol.
-4. Move Midihub and system tools one consumer at a time.
-5. Decide separately whether `bonami.library` becomes a compatibility adapter
-   or remains a frozen legacy client.
-6. Remove no Bonami source until all dependencies are enumerated and a
-   release/deprecation policy is approved.
+1. Inventory consumers, provenance, reusable algorithms and packet-level
+   behavior before moving or deleting source.
+2. Define canonical daemon records and operation IDs independent of all
+   Bonami public structures, then replace the Bonami-shaped IPC boundary.
+3. Implement `dnssd.library` directly on the neutral boundary.
+4. Migrate Midihub and system tools directly to `dnssd.library`, in separately
+   reviewable consumer commits.
+5. Remove `bonami.library`, its public headers and Bonami-only tools from the
+   production build once the native replacements meet their acceptance tests.
+6. Retain required copyright/license notices, lineage documentation and useful
+   protocol fixtures; do not retain a runtime compatibility implementation.
 
 The historical `network/mdns/aros/` copy is not a second production
 implementation. Accepted AROS `workbench/network/mdns/`, or an active proposal
@@ -256,7 +304,7 @@ branch based on it, remains canonical.
 - First implementation is a neutral protocol seam and lifecycle prototype,
   not public vectors.
 - ABI review includes 32/64-bit and m68k layout canaries, ownership AutoDocs
-  and old/new library coexistence.
+  and direct native-client lifecycle tests.
 - Hosted AROS runtime, host fixtures and cross-builds remain separate evidence
   classes.
 - No upstream PR follows without explicit authorization.

@@ -28,8 +28,9 @@ by a native service. The smallest coherent path is to separate its client
 operations from `MDNSIPCMsg`/Bonami structures and place a new AROS-native
 library on that boundary.
 
-No evidence justifies a responder rewrite. No compatibility requirement
-justifies carrying Bonami public ABI constraints into `dnssd.library`.
+No evidence justifies a responder rewrite. Bonami API/ABI compatibility is
+explicitly out of scope, including transitional compatibility. Its public
+constraints therefore have no standing in the `dnssd.library` design.
 
 The requested four-way disposition is:
 
@@ -44,7 +45,7 @@ The requested four-way disposition is:
 
 | Source | Current responsibility | Native disposition |
 |---|---|---|
-| `mdnsd.c` | daemon loop, IPC port, socket receive, timers and stack lifecycle | **Reuse/refactor.** Keep daemon ownership; put a neutral, versioned service layer beside the legacy port. |
+| `mdnsd.c` | daemon loop, IPC port, socket receive, timers and stack lifecycle | **Reuse/refactor.** Keep daemon ownership; replace the Bonami-shaped client boundary with a neutral, versioned service layer. |
 | `mdns_net.c` | interface enumeration, multicast sockets and scoped output | **Reuse.** Preserve dual-stack network behavior; expose limits/capabilities before changing them. |
 | `mdns_dns.c`, `mdns_packet.c` | wire codec and packet dispatch | **Reuse.** Add bounds/fuzz cases rather than replace the codec. |
 | `mdns_host.c` | host probing, announce, conflict and goodbye | **Reuse.** Preserve packet behavior. |
@@ -52,11 +53,18 @@ The requested four-way disposition is:
 | `mdns_discovery.c` | browse/resolve cache and bounded event queues | **Reuse/refactor.** Preserve cache; emit native events with all addresses, target and interface metadata. |
 | `mdns_query.c` | generic long-lived record queries | **Reuse/refactor.** Use the common native operation/event model. |
 | `mdns_client.c` | Bonami IPC dispatch and stale-owner reaping | **Replace boundary, reuse behavior.** Generalize sessions and validate task-death notification versus fallback reaping. |
-| `mdns_ipc.h` | fixed library/daemon message layout | **Legacy only.** Port `"BonAmi"`, IPC v6 and embedded public events must not define the native protocol. |
-| `library/bonami_*.c`, `bonami.conf` | inherited ABI and thin client | **Freeze/adapt.** Do not link into `dnssd.library`; optionally retarget after compatibility tests. |
-| `include/bonami/*`, `include/libraries/bonamibase.h` | Bonami public types/tags/errors | **Legacy only.** Native public headers include none of them. |
-| `tools/*`, commodity | Bonami consumers and test clients | **Migrate selectively.** Preserve as compatibility tests until native coverage exists. |
+| `mdns_ipc.h` | fixed library/daemon message layout | **Replace.** Port `"BonAmi"`, IPC versions and embedded public events must not define the native protocol. |
+| `library/bonami_*.c`, `bonami.conf` | inherited ABI and thin client | **Retire from production.** Reuse implementation fragments only when independently suitable and with attribution. |
+| `include/bonami/*`, `include/libraries/bonamibase.h` | Bonami public types/tags/errors | **Retire from production.** Native public headers include none of them. |
+| `tools/*`, commodity | Bonami consumers and test clients | **Migrate or retire.** Protocol fixtures may be retained after removing their Bonami API dependency. |
 | `services.d/mdns` | AROSTCP-managed daemon lifecycle | **Reuse.** The library never starts a private responder. |
+
+The AROSTCP service model is the principal native reference. At the audited
+SHA, `mdnsd_service.c` registers `mdnsd` with `netservices.library` for stop,
+reconfigure-begin and reconfigure-end signals. `mdnsd.c` binds its own
+`bsdsocket.library` base to the daemon task and subscribes through
+`SBTC_SIG_ADDRESS_CHANGE_MASK`. This lifecycle remains authoritative; the new
+library does not create sockets or a competing service process.
 
 ### Source anchors
 
@@ -116,7 +124,29 @@ At the audited SHA, the behavior is anchored by these exact symbols/locations:
 
 The Bonami `MDNSDiscoveryEvent2` work remains useful because it proves
 dual-stack cache extraction, layout canaries and interoperability. It is not
-the native event definition.
+the native event definition, a compatibility requirement or a transitional
+public API.
+
+### PR #2123 disposition
+
+AROS PR #2123 was audited at head
+`bb650b3859a8cf7774d9a615130974603f28e2ba`. Its implementation commit is
+`8715e6a67a` and its documentation commit is `bb650b3859`. It is not treated as
+the final native API merely because it is the newest published proposal.
+
+| PR #2123 content | Native disposition |
+|---|---|
+| richer browse/resolve snapshot including SRV priority, weight and target | Reuse in the canonical internal model after provenance review. |
+| multiple A/AAAA collection, deterministic sorting and explicit truncation | Reuse algorithm and fixtures; expose through native counted records. |
+| IPv6-only resolution and multiple pending addresses | Reuse behavior and interoperability evidence. |
+| public `MDNSDiscoveryEvent2`, `ReadMDNSEvent2()` and Bonami 41.8 vector | Do not carry forward; `dnssd.library` defines its own sized native contract. |
+| V1/V2 `eventMode`, `legacyAddress` and `legacyVisible` projection | Remove from the target model; these exist only to preserve Bonami representations. |
+| IPC version 7 carrying legacy and V2 forms | Replace with one neutral, sized protocol rather than extending it. |
+
+The current internal `DiscoveryEvent` embeds the public Bonami V2 event, so
+the PR has not yet achieved a public-API-independent canonical model. D2 must
+extract the reusable cache/address behavior before public native records are
+designed. That is a replacement path, not an adapter path.
 
 ## Current Midihub integration
 
@@ -126,9 +156,9 @@ drains `ReadMDNSEvent()`. It uses a no-op `UpdateServiceA()` as a daemon/handle
 liveness probe. `ports/aros/mdns_probe.c` and review probes also compile
 against Bonami.
 
-These are migration consumers, not reasons to mirror the old ABI. The native
-API must cover their required semantics first, then Midihub changes in a
-separate consumer commit.
+These are direct migration consumers, not reasons to mirror the old ABI. The
+native API must cover their required semantics first, then Midihub changes in
+a separate consumer commit. There is no intermediate adapter requirement.
 
 The historical `network/mdns/aros/` copy must not become a parallel runtime.
 AROS `workbench/network/mdns/` remains canonical.
@@ -164,7 +194,7 @@ The useful lesson is separation and lifecycle, not API imitation.
 |---|---|---|
 | canonical-source responder/discovery/query host fixtures | codec/cache/state behavior under mocks | AROS Exec/IPC/socket runtime |
 | recorded Linux-hosted AROS + Avahi runs | daemon/library interoperability for tested cases | hardware or future native API |
-| Bonami discovery/query/status/TXT probes | current lifecycle and restart behavior | native session contract |
+| Bonami discovery/query/status/TXT probes | reusable scenarios and current behavior before replacement | native session contract or a compatibility obligation |
 | V2 layout canaries | a pointer-free dual-stack event compiles on selected architectures | that it is the right native ABI |
 | Midihub discovery mocks | consumer retry/register/browse behavior | network interoperability |
 
@@ -180,13 +210,23 @@ the unchanged consumer code, not AROS runtime evidence for the proposed API.
 
 | Gap | Owner | Minimum correction | Validation gate |
 |---|---|---|---|
-| Bonami-coupled IPC | `mdnsd` internal boundary | sized/versioned command protocol with daemon IDs | legacy and new clients coexist; malformed lengths rejected |
+| Bonami-coupled IPC | `mdnsd` internal boundary | replace it with a sized/versioned command protocol and daemon IDs | native clients pass; malformed lengths rejected; no Bonami public type crosses the boundary |
 | native API absent | new AROS library | session/operation/event canary with AutoDocs | 32/64/m68k layouts; hosted two-task lifecycle |
 | IPv6/multi-address discovery absent publicly | event projection + library | full address set and SRV target | Avahi dual-stack and IPv6-only runtime |
 | binary TXT registration absent | library + daemon request | counted wire TXT and helpers | empty, binary, 255-byte and malformed cases |
 | restart/overflow recovery absent | session contract | incarnation and lost/resnapshot events | forced restart and overflow |
 | abnormal cleanup only polled | daemon lifecycle | validate termination notification, keep task-ID fallback | forced death during register/browse/query |
 | native consumer migration absent | Midihub/tools | migrate after API gate | fixtures and Avahi interoperability |
+
+### Network-stack gap rule
+
+No missing AROSTCP facility is classified as a `mdnsd` or `dnssd.library`
+implementation detail. A generic stack gap gets its own reproducer, AROSTCP
+owner, minimum correction and stack regression before DNS-SD integration.
+This is how receive metadata, IPv6 address-state visibility, multicast and
+address-change notifications must continue to be handled. The DNS-SD backlog
+may be blocked on such work; it may not bypass it with a private parallel
+mechanism.
 
 ## Conclusion
 
