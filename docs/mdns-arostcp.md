@@ -1,5 +1,12 @@
 # mDNS and AROSTCP
 
+> **2026-11-10:** the agreements between the stack, the system resolver,
+> `mdnsd` and `dnssd.library` are now in
+> [`mdns-integration-agreements.md`](mdns-integration-agreements.md), with the
+> native DNS-SD architecture decision as the baseline. Where they differ, they
+> win: the mechanism list below predates IPv6 in `mdnsd` and AROSTCP's IPv4
+> address state, and `bonami.library` is to be replaced by `dnssd.library`.
+
 How the system mDNS service relates to the TCP/IP stack: what each side is
 responsible for, what the stack had to gain, and how the service starts. The
 service itself is described in
