@@ -137,3 +137,25 @@ The byte vectors are cross-checked against the pinned `midici` 0.0.1
 spec-derived Management fixture; that is source comparison, not independent
 interoperability evidence. This is a foundation, not a claim of complete
 MIDI-CI 1.2.1 support.
+
+## External validation candidate: MultitrackStudio (2026-11-18)
+
+Reference: [MIDI Association — MultitrackStudio brings practical MIDI 2.0 support to audio and MIDI recording](https://midi.org/multitrackstudio-brings-practical-midi-2-0-support-to-audio-and-midi-recording).
+
+MultitrackStudio is a commercial DAW and a **potential independent application-level interoperability peer**, not a source dependency, conformance suite, or evidence that AROS has already interoperated with it. The article describes practical MIDI 2.0 workflows including MIDI-CI discovery, Profiles, Property Exchange, UMP/per-note expression and MIDI 2.0 clip interchange. Verify exact feature availability, application version, platform, device requirements and transport path before each test; do not assume that it exposes an arbitrary MIDI-CI peer or a network MIDI 2.0 endpoint.
+
+### Proposed validation matrix (not yet executed)
+
+| Area | Proposed check | Prerequisite / evidence |
+| --- | --- | --- |
+| Discovery and identity | Exchange MIDI-CI Discovery/Reply, track MUID and re-discovery after restart | Confirm bidirectional MIDI-CI-capable path; capture messages and peer/application versions |
+| Endpoint/topology | Compare UMP Endpoint and Function Block information with observed routing | Native UMP-capable CAMD path; record stream messages separately from MIDI-CI |
+| Profiles | Discover supported Profiles and test state notifications/configuration when available | Implement corresponding MIDI-CI Profile functionality in AROS; capture request/reply |
+| Property Exchange | Query resource lists and selected properties; test changes/subscriptions if offered | Implement PE request lifecycle, chunking and bounds; retain payloads and status codes |
+| UMP data path | Round-trip MIDI 2.0 channel voice, 16-bit velocity and per-note controls without unintended MIDI 1.0 downgrade | Native UMP endpoint/driver, supported device or virtual peer, byte-level traces |
+| File interchange | Compare exported/imported MIDI 2.0 clips and their event semantics | Treat as application/file-format validation, **not** CAMD transport or MIDI-CI conformance |
+| Fault handling | Exercise timeout, disconnect, malformed replies and MUID invalidation where safely reproducible | Deterministic test harness and captures; distinguish application behavior from specification requirements |
+
+**Execution rule:** mark every row *planned* until a reproducible test is run. Record OS/DAW versions, AROS/CAMD build SHA, transport and routing, hardware or virtual endpoints, packet/SysEx traces, expected versus observed behavior, and pass/fail. A successful exchange establishes interoperability for that configuration only, not full MIDI 2.0 conformance.
+
+**Architectural boundary:** CAMD provides native UMP/message transport and endpoint metadata; MIDI-CI session, Profile and Property Exchange policy belongs above the transport. MIDIHub serves as integration/validation harness and should not acquire a permanent parallel MIDI subsystem merely to accommodate this DAW.
