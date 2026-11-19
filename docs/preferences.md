@@ -335,3 +335,80 @@ Profiles            -> Which saved MIDI environment should be active?
 ```
 
 The guiding principle is **overview and basic control**. Advanced MIDI transformation and processing belong in specialized CAMD applications, not in MIDIHub.prefs.
+
+
+## Preferences parity audit and recommended next steps (2026-11-18)
+
+**Scope:** source-backed research/backlog only. This section does not assert that the MUI executable was run, does not change the existing six-page navigation, and does not authorize protocol or runtime changes. Inspected: `ports/aros/MIDIHubPrefsClass.c`, `ports/aros/MIDIHubPrefsClass.h`, `include/netmidi/config.h`, `include/netmidi/config_applemidi.h`, `include/netmidi/config_midi2.h`, plus the AppleMIDI/Network MIDI 2.0 backlogs.
+
+### Confirmed UI baseline
+
+The custom MUI class declares **Overview, Routing, Network MIDI, Synthesizer, Profiles, Diagnostics**. Overview displays CAMD clusters with transport, direction and status. Routing shows active/waiting/disabled and service states. Synthesizer, Profiles and Diagnostics already have dedicated controls. **Do not rebuild these pages or introduce a generic MIDI 2.0 tab** merely because new protocol capabilities exist.
+
+The Network MIDI page currently exposes only `network_session`, `network_local_port`, `network_peer_ip` and `network_peer_port` as editable widgets. Its load/save path holds a full `struct netmidi_network_config` and uses `netmidi_config_load/save`, so **unexposed fields can be preserved through a save**; lack of a widget does not mean lack of persistence. Confirm this preservation with round-trip tests.
+
+### Network configuration parity matrix
+
+| Contract field / setting | Supported in configuration source | MUI editable today | Proposed UI treatment |
+| --- | --- | --- | --- |
+| `session_name` | Shared | Yes | Keep; validate 63-byte maximum and display meaning |
+| `applemidi.local_port` (`local_port`) | AppleMIDI | Yes | Keep; port range and data-port implications |
+| `applemidi.peer_ip` / `peer_port` | AppleMIDI | Yes | Keep; clarify outgoing invitation versus listening |
+| `latency_ms` (0–2000) | Shared | **No** | P0 numeric control with range/help and change-impact warning |
+| `applemidi.peer_name` | AppleMIDI when `NETMIDI_BROWSE` | **No** | P0 optional discovery-name control; show only when compiled/supported |
+| `applemidi.max_peers` (0 or 1–8) | AppleMIDI | **No** | P0 numeric limit with clear meaning of 0 |
+| `applemidi.accept` | AppleMIDI | **No** | P0 incoming connection policy; explicit validation of accepted syntax; **not** a replacement for authentication |
+| `applemidi.port_name[16]` | AppleMIDI | **No** | P1 advanced peer-to-driver-port reservation editor, only after safe validation |
+| `midi2.port` (`midi2_port`) | Network MIDI 2.0 | **No** | P0 enable/listen-port control; zero/absent semantics and dependencies verified before UI |
+| `midi2.peer_ip` / `peer_port` | Network MIDI 2.0 | **No** | P0 separate outgoing Host settings, not mixed with AppleMIDI |
+| `midi2.peer_name` | Network MIDI 2.0 when `NETMIDI_BROWSE` | **No** | P0 conditional discovery-name control |
+| `midi2.port_name[16]` | Network MIDI 2.0 | **No** | P1 advanced port reservation editor |
+
+**Important distinctions:** AppleMIDI and Network MIDI 2.0 are different protocols; use separate grouped controls under the existing Network MIDI page. Conditional `NETMIDI_BROWSE` members must not be referenced unconditionally. Do not infer a general network enable toggle, peer browser, Connect/Disconnect API or live session list from configuration structs alone; those require a verified runtime/status/control contract.
+
+### P0 — complete Network MIDI parity without changing the protocol
+
+1. Add controls for existing validated configuration fields, grouped as **Shared**, **AppleMIDI**, **Network MIDI 2.0**, with an **Advanced port reservations** section deferred to P1.
+2. Check constraints against `netmidi_config_*_check` and existing parsing rules. Show actionable errors; preserve existing values on invalid input.
+3. Preserve hidden/conditional fields and unknown future settings as far as the current parser/serializer contract permits; explicitly test any round-trip limitations rather than promising forward compatibility.
+4. Preserve Amiga Preferences semantics: **Use** to `ENV:`, **Save** to `ENV:` and `ENVARC:`, **Cancel** without unintended changes; verify profiles restore the complete network configuration.
+5. Distinguish **configuration saved** from **configuration applied to a running service**. The AppleMIDI backlog AM16 records disruptive reconfiguration behavior; no promise of seamless updates without a service-level change and test.
+6. Keep device pairing, IP interface setup, DNS and AHI configuration in their native AROS owners.
+
+**P0 acceptance:** every exposed field survives Use/Save/reopen/profile activation, invalid input cannot corrupt active configuration, AppleMIDI and MIDI 2.0 settings do not overwrite each other, and conditional builds compile. Exercise network reconfiguration with active sessions and document which changes interrupt them. Test both hosted and target AROS, including m68k when available.
+
+### P1 — improve Overview device identity
+
+The source's `endpoint_transport()` classifies several transports by cluster-name patterns; BLE additionally has `bluetooth.library` integration. A CAMD cluster name alone does not reliably identify the physical device, driver port or remote peer.
+
+- Distinguish **physical device**, **CAMD endpoint/cluster**, **transport**, **direction** and **connection state** where the owning subsystem exposes reliable identity.
+- Prefer authoritative driver/Bluetooth/USB/network status over heuristic name matching; retain a neutral `CAMD`/unknown fallback rather than inventing capabilities.
+- Explicitly differentiate unavailable device, disconnected peer, advertised service, waiting route and stopped service.
+- Verify hotplug/rebind/rename/reconnect refresh without polling loops that burden m68k; avoid implying `StartClusterNotify()` reports every internal link-state change.
+- Do not duplicate Poseidon/Trident, Bluetooth Preferences or AHI controls.
+
+**P1 acceptance:** two identical devices and a reconnected BLE/network endpoint remain distinguishable when native identity data permits; unavailable identity is shown as unknown rather than guessed; routing remains functional with the Preferences window closed.
+
+### P1/P2 — preserve the rest and evolve by evidence
+
+- **Routing:** retain basic persistent source→destination policy and existing active/waiting/reconnect UI. Rich processing chains belong to a future specialized application; see `router-processing-future.md`.
+- **Diagnostics:** extend to UMP and MIDI-CI only as CAMD 43 APIs expose validated data; distinguish decoded MIDI 1.0, UMP, MIDI-CI discovery and unsupported features. Do not implement MIDI-CI in Preferences.
+- **Synthesizer:** improve error reporting and validate SoundFont/backend changes before replacing a working instance; audio device selection remains AHI-owned.
+- **Profiles:** verify round-trip of full MIDIHub-owned configuration, explicit active-profile indication and rollback on failed activation.
+
+### Verification matrix (not yet executed)
+
+| ID | Test | Required evidence |
+| --- | --- | --- |
+| MP01 | Open each of six MUI pages on target AROS | Screenshots or captured UI behavior; no missing widgets or layout clipping |
+| MP02 | Edit all supported Network MIDI fields, Use, reopen, Save, reboot | Exact `ENV:NetMIDI`/`ENVARC:NetMIDI` values and retained conditional fields |
+| MP03 | Reject invalid ports, peer limits, latency, policy syntax and conflicting settings | No partial/invalid configuration; actionable UI error |
+| MP04 | Change network settings with active AppleMIDI and Network MIDI 2.0 sessions | Observed session continuity or explicit disconnect/restart; no misleading success status |
+| MP05 | Save/activate a profile containing both protocols and synth/routes | Complete restoration and clear current profile |
+| MP06 | Hotplug USB/BLE and disconnect/reconnect a network peer | Accurate endpoint identity/state and route recovery |
+| MP07 | Build/run on AROS m68k with and without optional Bluetooth/browse features | Compile success, responsiveness, memory/CPU observation and safe disabled controls |
+| MP08 | Close Preferences while routing is active | Router and MIDI event forwarding continue |
+
+### Decision
+
+**First implementation PR:** P0 Network MIDI UI parity only, based on existing configuration contracts; no protocol modifications, no new top-level page, no speculative session-control API. **Second investigation:** Overview identity/status contracts, especially authoritative device↔CAMD endpoint mapping. Perform MUI-on-AROS execution checks before calling either area complete.
